@@ -1,0 +1,4 @@
+# File header: Keeps repository text and binary normalization deterministic.
+
+* text=auto eol=lf
+*.png binary
