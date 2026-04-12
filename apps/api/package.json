@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ee-library/shared": "*"
+    "@ee-library/shared": "*",
+    "pg": "^8.20.0"
   }
 }

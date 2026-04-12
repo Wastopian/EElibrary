@@ -13,11 +13,14 @@
     "dev:api": "npm run dev -w @ee-library/api",
     "dev:web": "npm run dev -w @ee-library/web",
     "dev:worker": "npm run dev -w @ee-library/worker",
+    "ingest:local": "npm run ingest -w @ee-library/worker",
     "lint": "npm run lint --workspaces",
+    "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces"
   },
   "devDependencies": {
     "@types/node": "^22.13.14",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "concurrently": "^9.2.1",

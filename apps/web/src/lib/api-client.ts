@@ -2,13 +2,7 @@
  * File header: Provides the web app's provider-neutral API access layer.
  */
 
-import type { PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared";
-
-/** ApiEnvelope matches the JSON response shape served by apps/api. */
-interface ApiEnvelope<TData> {
-  /** Response data returned by the API service. */
-  data: TData;
-}
+import type { ApiEnvelope, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared";
 
 /**
  * Fetches provider-neutral search facets from the API boundary.

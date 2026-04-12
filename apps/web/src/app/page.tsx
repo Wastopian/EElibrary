@@ -1,10 +1,10 @@
 /**
- * File header: Implements the Phase 1 search page using provider-neutral seed data.
+ * File header: Implements the provider-neutral search page through the API boundary.
  */
 
 import Link from "next/link";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
-import { isFileBackedAsset } from "@ee-library/shared";
+import { isValidatedDownloadableAsset } from "@ee-library/shared";
 import { fetchPartSearch, fetchSearchFacets } from "../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CadAvailabilityFilter, LifecycleStatus, PartSearchFilters } from "@ee-library/shared";
@@ -53,7 +53,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     <main className="search-layout">
       <section className="search-hero">
         <div>
-          <p className="app-kicker">Phase 1 foundation</p>
+          <p className="app-kicker">Phase 2 foundation</p>
           <h2>Search parts, inspect provenance, and keep export readiness honest.</h2>
         </div>
         <form className="search-bar" action="/" method="get">
@@ -122,8 +122,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               CAD files
               <select defaultValue={cadAvailability} name="cad">
                 <option value="any">Any CAD state</option>
-                <option value="available">File-backed only</option>
-                <option value="unavailable">Needs files</option>
+                <option value="available">Validated downloadable</option>
+                <option value="unavailable">Needs validation</option>
               </select>
             </label>
             <button type="submit">Apply filters</button>
@@ -136,14 +136,14 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               <p className="app-kicker">Search results</p>
               <h2>{results.length} matched records</h2>
             </div>
-            <StatusBadge label="Seed data" tone="info" />
+            <StatusBadge label="Catalog API" tone="info" />
           </div>
 
           {results.length > 0 ? (
             <div className="results-list">
               {results.map((record) => {
-                const fileBackedAssets = record.assets.filter(isFileBackedAsset);
-                const assetLabel = fileBackedAssets.length > 0 ? `${fileBackedAssets.length} files` : "metadata only";
+                const exportableAssets = record.assets.filter(isValidatedDownloadableAsset);
+                const assetLabel = exportableAssets.length > 0 ? `${exportableAssets.length} exportable` : "not exportable";
 
                 return (
                   <article className="result-row" key={record.part.id}>
@@ -161,7 +161,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                     </div>
                     <div className="result-row__badges">
                       <StatusBadge label={record.part.lifecycleStatus} tone="info" />
-                      <StatusBadge label={assetLabel} tone={fileBackedAssets.length > 0 ? "verified" : "review"} />
+                      <StatusBadge label={assetLabel} tone={exportableAssets.length > 0 ? "verified" : "review"} />
                     </div>
                     <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
                   </article>

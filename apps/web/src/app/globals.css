@@ -205,7 +205,7 @@ select {
   padding: 18px;
 }
 
-/* Results header aligns count and seed status. */
+/* Results header aligns count and catalog source status. */
 .results-panel__header {
   align-items: center;
   display: flex;
@@ -564,6 +564,65 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Asset metadata labels show source and update provenance without provider-specific styling. */
+.ui-asset-card__meta {
+  color: var(--color-muted);
+  display: grid;
+  font-size: 0.82rem;
+  gap: 4px;
+}
+
+/* Source list presents provenance rows as repeated audit items. */
+.source-list {
+  display: grid;
+  gap: 12px;
+}
+
+/* Source audit items use compact repeated-card treatment. */
+.source-list article {
+  background: var(--color-panel-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+/* Source audit headings keep provider identity and source keys paired. */
+.source-list h3,
+.source-list p {
+  margin: 0;
+}
+
+/* Source definition lists keep audit values aligned and compact. */
+.source-list dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+/* Source fields keep labels muted and values readable. */
+.source-list div {
+  display: grid;
+  gap: 4px;
+}
+
+/* Source field labels use muted metadata styling. */
+.source-list dt {
+  color: var(--color-muted);
+}
+
+/* Source field values reset definition list defaults and wrap long URLs. */
+.source-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Muted copy supports provenance fallback text. */
+.muted-copy {
+  color: var(--color-muted);
 }
 
 /* Export list stacks deterministic bundle actions. */

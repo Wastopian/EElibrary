@@ -1,4 +1,4 @@
-# Local infrastructure for Phase 0 services that are intentionally not wired into app code yet.
+# Local infrastructure for the API, worker, and future queue/object-storage services.
 services:
   postgres:
     image: postgres:16

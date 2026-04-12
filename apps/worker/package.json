@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx src/index.ts status",
+    "ingest": "tsx src/index.ts ingest",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ee-library/shared": "*"
+    "@ee-library/shared": "*",
+    "pg": "^8.20.0"
   }
 }
