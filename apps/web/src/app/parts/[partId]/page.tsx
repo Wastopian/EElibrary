@@ -1,5 +1,5 @@
 /**
- * File header: Implements the Phase 1 component detail shell.
+ * File header: Implements the Phase 2 component detail workspace.
  */
 
 import Link from "next/link";
@@ -13,7 +13,7 @@ import {
 } from "@ee-library/shared";
 import { fetchPartDetail } from "../../../lib/api-client";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { Asset, Package, PreviewStatus, ValidationStatus } from "@ee-library/shared";
+import type { Asset, AssetState, Package, PreviewStatus, ValidationStatus } from "@ee-library/shared";
 
 /** dynamic forces detail data to flow through the API service at request time. */
 export const dynamic = "force-dynamic";
@@ -43,6 +43,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     value: formatMetricValue(metric)
   }));
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
+  const latestSource = record.sources[0];
 
   return (
     <main className="detail-layout">
@@ -59,7 +60,8 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </p>
         </div>
         <div className="detail-hero__status">
-          <StatusBadge label="Normalized seed record" tone="info" />
+          <StatusBadge label={`${record.sources.length} source records`} tone="info" />
+          <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
           <TrustMeter label="Trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
         </div>
       </section>
@@ -67,6 +69,37 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
       <div className="detail-grid">
         <SectionPanel description="Values are normalized to the unit policy and retain datasheet revision confidence." title="Normalized specs">
           <MetricTable rows={metricRows} />
+        </SectionPanel>
+
+        <SectionPanel description="Raw source records are preserved for audit and later conflict review." title="Provenance">
+          <div className="source-list">
+            {record.sources.length > 0 ? (
+              record.sources.map((source) => (
+                <article key={source.id}>
+                  <div>
+                    <h3>{source.providerId}</h3>
+                    <p className="ui-mono">{source.providerPartKey}</p>
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>Fetched</dt>
+                      <dd>{formatDateTime(source.fetchedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Normalized</dt>
+                      <dd>{source.normalizedAt ? formatDateTime(source.normalizedAt) : "Not normalized"}</dd>
+                    </div>
+                    <div>
+                      <dt>Source</dt>
+                      <dd>{source.sourceUrl ? <a href={source.sourceUrl}>{source.sourceUrl}</a> : "No source URL"}</dd>
+                    </div>
+                  </dl>
+                </article>
+              ))
+            ) : (
+              <p className="muted-copy">No source records are attached to this fallback record.</p>
+            )}
+          </div>
         </SectionPanel>
 
         <SectionPanel description="Dimensions are normalized in millimeters and unknown fields stay blank." title="Package dimensions">
@@ -89,7 +122,8 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </div>
             <div className="datasheet-panel__badges">
               <StatusBadge label={`${Math.round((record.datasheetRevision?.parseConfidence ?? 0) * 100)}% parse confidence`} tone={scoreTone(record.datasheetRevision?.parseConfidence ?? 0)} />
-              <StatusBadge label={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "File available" : "Metadata only"} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
+              <StatusBadge label={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "Stored file" : "Metadata only"} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
+              <StatusBadge label={latestSource ? `Source ${latestSource.providerId}` : "No source"} tone={latestSource ? "info" : "neutral"} />
             </div>
           </div>
         </SectionPanel>
@@ -98,13 +132,15 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           <div className="asset-grid">
             {record.assets.map((asset) => (
               <AssetCard
-                availabilityLabel={isFileBackedAsset(asset) ? "File available" : "Metadata only"}
-                availabilityTone={isFileBackedAsset(asset) ? "verified" : "review"}
+                availabilityLabel={assetStateLabel(asset.assetState)}
+                availabilityTone={assetStateTone(asset.assetState)}
                 fileFormat={asset.fileFormat}
                 key={asset.id}
                 previewLabel={previewLabel(asset.previewStatus)}
                 previewTone={previewTone(asset.previewStatus)}
+                sourceLabel={asset.providerId ? `Source ${asset.providerId}` : "No source"}
                 title={assetTypeLabel(asset)}
+                updatedLabel={`Updated ${formatDateTime(asset.lastUpdatedAt)}`}
                 validationLabel={validationLabel(asset.validationStatus)}
                 validationTone={validationTone(asset.validationStatus)}
               />
@@ -112,7 +148,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </div>
         </SectionPanel>
 
-        <SectionPanel description="File-backed assets are required before CAD bundles can be packaged." title="Export readiness">
+        <SectionPanel description="Validated downloadable assets are required before CAD bundles can be packaged." title="Export readiness">
           <div className="export-list">
             {exportActions.map((action) => (
               <button className="export-action" disabled={!action.available} key={action.id} title={action.reason} type="button">
@@ -125,6 +161,16 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
       </div>
     </main>
   );
+}
+
+/**
+ * Formats an ISO timestamp for dense workspace metadata.
+ */
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(value));
 }
 
 /**
@@ -202,6 +248,36 @@ function validationTone(status: ValidationStatus): BadgeTone {
   };
 
   return tones[status];
+}
+
+/**
+ * Maps asset state into a badge tone.
+ */
+function assetStateTone(status: AssetState): BadgeTone {
+  const tones: Record<AssetState, BadgeTone> = {
+    downloaded: "review",
+    failed: "danger",
+    missing: "neutral",
+    referenced: "review",
+    validated: "verified"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Maps asset state into direct user-facing availability text.
+ */
+function assetStateLabel(status: AssetState): string {
+  const labels: Record<AssetState, string> = {
+    downloaded: "Downloaded",
+    failed: "Failed",
+    missing: "Missing",
+    referenced: "Referenced",
+    validated: "Validated"
+  };
+
+  return labels[status];
 }
 
 /**

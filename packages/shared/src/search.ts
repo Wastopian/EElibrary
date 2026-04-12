@@ -2,7 +2,8 @@
  * File header: Provides provider-neutral search, lookup, formatting, and export helpers.
  */
 
-import { assets, datasheetRevisions, manufacturers, partMetrics, partPackages, parts } from "./seed";
+import { assets, datasheetRevisions, manufacturers, partMetrics, partPackages, parts, sourceRecords } from "./seed";
+import { isValidatedDownloadableAsset } from "./asset-state";
 import type {
   Asset,
   AssetType,
@@ -40,13 +41,26 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     return null;
   }
 
+  const partAssets = assets.filter((asset) => asset.partId === part.id);
+  const partDatasheetRevision = selectLatestDatasheetRevision(part.id);
+  const metrics = partMetrics.filter((metric) => metric.partId === part.id);
+  const sources = sourceRecords.filter((sourceRecord) => sourceRecord.partId === part.id);
+
   return {
-    assets: assets.filter((asset) => asset.partId === part.id),
-    datasheetRevision: selectLatestDatasheetRevision(part.id),
+    assets: partAssets,
+    datasheetRevision: partDatasheetRevision,
     manufacturer,
-    metrics: partMetrics.filter((metric) => metric.partId === part.id),
+    metrics,
     package: packageRecord,
-    part
+    part,
+    lastUpdatedAt: latestTimestamp([
+      part.lastUpdatedAt,
+      ...partAssets.map((asset) => asset.lastUpdatedAt),
+      ...metrics.map((metric) => metric.lastUpdatedAt),
+      ...(partDatasheetRevision ? [partDatasheetRevision.lastUpdatedAt] : []),
+      ...sources.map((sourceRecord) => sourceRecord.lastUpdatedAt)
+    ]),
+    sources
   };
 }
 
@@ -71,9 +85,35 @@ export function getPartDetail(partId: string): PartSearchRecord | undefined {
  * Searches seed records with provider-neutral filters from the search page or API.
  */
 export function searchParts(filters: PartSearchFilters = {}): PartSearchRecord[] {
+  return filterPartRecords(getAllPartRecords(), filters);
+}
+
+/**
+ * Builds the provider-neutral search facets exposed by the API.
+ */
+export function getSearchFacets(): SearchFacets {
+  return getSearchFacetsFromRecords(getAllPartRecords());
+}
+
+/**
+ * Builds provider-neutral search facets from joined records.
+ */
+export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchFacets {
+  return {
+    categories: Array.from(new Set(records.map((record) => record.part.category))).sort(),
+    lifecycleStatuses: ["active", "not_recommended", "obsolete", "unknown"],
+    manufacturers: uniqueBy(records.map((record) => record.manufacturer), (manufacturer) => manufacturer.id),
+    packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id)
+  };
+}
+
+/**
+ * Filters joined part records with provider-neutral search filters.
+ */
+export function filterPartRecords(records: PartSearchRecord[], filters: PartSearchFilters = {}): PartSearchRecord[] {
   const normalizedQuery = filters.query?.trim().toLowerCase();
 
-  return getAllPartRecords().filter((record) => {
+  return records.filter((record) => {
     const hasQueryMatch = normalizedQuery ? recordMatchesQuery(record, normalizedQuery) : true;
     const hasManufacturerMatch = filters.manufacturerId ? record.part.manufacturerId === filters.manufacturerId : true;
     const hasCategoryMatch = filters.category ? record.part.category === filters.category : true;
@@ -83,18 +123,6 @@ export function searchParts(filters: PartSearchFilters = {}): PartSearchRecord[]
 
     return hasQueryMatch && hasManufacturerMatch && hasCategoryMatch && hasPackageMatch && hasLifecycleMatch && hasCadMatch;
   });
-}
-
-/**
- * Builds the provider-neutral search facets exposed by the API.
- */
-export function getSearchFacets(): SearchFacets {
-  return {
-    categories: Array.from(new Set(parts.map((part) => part.category))).sort(),
-    lifecycleStatuses: ["active", "not_recommended", "obsolete", "unknown"],
-    manufacturers,
-    packages: partPackages
-  };
 }
 
 /**
@@ -131,42 +159,35 @@ export function formatMetricValue(metric: PartMetric): string {
 }
 
 /**
- * Calculates export availability from real file-backed assets only.
+ * Calculates export availability from real validated downloadable assets only.
  */
 export function getExportAvailability(record: PartSearchRecord): ExportAvailability[] {
-  const fileBackedAssets = record.assets.filter(isFileBackedAsset);
-  const hasFootprint = fileBackedAssets.some((asset) => asset.assetType === "footprint");
-  const hasSymbol = fileBackedAssets.some((asset) => asset.assetType === "symbol");
-  const hasThreeDModel = fileBackedAssets.some((asset) => asset.assetType === "three_d_model");
-  const hasStepModel = fileBackedAssets.some((asset) => asset.assetType === "three_d_model" && asset.fileFormat === "step");
+  const exportableAssets = record.assets.filter(isValidatedDownloadableAsset);
+  const hasFootprint = exportableAssets.some((asset) => asset.assetType === "footprint");
+  const hasSymbol = exportableAssets.some((asset) => asset.assetType === "symbol");
+  const hasThreeDModel = exportableAssets.some((asset) => asset.assetType === "three_d_model");
+  const hasStepModel = exportableAssets.some((asset) => asset.assetType === "three_d_model" && asset.fileFormat === "step");
 
   return [
     {
       available: hasFootprint && hasSymbol,
       id: "altium",
       label: "Altium bundle",
-      reason: hasFootprint && hasSymbol ? "Footprint and symbol files are available." : "Requires file-backed footprint and symbol assets."
+      reason: hasFootprint && hasSymbol ? "Validated footprint and symbol files are available." : "Requires validated downloadable footprint and symbol assets."
     },
     {
       available: hasThreeDModel,
       id: "solidworks",
       label: "SolidWorks bundle",
-      reason: hasThreeDModel ? "A file-backed 3D model is available." : "Requires a file-backed 3D model asset."
+      reason: hasThreeDModel ? "A validated downloadable 3D model is available." : "Requires a validated downloadable 3D model asset."
     },
     {
       available: hasStepModel,
       id: "neutral_cad",
       label: "Neutral CAD package",
-      reason: hasStepModel ? "A file-backed STEP model is available." : "Requires a file-backed STEP model asset."
+      reason: hasStepModel ? "A validated downloadable STEP model is available." : "Requires a validated downloadable STEP model asset."
     }
   ];
-}
-
-/**
- * Returns true only when an asset points to a captured file in object storage.
- */
-export function isFileBackedAsset(asset: Asset): boolean {
-  return asset.storageKey !== null;
 }
 
 /**
@@ -210,9 +231,34 @@ function matchesCadAvailability(assetsForPart: Asset[], availability: CadAvailab
     return true;
   }
 
-  const hasAvailableCadAsset = assetsForPart.some((asset) => CAD_ASSET_TYPES.has(asset.assetType) && isFileBackedAsset(asset));
+  const hasAvailableCadAsset = assetsForPart.some((asset) => CAD_ASSET_TYPES.has(asset.assetType) && isValidatedDownloadableAsset(asset));
 
   return availability === "available" ? hasAvailableCadAsset : !hasAvailableCadAsset;
+}
+
+/**
+ * Returns the newest ISO timestamp in a set of timestamp strings.
+ */
+function latestTimestamp(timestamps: string[]): string {
+  return timestamps.sort((first, second) => Date.parse(second) - Date.parse(first))[0] ?? new Date(0).toISOString();
+}
+
+/**
+ * Returns a deterministic list of records by identifier.
+ */
+function uniqueBy<TValue>(values: TValue[], getKey: (value: TValue) => string): TValue[] {
+  const seen = new Set<string>();
+
+  return values.filter((value) => {
+    const key = getKey(value);
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
 }
 
 /**

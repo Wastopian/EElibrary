@@ -1,8 +1,11 @@
 /**
- * File header: Provides small provider-neutral seed data for Phase 1 screens and APIs.
+ * File header: Provides small provider-neutral seed fallback data for screens and APIs.
  */
 
-import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "./types";
+import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric, SourceRecord } from "./types";
+
+/** LAST_UPDATED_AT keeps seed timestamps deterministic for repeatable local runs. */
+const LAST_UPDATED_AT = "2026-04-12T00:00:00.000Z";
 
 /** Manufacturers seed search filters and joined part records. */
 export const manufacturers = [
@@ -62,6 +65,7 @@ export const parts = [
   {
     category: "Power management",
     id: "part-tps7a02dbvr",
+    lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
     manufacturerId: "mfr-texas-instruments",
     mpn: "TPS7A02DBVR",
@@ -71,6 +75,7 @@ export const parts = [
   {
     category: "Capacitor",
     id: "part-grm188r71c104ka01d",
+    lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
     manufacturerId: "mfr-murata",
     mpn: "GRM188R71C104KA01D",
@@ -80,6 +85,7 @@ export const parts = [
   {
     category: "Microcontroller",
     id: "part-stm32g031k8t6",
+    lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
     manufacturerId: "mfr-stmicroelectronics",
     mpn: "STM32G031K8T6",
@@ -93,31 +99,74 @@ export const datasheetRevisions = [
   {
     fileAssetId: "asset-tps7a02-datasheet",
     id: "dsr-tps7a02-rev-e",
+    lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 39,
     parseConfidence: 0.79,
     partId: "part-tps7a02dbvr",
     revisionDate: "2024-02-01",
-    revisionLabel: "Rev. E"
+    revisionLabel: "Rev. E",
+    sourceRecordId: "source-seed-tps7a02"
   },
   {
     fileAssetId: "asset-grm188-datasheet",
     id: "dsr-grm188-series",
+    lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 12,
     parseConfidence: 0.72,
     partId: "part-grm188r71c104ka01d",
     revisionDate: "2023-11-15",
-    revisionLabel: "Series data"
+    revisionLabel: "Series data",
+    sourceRecordId: "source-seed-grm188"
   },
   {
     fileAssetId: "asset-stm32g031-datasheet",
     id: "dsr-stm32g031-rev-7",
+    lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 123,
     parseConfidence: 0.66,
     partId: "part-stm32g031k8t6",
     revisionDate: "2024-06-20",
-    revisionLabel: "Rev. 7"
+    revisionLabel: "Rev. 7",
+    sourceRecordId: "source-seed-stm32g031"
   }
 ] satisfies DatasheetRevision[];
+
+/** Source records seed raw payload provenance for Phase 2 fallback records. */
+export const sourceRecords = [
+  {
+    fetchedAt: LAST_UPDATED_AT,
+    id: "source-seed-tps7a02",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    normalizedAt: LAST_UPDATED_AT,
+    partId: "part-tps7a02dbvr",
+    providerId: "seed:local-catalog",
+    providerPartKey: "TPS7A02DBVR",
+    rawPayload: { mpn: "TPS7A02DBVR" },
+    sourceUrl: "https://www.ti.com/product/TPS7A02"
+  },
+  {
+    fetchedAt: LAST_UPDATED_AT,
+    id: "source-seed-grm188",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    normalizedAt: LAST_UPDATED_AT,
+    partId: "part-grm188r71c104ka01d",
+    providerId: "seed:local-catalog",
+    providerPartKey: "GRM188R71C104KA01D",
+    rawPayload: { mpn: "GRM188R71C104KA01D" },
+    sourceUrl: "https://www.murata.com/en-us/products/productdetail?partno=GRM188R71C104KA01D"
+  },
+  {
+    fetchedAt: LAST_UPDATED_AT,
+    id: "source-seed-stm32g031",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    normalizedAt: LAST_UPDATED_AT,
+    partId: "part-stm32g031k8t6",
+    providerId: "seed:local-catalog",
+    providerPartKey: "STM32G031K8T6",
+    rawPayload: { mpn: "STM32G031K8T6" },
+    sourceUrl: "https://www.st.com/en/microcontrollers-microprocessors/stm32g031k8.html"
+  }
+] satisfies SourceRecord[];
 
 /** Metrics seed normalized values and confidence scores from the datasheet revisions. */
 export const partMetrics = [
@@ -129,6 +178,8 @@ export const partMetrics = [
     metricValue: 5.5,
     minValue: null,
     partId: "part-tps7a02dbvr",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    sourceRecordId: "source-seed-tps7a02",
     sourceRevisionId: "dsr-tps7a02-rev-e",
     unit: "V"
   },
@@ -140,6 +191,8 @@ export const partMetrics = [
     metricValue: 0.2,
     minValue: null,
     partId: "part-tps7a02dbvr",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    sourceRecordId: "source-seed-tps7a02",
     sourceRevisionId: "dsr-tps7a02-rev-e",
     unit: "A"
   },
@@ -151,6 +204,8 @@ export const partMetrics = [
     metricValue: 0.0000001,
     minValue: null,
     partId: "part-grm188r71c104ka01d",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    sourceRecordId: "source-seed-grm188",
     sourceRevisionId: "dsr-grm188-series",
     unit: "F"
   },
@@ -162,6 +217,8 @@ export const partMetrics = [
     metricValue: 16,
     minValue: null,
     partId: "part-grm188r71c104ka01d",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    sourceRecordId: "source-seed-grm188",
     sourceRevisionId: "dsr-grm188-series",
     unit: "V"
   },
@@ -173,6 +230,8 @@ export const partMetrics = [
     metricValue: null,
     minValue: 2,
     partId: "part-stm32g031k8t6",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    sourceRecordId: "source-seed-stm32g031",
     sourceRevisionId: "dsr-stm32g031-rev-7",
     unit: "V"
   },
@@ -184,6 +243,8 @@ export const partMetrics = [
     metricValue: 64000000,
     minValue: null,
     partId: "part-stm32g031k8t6",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    sourceRecordId: "source-seed-stm32g031",
     sourceRevisionId: "dsr-stm32g031-rev-7",
     unit: "Hz"
   }
@@ -193,61 +254,81 @@ export const partMetrics = [
 export const assets = [
   {
     assetType: "datasheet",
+    assetState: "referenced",
     fileFormat: "pdf",
     fileHash: null,
     id: "asset-tps7a02-datasheet",
     licenseMode: "metadata_only",
+    lastUpdatedAt: LAST_UPDATED_AT,
     partId: "part-tps7a02dbvr",
     previewStatus: "not_available",
     providerId: "seed:datasheet-metadata",
+    sourceRecordId: "source-seed-tps7a02",
+    sourceUrl: "https://www.ti.com/lit/ds/symlink/tps7a02.pdf",
     storageKey: null,
     validationStatus: "needs_review"
   },
   {
     assetType: "footprint",
+    assetState: "missing",
     fileFormat: "unknown",
     fileHash: null,
     id: "asset-tps7a02-footprint",
     licenseMode: "unknown",
+    lastUpdatedAt: LAST_UPDATED_AT,
     partId: "part-tps7a02dbvr",
     previewStatus: "not_available",
     providerId: "seed:cad-metadata",
+    sourceRecordId: "source-seed-tps7a02",
+    sourceUrl: null,
     storageKey: null,
     validationStatus: "not_validated"
   },
   {
     assetType: "datasheet",
+    assetState: "referenced",
     fileFormat: "pdf",
     fileHash: null,
     id: "asset-grm188-datasheet",
     licenseMode: "metadata_only",
+    lastUpdatedAt: LAST_UPDATED_AT,
     partId: "part-grm188r71c104ka01d",
     previewStatus: "not_available",
     providerId: "seed:datasheet-metadata",
+    sourceRecordId: "source-seed-grm188",
+    sourceUrl: "https://www.murata.com/en-us/products/productdetail?partno=GRM188R71C104KA01D",
     storageKey: null,
     validationStatus: "needs_review"
   },
   {
     assetType: "datasheet",
+    assetState: "referenced",
     fileFormat: "pdf",
     fileHash: null,
     id: "asset-stm32g031-datasheet",
     licenseMode: "metadata_only",
+    lastUpdatedAt: LAST_UPDATED_AT,
     partId: "part-stm32g031k8t6",
     previewStatus: "not_available",
     providerId: "seed:datasheet-metadata",
+    sourceRecordId: "source-seed-stm32g031",
+    sourceUrl: "https://www.st.com/resource/en/datasheet/stm32g031k8.pdf",
     storageKey: null,
     validationStatus: "needs_review"
   },
   {
     assetType: "three_d_model",
+    assetState: "missing",
     fileFormat: "unknown",
     fileHash: null,
     id: "asset-stm32g031-3d",
     licenseMode: "unknown",
+    lastUpdatedAt: LAST_UPDATED_AT,
     partId: "part-stm32g031k8t6",
     previewStatus: "not_available",
     providerId: "seed:cad-metadata",
+    sourceRecordId: "source-seed-stm32g031",
+    sourceUrl: null,
     storageKey: null,
     validationStatus: "not_validated"
   }

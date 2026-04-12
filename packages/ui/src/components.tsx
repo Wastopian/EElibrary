@@ -69,6 +69,10 @@ export interface AssetCardProps {
   validationTone: BadgeTone;
   /** Preview tone selected by the consuming domain layer. */
   previewTone: BadgeTone;
+  /** Optional source attribution label supplied by the domain layer. */
+  sourceLabel?: string;
+  /** Optional last-updated label supplied by the domain layer. */
+  updatedLabel?: string;
 }
 
 /** TrustMeterProps renders a compact trust score with explicit uncertainty. */
@@ -146,7 +150,7 @@ export function MetricTable({ rows }: MetricTableProps) {
 }
 
 /**
- * Renders an asset metadata card with explicit file availability.
+ * Renders an asset metadata card with explicit provider-neutral asset state.
  */
 export function AssetCard({
   availabilityLabel,
@@ -154,7 +158,9 @@ export function AssetCard({
   fileFormat,
   previewLabel,
   previewTone,
+  sourceLabel,
   title,
+  updatedLabel,
   validationLabel,
   validationTone
 }: AssetCardProps) {
@@ -169,6 +175,12 @@ export function AssetCard({
         <StatusBadge label={previewLabel} tone={previewTone} />
         <StatusBadge label={availabilityLabel} tone={availabilityTone} />
       </div>
+      {sourceLabel || updatedLabel ? (
+        <div className="ui-asset-card__meta">
+          {sourceLabel ? <span>{sourceLabel}</span> : null}
+          {updatedLabel ? <span>{updatedLabel}</span> : null}
+        </div>
+      ) : null}
     </article>
   );
 }

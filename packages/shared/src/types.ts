@@ -23,6 +23,9 @@ export type ValidationStatus = "verified" | "needs_review" | "not_validated" | "
 /** Preview status describes whether a visual preview can be rendered. */
 export type PreviewStatus = "ready" | "pending" | "not_available";
 
+/** AssetState tracks the concrete file lifecycle without implying fake availability. */
+export type AssetState = "missing" | "referenced" | "downloaded" | "validated" | "failed";
+
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
   /** Stable identifier used by internal records. */
@@ -69,6 +72,30 @@ export interface Part {
   packageId: string;
   /** Normalized trust score from 0 to 1. */
   trustScore: number;
+  /** ISO timestamp for the latest canonical record update. */
+  lastUpdatedAt: string;
+}
+
+/** SourceRecord preserves raw provider payload provenance for normalized records. */
+export interface SourceRecord {
+  /** Stable source record identifier. */
+  id: string;
+  /** Opaque provider identifier. */
+  providerId: string;
+  /** Provider-specific part key used for deterministic upserts. */
+  providerPartKey: string;
+  /** Canonical part identifier when the payload has been normalized. */
+  partId: string | null;
+  /** Provider source URL when one exists. */
+  sourceUrl: string | null;
+  /** ISO timestamp for when the raw payload was fetched. */
+  fetchedAt: string;
+  /** Raw provider payload retained for provenance and later audits. */
+  rawPayload: unknown;
+  /** ISO timestamp for when this payload was normalized. */
+  normalizedAt: string | null;
+  /** ISO timestamp for the latest source record update. */
+  lastUpdatedAt: string;
 }
 
 /** PartMetric stores one normalized datasheet metric with confidence and provenance. */
@@ -91,6 +118,10 @@ export interface PartMetric {
   confidenceScore: number;
   /** Datasheet revision that supplied or validated this metric. */
   sourceRevisionId: string;
+  /** Source record that supplied the metric normalization. */
+  sourceRecordId: string | null;
+  /** ISO timestamp for the latest metric update. */
+  lastUpdatedAt: string;
 }
 
 /** Asset tracks metadata, storage, validation, preview, and source provenance for files. */
@@ -115,6 +146,14 @@ export interface Asset {
   validationStatus: ValidationStatus;
   /** Preview readiness for UI rendering. */
   previewStatus: PreviewStatus;
+  /** Concrete asset file lifecycle state. */
+  assetState: AssetState;
+  /** Provider source URL for a referenced asset when known. */
+  sourceUrl: string | null;
+  /** Source record that supplied the asset metadata. */
+  sourceRecordId: string | null;
+  /** ISO timestamp for the latest asset update. */
+  lastUpdatedAt: string;
 }
 
 /** DatasheetRevision stores parsed datasheet revision metadata and parse confidence. */
@@ -133,9 +172,13 @@ export interface DatasheetRevision {
   fileAssetId: string | null;
   /** Confidence score from 0 to 1 for the parsed datasheet revision. */
   parseConfidence: number;
+  /** Source record that supplied the datasheet revision. */
+  sourceRecordId: string | null;
+  /** ISO timestamp for the latest datasheet revision update. */
+  lastUpdatedAt: string;
 }
 
-/** CAD availability filters let search distinguish metadata-only records from file-backed ones. */
+/** CAD availability filters let search distinguish exportable records from unavailable ones. */
 export type CadAvailabilityFilter = "any" | "available" | "unavailable";
 
 /** PartSearchFilters contains provider-neutral filters used by web and API. */
@@ -168,6 +211,10 @@ export interface PartSearchRecord {
   assets: Asset[];
   /** Latest datasheet revision when one is known. */
   datasheetRevision: DatasheetRevision | null;
+  /** Source records that contributed to this canonical part. */
+  sources: SourceRecord[];
+  /** ISO timestamp for the latest joined record update. */
+  lastUpdatedAt: string;
 }
 
 /** SearchFacets contains provider-neutral filter data served by the API. */
@@ -188,8 +235,19 @@ export interface ExportAvailability {
   id: "altium" | "solidworks" | "neutral_cad";
   /** User-facing target name. */
   label: string;
-  /** True only when required file-backed assets exist. */
+  /** True only when required validated downloadable assets exist. */
   available: boolean;
   /** Human-readable availability reason for disabled actions or audit text. */
   reason: string;
+}
+
+/** CatalogDataSource names the backing source used by an API response. */
+export type CatalogDataSource = "database" | "seed_fallback";
+
+/** ApiEnvelope defines the typed JSON response envelope used by apps/api. */
+export interface ApiEnvelope<TData> {
+  /** Response data returned by the API service. */
+  data: TData;
+  /** Backing catalog source when the route serves catalog data. */
+  source?: CatalogDataSource;
 }
