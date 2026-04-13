@@ -2,7 +2,22 @@
  * File header: Defines the worker-side provider adapter boundary and registry.
  */
 
-import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric, SourceRecord } from "@ee-library/shared";
+import type {
+  AccessoryRequirement,
+  Asset,
+  CableCompatibility,
+  CompanionRecommendation,
+  ConnectorFamily,
+  DatasheetRevision,
+  GenerationWorkflow,
+  Manufacturer,
+  MateRelation,
+  Package,
+  Part,
+  PartMetric,
+  SimilarPartRelation,
+  SourceRecord
+} from "@ee-library/shared/types";
 import { localCatalogProviderAdapter } from "./providers/local-catalog-provider";
 
 /** ProviderPartRequest describes the minimum lookup input for future provider fetches. */
@@ -29,6 +44,8 @@ export interface NormalizedProviderPart {
   manufacturer: Manufacturer;
   /** Canonical package record. */
   package: Package;
+  /** Optional connector family record for connector parts. */
+  connectorFamily: ConnectorFamily | null;
   /** Canonical part record. */
   part: Part;
   /** Source record preserving the raw payload. */
@@ -39,6 +56,18 @@ export interface NormalizedProviderPart {
   metrics: PartMetric[];
   /** Asset registry records parsed from the provider payload. */
   assets: Asset[];
+  /** Best and alternate mate connector relationships parsed from the provider payload. */
+  mateRelations: MateRelation[];
+  /** Required, optional, and tooling accessory relationships parsed from the provider payload. */
+  accessoryRequirements: AccessoryRequirement[];
+  /** Compatible cable relationships parsed from the provider payload. */
+  cableCompatibilities: CableCompatibility[];
+  /** Similar-part recommendations parsed from the provider payload. */
+  similarPartRelations: SimilarPartRelation[];
+  /** Companion recommendations parsed from the provider payload. */
+  companionRecommendations: CompanionRecommendation[];
+  /** Datasheet-driven generation workflows parsed from the provider payload. */
+  generationWorkflows: GenerationWorkflow[];
 }
 
 /** ProviderAdapter defines the worker boundary for provider-specific ingestion logic. */

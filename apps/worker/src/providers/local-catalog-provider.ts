@@ -4,14 +4,10 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  deriveAssetState,
-  normalizeAssetState,
-  normalizeLifecycleStatus,
-  normalizeMetricUnit,
-  normalizeNullableNumber
-} from "@ee-library/shared";
-import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared";
+import { deriveAssetState } from "@ee-library/shared/asset-state";
+import { normalizeAssetState, normalizeLifecycleStatus, normalizeMetricUnit, normalizeNullableNumber } from "@ee-library/shared/normalization";
+import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
+import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, SimilarPartRelation } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 
 /** LocalCatalogFile describes the adapter fixture envelope. */
@@ -32,14 +28,28 @@ interface LocalCatalogRecord {
   manufacturer: Manufacturer;
   /** Raw package payload. */
   package: Package;
+  /** Optional connector family payload for connector records. */
+  connectorFamily?: ConnectorFamily | null;
   /** Raw canonical part payload without normalized foreign keys. */
-  part: Omit<Part, "lastUpdatedAt" | "manufacturerId" | "packageId">;
+  part: Omit<Part, "connectorFamilyId" | "lastUpdatedAt" | "manufacturerId" | "packageId"> & { connectorFamilyId?: string | null };
   /** Raw datasheet payload without normalized part linkage. */
   datasheet: Omit<DatasheetRevision, "fileAssetId" | "lastUpdatedAt" | "partId" | "sourceRecordId">;
   /** Raw metric payloads using provider unit spellings. */
   metrics: LocalCatalogMetric[];
   /** Raw asset payloads without captured file evidence. */
   assets: LocalCatalogAsset[];
+  /** Optional raw connector mating relationships. */
+  mateRelations?: MateRelation[];
+  /** Optional raw connector accessory relationships. */
+  accessoryRequirements?: AccessoryRequirement[];
+  /** Optional raw connector cable compatibility relationships. */
+  cableCompatibilities?: CableCompatibility[];
+  /** Optional raw similar-part relationships. */
+  similarPartRelations?: SimilarPartRelation[];
+  /** Optional raw companion recommendations. */
+  companionRecommendations?: CompanionRecommendation[];
+  /** Optional raw generation workflow records. */
+  generationWorkflows?: GenerationWorkflow[];
 }
 
 /** LocalCatalogMetric describes one raw metric from the provider file. */
@@ -70,10 +80,22 @@ interface LocalCatalogAsset {
   fileFormat: Asset["fileFormat"];
   /** Provider license mode value. */
   licenseMode: Asset["licenseMode"];
+  /** Provider asset provenance value when the fixture knows it. */
+  provenance?: Asset["provenance"];
+  /** Provider asset review/export status when the fixture knows it. */
+  assetStatus?: Asset["assetStatus"];
+  /** Provider generation method when this is a generated asset. */
+  generationMethod?: string | null;
+  /** Source asset identifier when this asset was generated from another asset. */
+  generationSourceAssetId?: string | null;
   /** Provider preview readiness value. */
   previewStatus: Asset["previewStatus"];
   /** Provider source URL when only a reference exists. */
   sourceUrl: string | null;
+  /** Captured storage key when the provider fixture has a real stored file. */
+  storageKey?: string | null;
+  /** Captured file hash when the provider fixture has a real stored file. */
+  fileHash?: string | null;
   /** Provider asset state spelling. */
   state: string;
   /** Provider validation status value. */
@@ -122,7 +144,11 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
   const datasheetAsset = record.assets.find((asset) => asset.assetType === "datasheet");
 
   return {
+    accessoryRequirements: record.accessoryRequirements ?? [],
     assets: record.assets.map((asset) => normalizeAsset(asset, record, rawPayload, sourceRecordId)),
+    cableCompatibilities: record.cableCompatibilities ?? [],
+    companionRecommendations: record.companionRecommendations ?? [],
+    connectorFamily: record.connectorFamily ?? null,
     datasheetRevisions: [
       {
         fileAssetId: datasheetAsset?.id ?? null,
@@ -136,11 +162,14 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
         sourceRecordId
       }
     ],
+    generationWorkflows: record.generationWorkflows ?? [],
     manufacturer: record.manufacturer,
+    mateRelations: record.mateRelations ?? [],
     metrics: record.metrics.map((metric) => normalizeMetric(metric, record, rawPayload, sourceRecordId)),
     package: record.package,
     part: {
       category: record.part.category,
+      connectorFamilyId: record.part.connectorFamilyId ?? record.connectorFamily?.id ?? null,
       id: record.part.id,
       lastUpdatedAt,
       lifecycleStatus: normalizeLifecycleStatus(record.part.lifecycleStatus),
@@ -149,6 +178,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
       packageId: record.package.id,
       trustScore: record.part.trustScore
     },
+    similarPartRelations: record.similarPartRelations ?? [],
     sourceRecord: {
       fetchedAt: rawPayload.fetchedAt,
       id: sourceRecordId,
@@ -187,26 +217,31 @@ function normalizeMetric(metric: LocalCatalogMetric, record: LocalCatalogRecord,
  */
 function normalizeAsset(asset: LocalCatalogAsset, record: LocalCatalogRecord, rawPayload: RawProviderPayload, sourceRecordId: string): Asset {
   const normalizedState = normalizeAssetState(asset.state);
+  const assetState = deriveAssetState({
+    fileHash: asset.fileHash ?? null,
+    sourceUrl: asset.sourceUrl,
+    storageKey: asset.storageKey ?? null,
+    validationStatus: normalizedState === "failed" ? "failed" : asset.validationStatus
+  });
 
   return {
-    assetState: deriveAssetState({
-      fileHash: null,
-      sourceUrl: asset.sourceUrl,
-      storageKey: null,
-      validationStatus: normalizedState === "failed" ? "failed" : asset.validationStatus
-    }),
+    assetState,
+    assetStatus: asset.assetStatus ?? assetState,
     assetType: asset.assetType,
     fileFormat: asset.fileFormat,
-    fileHash: null,
+    fileHash: asset.fileHash ?? null,
+    generationMethod: asset.generationMethod ?? null,
+    generationSourceAssetId: asset.generationSourceAssetId ?? null,
     id: asset.id,
     lastUpdatedAt: rawPayload.fetchedAt,
     licenseMode: asset.licenseMode,
     partId: record.part.id,
     previewStatus: asset.previewStatus,
     providerId: rawPayload.providerId,
+    provenance: asset.provenance ?? "manual_internal",
     sourceRecordId,
     sourceUrl: asset.sourceUrl,
-    storageKey: null,
+    storageKey: asset.storageKey ?? null,
     validationStatus: normalizedState === "failed" ? "failed" : asset.validationStatus
   };
 }

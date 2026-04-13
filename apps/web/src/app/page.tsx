@@ -4,10 +4,10 @@
 
 import Link from "next/link";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
-import { isValidatedDownloadableAsset } from "@ee-library/shared";
 import { fetchPartSearch, fetchSearchFacets } from "../lib/api-client";
+import { getSearchExportReadiness } from "../lib/detail-view-model";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CadAvailabilityFilter, LifecycleStatus, PartSearchFilters } from "@ee-library/shared";
+import type { CadAvailabilityFilter, LifecycleStatus, PartSearchFilters } from "@ee-library/shared/types";
 
 /** PageSearchParams mirrors the GET filters used by the search form. */
 type PageSearchParams = {
@@ -142,8 +142,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           {results.length > 0 ? (
             <div className="results-list">
               {results.map((record) => {
-                const exportableAssets = record.assets.filter(isValidatedDownloadableAsset);
-                const assetLabel = exportableAssets.length > 0 ? `${exportableAssets.length} exportable` : "not exportable";
+                const exportReadiness = getSearchExportReadiness(record);
 
                 return (
                   <article className="result-row" key={record.part.id}>
@@ -161,7 +160,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                     </div>
                     <div className="result-row__badges">
                       <StatusBadge label={record.part.lifecycleStatus} tone="info" />
-                      <StatusBadge label={assetLabel} tone={exportableAssets.length > 0 ? "verified" : "review"} />
+                      <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
                     </div>
                     <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
                   </article>

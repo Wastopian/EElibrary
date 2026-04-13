@@ -3,11 +3,13 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { filterPartRecords, getPartDetail, getSearchFacets, getSearchFacetsFromRecords, searchParts } from "@ee-library/shared";
-import { getCatalogStoreStatus, readCatalogRecordsFromDatabase } from "./catalog-store";
-import type { CadAvailabilityFilter, PartSearchFilters, PartSearchRecord } from "@ee-library/shared";
+import { filterPartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
+import { getCatalogStoreStatus, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase } from "./catalog-store";
+import { resolveCatalogRecords } from "./catalog-resolver";
+import { buildPartDetailResponse } from "./detail-response";
+import type { ApiEnvelope, CadAvailabilityFilter, CatalogDataSource, PartSearchFilters, PartSearchRecord } from "@ee-library/shared/types";
 
-/** API_PORT is read from the environment so local runs do not hard-code deployment details. */
+/** port is the local HTTP port for the API process. */
 const port = Number(process.env.API_PORT ?? 4000);
 
 /**
@@ -42,57 +44,54 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (url.pathname === "/parts") {
-    const databaseRecords = await readDatabaseRecordsSafely();
-    const data = databaseRecords ? filterPartRecords(databaseRecords, readSearchFilters(url)) : searchParts(readSearchFilters(url));
+    const filters = readSearchFilters(url);
+    const catalog = await resolveCatalogRecords(readCatalogRecordsFromDatabase, loadSeedCatalogRecords);
 
-    sendJson(response, 200, {
-      data,
-      source: databaseRecords ? "database" : "seed_fallback"
-    });
+    if (!catalog.ok) {
+      sendJson(response, catalog.statusCode, catalog.body);
+      return;
+    }
+
+    sendCatalogJson(response, filterPartRecords(catalog.records, filters), catalog.source, catalog.warnings);
     return;
   }
 
   if (url.pathname === "/parts/facets") {
-    const databaseRecords = await readDatabaseRecordsSafely();
+    const catalog = await resolveCatalogRecords(readCatalogRecordsFromDatabase, loadSeedCatalogRecords);
 
-    sendJson(response, 200, {
-      data: databaseRecords ? getSearchFacetsFromRecords(databaseRecords) : getSearchFacets(),
-      source: databaseRecords ? "database" : "seed_fallback"
-    });
+    if (!catalog.ok) {
+      sendJson(response, catalog.statusCode, catalog.body);
+      return;
+    }
+
+    sendCatalogJson(response, getSearchFacetsFromRecords(catalog.records), catalog.source, catalog.warnings);
     return;
   }
 
   const partMatch = /^\/parts\/([^/]+)$/u.exec(url.pathname);
 
   if (partMatch?.[1]) {
-    const databaseRecords = await readDatabaseRecordsSafely();
-    const record = databaseRecords ? databaseRecords.find((candidate) => candidate.part.id === partMatch[1]) : getPartDetail(partMatch[1]);
+    const partId = partMatch[1];
+    const catalog = await resolveCatalogRecords(() => readPartDetailRecordsFromDatabase(partId), loadSeedCatalogRecords);
+
+    if (!catalog.ok) {
+      sendJson(response, catalog.statusCode, catalog.body);
+      return;
+    }
+
+    const records = catalog.records;
+    const record = records.find((candidate) => candidate.part.id === partMatch[1]);
 
     if (!record) {
       sendJson(response, 404, { error: "Part not found" });
       return;
     }
 
-    sendJson(response, 200, {
-      data: record,
-      source: databaseRecords ? "database" : "seed_fallback"
-    });
+    sendCatalogJson(response, buildPartDetailResponse(record, records), catalog.source, catalog.warnings);
     return;
   }
 
   sendJson(response, 404, { error: "Route not found" });
-}
-
-/**
- * Reads database records while allowing seed fallback for local development outages.
- */
-async function readDatabaseRecordsSafely(): Promise<PartSearchRecord[] | null> {
-  try {
-    return await readCatalogRecordsFromDatabase();
-  } catch (error) {
-    console.error("Catalog database read failed; using seed fallback.", error);
-    return null;
-  }
 }
 
 /**
@@ -110,7 +109,7 @@ function readSearchFilters(url: URL): PartSearchFilters {
 }
 
 /**
- * Normalizes the CAD availability query parameter for API consumers.
+ * Reads a URL CAD availability filter without accepting unknown strings.
  */
 function readCadAvailability(value: string | null): CadAvailabilityFilter {
   if (value === "available" || value === "unavailable") {
@@ -121,7 +120,7 @@ function readCadAvailability(value: string | null): CadAvailabilityFilter {
 }
 
 /**
- * Normalizes the lifecycle query parameter for API consumers.
+ * Reads a URL lifecycle filter without accepting unknown strings.
  */
 function readLifecycleStatus(value: string | null): PartSearchFilters["lifecycleStatus"] {
   if (value === "active" || value === "not_recommended" || value === "obsolete" || value === "unknown") {
@@ -132,13 +131,31 @@ function readLifecycleStatus(value: string | null): PartSearchFilters["lifecycle
 }
 
 /**
- * Sends a JSON response with consistent headers.
+ * Sends a JSON response with a stable content type.
  */
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8"
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Sends a typed catalog data envelope with optional degraded-state warnings.
+ */
+function sendCatalogJson<TData>(response: ServerResponse, data: TData, source: CatalogDataSource, warnings?: string[]): void {
+  const payload: ApiEnvelope<TData> = warnings && warnings.length > 0 ? { data, source, warnings } : { data, source };
+
+  sendJson(response, 200, payload);
+}
+
+/**
+ * Dynamically loads seed data only when explicit local fallback is enabled.
+ */
+async function loadSeedCatalogRecords(): Promise<PartSearchRecord[]> {
+  const { getAllPartRecords } = await import("@ee-library/shared/search");
+
+  return getAllPartRecords();
 }
 
 /** server starts the provider-neutral API process. */

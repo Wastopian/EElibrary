@@ -2,7 +2,7 @@
  * File header: Provides the web app's provider-neutral API access layer.
  */
 
-import type { ApiEnvelope, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared";
+import type { ApiEnvelope, PartDetailResponse, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared/types";
 
 /**
  * Fetches provider-neutral search facets from the API boundary.
@@ -35,7 +35,7 @@ export async function fetchPartSearch(filters: PartSearchFilters): Promise<PartS
 /**
  * Fetches one component detail record from the API boundary.
  */
-export async function fetchPartDetail(partId: string): Promise<PartSearchRecord | null> {
+export async function fetchPartDetail(partId: string): Promise<PartDetailResponse | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}`), {
     cache: "no-store"
   });
@@ -48,7 +48,7 @@ export async function fetchPartDetail(partId: string): Promise<PartSearchRecord 
     throw new Error(`API request failed with ${response.status}`);
   }
 
-  const envelope = (await response.json()) as ApiEnvelope<PartSearchRecord>;
+  const envelope = (await response.json()) as ApiEnvelope<PartDetailResponse>;
 
   return envelope.data;
 }

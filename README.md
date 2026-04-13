@@ -41,7 +41,8 @@ That gets you to something useful instead of a massive half-built cathedral.
 ## Phase 2 data flow
 - `apps/worker` includes a `local-catalog` provider adapter that reads deterministic provider payloads, normalizes them through shared helpers, and persists canonical rows into Postgres.
 - `infra/postgres/002_phase2_asset_registry.sql` adds source-record provenance, record update timestamps, and asset lifecycle states: `missing`, `referenced`, `downloaded`, `validated`, and `failed`.
-- `apps/api` reads parts, facets, and details from Postgres when `DATABASE_URL` is configured and reachable. It falls back to seed data only when the database is not configured or unavailable.
+- `infra/postgres/003_connector_intelligence_hardening.sql` upgrades older databases with connector relationship tables, asset provenance/status columns, generation workflows, and conservative backfills.
+- `apps/api` reads parts, facets, and details from Postgres when `DATABASE_URL` is configured and reachable. It uses seed data only when `EE_LIBRARY_ALLOW_SEED_FALLBACK=true` is explicitly set for local development.
 - `apps/web` stays provider-neutral and reads provenance, asset state, confidence, and updated timestamps from the API response.
 - Export actions require validated downloadable assets with storage and hash evidence. Referenced URLs do not count as downloaded files.
 
@@ -58,5 +59,6 @@ npm run ingest:local
 ```
 
 For DB-backed local ingestion, start Postgres and set `DATABASE_URL` before running `npm run ingest:local`.
-The current seed data is intentionally metadata-only for assets. Export actions stay disabled until validated downloadable assets exist.
+For seed-only local API development, set `EE_LIBRARY_ALLOW_SEED_FALLBACK=true`; DB schema or access failures are otherwise returned explicitly.
+Seed assets intentionally mix referenced metadata, missing files, validated files, and export-verified files so export actions can demonstrate strict gating.
 The web app reads search and detail data through `apps/api`; run `npm run dev` for both services together.

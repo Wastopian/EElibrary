@@ -55,6 +55,8 @@
           "fileFormat": "pdf",
           "id": "asset-tps7a02-datasheet",
           "licenseMode": "metadata_only",
+          "provenance": "official",
+          "assetStatus": "referenced",
           "previewStatus": "not_available",
           "sourceUrl": "https://www.ti.com/lit/ds/symlink/tps7a02.pdf",
           "state": "referenced",
@@ -65,10 +67,80 @@
           "fileFormat": "unknown",
           "id": "asset-tps7a02-footprint",
           "licenseMode": "unknown",
+          "provenance": "manual_internal",
+          "assetStatus": "missing",
           "previewStatus": "not_available",
           "sourceUrl": null,
           "state": "missing",
           "validationStatus": "not_validated"
+        },
+        {
+          "assetType": "symbol",
+          "fileFormat": "unknown",
+          "id": "asset-tps7a02-symbol",
+          "licenseMode": "unknown",
+          "provenance": "manual_internal",
+          "assetStatus": "missing",
+          "previewStatus": "not_available",
+          "sourceUrl": null,
+          "state": "missing",
+          "validationStatus": "not_validated"
+        },
+        {
+          "assetType": "mechanical_drawing",
+          "fileFormat": "pdf",
+          "id": "asset-tps7a02-mechanical",
+          "licenseMode": "metadata_only",
+          "provenance": "official",
+          "assetStatus": "reviewed",
+          "previewStatus": "not_available",
+          "sourceUrl": "https://www.ti.com/lit/ml/mpds026/mpds026.pdf",
+          "state": "referenced",
+          "validationStatus": "needs_review"
+        },
+        {
+          "assetType": "three_d_model",
+          "fileFormat": "unknown",
+          "id": "asset-tps7a02-3d",
+          "licenseMode": "unknown",
+          "provenance": "manual_internal",
+          "assetStatus": "missing",
+          "previewStatus": "not_available",
+          "sourceUrl": null,
+          "state": "missing",
+          "validationStatus": "not_validated"
+        }
+      ],
+      "generationWorkflows": [
+        {
+          "confidenceScore": 0.77,
+          "generationStatus": "ready",
+          "id": "gen-tps7a02-footprint",
+          "outputAssetId": "asset-tps7a02-footprint",
+          "partId": "part-tps7a02dbvr",
+          "sourceAssetId": "asset-tps7a02-datasheet",
+          "sourceDatasheetRevisionId": "dsr-tps7a02-rev-e",
+          "targetAssetType": "footprint"
+        },
+        {
+          "confidenceScore": 0.74,
+          "generationStatus": "ready",
+          "id": "gen-tps7a02-symbol",
+          "outputAssetId": "asset-tps7a02-symbol",
+          "partId": "part-tps7a02dbvr",
+          "sourceAssetId": "asset-tps7a02-datasheet",
+          "sourceDatasheetRevisionId": "dsr-tps7a02-rev-e",
+          "targetAssetType": "symbol"
+        },
+        {
+          "confidenceScore": 0.72,
+          "generationStatus": "ready",
+          "id": "gen-tps7a02-3d",
+          "outputAssetId": "asset-tps7a02-3d",
+          "partId": "part-tps7a02dbvr",
+          "sourceAssetId": "asset-tps7a02-mechanical",
+          "sourceDatasheetRevisionId": "dsr-tps7a02-rev-e",
+          "targetAssetType": "three_d_model"
         }
       ]
     },
@@ -128,6 +200,8 @@
           "fileFormat": "pdf",
           "id": "asset-stm32g031-datasheet",
           "licenseMode": "metadata_only",
+          "provenance": "official",
+          "assetStatus": "referenced",
           "previewStatus": "not_available",
           "sourceUrl": "https://www.st.com/resource/en/datasheet/stm32g031k8.pdf",
           "state": "referenced",
@@ -138,6 +212,8 @@
           "fileFormat": "unknown",
           "id": "asset-stm32g031-3d",
           "licenseMode": "unknown",
+          "provenance": "manual_internal",
+          "assetStatus": "missing",
           "previewStatus": "not_available",
           "sourceUrl": null,
           "state": "missing",

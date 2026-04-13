@@ -24,6 +24,9 @@
       "@ee-library/shared": [
         "packages/shared/src/index.ts"
       ],
+      "@ee-library/shared/*": [
+        "packages/shared/src/*"
+      ],
       "@ee-library/ui": [
         "packages/ui/src/index.ts"
       ]

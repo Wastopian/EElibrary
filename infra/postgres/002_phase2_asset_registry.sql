@@ -48,3 +48,15 @@ BEGIN
       CHECK (asset_state IN ('missing', 'referenced', 'downloaded', 'validated', 'failed'));
   END IF;
 END $$;
+
+-- Generation workflows track datasheet-driven CAD opportunities without implying output files exist.
+CREATE TABLE IF NOT EXISTS generation_workflows (
+  id TEXT PRIMARY KEY,
+  part_id TEXT NOT NULL REFERENCES parts(id),
+  target_asset_type TEXT NOT NULL CHECK (target_asset_type IN ('footprint', 'symbol', 'three_d_model')),
+  source_datasheet_revision_id TEXT NOT NULL REFERENCES datasheet_revisions(id),
+  source_asset_id TEXT REFERENCES assets(id),
+  generation_status TEXT NOT NULL CHECK (generation_status IN ('ready', 'blocked', 'in_progress', 'completed')),
+  confidence_score NUMERIC NOT NULL CHECK (confidence_score >= 0 AND confidence_score <= 1),
+  output_asset_id TEXT REFERENCES assets(id)
+);

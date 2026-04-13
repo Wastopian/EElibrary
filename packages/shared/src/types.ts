@@ -9,13 +9,32 @@ export type LifecycleStatus = "active" | "not_recommended" | "obsolete" | "unkno
 export type MetricUnit = "V" | "A" | "F" | "H" | "ohm" | "mm" | "Hz" | "deg C";
 
 /** Asset kinds match the MVP asset registry without naming a specific provider. */
-export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model";
+export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model" | "mechanical_drawing";
+
+/** EngineeringAssetClass names first-class asset classes used by the detail API. */
+export type EngineeringAssetClass = AssetType;
 
 /** File formats describe storage content without implying availability. */
-export type FileFormat = "pdf" | "step" | "kicad_mod" | "kicad_sym" | "unknown";
+export type FileFormat = "pdf" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
 
 /** License modes prevent the UI from promising redistribution when it is not known. */
 export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown";
+
+/** Provenance makes source trust explicit without assuming correctness. */
+export type AssetProvenance = "official" | "trusted_external" | "generated" | "manual_internal";
+
+/** Asset status keeps metadata review and export verification separate from file storage. */
+export type AssetStatus =
+  | "missing"
+  | "referenced"
+  | "downloaded"
+  | "validated"
+  | "failed"
+  | "reviewed"
+  | "verified_for_export";
+
+/** Concrete asset file lifecycle values never treat references as downloaded files. */
+export type AssetState = "missing" | "referenced" | "downloaded" | "validated" | "failed";
 
 /** Validation status describes trust in the asset or metadata. */
 export type ValidationStatus = "verified" | "needs_review" | "not_validated" | "failed";
@@ -23,54 +42,57 @@ export type ValidationStatus = "verified" | "needs_review" | "not_validated" | "
 /** Preview status describes whether a visual preview can be rendered. */
 export type PreviewStatus = "ready" | "pending" | "not_available";
 
-/** AssetState tracks the concrete file lifecycle without implying fake availability. */
-export type AssetState = "missing" | "referenced" | "downloaded" | "validated" | "failed";
+/** Connector relationship types model mating and accessory intelligence. */
+export type ConnectorRelationshipType =
+  | "best_mate"
+  | "alternate_mate"
+  | "requires_accessory"
+  | "optional_accessory"
+  | "supports_cable"
+  | "tooling_requirement";
+
+/** Generation targets for datasheet-driven CAD creation workflows. */
+export type GenerationTargetAssetType = "footprint" | "symbol" | "three_d_model";
+
+/** Workflow status for generated asset pipelines. */
+export type GenerationStatus = "ready" | "blocked" | "in_progress" | "completed";
 
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
-  /** Stable identifier used by internal records. */
   id: string;
-  /** Official or display-ready manufacturer name. */
   name: string;
-  /** Search aliases that should never replace the official name. */
   aliases: string[];
-  /** Public manufacturer website when known. */
   website: string | null;
 }
 
 /** Package is the normalized physical package entity from the data model. */
 export interface Package {
-  /** Stable package identifier used by part records. */
   id: string;
-  /** Display-ready package name such as SOT-23-5 or 0603. */
   packageName: string;
-  /** Pin or terminal count when the package exposes one. */
   pinCount: number | null;
-  /** Normalized terminal pitch in millimeters. */
   pitchMm: number | null;
-  /** Normalized body length in millimeters. */
   bodyLengthMm: number | null;
-  /** Normalized body width in millimeters. */
   bodyWidthMm: number | null;
-  /** Normalized body height in millimeters. */
   bodyHeightMm: number | null;
+}
+
+/** ConnectorFamily groups mechanically compatible connector lines. */
+export interface ConnectorFamily {
+  id: string;
+  name: string;
+  series: string;
+  description: string;
 }
 
 /** Part is the normalized catalog entity that search results are built around. */
 export interface Part {
-  /** Stable part identifier used across the monorepo. */
   id: string;
-  /** Manufacturer part number displayed as the primary engineering identifier. */
   mpn: string;
-  /** Foreign key back to the normalized manufacturer. */
   manufacturerId: string;
-  /** Coarse engineering category used by filters. */
   category: string;
-  /** Lifecycle state with unknown kept distinct from active. */
   lifecycleStatus: LifecycleStatus;
-  /** Foreign key back to the normalized package record. */
   packageId: string;
-  /** Normalized trust score from 0 to 1. */
+  connectorFamilyId: string | null;
   trustScore: number;
   /** ISO timestamp for the latest canonical record update. */
   lastUpdatedAt: string;
@@ -78,166 +100,240 @@ export interface Part {
 
 /** SourceRecord preserves raw provider payload provenance for normalized records. */
 export interface SourceRecord {
-  /** Stable source record identifier. */
   id: string;
-  /** Opaque provider identifier. */
   providerId: string;
-  /** Provider-specific part key used for deterministic upserts. */
   providerPartKey: string;
-  /** Canonical part identifier when the payload has been normalized. */
   partId: string | null;
-  /** Provider source URL when one exists. */
   sourceUrl: string | null;
-  /** ISO timestamp for when the raw payload was fetched. */
   fetchedAt: string;
-  /** Raw provider payload retained for provenance and later audits. */
   rawPayload: unknown;
-  /** ISO timestamp for when this payload was normalized. */
   normalizedAt: string | null;
-  /** ISO timestamp for the latest source record update. */
   lastUpdatedAt: string;
 }
 
 /** PartMetric stores one normalized datasheet metric with confidence and provenance. */
 export interface PartMetric {
-  /** Stable metric identifier. */
   id: string;
-  /** Foreign key back to the part this metric describes. */
   partId: string;
-  /** Machine-readable metric name such as input_voltage_max. */
   metricKey: string;
-  /** Single normalized value when the datasheet gives one. */
   metricValue: number | null;
-  /** Normalized unit for the value or range. */
   unit: MetricUnit;
-  /** Lower bound when the metric is a range. */
   minValue: number | null;
-  /** Upper bound when the metric is a range. */
   maxValue: number | null;
-  /** Confidence score from 0 to 1 for this normalized metric. */
   confidenceScore: number;
-  /** Datasheet revision that supplied or validated this metric. */
   sourceRevisionId: string;
-  /** Source record that supplied the metric normalization. */
   sourceRecordId: string | null;
-  /** ISO timestamp for the latest metric update. */
   lastUpdatedAt: string;
 }
 
 /** Asset tracks metadata, storage, validation, preview, and source provenance for files. */
 export interface Asset {
-  /** Stable asset identifier. */
   id: string;
-  /** Foreign key back to the part this asset belongs to. */
   partId: string;
-  /** Provider-neutral asset category. */
   assetType: AssetType;
-  /** Provider-neutral file format. */
   fileFormat: FileFormat;
-  /** Storage key when a real file exists, otherwise null for metadata-only records. */
   storageKey: string | null;
-  /** Content hash when a real file has been captured and hashed. */
   fileHash: string | null;
-  /** Opaque provider or source identifier used only for provenance. */
   providerId: string | null;
-  /** Redistribution status for the asset. */
   licenseMode: LicenseMode;
-  /** Validation state for the asset metadata or file. */
+  provenance: AssetProvenance;
+  assetStatus: AssetStatus;
+  generationMethod: string | null;
+  generationSourceAssetId: string | null;
   validationStatus: ValidationStatus;
-  /** Preview readiness for UI rendering. */
   previewStatus: PreviewStatus;
-  /** Concrete asset file lifecycle state. */
   assetState: AssetState;
-  /** Provider source URL for a referenced asset when known. */
   sourceUrl: string | null;
-  /** Source record that supplied the asset metadata. */
   sourceRecordId: string | null;
-  /** ISO timestamp for the latest asset update. */
   lastUpdatedAt: string;
 }
 
 /** DatasheetRevision stores parsed datasheet revision metadata and parse confidence. */
 export interface DatasheetRevision {
-  /** Stable datasheet revision identifier. */
   id: string;
-  /** Foreign key back to the part this datasheet describes. */
   partId: string;
-  /** Human-readable revision label from the datasheet. */
   revisionLabel: string;
-  /** ISO date string when the revision date is known. */
   revisionDate: string | null;
-  /** Page count when it has been parsed or verified. */
   pageCount: number | null;
-  /** Linked asset identifier for the PDF metadata or file. */
   fileAssetId: string | null;
-  /** Confidence score from 0 to 1 for the parsed datasheet revision. */
   parseConfidence: number;
-  /** Source record that supplied the datasheet revision. */
   sourceRecordId: string | null;
-  /** ISO timestamp for the latest datasheet revision update. */
   lastUpdatedAt: string;
+}
+
+/** MateRelation stores best/alternate mating connector relationships. */
+export interface MateRelation {
+  id: string;
+  partId: string;
+  matePartId: string;
+  relationshipType: "best_mate" | "alternate_mate";
+  confidenceScore: number;
+  sourceRevisionId: string;
+  notes: string | null;
+}
+
+/** AccessoryRequirement stores required, optional, and tooling accessory relationships. */
+export interface AccessoryRequirement {
+  id: string;
+  partId: string;
+  accessoryPartId: string;
+  relationshipType: "requires_accessory" | "optional_accessory" | "tooling_requirement";
+  confidenceScore: number;
+  sourceRevisionId: string;
+  notes: string | null;
+}
+
+/** CableCompatibility tracks compatible cables for connector parts. */
+export interface CableCompatibility {
+  id: string;
+  partId: string;
+  cablePartId: string;
+  relationshipType: "supports_cable";
+  confidenceScore: number;
+  sourceRevisionId: string;
+  notes: string | null;
+}
+
+/** SimilarPartRelation stores cross-suggested alternatives with confidence. */
+export interface SimilarPartRelation {
+  id: string;
+  partId: string;
+  similarPartId: string;
+  confidenceScore: number;
+  reason: string;
+}
+
+/** CompanionRecommendation stores frequently paired companion components. */
+export interface CompanionRecommendation {
+  id: string;
+  partId: string;
+  companionPartId: string;
+  confidenceScore: number;
+  usageContext: string;
+}
+
+/** GenerationWorkflow tracks datasheet-driven CAD generation opportunities and status. */
+export interface GenerationWorkflow {
+  id: string;
+  partId: string;
+  targetAssetType: GenerationTargetAssetType;
+  sourceDatasheetRevisionId: string;
+  sourceAssetId: string | null;
+  generationStatus: GenerationStatus;
+  confidenceScore: number;
+  outputAssetId: string | null;
+}
+
+/** AssetClassReadiness summarizes the best concrete evidence for one asset class. */
+export type AssetClassReadiness = "export_ready" | "validated_file" | "downloaded_file" | "reference_only" | "missing" | "failed";
+
+/** AssetClassSummary groups all assets for one class and identifies the best candidate. */
+export interface AssetClassSummary {
+  assetType: EngineeringAssetClass;
+  assets: Asset[];
+  bestAsset: Asset | null;
+  readiness: AssetClassReadiness;
+}
+
+/** BundleReadinessState names the honest export readiness state shown by API and UI. */
+export type BundleReadinessState = "bundle_ready" | "partial_bundle" | "references_only" | "no_usable_assets";
+
+/** BundleReadinessSummary describes bundle readiness without implying nonexistent files. */
+export interface BundleReadinessSummary {
+  state: BundleReadinessState;
+  label: string;
+  reason: string;
+  verifiedCadAssetCount: number;
+  fileBackedCadAssetCount: number;
+  referencedAssetCount: number;
+  exportActions: ExportAvailability[];
+}
+
+/** AssetGenerationOption is the typed request foundation for a missing asset workflow. */
+export interface AssetGenerationOption {
+  workflowId: string;
+  targetAssetType: GenerationTargetAssetType;
+  label: string;
+  reason: string;
+  generationStatus: GenerationStatus;
+  confidenceScore: number;
+  sourceAssetId: string | null;
+  sourceDatasheetRevisionId: string;
+}
+
+/** BuildableMatingSet is the API-ready recommendation for procurement-friendly assembly. */
+export interface BuildableMatingSet {
+  bestMate: MateRelation | null;
+  requiredAccessories: AccessoryRequirement[];
+  toolingRequirements: AccessoryRequirement[];
+  cableOptions: CableCompatibility[];
 }
 
 /** CAD availability filters let search distinguish exportable records from unavailable ones. */
 export type CadAvailabilityFilter = "any" | "available" | "unavailable";
 
-/** PartSearchFilters contains provider-neutral filters used by web and API. */
+/** PartSearchFilters are provider-neutral search filters accepted by API and UI. */
 export interface PartSearchFilters {
-  /** Free-text query matching MPN, manufacturer, aliases, package, or category. */
   query?: string | undefined;
-  /** Optional manufacturer identifier filter. */
   manufacturerId?: string | undefined;
-  /** Optional category filter. */
   category?: string | undefined;
-  /** Optional package identifier filter. */
   packageId?: string | undefined;
-  /** Optional lifecycle status filter. */
   lifecycleStatus?: LifecycleStatus | undefined;
-  /** Optional CAD file availability filter. */
   cadAvailability?: CadAvailabilityFilter | undefined;
 }
 
-/** PartSearchRecord is the joined record shape consumed by API and web search. */
+/** PartSearchRecord is the joined record shape consumed by API and web search/detail pages. */
 export interface PartSearchRecord {
-  /** Normalized part row. */
   part: Part;
-  /** Joined manufacturer row. */
   manufacturer: Manufacturer;
-  /** Joined package row. */
   package: Package;
-  /** Metrics linked to the part. */
+  connectorFamily: ConnectorFamily | null;
   metrics: PartMetric[];
-  /** Assets linked to the part. */
   assets: Asset[];
-  /** Latest datasheet revision when one is known. */
   datasheetRevision: DatasheetRevision | null;
-  /** Source records that contributed to this canonical part. */
   sources: SourceRecord[];
+  mateRelations: MateRelation[];
+  accessoryRequirements: AccessoryRequirement[];
+  cableCompatibilities: CableCompatibility[];
+  buildableMatingSet: BuildableMatingSet;
+  similarParts: SimilarPartRelation[];
+  companionRecommendations: CompanionRecommendation[];
+  generationWorkflows: GenerationWorkflow[];
   /** ISO timestamp for the latest joined record update. */
   lastUpdatedAt: string;
 }
 
-/** SearchFacets contains provider-neutral filter data served by the API. */
+/** RelatedPartSummary provides lightweight display data for relationship sections. */
+export interface RelatedPartSummary {
+  id: string;
+  mpn: string;
+  manufacturerName: string;
+  category: string;
+}
+
+/** PartDetailResponse enriches the base record with resolved related-part summaries. */
+export interface PartDetailResponse {
+  record: PartSearchRecord;
+  relatedPartSummaries: RelatedPartSummary[];
+  assetGroups: AssetClassSummary[];
+  bundleReadiness: BundleReadinessSummary;
+  generationOptions: AssetGenerationOption[];
+}
+
+/** SearchFacets contains the provider-neutral filter data for the search surface. */
 export interface SearchFacets {
-  /** Manufacturers available to the search filter rail. */
   manufacturers: Manufacturer[];
-  /** Categories available to the search filter rail. */
   categories: string[];
-  /** Packages available to the search filter rail. */
   packages: Package[];
-  /** Lifecycle states available to the search filter rail. */
   lifecycleStatuses: LifecycleStatus[];
 }
 
-/** ExportAvailability records whether a bundle can be created from real files. */
+/** ExportAvailability describes one export action and why it is enabled or disabled. */
 export interface ExportAvailability {
-  /** Stable export target identifier. */
   id: "altium" | "solidworks" | "neutral_cad";
-  /** User-facing target name. */
   label: string;
-  /** True only when required validated downloadable assets exist. */
+  /** True only when required verified file-backed assets exist. */
   available: boolean;
-  /** Human-readable availability reason for disabled actions or audit text. */
   reason: string;
 }
 
@@ -246,8 +342,20 @@ export type CatalogDataSource = "database" | "seed_fallback";
 
 /** ApiEnvelope defines the typed JSON response envelope used by apps/api. */
 export interface ApiEnvelope<TData> {
-  /** Response data returned by the API service. */
   data: TData;
-  /** Backing catalog source when the route serves catalog data. */
   source?: CatalogDataSource;
+  /** Explicit degraded-state warnings, such as allowed local seed fallback. */
+  warnings?: string[];
+}
+
+/** ApiErrorEnvelope defines typed error responses used by apps/api. */
+export interface ApiErrorEnvelope {
+  error: {
+    /** Stable machine-readable API error code. */
+    code: string;
+    /** User-facing explanation that avoids implying healthy DB-backed data. */
+    message: string;
+  };
+  /** Explicit degraded-state warnings when applicable. */
+  warnings?: string[];
 }

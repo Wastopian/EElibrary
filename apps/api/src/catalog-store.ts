@@ -3,16 +3,24 @@
  */
 
 import { Pool } from "pg";
+import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import type {
+  AccessoryRequirement,
   Asset,
+  CableCompatibility,
+  CompanionRecommendation,
+  ConnectorFamily,
   DatasheetRevision,
+  GenerationWorkflow,
   Manufacturer,
+  MateRelation,
   Package,
   Part,
   PartMetric,
   PartSearchRecord,
+  SimilarPartRelation,
   SourceRecord
-} from "@ee-library/shared";
+} from "@ee-library/shared/types";
 
 /** CatalogStoreStatus describes whether the API can currently use Postgres. */
 export interface CatalogStoreStatus {
@@ -20,6 +28,30 @@ export interface CatalogStoreStatus {
   connected: boolean;
   /** User-facing service status for the health endpoint. */
   label: "connected" | "not_configured" | "unavailable";
+}
+
+/** CatalogReadResult makes the configured-vs-readable database state explicit. */
+export type CatalogReadResult = { status: "available"; records: PartSearchRecord[] } | { status: "not_configured" };
+
+/** CatalogStoreFailureKind distinguishes operational outages from schema/data shape problems. */
+export type CatalogStoreFailureKind = "database_unavailable" | "schema_mismatch" | "query_failed";
+
+/** CatalogStoreError wraps Postgres read errors so routes do not silently fall back to seed data. */
+export class CatalogStoreError extends Error {
+  /** Stable error kind for route status and test assertions. */
+  readonly kind: CatalogStoreFailureKind;
+  /** Original Postgres or network error. */
+  override readonly cause: unknown;
+
+  /**
+   * Creates an explicit catalog-store failure.
+   */
+  constructor(kind: CatalogStoreFailureKind, message: string, cause: unknown) {
+    super(message);
+    this.name = "CatalogStoreError";
+    this.kind = kind;
+    this.cause = cause;
+  }
 }
 
 /** DatabasePartRow is the joined canonical part row shape read from Postgres. */
@@ -31,6 +63,7 @@ interface DatabasePartRow {
   category: string;
   lifecycle_status: Part["lifecycleStatus"];
   package_id: string;
+  connector_family_id: string | null;
   trust_score: string;
   part_last_updated_at: Date | string;
   /** Manufacturer fields from manufacturers. */
@@ -44,6 +77,10 @@ interface DatabasePartRow {
   body_length_mm: string | null;
   body_width_mm: string | null;
   body_height_mm: string | null;
+  /** Connector family fields from connector_families when the part is a connector. */
+  connector_family_name: string | null;
+  connector_family_series: string | null;
+  connector_family_description: string | null;
 }
 
 /** DatabaseMetricRow is the part metric row shape read from Postgres. */
@@ -73,12 +110,85 @@ interface DatabaseAssetRow {
   file_hash: string | null;
   provider_id: string | null;
   license_mode: Asset["licenseMode"];
+  provenance: Asset["provenance"];
+  asset_status: Asset["assetStatus"];
+  generation_method: string | null;
+  generation_source_asset_id: string | null;
   validation_status: Asset["validationStatus"];
   preview_status: Asset["previewStatus"];
   asset_state: Asset["assetState"];
   source_url: string | null;
   source_record_id: string | null;
   last_updated_at: Date | string;
+}
+
+/** DatabaseMateRow is the connector mating relationship shape read from Postgres. */
+interface DatabaseMateRow {
+  /** MateRelation fields from mate_relations. */
+  id: string;
+  part_id: string;
+  mate_part_id: string;
+  relationship_type: MateRelation["relationshipType"];
+  confidence_score: string;
+  source_revision_id: string;
+  notes: string | null;
+}
+
+/** DatabaseAccessoryRow is the accessory/tooling relationship shape read from Postgres. */
+interface DatabaseAccessoryRow {
+  /** AccessoryRequirement fields from accessory_requirements. */
+  id: string;
+  part_id: string;
+  accessory_part_id: string;
+  relationship_type: AccessoryRequirement["relationshipType"];
+  confidence_score: string;
+  source_revision_id: string;
+  notes: string | null;
+}
+
+/** DatabaseCableRow is the cable compatibility relationship shape read from Postgres. */
+interface DatabaseCableRow {
+  /** CableCompatibility fields from cable_compatibilities. */
+  id: string;
+  part_id: string;
+  cable_part_id: string;
+  relationship_type: CableCompatibility["relationshipType"];
+  confidence_score: string;
+  source_revision_id: string;
+  notes: string | null;
+}
+
+/** DatabaseSimilarPartRow is the similar-part relationship shape read from Postgres. */
+interface DatabaseSimilarPartRow {
+  /** SimilarPartRelation fields from similar_part_relations. */
+  id: string;
+  part_id: string;
+  similar_part_id: string;
+  confidence_score: string;
+  reason: string;
+}
+
+/** DatabaseCompanionRow is the companion recommendation shape read from Postgres. */
+interface DatabaseCompanionRow {
+  /** CompanionRecommendation fields from companion_recommendations. */
+  id: string;
+  part_id: string;
+  companion_part_id: string;
+  confidence_score: string;
+  usage_context: string;
+}
+
+/** DatabaseGenerationWorkflowRow is the generation workflow shape read from Postgres. */
+interface DatabaseGenerationWorkflowRow {
+  /** GenerationWorkflow fields from generation_workflows. */
+  id: string;
+  part_id: string;
+  target_asset_type: GenerationWorkflow["targetAssetType"];
+  source_datasheet_revision_id: string;
+  source_asset_id: string | null;
+  generation_status: GenerationWorkflow["generationStatus"];
+  confidence_score: string;
+  output_asset_id: string | null;
 }
 
 /** DatabaseDatasheetRow is the datasheet row shape read from Postgres. */
@@ -113,24 +223,65 @@ interface DatabaseSourceRow {
 let pool: Pool | null = null;
 
 /**
- * Returns every canonical part record from Postgres, or null when the database is not configured.
+ * Returns every canonical part record from Postgres, or an explicit not-configured status.
  */
-export async function readCatalogRecordsFromDatabase(): Promise<PartSearchRecord[] | null> {
+export async function readCatalogRecordsFromDatabase(): Promise<CatalogReadResult> {
   const databasePool = getDatabasePool();
 
   if (!databasePool) {
-    return null;
+    return { status: "not_configured" };
   }
 
-  const [partRows, metricRows, assetRows, datasheetRows, sourceRows] = await Promise.all([
-    databasePool.query<DatabasePartRow>(PART_ROWS_SQL),
-    databasePool.query<DatabaseMetricRow>(METRIC_ROWS_SQL),
-    databasePool.query<DatabaseAssetRow>(ASSET_ROWS_SQL),
-    databasePool.query<DatabaseDatasheetRow>(DATASHEET_ROWS_SQL),
-    databasePool.query<DatabaseSourceRow>(SOURCE_ROWS_SQL)
-  ]);
+  return { records: await readCatalogRecords(databasePool, null), status: "available" };
+}
 
-  return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows);
+/**
+ * Returns the requested part plus relationship targets from Postgres without loading the full catalog.
+ */
+export async function readPartDetailRecordsFromDatabase(partId: string): Promise<CatalogReadResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const primaryRecords = await readCatalogRecords(databasePool, [partId]);
+  const primaryRecord = primaryRecords.find((record) => record.part.id === partId);
+
+  if (!primaryRecord) {
+    return { records: [], status: "available" };
+  }
+
+  const relatedIds = collectRelatedPartIds(primaryRecord);
+  const detailPartIds = Array.from(new Set([partId, ...relatedIds])).sort();
+
+  return { records: await readCatalogRecords(databasePool, detailPartIds), status: "available" };
+}
+
+/**
+ * Reads joined catalog records from Postgres with an optional part-id scope.
+ */
+async function readCatalogRecords(databasePool: Pool, partIds: string[] | null): Promise<PartSearchRecord[]> {
+  try {
+    const params = [partIds];
+    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows] = await Promise.all([
+      databasePool.query<DatabasePartRow>(PART_ROWS_SQL, params),
+      databasePool.query<DatabaseMetricRow>(METRIC_ROWS_SQL, params),
+      databasePool.query<DatabaseAssetRow>(ASSET_ROWS_SQL, params),
+      databasePool.query<DatabaseDatasheetRow>(DATASHEET_ROWS_SQL, params),
+      databasePool.query<DatabaseSourceRow>(SOURCE_ROWS_SQL, params),
+      databasePool.query<DatabaseMateRow>(MATE_ROWS_SQL, params),
+      databasePool.query<DatabaseAccessoryRow>(ACCESSORY_ROWS_SQL, params),
+      databasePool.query<DatabaseCableRow>(CABLE_ROWS_SQL, params),
+      databasePool.query<DatabaseSimilarPartRow>(SIMILAR_PART_ROWS_SQL, params),
+      databasePool.query<DatabaseCompanionRow>(COMPANION_ROWS_SQL, params),
+      databasePool.query<DatabaseGenerationWorkflowRow>(GENERATION_WORKFLOW_ROWS_SQL, params)
+    ]);
+
+    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
 }
 
 /**
@@ -176,6 +327,57 @@ function getDatabasePool(): Pool | null {
 }
 
 /**
+ * Collects relationship target identifiers needed for the detail related-part summaries.
+ */
+function collectRelatedPartIds(record: PartSearchRecord): string[] {
+  return [
+    ...record.mateRelations.map((relation) => relation.matePartId),
+    ...record.accessoryRequirements.map((relation) => relation.accessoryPartId),
+    ...record.cableCompatibilities.map((relation) => relation.cablePartId),
+    ...record.similarParts.map((relation) => relation.similarPartId),
+    ...record.companionRecommendations.map((relation) => relation.companionPartId)
+  ];
+}
+
+/**
+ * Converts unknown Postgres/network failures into explicit catalog-store failures.
+ */
+function toCatalogStoreError(error: unknown): CatalogStoreError {
+  if (isSchemaMismatchError(error)) {
+    return new CatalogStoreError("schema_mismatch", "Catalog database schema does not match the API query contract.", error);
+  }
+
+  if (isDatabaseUnavailableError(error)) {
+    return new CatalogStoreError("database_unavailable", "Catalog database is configured but unavailable.", error);
+  }
+
+  return new CatalogStoreError("query_failed", "Catalog database query failed.", error);
+}
+
+/**
+ * Checks common Postgres SQLSTATE codes for missing tables, columns, or functions.
+ */
+function isSchemaMismatchError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return code === "42P01" || code === "42703" || code === "42883";
+}
+
+/**
+ * Checks common network and server SQLSTATE codes for unavailable databases.
+ */
+function isDatabaseUnavailableError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "ETIMEDOUT" || code === "57P01" || code === "57P03";
+}
+
+/**
+ * Reads a Postgres or Node error code without depending on one concrete error class.
+ */
+function getErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+/**
  * Builds joined API records from flat database row sets.
  */
 function buildPartRecords(
@@ -183,12 +385,24 @@ function buildPartRecords(
   metricRows: DatabaseMetricRow[],
   assetRows: DatabaseAssetRow[],
   datasheetRows: DatabaseDatasheetRow[],
-  sourceRows: DatabaseSourceRow[]
+  sourceRows: DatabaseSourceRow[],
+  mateRows: DatabaseMateRow[],
+  accessoryRows: DatabaseAccessoryRow[],
+  cableRows: DatabaseCableRow[],
+  similarRows: DatabaseSimilarPartRow[],
+  companionRows: DatabaseCompanionRow[],
+  workflowRows: DatabaseGenerationWorkflowRow[]
 ): PartSearchRecord[] {
   const metricsByPartId = groupBy(metricRows.map(mapMetricRow), (metric) => metric.partId);
   const assetsByPartId = groupBy(assetRows.map(mapAssetRow), (asset) => asset.partId);
   const datasheetsByPartId = groupBy(datasheetRows.map(mapDatasheetRow), (datasheet) => datasheet.partId);
   const sourcesByPartId = groupBy(sourceRows.map(mapSourceRow), (source) => source.partId ?? "");
+  const matesByPartId = groupBy(mateRows.map(mapMateRow), (relation) => relation.partId);
+  const accessoriesByPartId = groupBy(accessoryRows.map(mapAccessoryRow), (relation) => relation.partId);
+  const cablesByPartId = groupBy(cableRows.map(mapCableRow), (relation) => relation.partId);
+  const similarPartsByPartId = groupBy(similarRows.map(mapSimilarPartRow), (relation) => relation.partId);
+  const companionsByPartId = groupBy(companionRows.map(mapCompanionRow), (relation) => relation.partId);
+  const workflowsByPartId = groupBy(workflowRows.map(mapGenerationWorkflowRow), (workflow) => workflow.partId);
 
   return partRows.map((row) => {
     const part = mapPartRow(row);
@@ -196,16 +410,30 @@ function buildPartRecords(
     const assets = assetsByPartId.get(part.id) ?? [];
     const datasheets = datasheetsByPartId.get(part.id) ?? [];
     const sources = sourcesByPartId.get(part.id) ?? [];
+    const mateRelations = matesByPartId.get(part.id) ?? [];
+    const accessoryRequirements = accessoriesByPartId.get(part.id) ?? [];
+    const cableCompatibilities = cablesByPartId.get(part.id) ?? [];
+    const similarParts = similarPartsByPartId.get(part.id) ?? [];
+    const companionRecommendations = companionsByPartId.get(part.id) ?? [];
+    const generationWorkflows = workflowsByPartId.get(part.id) ?? [];
     const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt)]);
 
     return {
+      accessoryRequirements,
       assets,
+      buildableMatingSet: buildBuildableMatingSet(mateRelations, accessoryRequirements, cableCompatibilities),
+      cableCompatibilities,
+      companionRecommendations,
+      connectorFamily: mapConnectorFamilyRow(row),
       datasheetRevision: selectLatestDatasheet(datasheets),
+      generationWorkflows,
       lastUpdatedAt,
       manufacturer: mapManufacturerRow(row),
+      mateRelations,
       metrics,
       package: mapPackageRow(row),
       part,
+      similarParts,
       sources
     };
   });
@@ -217,6 +445,7 @@ function buildPartRecords(
 function mapPartRow(row: DatabasePartRow): Part {
   return {
     category: row.category,
+    connectorFamilyId: row.connector_family_id,
     id: row.part_id,
     lastUpdatedAt: toIsoTimestamp(row.part_last_updated_at),
     lifecycleStatus: row.lifecycle_status,
@@ -224,6 +453,22 @@ function mapPartRow(row: DatabasePartRow): Part {
     mpn: row.mpn,
     packageId: row.package_id,
     trustScore: toNumber(row.trust_score)
+  };
+}
+
+/**
+ * Maps joined connector family fields into the shared ConnectorFamily type.
+ */
+function mapConnectorFamilyRow(row: DatabasePartRow): ConnectorFamily | null {
+  if (!row.connector_family_id || !row.connector_family_name || !row.connector_family_series || !row.connector_family_description) {
+    return null;
+  }
+
+  return {
+    description: row.connector_family_description,
+    id: row.connector_family_id,
+    name: row.connector_family_name,
+    series: row.connector_family_series
   };
 }
 
@@ -279,19 +524,110 @@ function mapMetricRow(row: DatabaseMetricRow): PartMetric {
 function mapAssetRow(row: DatabaseAssetRow): Asset {
   return {
     assetState: row.asset_state,
+    assetStatus: row.asset_status,
     assetType: row.asset_type,
     fileFormat: row.file_format,
     fileHash: row.file_hash,
     id: row.id,
+    generationMethod: row.generation_method,
+    generationSourceAssetId: row.generation_source_asset_id,
     lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
     licenseMode: row.license_mode,
     partId: row.part_id,
     previewStatus: row.preview_status,
     providerId: row.provider_id,
+    provenance: row.provenance,
     sourceRecordId: row.source_record_id,
     sourceUrl: row.source_url,
     storageKey: row.storage_key,
     validationStatus: row.validation_status
+  };
+}
+
+/**
+ * Maps a database row into the shared MateRelation type.
+ */
+function mapMateRow(row: DatabaseMateRow): MateRelation {
+  return {
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    matePartId: row.mate_part_id,
+    notes: row.notes,
+    partId: row.part_id,
+    relationshipType: row.relationship_type,
+    sourceRevisionId: row.source_revision_id
+  };
+}
+
+/**
+ * Maps a database row into the shared AccessoryRequirement type.
+ */
+function mapAccessoryRow(row: DatabaseAccessoryRow): AccessoryRequirement {
+  return {
+    accessoryPartId: row.accessory_part_id,
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    notes: row.notes,
+    partId: row.part_id,
+    relationshipType: row.relationship_type,
+    sourceRevisionId: row.source_revision_id
+  };
+}
+
+/**
+ * Maps a database row into the shared CableCompatibility type.
+ */
+function mapCableRow(row: DatabaseCableRow): CableCompatibility {
+  return {
+    cablePartId: row.cable_part_id,
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    notes: row.notes,
+    partId: row.part_id,
+    relationshipType: row.relationship_type,
+    sourceRevisionId: row.source_revision_id
+  };
+}
+
+/**
+ * Maps a database row into the shared SimilarPartRelation type.
+ */
+function mapSimilarPartRow(row: DatabaseSimilarPartRow): SimilarPartRelation {
+  return {
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    partId: row.part_id,
+    reason: row.reason,
+    similarPartId: row.similar_part_id
+  };
+}
+
+/**
+ * Maps a database row into the shared CompanionRecommendation type.
+ */
+function mapCompanionRow(row: DatabaseCompanionRow): CompanionRecommendation {
+  return {
+    companionPartId: row.companion_part_id,
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    partId: row.part_id,
+    usageContext: row.usage_context
+  };
+}
+
+/**
+ * Maps a database row into the shared GenerationWorkflow type.
+ */
+function mapGenerationWorkflowRow(row: DatabaseGenerationWorkflowRow): GenerationWorkflow {
+  return {
+    confidenceScore: toNumber(row.confidence_score),
+    generationStatus: row.generation_status,
+    id: row.id,
+    outputAssetId: row.output_asset_id,
+    partId: row.part_id,
+    sourceAssetId: row.source_asset_id,
+    sourceDatasheetRevisionId: row.source_datasheet_revision_id,
+    targetAssetType: row.target_asset_type
   };
 }
 
@@ -333,7 +669,7 @@ function mapSourceRow(row: DatabaseSourceRow): SourceRecord {
  * Picks the newest datasheet revision by revision date and update time.
  */
 function selectLatestDatasheet(datasheets: DatasheetRevision[]): DatasheetRevision | null {
-  return datasheets.sort((first, second) => Date.parse(second.revisionDate ?? second.lastUpdatedAt) - Date.parse(first.revisionDate ?? first.lastUpdatedAt))[0] ?? null;
+  return [...datasheets].sort((first, second) => Date.parse(second.revisionDate ?? second.lastUpdatedAt) - Date.parse(first.revisionDate ?? first.lastUpdatedAt) || first.id.localeCompare(second.id))[0] ?? null;
 }
 
 /**
@@ -397,6 +733,7 @@ const PART_ROWS_SQL = `
     p.category,
     p.lifecycle_status,
     p.package_id,
+    p.connector_family_id,
     p.trust_score,
     p.last_updated_at AS part_last_updated_at,
     m.name AS manufacturer_name,
@@ -407,10 +744,15 @@ const PART_ROWS_SQL = `
     pk.pitch_mm,
     pk.body_length_mm,
     pk.body_width_mm,
-    pk.body_height_mm
+    pk.body_height_mm,
+    cf.name AS connector_family_name,
+    cf.series AS connector_family_series,
+    cf.description AS connector_family_description
   FROM parts p
   JOIN manufacturers m ON m.id = p.manufacturer_id
   JOIN packages pk ON pk.id = p.package_id
+  LEFT JOIN connector_families cf ON cf.id = p.connector_family_id
+  WHERE ($1::text[] IS NULL OR p.id = ANY($1::text[]))
   ORDER BY p.mpn ASC
 `;
 
@@ -429,6 +771,7 @@ const METRIC_ROWS_SQL = `
     source_record_id,
     last_updated_at
   FROM part_metrics
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY metric_key ASC
 `;
 
@@ -443,6 +786,10 @@ const ASSET_ROWS_SQL = `
     file_hash,
     provider_id,
     license_mode,
+    provenance,
+    asset_status,
+    generation_method,
+    generation_source_asset_id,
     validation_status,
     preview_status,
     asset_state,
@@ -450,7 +797,95 @@ const ASSET_ROWS_SQL = `
     source_record_id,
     last_updated_at
   FROM assets
-  ORDER BY asset_type ASC
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY asset_type ASC, last_updated_at DESC, id ASC
+`;
+
+/** MATE_ROWS_SQL reads connector mating relationships. */
+const MATE_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    mate_part_id,
+    relationship_type,
+    confidence_score,
+    source_revision_id,
+    notes
+  FROM mate_relations
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, id ASC
+`;
+
+/** ACCESSORY_ROWS_SQL reads required, optional, and tooling relationships. */
+const ACCESSORY_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    accessory_part_id,
+    relationship_type,
+    confidence_score,
+    source_revision_id,
+    notes
+  FROM accessory_requirements
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, id ASC
+`;
+
+/** CABLE_ROWS_SQL reads cable compatibility relationships. */
+const CABLE_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    cable_part_id,
+    relationship_type,
+    confidence_score,
+    source_revision_id,
+    notes
+  FROM cable_compatibilities
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, id ASC
+`;
+
+/** SIMILAR_PART_ROWS_SQL reads similar-part recommendations. */
+const SIMILAR_PART_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    similar_part_id,
+    confidence_score,
+    reason
+  FROM similar_part_relations
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, id ASC
+`;
+
+/** COMPANION_ROWS_SQL reads companion recommendations. */
+const COMPANION_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    companion_part_id,
+    confidence_score,
+    usage_context
+  FROM companion_recommendations
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, id ASC
+`;
+
+/** GENERATION_WORKFLOW_ROWS_SQL reads asset generation workflow status. */
+const GENERATION_WORKFLOW_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    target_asset_type,
+    source_datasheet_revision_id,
+    source_asset_id,
+    generation_status,
+    confidence_score,
+    output_asset_id
+  FROM generation_workflows
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, id ASC
 `;
 
 /** DATASHEET_ROWS_SQL reads datasheet revision records. */
@@ -466,6 +901,7 @@ const DATASHEET_ROWS_SQL = `
     source_record_id,
     last_updated_at
   FROM datasheet_revisions
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY revision_date DESC NULLS LAST, last_updated_at DESC
 `;
 
@@ -482,5 +918,6 @@ const SOURCE_ROWS_SQL = `
     normalized_at,
     last_updated_at
   FROM source_records
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY fetched_at DESC
 `;

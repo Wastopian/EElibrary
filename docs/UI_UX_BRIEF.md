@@ -19,6 +19,7 @@
 - filter rail
 - results list/table toggle
 - asset badges
+- connector-intelligence badges
 - compare selection
 
 ### Component detail
@@ -26,8 +27,10 @@
 - specs table
 - package dimensions
 - datasheet panel
-- footprint / symbol / 3D asset cards
-- trust / validation badges
+- engineering asset status (provenance + review + verification)
+- footprint / symbol / 3D / datasheet / mechanical drawing cards
+- recommended buildable set for connectors
+- fallback generation actions for missing CAD assets
 - export drawer
 
 ### Compare
@@ -45,6 +48,7 @@
 - ingest queue
 - conflicts
 - failed parses
+- generation jobs
 - approvals
 
 ## Visual direction
@@ -52,4 +56,10 @@
 - electric blue accents
 - muted green for verified
 - amber for review
+- purple for generated
 - mono font for MPNs and filenames
+
+## Clarity rules
+- generated assets must always show a generated label
+- generated assets must never appear as official
+- disabled export actions must explain exactly which verified file-backed assets are missing

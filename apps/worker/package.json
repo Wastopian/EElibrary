@@ -8,6 +8,7 @@
     "dev": "tsx src/index.ts status",
     "ingest": "tsx src/index.ts ingest",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -1,69 +1,126 @@
 /**
- * File header: Provides small provider-neutral seed fallback data for screens and APIs.
+ * File header: Provides provider-neutral seed fallback data for connector intelligence and asset workflows.
  */
 
-import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric, SourceRecord } from "./types";
+import type {
+  AccessoryRequirement,
+  Asset,
+  CableCompatibility,
+  CompanionRecommendation,
+  ConnectorFamily,
+  DatasheetRevision,
+  GenerationWorkflow,
+  Manufacturer,
+  MateRelation,
+  Package,
+  Part,
+  PartMetric,
+  SimilarPartRelation,
+  SourceRecord
+} from "./types";
 
 /** LAST_UPDATED_AT keeps seed timestamps deterministic for repeatable local runs. */
 const LAST_UPDATED_AT = "2026-04-12T00:00:00.000Z";
 
-/** Manufacturers seed search filters and joined part records. */
+/** manufacturers provide the normalized maker records used by seed parts. */
 export const manufacturers = [
-  {
-    aliases: ["TI"],
-    id: "mfr-texas-instruments",
-    name: "Texas Instruments",
-    website: "https://www.ti.com"
-  },
-  {
-    aliases: ["Murata Manufacturing"],
-    id: "mfr-murata",
-    name: "Murata",
-    website: "https://www.murata.com"
-  },
-  {
-    aliases: ["ST"],
-    id: "mfr-stmicroelectronics",
-    name: "STMicroelectronics",
-    website: "https://www.st.com"
-  }
+  { aliases: ["TE"], id: "mfr-te-connectivity", name: "TE Connectivity", website: "https://www.te.com" },
+  { aliases: ["Molex"], id: "mfr-molex", name: "Molex", website: "https://www.molex.com" },
+  { aliases: ["TI"], id: "mfr-texas-instruments", name: "Texas Instruments", website: "https://www.ti.com" },
+  { aliases: ["Murata"], id: "mfr-murata", name: "Murata", website: "https://www.murata.com" },
+  { aliases: ["ST"], id: "mfr-stmicroelectronics", name: "STMicroelectronics", website: "https://www.st.com" }
 ] satisfies Manufacturer[];
 
-/** Packages seed normalized package dimensions in millimeters. */
-export const partPackages = [
+/** connectorFamilies groups connector records without exposing provider-specific names. */
+export const connectorFamilies = [
   {
-    bodyHeightMm: 1.45,
-    bodyLengthMm: 2.9,
-    bodyWidthMm: 1.6,
-    id: "pkg-sot-23-5",
-    packageName: "SOT-23-5",
-    pinCount: 5,
-    pitchMm: 0.95
-  },
-  {
-    bodyHeightMm: 0.8,
-    bodyLengthMm: 1.6,
-    bodyWidthMm: 0.8,
-    id: "pkg-0603",
-    packageName: "0603",
-    pinCount: 2,
-    pitchMm: null
-  },
-  {
-    bodyHeightMm: 0.6,
-    bodyLengthMm: 5,
-    bodyWidthMm: 5,
-    id: "pkg-qfn-32",
-    packageName: "QFN-32",
-    pinCount: 32,
-    pitchMm: 0.5
+    description: "1.27 mm board-to-wire connector system for compact internal harnesses.",
+    id: "cf-micro-match-1-27",
+    name: "Micro-MaTch",
+    series: "Micro-MaTch 1.27 mm"
   }
+] satisfies ConnectorFamily[];
+
+/** partPackages contains deterministic package records for the fallback catalog. */
+export const partPackages = [
+  { bodyHeightMm: 8.3, bodyLengthMm: 12.0, bodyWidthMm: 5.0, id: "pkg-micro-match-8", packageName: "Micro-MaTch 8-pos", pinCount: 8, pitchMm: 1.27 },
+  { bodyHeightMm: 8.1, bodyLengthMm: 12.1, bodyWidthMm: 5.1, id: "pkg-micro-match-8-header", packageName: "Micro-MaTch Header 8-pos", pinCount: 8, pitchMm: 1.27 },
+  { bodyHeightMm: 1.45, bodyLengthMm: 2.9, bodyWidthMm: 1.6, id: "pkg-sot-23-5", packageName: "SOT-23-5", pinCount: 5, pitchMm: 0.95 },
+  { bodyHeightMm: 0.8, bodyLengthMm: 1.6, bodyWidthMm: 0.8, id: "pkg-0603", packageName: "0603", pinCount: 2, pitchMm: null },
+  { bodyHeightMm: 0.6, bodyLengthMm: 5, bodyWidthMm: 5, id: "pkg-qfn-32", packageName: "QFN-32", pinCount: 32, pitchMm: 0.5 }
 ] satisfies Package[];
 
-/** Parts seed realistic search and detail page records without provider-specific branches. */
+/** parts seed connector and non-connector records for search, detail, and export states. */
 export const parts = [
   {
+    category: "Connector",
+    connectorFamilyId: "cf-micro-match-1-27",
+    id: "part-te-215079-8",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    lifecycleStatus: "active",
+    manufacturerId: "mfr-te-connectivity",
+    mpn: "215079-8",
+    packageId: "pkg-micro-match-8",
+    trustScore: 0.84
+  },
+  {
+    category: "Connector",
+    connectorFamilyId: "cf-micro-match-1-27",
+    id: "part-te-215083-8",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    lifecycleStatus: "active",
+    manufacturerId: "mfr-te-connectivity",
+    mpn: "215083-8",
+    packageId: "pkg-micro-match-8-header",
+    trustScore: 0.82
+  },
+  {
+    category: "Connector accessory",
+    connectorFamilyId: "cf-micro-match-1-27",
+    id: "part-te-215460-8",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    lifecycleStatus: "active",
+    manufacturerId: "mfr-te-connectivity",
+    mpn: "215460-8",
+    packageId: "pkg-micro-match-8",
+    trustScore: 0.75
+  },
+  {
+    category: "Connector accessory",
+    connectorFamilyId: "cf-micro-match-1-27",
+    id: "part-te-215464-1",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    lifecycleStatus: "active",
+    manufacturerId: "mfr-te-connectivity",
+    mpn: "215464-1",
+    packageId: "pkg-micro-match-8",
+    trustScore: 0.74
+  },
+  {
+    category: "Connector tooling",
+    connectorFamilyId: "cf-micro-match-1-27",
+    id: "part-te-734532-1",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    lifecycleStatus: "active",
+    manufacturerId: "mfr-te-connectivity",
+    mpn: "734532-1",
+    packageId: "pkg-micro-match-8",
+    trustScore: 0.7
+  },
+  {
+    category: "Connector cable",
+    connectorFamilyId: "cf-micro-match-1-27",
+    id: "part-molex-1513400800",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    lifecycleStatus: "active",
+    manufacturerId: "mfr-molex",
+    mpn: "1513400800",
+    packageId: "pkg-micro-match-8",
+    trustScore: 0.72
+  },
+  {
     category: "Power management",
+    connectorFamilyId: null,
     id: "part-tps7a02dbvr",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -74,16 +131,18 @@ export const parts = [
   },
   {
     category: "Capacitor",
+    connectorFamilyId: null,
     id: "part-grm188r71c104ka01d",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
     manufacturerId: "mfr-murata",
     mpn: "GRM188R71C104KA01D",
     packageId: "pkg-0603",
-    trustScore: 0.74
+    trustScore: 0.78
   },
   {
     category: "Microcontroller",
+    connectorFamilyId: null,
     id: "part-stm32g031k8t6",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -94,8 +153,30 @@ export const parts = [
   }
 ] satisfies Part[];
 
-/** Datasheet revisions seed provenance for the normalized metrics. */
+/** datasheetRevisions attach parse confidence to normalized datasheet metadata. */
 export const datasheetRevisions = [
+  {
+    fileAssetId: "asset-te-215079-8-datasheet",
+    id: "dsr-te-215079-8-rev-b",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    pageCount: 18,
+    parseConfidence: 0.81,
+    partId: "part-te-215079-8",
+    revisionDate: "2025-04-11",
+    revisionLabel: "Rev. B",
+    sourceRecordId: "source-seed-te-215079-8"
+  },
+  {
+    fileAssetId: "asset-te-215083-8-datasheet",
+    id: "dsr-te-215083-8-rev-c",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    pageCount: 16,
+    parseConfidence: 0.79,
+    partId: "part-te-215083-8",
+    revisionDate: "2024-08-02",
+    revisionLabel: "Rev. C",
+    sourceRecordId: "source-seed-te-215083-8"
+  },
   {
     fileAssetId: "asset-tps7a02-datasheet",
     id: "dsr-tps7a02-rev-e",
@@ -131,8 +212,30 @@ export const datasheetRevisions = [
   }
 ] satisfies DatasheetRevision[];
 
-/** Source records seed raw payload provenance for Phase 2 fallback records. */
+/** sourceRecords preserve raw-payload provenance for the seed fallback catalog. */
 export const sourceRecords = [
+  {
+    fetchedAt: LAST_UPDATED_AT,
+    id: "source-seed-te-215079-8",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    normalizedAt: LAST_UPDATED_AT,
+    partId: "part-te-215079-8",
+    providerId: "seed:local-catalog",
+    providerPartKey: "215079-8",
+    rawPayload: { mpn: "215079-8" },
+    sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215079"
+  },
+  {
+    fetchedAt: LAST_UPDATED_AT,
+    id: "source-seed-te-215083-8",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    normalizedAt: LAST_UPDATED_AT,
+    partId: "part-te-215083-8",
+    providerId: "seed:local-catalog",
+    providerPartKey: "215083-8",
+    rawPayload: { mpn: "215083-8" },
+    sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215083"
+  },
   {
     fetchedAt: LAST_UPDATED_AT,
     id: "source-seed-tps7a02",
@@ -168,17 +271,56 @@ export const sourceRecords = [
   }
 ] satisfies SourceRecord[];
 
-/** Metrics seed normalized values and confidence scores from the datasheet revisions. */
+/** partMetrics seed normalized values and confidence scores from datasheet revisions. */
 export const partMetrics = [
   {
     confidenceScore: 0.83,
+    id: "metric-te-215079-current-rating",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    maxValue: null,
+    metricKey: "current_rating_per_contact",
+    metricValue: 2,
+    minValue: null,
+    partId: "part-te-215079-8",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceRevisionId: "dsr-te-215079-8-rev-b",
+    unit: "A"
+  },
+  {
+    confidenceScore: 0.81,
+    id: "metric-te-215079-voltage-rating",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    maxValue: null,
+    metricKey: "voltage_rating",
+    metricValue: 100,
+    minValue: null,
+    partId: "part-te-215079-8",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceRevisionId: "dsr-te-215079-8-rev-b",
+    unit: "V"
+  },
+  {
+    confidenceScore: 0.76,
+    id: "metric-te-215079-operating-temperature",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    maxValue: 105,
+    metricKey: "operating_temperature",
+    metricValue: null,
+    minValue: -40,
+    partId: "part-te-215079-8",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceRevisionId: "dsr-te-215079-8-rev-b",
+    unit: "deg C"
+  },
+  {
+    confidenceScore: 0.83,
     id: "metric-tps7a02-input-voltage-max",
+    lastUpdatedAt: LAST_UPDATED_AT,
     maxValue: null,
     metricKey: "input_voltage_max",
     metricValue: 5.5,
     minValue: null,
     partId: "part-tps7a02dbvr",
-    lastUpdatedAt: LAST_UPDATED_AT,
     sourceRecordId: "source-seed-tps7a02",
     sourceRevisionId: "dsr-tps7a02-rev-e",
     unit: "V"
@@ -186,12 +328,12 @@ export const partMetrics = [
   {
     confidenceScore: 0.81,
     id: "metric-tps7a02-output-current-max",
+    lastUpdatedAt: LAST_UPDATED_AT,
     maxValue: null,
     metricKey: "output_current_max",
     metricValue: 0.2,
     minValue: null,
     partId: "part-tps7a02dbvr",
-    lastUpdatedAt: LAST_UPDATED_AT,
     sourceRecordId: "source-seed-tps7a02",
     sourceRevisionId: "dsr-tps7a02-rev-e",
     unit: "A"
@@ -199,12 +341,12 @@ export const partMetrics = [
   {
     confidenceScore: 0.76,
     id: "metric-grm188-capacitance",
+    lastUpdatedAt: LAST_UPDATED_AT,
     maxValue: null,
     metricKey: "capacitance",
     metricValue: 0.0000001,
     minValue: null,
     partId: "part-grm188r71c104ka01d",
-    lastUpdatedAt: LAST_UPDATED_AT,
     sourceRecordId: "source-seed-grm188",
     sourceRevisionId: "dsr-grm188-series",
     unit: "F"
@@ -212,12 +354,12 @@ export const partMetrics = [
   {
     confidenceScore: 0.74,
     id: "metric-grm188-rated-voltage",
+    lastUpdatedAt: LAST_UPDATED_AT,
     maxValue: null,
     metricKey: "rated_voltage",
     metricValue: 16,
     minValue: null,
     partId: "part-grm188r71c104ka01d",
-    lastUpdatedAt: LAST_UPDATED_AT,
     sourceRecordId: "source-seed-grm188",
     sourceRevisionId: "dsr-grm188-series",
     unit: "V"
@@ -225,12 +367,12 @@ export const partMetrics = [
   {
     confidenceScore: 0.71,
     id: "metric-stm32g031-supply-voltage",
+    lastUpdatedAt: LAST_UPDATED_AT,
     maxValue: 3.6,
     metricKey: "supply_voltage",
     metricValue: null,
     minValue: 2,
     partId: "part-stm32g031k8t6",
-    lastUpdatedAt: LAST_UPDATED_AT,
     sourceRecordId: "source-seed-stm32g031",
     sourceRevisionId: "dsr-stm32g031-rev-7",
     unit: "V"
@@ -238,98 +380,481 @@ export const partMetrics = [
   {
     confidenceScore: 0.67,
     id: "metric-stm32g031-clock-frequency-max",
+    lastUpdatedAt: LAST_UPDATED_AT,
     maxValue: null,
     metricKey: "clock_frequency_max",
     metricValue: 64000000,
     minValue: null,
     partId: "part-stm32g031k8t6",
-    lastUpdatedAt: LAST_UPDATED_AT,
     sourceRecordId: "source-seed-stm32g031",
     sourceRevisionId: "dsr-stm32g031-rev-7",
     unit: "Hz"
   }
 ] satisfies PartMetric[];
 
-/** Assets seed metadata-only records so export availability never implies missing files exist. */
+/** assets keep provenance, lifecycle, and export verification explicitly separate. */
 export const assets = [
   {
-    assetType: "datasheet",
     assetState: "referenced",
+    assetStatus: "reviewed",
+    assetType: "datasheet",
     fileFormat: "pdf",
     fileHash: null,
-    id: "asset-tps7a02-datasheet",
-    licenseMode: "metadata_only",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-te-215079-8-datasheet",
     lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
+    partId: "part-te-215079-8",
+    previewStatus: "not_available",
+    providerId: "seed:official-datasheet",
+    provenance: "official",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215079",
+    storageKey: null,
+    validationStatus: "needs_review"
+  },
+  {
+    assetState: "validated",
+    assetStatus: "verified_for_export",
+    assetType: "footprint",
+    fileFormat: "kicad_mod",
+    fileHash: "sha256:seed-footprint-215079",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-te-215079-8-footprint",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "redistribution_allowed",
+    partId: "part-te-215079-8",
+    previewStatus: "ready",
+    providerId: "seed:internal-library",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceUrl: null,
+    storageKey: "cad/part-te-215079-8/footprint.kicad_mod",
+    validationStatus: "verified"
+  },
+  {
+    assetState: "validated",
+    assetStatus: "verified_for_export",
+    assetType: "symbol",
+    fileFormat: "kicad_sym",
+    fileHash: "sha256:seed-symbol-215079",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-te-215079-8-symbol",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "redistribution_allowed",
+    partId: "part-te-215079-8",
+    previewStatus: "ready",
+    providerId: "seed:internal-library",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceUrl: null,
+    storageKey: "cad/part-te-215079-8/symbol.kicad_sym",
+    validationStatus: "verified"
+  },
+  {
+    assetState: "validated",
+    assetStatus: "validated",
+    assetType: "three_d_model",
+    fileFormat: "step",
+    fileHash: "sha256:seed-step-215079",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-te-215079-8-3d",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "redistribution_allowed",
+    partId: "part-te-215079-8",
+    previewStatus: "ready",
+    providerId: "seed:trusted-cad",
+    provenance: "trusted_external",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceUrl: null,
+    storageKey: "cad/part-te-215079-8/model.step",
+    validationStatus: "verified"
+  },
+  {
+    assetState: "referenced",
+    assetStatus: "referenced",
+    assetType: "mechanical_drawing",
+    fileFormat: "pdf",
+    fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-te-215079-8-mechanical",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
+    partId: "part-te-215079-8",
+    previewStatus: "not_available",
+    providerId: "seed:official-drawing",
+    provenance: "official",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215079",
+    storageKey: null,
+    validationStatus: "not_validated"
+  },
+  {
+    assetState: "referenced",
+    assetStatus: "reviewed",
+    assetType: "datasheet",
+    fileFormat: "pdf",
+    fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-te-215083-8-datasheet",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
+    partId: "part-te-215083-8",
+    previewStatus: "not_available",
+    providerId: "seed:official-datasheet",
+    provenance: "official",
+    sourceRecordId: "source-seed-te-215083-8",
+    sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215083",
+    storageKey: null,
+    validationStatus: "needs_review"
+  },
+  {
+    assetState: "referenced",
+    assetStatus: "reviewed",
+    assetType: "datasheet",
+    fileFormat: "pdf",
+    fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-tps7a02-datasheet",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
     partId: "part-tps7a02dbvr",
     previewStatus: "not_available",
-    providerId: "seed:datasheet-metadata",
+    providerId: "seed:official-datasheet",
+    provenance: "official",
     sourceRecordId: "source-seed-tps7a02",
     sourceUrl: "https://www.ti.com/lit/ds/symlink/tps7a02.pdf",
     storageKey: null,
     validationStatus: "needs_review"
   },
   {
-    assetType: "footprint",
     assetState: "missing",
+    assetStatus: "missing",
+    assetType: "footprint",
     fileFormat: "unknown",
     fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
     id: "asset-tps7a02-footprint",
-    licenseMode: "unknown",
     lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "unknown",
     partId: "part-tps7a02dbvr",
     previewStatus: "not_available",
-    providerId: "seed:cad-metadata",
+    providerId: "seed:missing",
+    provenance: "manual_internal",
     sourceRecordId: "source-seed-tps7a02",
     sourceUrl: null,
     storageKey: null,
     validationStatus: "not_validated"
   },
   {
-    assetType: "datasheet",
+    assetState: "missing",
+    assetStatus: "missing",
+    assetType: "symbol",
+    fileFormat: "unknown",
+    fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-tps7a02-symbol",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "unknown",
+    partId: "part-tps7a02dbvr",
+    previewStatus: "not_available",
+    providerId: "seed:missing",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-tps7a02",
+    sourceUrl: null,
+    storageKey: null,
+    validationStatus: "not_validated"
+  },
+  {
     assetState: "referenced",
+    assetStatus: "reviewed",
+    assetType: "mechanical_drawing",
     fileFormat: "pdf",
     fileHash: null,
-    id: "asset-grm188-datasheet",
-    licenseMode: "metadata_only",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-tps7a02-mechanical",
     lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
+    partId: "part-tps7a02dbvr",
+    previewStatus: "not_available",
+    providerId: "seed:official-drawing",
+    provenance: "official",
+    sourceRecordId: "source-seed-tps7a02",
+    sourceUrl: "https://www.ti.com/lit/ml/mpds026/mpds026.pdf",
+    storageKey: null,
+    validationStatus: "needs_review"
+  },
+  {
+    assetState: "missing",
+    assetStatus: "missing",
+    assetType: "three_d_model",
+    fileFormat: "unknown",
+    fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-tps7a02-3d",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "unknown",
+    partId: "part-tps7a02dbvr",
+    previewStatus: "not_available",
+    providerId: "seed:missing",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-tps7a02",
+    sourceUrl: null,
+    storageKey: null,
+    validationStatus: "not_validated"
+  },
+  {
+    assetState: "referenced",
+    assetStatus: "reviewed",
+    assetType: "datasheet",
+    fileFormat: "pdf",
+    fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-grm188-datasheet",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
     partId: "part-grm188r71c104ka01d",
     previewStatus: "not_available",
-    providerId: "seed:datasheet-metadata",
+    providerId: "seed:official-datasheet",
+    provenance: "official",
     sourceRecordId: "source-seed-grm188",
     sourceUrl: "https://www.murata.com/en-us/products/productdetail?partno=GRM188R71C104KA01D",
     storageKey: null,
     validationStatus: "needs_review"
   },
   {
-    assetType: "datasheet",
+    assetState: "validated",
+    assetStatus: "verified_for_export",
+    assetType: "footprint",
+    fileFormat: "kicad_mod",
+    fileHash: "sha256:seed-footprint-grm188",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-grm188-footprint",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "redistribution_allowed",
+    partId: "part-grm188r71c104ka01d",
+    previewStatus: "ready",
+    providerId: "seed:internal-library",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-grm188",
+    sourceUrl: null,
+    storageKey: "cad/part-grm188r71c104ka01d/footprint.kicad_mod",
+    validationStatus: "verified"
+  },
+  {
+    assetState: "validated",
+    assetStatus: "verified_for_export",
+    assetType: "symbol",
+    fileFormat: "kicad_sym",
+    fileHash: "sha256:seed-symbol-grm188",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-grm188-symbol",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "redistribution_allowed",
+    partId: "part-grm188r71c104ka01d",
+    previewStatus: "ready",
+    providerId: "seed:internal-library",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-grm188",
+    sourceUrl: null,
+    storageKey: "cad/part-grm188r71c104ka01d/symbol.kicad_sym",
+    validationStatus: "verified"
+  },
+  {
+    assetState: "validated",
+    assetStatus: "verified_for_export",
+    assetType: "three_d_model",
+    fileFormat: "step",
+    fileHash: "sha256:seed-step-grm188",
+    generationMethod: null,
+    generationSourceAssetId: null,
+    id: "asset-grm188-3d",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "redistribution_allowed",
+    partId: "part-grm188r71c104ka01d",
+    previewStatus: "ready",
+    providerId: "seed:internal-library",
+    provenance: "manual_internal",
+    sourceRecordId: "source-seed-grm188",
+    sourceUrl: null,
+    storageKey: "cad/part-grm188r71c104ka01d/model.step",
+    validationStatus: "verified"
+  },
+  {
     assetState: "referenced",
+    assetStatus: "reviewed",
+    assetType: "datasheet",
     fileFormat: "pdf",
     fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
     id: "asset-stm32g031-datasheet",
-    licenseMode: "metadata_only",
     lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "metadata_only",
     partId: "part-stm32g031k8t6",
     previewStatus: "not_available",
-    providerId: "seed:datasheet-metadata",
+    providerId: "seed:official-datasheet",
+    provenance: "official",
     sourceRecordId: "source-seed-stm32g031",
     sourceUrl: "https://www.st.com/resource/en/datasheet/stm32g031k8.pdf",
     storageKey: null,
     validationStatus: "needs_review"
   },
   {
-    assetType: "three_d_model",
     assetState: "missing",
+    assetStatus: "missing",
+    assetType: "three_d_model",
     fileFormat: "unknown",
     fileHash: null,
+    generationMethod: null,
+    generationSourceAssetId: null,
     id: "asset-stm32g031-3d",
-    licenseMode: "unknown",
     lastUpdatedAt: LAST_UPDATED_AT,
+    licenseMode: "unknown",
     partId: "part-stm32g031k8t6",
     previewStatus: "not_available",
-    providerId: "seed:cad-metadata",
+    providerId: "seed:missing",
+    provenance: "manual_internal",
     sourceRecordId: "source-seed-stm32g031",
     sourceUrl: null,
     storageKey: null,
     validationStatus: "not_validated"
   }
 ] satisfies Asset[];
+
+/** mateRelations seed direct connector mating relationships with confidence. */
+export const mateRelations = [
+  {
+    confidenceScore: 0.94,
+    id: "mate-te-215079-best",
+    matePartId: "part-te-215083-8",
+    notes: "Primary mating header per mechanical keying and retention geometry.",
+    partId: "part-te-215079-8",
+    relationshipType: "best_mate",
+    sourceRevisionId: "dsr-te-215079-8-rev-b"
+  }
+] satisfies MateRelation[];
+
+/** accessoryRequirements seed required accessories and tooling for a buildable set. */
+export const accessoryRequirements = [
+  {
+    accessoryPartId: "part-te-215460-8",
+    confidenceScore: 0.89,
+    id: "acc-te-215079-required-1",
+    notes: "Strain relief required for rated cable pull force.",
+    partId: "part-te-215079-8",
+    relationshipType: "requires_accessory",
+    sourceRevisionId: "dsr-te-215079-8-rev-b"
+  },
+  {
+    accessoryPartId: "part-te-215464-1",
+    confidenceScore: 0.83,
+    id: "acc-te-215079-required-2",
+    notes: "Locking clip required for vibration environments.",
+    partId: "part-te-215079-8",
+    relationshipType: "requires_accessory",
+    sourceRevisionId: "dsr-te-215079-8-rev-b"
+  },
+  {
+    accessoryPartId: "part-te-734532-1",
+    confidenceScore: 0.9,
+    id: "acc-te-215079-tooling-1",
+    notes: "Crimp tooling required for production assembly quality.",
+    partId: "part-te-215079-8",
+    relationshipType: "tooling_requirement",
+    sourceRevisionId: "dsr-te-215079-8-rev-b"
+  }
+] satisfies AccessoryRequirement[];
+
+/** cableCompatibilities seed compatible cable options for connector assembly. */
+export const cableCompatibilities = [
+  {
+    cablePartId: "part-molex-1513400800",
+    confidenceScore: 0.78,
+    id: "cable-te-215079-1",
+    notes: "Compatible ribbon cable option for 8-pos harness prototypes.",
+    partId: "part-te-215079-8",
+    relationshipType: "supports_cable",
+    sourceRevisionId: "dsr-te-215079-8-rev-b"
+  }
+] satisfies CableCompatibility[];
+
+/** similarPartRelations seed alternatives without implying drop-in equivalence. */
+export const similarPartRelations = [
+  {
+    confidenceScore: 0.81,
+    id: "sim-te-215079-1",
+    partId: "part-te-215079-8",
+    reason: "Same family, same pitch, alternate shell style.",
+    similarPartId: "part-te-215083-8"
+  }
+] satisfies SimilarPartRelation[];
+
+/** companionRecommendations seed low-confidence design-context suggestions. */
+export const companionRecommendations = [
+  {
+    companionPartId: "part-tps7a02dbvr",
+    confidenceScore: 0.63,
+    id: "comp-te-215079-1",
+    partId: "part-te-215079-8",
+    usageContext: "Often paired in low-power sensor board harness interfaces."
+  }
+] satisfies CompanionRecommendation[];
+
+/** generationWorkflows seed future CAD generation state without pretending files exist. */
+export const generationWorkflows = [
+  {
+    confidenceScore: 0.86,
+    generationStatus: "ready",
+    id: "gen-te-215079-footprint",
+    outputAssetId: null,
+    partId: "part-te-215079-8",
+    sourceAssetId: "asset-te-215079-8-mechanical",
+    sourceDatasheetRevisionId: "dsr-te-215079-8-rev-b",
+    targetAssetType: "footprint"
+  },
+  {
+    confidenceScore: 0.77,
+    generationStatus: "ready",
+    id: "gen-tps7a02-footprint",
+    outputAssetId: "asset-tps7a02-footprint",
+    partId: "part-tps7a02dbvr",
+    sourceAssetId: "asset-tps7a02-datasheet",
+    sourceDatasheetRevisionId: "dsr-tps7a02-rev-e",
+    targetAssetType: "footprint"
+  },
+  {
+    confidenceScore: 0.74,
+    generationStatus: "ready",
+    id: "gen-tps7a02-symbol",
+    outputAssetId: "asset-tps7a02-symbol",
+    partId: "part-tps7a02dbvr",
+    sourceAssetId: "asset-tps7a02-datasheet",
+    sourceDatasheetRevisionId: "dsr-tps7a02-rev-e",
+    targetAssetType: "symbol"
+  },
+  {
+    confidenceScore: 0.72,
+    generationStatus: "ready",
+    id: "gen-tps7a02-3d",
+    outputAssetId: "asset-tps7a02-3d",
+    partId: "part-tps7a02dbvr",
+    sourceAssetId: "asset-tps7a02-mechanical",
+    sourceDatasheetRevisionId: "dsr-tps7a02-rev-e",
+    targetAssetType: "three_d_model"
+  }
+] satisfies GenerationWorkflow[];

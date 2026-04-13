@@ -10,15 +10,19 @@ import type { Asset, PartSearchRecord } from "./index";
 /** baseAsset supplies a complete asset shape for focused state tests. */
 const baseAsset: Asset = {
   assetState: "missing",
+  assetStatus: "missing",
   assetType: "three_d_model",
   fileFormat: "step",
   fileHash: null,
+  generationMethod: null,
+  generationSourceAssetId: null,
   id: "asset-test",
   lastUpdatedAt: "2026-04-12T00:00:00.000Z",
   licenseMode: "unknown",
   partId: "part-test",
   previewStatus: "not_available",
   providerId: "test-provider",
+  provenance: "manual_internal",
   sourceRecordId: "source-test",
   sourceUrl: null,
   storageKey: null,
@@ -42,7 +46,9 @@ test("deriveAssetState distinguishes missing, referenced, downloaded, validated,
 test("isValidatedDownloadableAsset requires validated state, storage key, hash, and verified status", () => {
   assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "referenced", validationStatus: "needs_review" }), false);
   assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "downloaded", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "not_validated" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" }), true);
+  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", assetStatus: "validated", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" }), false);
+  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", assetStatus: "verified_for_export", fileHash: null, storageKey: "assets/test.step", validationStatus: "verified" }), false);
+  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", assetStatus: "verified_for_export", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" }), true);
 });
 
 /**
@@ -66,7 +72,18 @@ test("getExportAvailability disables neutral CAD for referenced-only STEP assets
 function buildRecord(assets: Asset[]): PartSearchRecord {
   return {
     assets,
+    accessoryRequirements: [],
+    buildableMatingSet: {
+      bestMate: null,
+      cableOptions: [],
+      requiredAccessories: [],
+      toolingRequirements: []
+    },
+    cableCompatibilities: [],
+    companionRecommendations: [],
+    connectorFamily: null,
     datasheetRevision: null,
+    generationWorkflows: [],
     lastUpdatedAt: "2026-04-12T00:00:00.000Z",
     manufacturer: {
       aliases: [],
@@ -74,6 +91,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       name: "Test Manufacturer",
       website: null
     },
+    mateRelations: [],
     metrics: [],
     package: {
       bodyHeightMm: null,
@@ -86,6 +104,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     },
     part: {
       category: "Test",
+      connectorFamilyId: null,
       id: "part-test",
       lastUpdatedAt: "2026-04-12T00:00:00.000Z",
       lifecycleStatus: "unknown",
@@ -94,6 +113,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       packageId: "pkg-test",
       trustScore: 0
     },
+    similarParts: [],
     sources: []
   };
 }

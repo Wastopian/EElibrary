@@ -39,12 +39,16 @@
 ### Asset
 - id
 - part_id
-- asset_type
+- asset_type (datasheet, footprint, symbol, three_d_model, mechanical_drawing)
 - file_format
 - storage_key
 - file_hash
 - provider_id
 - license_mode
+- provenance (official, trusted_external, generated, manual_internal)
+- asset_status (missing, referenced, downloaded, validated, failed, reviewed, verified_for_export)
+- generation_method
+- generation_source_asset_id
 - validation_status
 - preview_status
 
@@ -57,12 +61,75 @@
 - file_asset_id
 - parse_confidence
 
-## Ingestion stages
+### ConnectorFamily
+- id
+- name
+- series
+- description
+
+### MateRelation
+- id
+- part_id
+- mate_part_id
+- relationship_type (best_mate, alternate_mate)
+- confidence_score
+- source_revision_id
+- notes
+
+### AccessoryRequirement
+- id
+- part_id
+- accessory_part_id
+- relationship_type (requires_accessory, optional_accessory, tooling_requirement)
+- confidence_score
+- source_revision_id
+- notes
+
+### CableCompatibility
+- id
+- part_id
+- cable_part_id
+- relationship_type (supports_cable)
+- confidence_score
+- source_revision_id
+- notes
+
+### SimilarPartRelation
+- id
+- part_id
+- similar_part_id
+- confidence_score
+- reason
+
+### CompanionRecommendation
+- id
+- part_id
+- companion_part_id
+- confidence_score
+- usage_context
+
+### GenerationWorkflow
+- id
+- part_id
+- target_asset_type (footprint, symbol, three_d_model)
+- source_datasheet_revision_id
+- source_asset_id (often mechanical_drawing for 3D generation)
+- generation_status
+- confidence_score
+- output_asset_id
+
+## Ingestion and generation stages
 1. Fetch raw source payload
 2. Parse into adapter contract
 3. Normalize fields and units
-4. Validate files and metadata
-5. Publish searchable record
+4. Register asset metadata and provenance
+5. Run validation / review workflow
+6. Publish searchable record
+
+## Connector intelligence policy
+- relationships are provenance-backed records, not free text blobs
+- buildable set recommendations must include required accessories
+- uncertain compatibility remains labeled as uncertain
 
 ## Unit policy
 Normalize internally to:

@@ -40,17 +40,17 @@ export function deriveAssetState(input: AssetStateInput): AssetState {
 }
 
 /**
- * Checks whether an asset has captured file evidence in storage.
+ * Checks whether an asset has captured storage plus hash evidence.
  */
-export function isFileBackedAsset(asset: Pick<Asset, "storageKey">): boolean {
-  return asset.storageKey !== null;
+export function isFileBackedAsset(asset: Pick<Asset, "fileHash" | "storageKey">): boolean {
+  return asset.storageKey !== null && asset.fileHash !== null;
 }
 
 /**
  * Checks whether an asset can safely participate in export packaging.
  */
-export function isValidatedDownloadableAsset(asset: Pick<Asset, "assetState" | "fileHash" | "storageKey" | "validationStatus">): boolean {
-  return asset.assetState === "validated" && asset.storageKey !== null && asset.fileHash !== null && asset.validationStatus === "verified";
+export function isValidatedDownloadableAsset(asset: Pick<Asset, "assetState" | "assetStatus" | "fileHash" | "storageKey" | "validationStatus">): boolean {
+  return asset.assetState === "validated" && asset.assetStatus === "verified_for_export" && asset.storageKey !== null && asset.fileHash !== null && asset.validationStatus === "verified";
 }
 
 /**
