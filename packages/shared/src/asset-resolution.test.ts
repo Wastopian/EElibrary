@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getPartDetail } from "./search";
-import { getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries, selectBestAvailableAsset } from "./asset-resolution";
+import { evaluateGenerationSourceReadiness, getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries, selectBestAvailableAsset } from "./asset-resolution";
 import type { Asset, PartSearchRecord } from "./types";
 
 /**
@@ -49,7 +49,7 @@ test("best-available asset ranking uses recency as a deterministic tie-break", (
  */
 test("bundle readiness distinguishes bundle, partial, references-only, and empty states", () => {
   const bundleReadyRecord = getSeedRecord("part-grm188r71c104ka01d");
-  const referencesOnlyRecord = getSeedRecord("part-tps7a02dbvr");
+  const referencesOnlyRecord = getSeedRecord("part-stm32g031k8t6");
   const partialRecord: PartSearchRecord = {
     ...bundleReadyRecord,
     assets: bundleReadyRecord.assets.filter((asset) => asset.assetType === "footprint")
@@ -66,16 +66,41 @@ test("bundle readiness distinguishes bundle, partial, references-only, and empty
 });
 
 /**
- * Verifies generation options appear only for missing or non-export-ready targets with stored workflows.
+ * Verifies source-readiness evaluation stays explicit and source-specific.
+ */
+test("source-readiness evaluation explains requestable and unavailable generation inputs", () => {
+  const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const microcontrollerRecord = getSeedRecord("part-stm32g031k8t6");
+  const mechanicalOnlyRecord: PartSearchRecord = {
+    ...regulatorRecord,
+    datasheetRevision: null
+  };
+
+  assert.equal(evaluateGenerationSourceReadiness(regulatorRecord, "symbol").ready, true);
+  assert.equal(evaluateGenerationSourceReadiness(microcontrollerRecord, "footprint").ready, true);
+  assert.equal(evaluateGenerationSourceReadiness(microcontrollerRecord, "three_d_model").ready, false);
+  assert.match(evaluateGenerationSourceReadiness(microcontrollerRecord, "three_d_model").reasons.join(" "), /mechanical drawing/u);
+  assert.equal(evaluateGenerationSourceReadiness(mechanicalOnlyRecord, "three_d_model").ready, true);
+  assert.equal(evaluateGenerationSourceReadiness(mechanicalOnlyRecord, "three_d_model").sourceDatasheetRevisionId, null);
+});
+
+/**
+ * Verifies generation options appear for requestable, unavailable, and review workflow targets.
  */
 test("generation options follow stored workflow and target readiness state", () => {
   const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const microcontrollerRecord = getSeedRecord("part-stm32g031k8t6");
   const connectorRecord = getSeedRecord("part-te-215079-8");
   const regulatorOptions = getGenerationOptions(regulatorRecord);
+  const microcontrollerOptions = getGenerationOptions(microcontrollerRecord);
   const connectorOptions = getGenerationOptions(connectorRecord);
 
   assert.deepEqual(regulatorOptions.map((option) => option.targetAssetType), ["footprint", "symbol", "three_d_model"]);
+  assert.equal(regulatorOptions.find((option) => option.targetAssetType === "symbol")?.workflowStatus, "available_to_request");
+  assert.equal(regulatorOptions.find((option) => option.targetAssetType === "three_d_model")?.workflowStatus, "review_required");
   assert.equal(regulatorOptions.find((option) => option.targetAssetType === "three_d_model")?.sourceAssetId, "asset-tps7a02-mechanical");
+  assert.equal(microcontrollerOptions.find((option) => option.targetAssetType === "footprint")?.canRequest, true);
+  assert.equal(microcontrollerOptions.find((option) => option.targetAssetType === "three_d_model")?.workflowStatus, "unavailable");
   assert.deepEqual(connectorOptions, []);
   assert.equal(resolveAssetClassSummaries(regulatorRecord.assets).find((group) => group.assetType === "datasheet")?.readiness, "reference_only");
 });

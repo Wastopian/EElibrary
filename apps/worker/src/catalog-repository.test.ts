@@ -113,6 +113,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
         lastUpdatedAt: "2026-04-12T00:00:00.000Z",
         pageCount: 1,
         parseConfidence: 0.8,
+        pinTableStatus: "available",
         partId: "part-test",
         revisionDate: "2026-04-12",
         revisionLabel: "Rev Test",
@@ -122,7 +123,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
     generationWorkflows: [
       {
         confidenceScore: 0.8,
-        generationStatus: "ready",
+        generationStatus: "available_to_request",
         id: "gen-test",
         outputAssetId: "asset-test-step",
         partId: "part-test",

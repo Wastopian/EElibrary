@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getAllPartRecords } from "@ee-library/shared";
+import { getAllPartRecords } from "@ee-library/shared/search";
 import { buildPartDetailResponse } from "./detail-response";
 
 /**
@@ -44,8 +44,9 @@ test("buildPartDetailResponse returns Phase 3A asset pipeline fields", () => {
 
   assert.deepEqual(regulatorResponse.assetGroups.map((group) => group.assetType), ["symbol", "footprint", "three_d_model", "datasheet", "mechanical_drawing"]);
   assert.equal(regulatorResponse.assetGroups.find((group) => group.assetType === "mechanical_drawing")?.bestAsset?.id, "asset-tps7a02-mechanical");
-  assert.equal(regulatorResponse.bundleReadiness.state, "references_only");
+  assert.equal(regulatorResponse.bundleReadiness.state, "partial_bundle");
   assert.deepEqual(regulatorResponse.generationOptions.map((option) => option.label), ["Generate footprint from datasheet", "Generate symbol from pin table", "Generate 3D from mechanical drawing"]);
+  assert.deepEqual(regulatorResponse.generationOptions.map((option) => option.workflowStatus), ["available_to_request", "available_to_request", "review_required"]);
   assert.equal(bundleReadyResponse.bundleReadiness.state, "bundle_ready");
   assert.equal(bundleReadyResponse.generationOptions.length, 0);
 });

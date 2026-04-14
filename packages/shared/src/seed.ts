@@ -8,6 +8,7 @@ import type {
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
+  GenerationRequest,
   DatasheetRevision,
   GenerationWorkflow,
   Manufacturer,
@@ -161,6 +162,7 @@ export const datasheetRevisions = [
     lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 18,
     parseConfidence: 0.81,
+    pinTableStatus: "needs_review",
     partId: "part-te-215079-8",
     revisionDate: "2025-04-11",
     revisionLabel: "Rev. B",
@@ -172,6 +174,7 @@ export const datasheetRevisions = [
     lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 16,
     parseConfidence: 0.79,
+    pinTableStatus: "not_available",
     partId: "part-te-215083-8",
     revisionDate: "2024-08-02",
     revisionLabel: "Rev. C",
@@ -183,6 +186,7 @@ export const datasheetRevisions = [
     lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 39,
     parseConfidence: 0.79,
+    pinTableStatus: "available",
     partId: "part-tps7a02dbvr",
     revisionDate: "2024-02-01",
     revisionLabel: "Rev. E",
@@ -194,6 +198,7 @@ export const datasheetRevisions = [
     lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 12,
     parseConfidence: 0.72,
+    pinTableStatus: "not_available",
     partId: "part-grm188r71c104ka01d",
     revisionDate: "2023-11-15",
     revisionLabel: "Series data",
@@ -205,6 +210,7 @@ export const datasheetRevisions = [
     lastUpdatedAt: LAST_UPDATED_AT,
     pageCount: 123,
     parseConfidence: 0.66,
+    pinTableStatus: "not_available",
     partId: "part-stm32g031k8t6",
     revisionDate: "2024-06-20",
     revisionLabel: "Rev. 7",
@@ -595,24 +601,24 @@ export const assets = [
     validationStatus: "needs_review"
   },
   {
-    assetState: "missing",
-    assetStatus: "missing",
+    assetState: "downloaded",
+    assetStatus: "downloaded",
     assetType: "three_d_model",
-    fileFormat: "unknown",
-    fileHash: null,
-    generationMethod: null,
-    generationSourceAssetId: null,
+    fileFormat: "step",
+    fileHash: "sha256:seed-review-tps7a02-3d",
+    generationMethod: "mechanical_drawing_request",
+    generationSourceAssetId: "asset-tps7a02-mechanical",
     id: "asset-tps7a02-3d",
     lastUpdatedAt: LAST_UPDATED_AT,
-    licenseMode: "unknown",
+    licenseMode: "redistribution_allowed",
     partId: "part-tps7a02dbvr",
-    previewStatus: "not_available",
-    providerId: "seed:missing",
-    provenance: "manual_internal",
+    previewStatus: "pending",
+    providerId: "seed:generation-workflow",
+    provenance: "generated",
     sourceRecordId: "source-seed-tps7a02",
     sourceUrl: null,
-    storageKey: null,
-    validationStatus: "not_validated"
+    storageKey: "generated/part-tps7a02dbvr/model-review.step",
+    validationStatus: "needs_review"
   },
   {
     assetState: "referenced",
@@ -819,7 +825,7 @@ export const companionRecommendations = [
 export const generationWorkflows = [
   {
     confidenceScore: 0.86,
-    generationStatus: "ready",
+    generationStatus: "available_to_request",
     id: "gen-te-215079-footprint",
     outputAssetId: null,
     partId: "part-te-215079-8",
@@ -829,7 +835,7 @@ export const generationWorkflows = [
   },
   {
     confidenceScore: 0.77,
-    generationStatus: "ready",
+    generationStatus: "available_to_request",
     id: "gen-tps7a02-footprint",
     outputAssetId: "asset-tps7a02-footprint",
     partId: "part-tps7a02dbvr",
@@ -839,7 +845,7 @@ export const generationWorkflows = [
   },
   {
     confidenceScore: 0.74,
-    generationStatus: "ready",
+    generationStatus: "available_to_request",
     id: "gen-tps7a02-symbol",
     outputAssetId: "asset-tps7a02-symbol",
     partId: "part-tps7a02dbvr",
@@ -849,7 +855,7 @@ export const generationWorkflows = [
   },
   {
     confidenceScore: 0.72,
-    generationStatus: "ready",
+    generationStatus: "review_required",
     id: "gen-tps7a02-3d",
     outputAssetId: "asset-tps7a02-3d",
     partId: "part-tps7a02dbvr",
@@ -858,3 +864,19 @@ export const generationWorkflows = [
     targetAssetType: "three_d_model"
   }
 ] satisfies GenerationWorkflow[];
+
+/** generationRequests seed persisted request state without simulating approved outputs. */
+export const generationRequests = [
+  {
+    id: "genreq-tps7a02-3d-review",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-tps7a02dbvr",
+    requestedAt: LAST_UPDATED_AT,
+    requestedBy: "seed:local-review",
+    requestStatus: "review_required",
+    sourceAssetId: "asset-tps7a02-mechanical",
+    sourceDatasheetRevisionId: "dsr-tps7a02-rev-e",
+    targetAssetType: "three_d_model",
+    workflowId: "gen-tps7a02-3d"
+  }
+] satisfies GenerationRequest[];

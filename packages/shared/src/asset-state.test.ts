@@ -83,6 +83,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     companionRecommendations: [],
     connectorFamily: null,
     datasheetRevision: null,
+    generationRequests: [],
     generationWorkflows: [],
     lastUpdatedAt: "2026-04-12T00:00:00.000Z",
     manufacturer: {

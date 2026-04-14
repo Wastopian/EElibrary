@@ -54,8 +54,17 @@ export type ConnectorRelationshipType =
 /** Generation targets for datasheet-driven CAD creation workflows. */
 export type GenerationTargetAssetType = "footprint" | "symbol" | "three_d_model";
 
-/** Workflow status for generated asset pipelines. */
-export type GenerationStatus = "ready" | "blocked" | "in_progress" | "completed";
+/** Datasheet extraction status tracks reviewed source material without claiming full PDF parsing. */
+export type DatasheetExtractionStatus = "not_available" | "available" | "needs_review";
+
+/** Workflow status for generated asset pipelines from requestability through review. */
+export type GenerationWorkflowState = "unavailable" | "available_to_request" | "requested" | "queued" | "processing" | "generated" | "review_required" | "approved" | "failed";
+
+/** GenerationStatus keeps existing workflow fields aligned with the Phase 3B state model. */
+export type GenerationStatus = GenerationWorkflowState;
+
+/** GenerationRequestStatus is the persisted state for user-created generation requests. */
+export type GenerationRequestStatus = Exclude<GenerationWorkflowState, "unavailable" | "available_to_request">;
 
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
@@ -157,6 +166,7 @@ export interface DatasheetRevision {
   pageCount: number | null;
   fileAssetId: string | null;
   parseConfidence: number;
+  pinTableStatus: DatasheetExtractionStatus;
   sourceRecordId: string | null;
   lastUpdatedAt: string;
 }
@@ -217,11 +227,38 @@ export interface GenerationWorkflow {
   id: string;
   partId: string;
   targetAssetType: GenerationTargetAssetType;
-  sourceDatasheetRevisionId: string;
+  sourceDatasheetRevisionId: string | null;
   sourceAssetId: string | null;
   generationStatus: GenerationStatus;
   confidenceScore: number;
   outputAssetId: string | null;
+}
+
+/** GenerationRequest persists an explicit request without implying the output exists. */
+export interface GenerationRequest {
+  id: string;
+  partId: string;
+  targetAssetType: GenerationTargetAssetType;
+  sourceDatasheetRevisionId: string | null;
+  sourceAssetId: string | null;
+  requestStatus: GenerationRequestStatus;
+  requestedAt: string;
+  requestedBy: string;
+  workflowId: string | null;
+  lastUpdatedAt: string;
+}
+
+/** SourceReadinessRequirement names the source material checked before a request can be made. */
+export type SourceReadinessRequirement = "package_mechanical_data" | "pin_table_data" | "mechanical_drawing";
+
+/** GenerationSourceReadiness explains whether a target has enough reviewed source material. */
+export interface GenerationSourceReadiness {
+  targetAssetType: GenerationTargetAssetType;
+  requiredMaterial: SourceReadinessRequirement;
+  ready: boolean;
+  reasons: string[];
+  sourceDatasheetRevisionId: string | null;
+  sourceAssetId: string | null;
 }
 
 /** AssetClassReadiness summarizes the best concrete evidence for one asset class. */
@@ -251,14 +288,21 @@ export interface BundleReadinessSummary {
 
 /** AssetGenerationOption is the typed request foundation for a missing asset workflow. */
 export interface AssetGenerationOption {
-  workflowId: string;
   targetAssetType: GenerationTargetAssetType;
   label: string;
   reason: string;
+  actionLabel: string;
+  canRequest: boolean;
+  workflowStatus: GenerationWorkflowState;
+  workflowStatusLabel: string;
+  sourceReadiness: GenerationSourceReadiness;
+  latestRequest: GenerationRequest | null;
+  workflow: GenerationWorkflow | null;
+  workflowId: string | null;
   generationStatus: GenerationStatus;
   confidenceScore: number;
   sourceAssetId: string | null;
-  sourceDatasheetRevisionId: string;
+  sourceDatasheetRevisionId: string | null;
 }
 
 /** BuildableMatingSet is the API-ready recommendation for procurement-friendly assembly. */
@@ -299,6 +343,7 @@ export interface PartSearchRecord {
   similarParts: SimilarPartRelation[];
   companionRecommendations: CompanionRecommendation[];
   generationWorkflows: GenerationWorkflow[];
+  generationRequests: GenerationRequest[];
   /** ISO timestamp for the latest joined record update. */
   lastUpdatedAt: string;
 }
@@ -318,6 +363,17 @@ export interface PartDetailResponse {
   assetGroups: AssetClassSummary[];
   bundleReadiness: BundleReadinessSummary;
   generationOptions: AssetGenerationOption[];
+}
+
+/** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */
+export interface GenerationRequestCreateInput {
+  targetAssetType: GenerationTargetAssetType;
+}
+
+/** GenerationRequestCreateResponse returns the persisted request and refreshed workflow summary. */
+export interface GenerationRequestCreateResponse {
+  request: GenerationRequest;
+  generationOption: AssetGenerationOption;
 }
 
 /** SearchFacets contains the provider-neutral filter data for the search surface. */

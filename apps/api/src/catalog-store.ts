@@ -3,6 +3,7 @@
  */
 
 import { Pool } from "pg";
+import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import type {
   AccessoryRequirement,
@@ -11,6 +12,9 @@ import type {
   CompanionRecommendation,
   ConnectorFamily,
   DatasheetRevision,
+  GenerationRequest,
+  GenerationRequestCreateResponse,
+  GenerationTargetAssetType,
   GenerationWorkflow,
   Manufacturer,
   MateRelation,
@@ -32,6 +36,13 @@ export interface CatalogStoreStatus {
 
 /** CatalogReadResult makes the configured-vs-readable database state explicit. */
 export type CatalogReadResult = { status: "available"; records: PartSearchRecord[] } | { status: "not_configured" };
+
+/** GenerationRequestCreateResult reports creation or explicit requestability failure. */
+export type GenerationRequestCreateResult =
+  | { status: "created"; records: PartSearchRecord[]; response: GenerationRequestCreateResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" }
+  | { status: "not_requestable"; reason: string };
 
 /** CatalogStoreFailureKind distinguishes operational outages from schema/data shape problems. */
 export type CatalogStoreFailureKind = "database_unavailable" | "schema_mismatch" | "query_failed";
@@ -184,11 +195,26 @@ interface DatabaseGenerationWorkflowRow {
   id: string;
   part_id: string;
   target_asset_type: GenerationWorkflow["targetAssetType"];
-  source_datasheet_revision_id: string;
+  source_datasheet_revision_id: string | null;
   source_asset_id: string | null;
   generation_status: GenerationWorkflow["generationStatus"];
   confidence_score: string;
   output_asset_id: string | null;
+}
+
+/** DatabaseGenerationRequestRow is the generation request shape read from Postgres. */
+interface DatabaseGenerationRequestRow {
+  /** GenerationRequest fields from generation_requests. */
+  id: string;
+  part_id: string;
+  target_asset_type: GenerationRequest["targetAssetType"];
+  source_datasheet_revision_id: string | null;
+  source_asset_id: string | null;
+  request_status: GenerationRequest["requestStatus"];
+  requested_at: Date | string;
+  requested_by: string;
+  workflow_id: string | null;
+  last_updated_at: Date | string;
 }
 
 /** DatabaseDatasheetRow is the datasheet row shape read from Postgres. */
@@ -201,6 +227,7 @@ interface DatabaseDatasheetRow {
   page_count: number | null;
   file_asset_id: string | null;
   parse_confidence: string;
+  pin_table_status: DatasheetRevision["pinTableStatus"];
   source_record_id: string | null;
   last_updated_at: Date | string;
 }
@@ -259,12 +286,125 @@ export async function readPartDetailRecordsFromDatabase(partId: string): Promise
 }
 
 /**
+ * Creates a generation request when the database record has enough normalized source material.
+ */
+export async function createGenerationRequestInDatabase(partId: string, targetAssetType: GenerationTargetAssetType, requestedBy = "local-dev", requestedAt = new Date().toISOString()): Promise<GenerationRequestCreateResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const primaryRecords = await readCatalogRecords(databasePool, [partId]);
+  const primaryRecord = primaryRecords.find((record) => record.part.id === partId);
+
+  if (!primaryRecord) {
+    return { status: "not_found" };
+  }
+
+  const generationOption = getGenerationOptions(primaryRecord).find((option) => option.targetAssetType === targetAssetType);
+
+  if (!generationOption || !generationOption.canRequest || (!generationOption.sourceDatasheetRevisionId && !generationOption.sourceAssetId)) {
+    return {
+      reason: generationOption?.reason ?? "The requested asset class is not missing or is not requestable.",
+      status: "not_requestable"
+    };
+  }
+
+  const workflowId = generationOption.workflowId ?? buildWorkflowId(partId, targetAssetType);
+  const requestId = buildGenerationRequestId(partId, targetAssetType, requestedAt);
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        INSERT INTO generation_workflows (
+          id,
+          part_id,
+          target_asset_type,
+          source_datasheet_revision_id,
+          source_asset_id,
+          generation_status,
+          confidence_score,
+          output_asset_id
+        )
+        VALUES ($1, $2, $3, $4, $5, 'requested', $6, NULL)
+        ON CONFLICT (id) DO UPDATE SET
+          source_datasheet_revision_id = EXCLUDED.source_datasheet_revision_id,
+          source_asset_id = EXCLUDED.source_asset_id,
+          generation_status = 'requested',
+          confidence_score = EXCLUDED.confidence_score
+      `,
+      [workflowId, partId, targetAssetType, generationOption.sourceDatasheetRevisionId, generationOption.sourceAssetId, generationOption.confidenceScore]
+    );
+    await client.query(
+      `
+        INSERT INTO generation_requests (
+          id,
+          part_id,
+          target_asset_type,
+          source_datasheet_revision_id,
+          source_asset_id,
+          request_status,
+          requested_at,
+          requested_by,
+          workflow_id,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 'requested', $6, $7, $8, $6)
+        ON CONFLICT (id) DO UPDATE SET
+          request_status = generation_requests.request_status,
+          last_updated_at = generation_requests.last_updated_at
+      `,
+      [requestId, partId, targetAssetType, generationOption.sourceDatasheetRevisionId, generationOption.sourceAssetId, requestedAt, requestedBy, workflowId]
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw toCatalogStoreError(error);
+  } finally {
+    client.release();
+  }
+
+  const detailResult = await readPartDetailRecordsFromDatabase(partId);
+
+  if (detailResult.status !== "available") {
+    return { status: "not_configured" };
+  }
+
+  const refreshedRecord = detailResult.records.find((record) => record.part.id === partId);
+  const refreshedOption = refreshedRecord ? getGenerationOptions(refreshedRecord).find((option) => option.targetAssetType === targetAssetType) ?? generationOption : generationOption;
+  const createdRequest = refreshedRecord?.generationRequests.find((request) => request.id === requestId) ?? {
+    id: requestId,
+    lastUpdatedAt: requestedAt,
+    partId,
+    requestedAt,
+    requestedBy,
+    requestStatus: "requested",
+    sourceAssetId: generationOption.sourceAssetId,
+    sourceDatasheetRevisionId: generationOption.sourceDatasheetRevisionId,
+    targetAssetType,
+    workflowId
+  };
+
+  return {
+    records: detailResult.records,
+    response: {
+      generationOption: refreshedOption,
+      request: createdRequest
+    },
+    status: "created"
+  };
+}
+
+/**
  * Reads joined catalog records from Postgres with an optional part-id scope.
  */
 async function readCatalogRecords(databasePool: Pool, partIds: string[] | null): Promise<PartSearchRecord[]> {
   try {
     const params = [partIds];
-    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows] = await Promise.all([
+    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows, requestRows] = await Promise.all([
       databasePool.query<DatabasePartRow>(PART_ROWS_SQL, params),
       databasePool.query<DatabaseMetricRow>(METRIC_ROWS_SQL, params),
       databasePool.query<DatabaseAssetRow>(ASSET_ROWS_SQL, params),
@@ -275,10 +415,11 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null):
       databasePool.query<DatabaseCableRow>(CABLE_ROWS_SQL, params),
       databasePool.query<DatabaseSimilarPartRow>(SIMILAR_PART_ROWS_SQL, params),
       databasePool.query<DatabaseCompanionRow>(COMPANION_ROWS_SQL, params),
-      databasePool.query<DatabaseGenerationWorkflowRow>(GENERATION_WORKFLOW_ROWS_SQL, params)
+      databasePool.query<DatabaseGenerationWorkflowRow>(GENERATION_WORKFLOW_ROWS_SQL, params),
+      databasePool.query<DatabaseGenerationRequestRow>(GENERATION_REQUEST_ROWS_SQL, params)
     ]);
 
-    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows);
+    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows, requestRows.rows);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -378,6 +519,20 @@ function getErrorCode(error: unknown): string | undefined {
 }
 
 /**
+ * Builds a stable workflow id for a part and target asset class.
+ */
+function buildWorkflowId(partId: string, targetAssetType: GenerationTargetAssetType): string {
+  return `gen-${partId}-${targetAssetType}`;
+}
+
+/**
+ * Builds a deterministic request id from part, target, and request timestamp.
+ */
+function buildGenerationRequestId(partId: string, targetAssetType: GenerationTargetAssetType, requestedAt: string): string {
+  return `genreq-${partId}-${targetAssetType}-${requestedAt.replace(/\D/gu, "")}`;
+}
+
+/**
  * Builds joined API records from flat database row sets.
  */
 function buildPartRecords(
@@ -391,7 +546,8 @@ function buildPartRecords(
   cableRows: DatabaseCableRow[],
   similarRows: DatabaseSimilarPartRow[],
   companionRows: DatabaseCompanionRow[],
-  workflowRows: DatabaseGenerationWorkflowRow[]
+  workflowRows: DatabaseGenerationWorkflowRow[],
+  requestRows: DatabaseGenerationRequestRow[]
 ): PartSearchRecord[] {
   const metricsByPartId = groupBy(metricRows.map(mapMetricRow), (metric) => metric.partId);
   const assetsByPartId = groupBy(assetRows.map(mapAssetRow), (asset) => asset.partId);
@@ -403,6 +559,7 @@ function buildPartRecords(
   const similarPartsByPartId = groupBy(similarRows.map(mapSimilarPartRow), (relation) => relation.partId);
   const companionsByPartId = groupBy(companionRows.map(mapCompanionRow), (relation) => relation.partId);
   const workflowsByPartId = groupBy(workflowRows.map(mapGenerationWorkflowRow), (workflow) => workflow.partId);
+  const requestsByPartId = groupBy(requestRows.map(mapGenerationRequestRow), (request) => request.partId);
 
   return partRows.map((row) => {
     const part = mapPartRow(row);
@@ -416,7 +573,8 @@ function buildPartRecords(
     const similarParts = similarPartsByPartId.get(part.id) ?? [];
     const companionRecommendations = companionsByPartId.get(part.id) ?? [];
     const generationWorkflows = workflowsByPartId.get(part.id) ?? [];
-    const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt)]);
+    const generationRequests = requestsByPartId.get(part.id) ?? [];
+    const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt), ...generationRequests.map((request) => request.lastUpdatedAt)]);
 
     return {
       accessoryRequirements,
@@ -426,6 +584,7 @@ function buildPartRecords(
       companionRecommendations,
       connectorFamily: mapConnectorFamilyRow(row),
       datasheetRevision: selectLatestDatasheet(datasheets),
+      generationRequests,
       generationWorkflows,
       lastUpdatedAt,
       manufacturer: mapManufacturerRow(row),
@@ -632,6 +791,24 @@ function mapGenerationWorkflowRow(row: DatabaseGenerationWorkflowRow): Generatio
 }
 
 /**
+ * Maps a database row into the shared GenerationRequest type.
+ */
+function mapGenerationRequestRow(row: DatabaseGenerationRequestRow): GenerationRequest {
+  return {
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    partId: row.part_id,
+    requestedAt: toIsoTimestamp(row.requested_at),
+    requestedBy: row.requested_by,
+    requestStatus: row.request_status,
+    sourceAssetId: row.source_asset_id,
+    sourceDatasheetRevisionId: row.source_datasheet_revision_id,
+    targetAssetType: row.target_asset_type,
+    workflowId: row.workflow_id
+  };
+}
+
+/**
  * Maps a database row into the shared DatasheetRevision type.
  */
 function mapDatasheetRow(row: DatabaseDatasheetRow): DatasheetRevision {
@@ -641,6 +818,7 @@ function mapDatasheetRow(row: DatabaseDatasheetRow): DatasheetRevision {
     lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
     pageCount: row.page_count,
     parseConfidence: toNumber(row.parse_confidence),
+    pinTableStatus: row.pin_table_status,
     partId: row.part_id,
     revisionDate: row.revision_date ? toIsoDate(row.revision_date) : null,
     revisionLabel: row.revision_label,
@@ -888,6 +1066,24 @@ const GENERATION_WORKFLOW_ROWS_SQL = `
   ORDER BY confidence_score DESC, id ASC
 `;
 
+/** GENERATION_REQUEST_ROWS_SQL reads explicit generation request state. */
+const GENERATION_REQUEST_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    target_asset_type,
+    source_datasheet_revision_id,
+    source_asset_id,
+    request_status,
+    requested_at,
+    requested_by,
+    workflow_id,
+    last_updated_at
+  FROM generation_requests
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY requested_at DESC, id DESC
+`;
+
 /** DATASHEET_ROWS_SQL reads datasheet revision records. */
 const DATASHEET_ROWS_SQL = `
   SELECT
@@ -898,6 +1094,7 @@ const DATASHEET_ROWS_SQL = `
     page_count,
     file_asset_id,
     parse_confidence,
+    pin_table_status,
     source_record_id,
     last_updated_at
   FROM datasheet_revisions

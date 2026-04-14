@@ -156,6 +156,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
         lastUpdatedAt,
         pageCount: record.datasheet.pageCount,
         parseConfidence: record.datasheet.parseConfidence,
+        pinTableStatus: record.datasheet.pinTableStatus,
         partId: record.part.id,
         revisionDate: record.datasheet.revisionDate,
         revisionLabel: record.datasheet.revisionLabel,

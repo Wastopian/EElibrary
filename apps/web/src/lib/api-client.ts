@@ -2,7 +2,7 @@
  * File header: Provides the web app's provider-neutral API access layer.
  */
 
-import type { ApiEnvelope, PartDetailResponse, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared/types";
+import type { ApiEnvelope, GenerationRequestCreateInput, GenerationRequestCreateResponse, GenerationTargetAssetType, PartDetailResponse, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared/types";
 
 /**
  * Fetches provider-neutral search facets from the API boundary.
@@ -49,6 +49,29 @@ export async function fetchPartDetail(partId: string): Promise<PartDetailRespons
   }
 
   const envelope = (await response.json()) as ApiEnvelope<PartDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates a DB-backed generation request through the API without simulating completion.
+ */
+export async function createGenerationRequest(partId: string, targetAssetType: GenerationTargetAssetType): Promise<GenerationRequestCreateResponse> {
+  const body: GenerationRequestCreateInput = { targetAssetType };
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/generation-requests`), {
+    body: JSON.stringify(body),
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Generation request failed with ${response.status}`);
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<GenerationRequestCreateResponse>;
 
   return envelope.data;
 }

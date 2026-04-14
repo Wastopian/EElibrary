@@ -30,6 +30,7 @@
         "id": "dsr-tps7a02-rev-e",
         "pageCount": 39,
         "parseConfidence": 0.79,
+        "pinTableStatus": "available",
         "revisionDate": "2024-02-01",
         "revisionLabel": "Rev. E"
       },
@@ -100,21 +101,25 @@
         },
         {
           "assetType": "three_d_model",
-          "fileFormat": "unknown",
+          "fileFormat": "step",
+          "fileHash": "sha256:seed-review-tps7a02-3d",
+          "generationMethod": "mechanical_drawing_request",
+          "generationSourceAssetId": "asset-tps7a02-mechanical",
           "id": "asset-tps7a02-3d",
-          "licenseMode": "unknown",
-          "provenance": "manual_internal",
-          "assetStatus": "missing",
-          "previewStatus": "not_available",
+          "licenseMode": "redistribution_allowed",
+          "provenance": "generated",
+          "assetStatus": "downloaded",
+          "previewStatus": "pending",
           "sourceUrl": null,
-          "state": "missing",
-          "validationStatus": "not_validated"
+          "state": "downloaded",
+          "storageKey": "generated/part-tps7a02dbvr/model-review.step",
+          "validationStatus": "needs_review"
         }
       ],
       "generationWorkflows": [
         {
           "confidenceScore": 0.77,
-          "generationStatus": "ready",
+          "generationStatus": "available_to_request",
           "id": "gen-tps7a02-footprint",
           "outputAssetId": "asset-tps7a02-footprint",
           "partId": "part-tps7a02dbvr",
@@ -124,7 +129,7 @@
         },
         {
           "confidenceScore": 0.74,
-          "generationStatus": "ready",
+          "generationStatus": "available_to_request",
           "id": "gen-tps7a02-symbol",
           "outputAssetId": "asset-tps7a02-symbol",
           "partId": "part-tps7a02dbvr",
@@ -134,7 +139,7 @@
         },
         {
           "confidenceScore": 0.72,
-          "generationStatus": "ready",
+          "generationStatus": "review_required",
           "id": "gen-tps7a02-3d",
           "outputAssetId": "asset-tps7a02-3d",
           "partId": "part-tps7a02dbvr",
@@ -173,6 +178,7 @@
         "id": "dsr-stm32g031-rev-7",
         "pageCount": 123,
         "parseConfidence": 0.66,
+        "pinTableStatus": "not_available",
         "revisionDate": "2024-06-20",
         "revisionLabel": "Rev. 7"
       },

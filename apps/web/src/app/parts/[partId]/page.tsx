@@ -3,14 +3,15 @@
  */
 
 import Link from "next/link";
+import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
-import { fetchPartDetail } from "../../../lib/api-client";
+import { createGenerationRequest, fetchPartDetail } from "../../../lib/api-client";
 import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, shouldRenderConnectorSections, shouldRenderGenerationOptions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetProvenance, BundleReadinessState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetProvenance, BundleReadinessState, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,22 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     tone: scoreTone(metric.confidenceScore),
     value: formatMetricValue(metric)
   }));
+
+  /**
+   * Requests generation through the API while leaving completion and export approval explicit.
+   */
+  async function requestGenerationAction(formData: FormData) {
+    "use server";
+
+    const targetAssetType = readGenerationTargetAssetType(formData.get("targetAssetType"));
+
+    if (!targetAssetType) {
+      return;
+    }
+
+    await createGenerationRequest(partId, targetAssetType);
+    revalidatePath(`/parts/${partId}`);
+  }
 
   return (
     <main className="detail-layout">
@@ -165,11 +182,28 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </SectionPanel>
 
         {shouldRenderGenerationOptions(generationOptions) ? (
-          <SectionPanel description="Fallback actions are available only when a stored workflow exists and the target asset is not export-ready." title="Missing Assets / Fallback Actions">
+          <SectionPanel description="Requests are available only when normalized source-readiness checks pass; generated assets still require review before export." title="Missing Assets / Fallback Actions">
             <ul className="info-list">
               {generationOptions.map((option) => (
-                <li key={option.workflowId}>
-                  <strong>{option.label}:</strong> {option.reason} Status {option.generationStatus}, confidence {Math.round(option.confidenceScore * 100)}%.
+                <li key={option.targetAssetType}>
+                  <div className="datasheet-panel">
+                    <div>
+                      <strong>{option.label}</strong>
+                      <p>{option.reason}</p>
+                      <p>Source check: {option.sourceReadiness.reasons.join(" ")}</p>
+                    </div>
+                    <div className="datasheet-panel__badges">
+                      <StatusBadge label={option.workflowStatusLabel} tone={generationWorkflowTone(option.workflowStatus)} />
+                      <StatusBadge label={option.sourceReadiness.ready ? "source ready" : "source incomplete"} tone={option.sourceReadiness.ready ? "verified" : "review"} />
+                      <form action={requestGenerationAction}>
+                        <input name="targetAssetType" type="hidden" value={option.targetAssetType} />
+                        <button className="export-action" disabled={!option.canRequest} type="submit">
+                          <span>{option.canRequest ? option.actionLabel : option.workflowStatusLabel}</span>
+                          <small>{option.sourceReadiness.ready ? "Creates a tracked request" : "Source material is incomplete"}</small>
+                        </button>
+                      </form>
+                    </div>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -411,6 +445,36 @@ function bundleReadinessTone(state: BundleReadinessState): BadgeTone {
   };
 
   return tones[state];
+}
+
+/**
+ * Maps generation workflow state into review-oriented badge tone.
+ */
+function generationWorkflowTone(state: GenerationWorkflowState): BadgeTone {
+  const tones: Record<GenerationWorkflowState, BadgeTone> = {
+    approved: "verified",
+    available_to_request: "info",
+    failed: "danger",
+    generated: "review",
+    processing: "review",
+    queued: "review",
+    requested: "info",
+    review_required: "review",
+    unavailable: "neutral"
+  };
+
+  return tones[state];
+}
+
+/**
+ * Reads a generation target from form data without trusting arbitrary input.
+ */
+function readGenerationTargetAssetType(value: FormDataEntryValue | null): GenerationTargetAssetType | null {
+  if (value === "footprint" || value === "symbol" || value === "three_d_model") {
+    return value;
+  }
+
+  return null;
 }
 
 /**

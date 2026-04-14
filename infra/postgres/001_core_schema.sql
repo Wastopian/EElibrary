@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS datasheet_revisions (
   revision_date DATE,
   page_count INTEGER,
   file_asset_id TEXT REFERENCES assets(id),
-  parse_confidence NUMERIC NOT NULL CHECK (parse_confidence >= 0 AND parse_confidence <= 1)
+  parse_confidence NUMERIC NOT NULL CHECK (parse_confidence >= 0 AND parse_confidence <= 1),
+  pin_table_status TEXT NOT NULL DEFAULT 'not_available' CHECK (pin_table_status IN ('not_available', 'available', 'needs_review'))
 );
 
 CREATE TABLE IF NOT EXISTS part_metrics (
@@ -126,9 +127,22 @@ CREATE TABLE IF NOT EXISTS generation_workflows (
   id TEXT PRIMARY KEY,
   part_id TEXT NOT NULL REFERENCES parts(id),
   target_asset_type TEXT NOT NULL CHECK (target_asset_type IN ('footprint', 'symbol', 'three_d_model')),
-  source_datasheet_revision_id TEXT NOT NULL REFERENCES datasheet_revisions(id),
+  source_datasheet_revision_id TEXT REFERENCES datasheet_revisions(id),
   source_asset_id TEXT REFERENCES assets(id),
-  generation_status TEXT NOT NULL CHECK (generation_status IN ('ready', 'blocked', 'in_progress', 'completed')),
+  generation_status TEXT NOT NULL CHECK (generation_status IN ('unavailable', 'available_to_request', 'requested', 'queued', 'processing', 'generated', 'review_required', 'approved', 'failed')),
   confidence_score NUMERIC NOT NULL CHECK (confidence_score >= 0 AND confidence_score <= 1),
   output_asset_id TEXT REFERENCES assets(id)
+);
+
+CREATE TABLE IF NOT EXISTS generation_requests (
+  id TEXT PRIMARY KEY,
+  part_id TEXT NOT NULL REFERENCES parts(id),
+  target_asset_type TEXT NOT NULL CHECK (target_asset_type IN ('footprint', 'symbol', 'three_d_model')),
+  source_datasheet_revision_id TEXT REFERENCES datasheet_revisions(id),
+  source_asset_id TEXT REFERENCES assets(id),
+  request_status TEXT NOT NULL CHECK (request_status IN ('requested', 'queued', 'processing', 'generated', 'review_required', 'approved', 'failed')),
+  requested_at TIMESTAMPTZ NOT NULL,
+  requested_by TEXT NOT NULL,
+  workflow_id TEXT REFERENCES generation_workflows(id),
+  last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -43,7 +43,7 @@ test("generation workflow wording distinguishes planned and generated outputs", 
 
   assert.ok(readyWorkflow, "expected seeded generation workflow");
   assert.match(formatGenerationWorkflowLabel(readyWorkflow, regulatorRecord.assets), /planned output/u);
-  assert.match(formatGenerationWorkflowLabel({ ...readyWorkflow, generationStatus: "completed" }, regulatorRecord.assets), /generated output/u);
+  assert.match(formatGenerationWorkflowLabel({ ...readyWorkflow, generationStatus: "review_required" }, regulatorRecord.assets), /review output/u);
 });
 
 /**
@@ -60,6 +60,7 @@ test("generation option visibility follows stored missing-asset workflows", () =
   assert.equal(shouldRenderGenerationOptions(regulatorOptions), true);
   assert.equal(shouldRenderGenerationOptions(connectorOptions), false);
   assert.deepEqual(regulatorOptions.map((option) => option.label), ["Generate footprint from datasheet", "Generate symbol from pin table", "Generate 3D from mechanical drawing"]);
+  assert.deepEqual(regulatorOptions.map((option) => option.workflowStatusLabel), ["request available", "request available", "in review"]);
 });
 
 /**
@@ -71,7 +72,7 @@ test("engineering asset grouping exposes first-class sections and missing states
 
   assert.deepEqual(groups.map((group) => group.assetType), ["symbol", "footprint", "three_d_model", "datasheet", "mechanical_drawing"]);
   assert.equal(groups.find((group) => group.assetType === "footprint")?.readiness, "missing");
-  assert.equal(groups.find((group) => group.assetType === "three_d_model")?.readiness, "missing");
+  assert.equal(groups.find((group) => group.assetType === "three_d_model")?.readiness, "downloaded_file");
   assert.equal(groups.find((group) => group.assetType === "mechanical_drawing")?.readiness, "reference_only");
 });
 
@@ -87,7 +88,8 @@ test("search export readiness labels distinguish bundles from single verified CA
 
   assert.equal(getSearchExportReadiness(connectorRecord).label, "bundle ready");
   assert.equal(getSearchExportReadiness(footprintOnlyRecord).label, "partial bundle");
-  assert.equal(getSearchExportReadiness(getSeedRecord("part-tps7a02dbvr")).label, "references only");
+  assert.equal(getSearchExportReadiness(getSeedRecord("part-tps7a02dbvr")).label, "partial bundle");
+  assert.equal(getSearchExportReadiness(getSeedRecord("part-stm32g031k8t6")).label, "references only");
 });
 
 /**

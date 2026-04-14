@@ -82,8 +82,12 @@ function formatWorkflowOutput(workflow: GenerationWorkflow, assets: Asset[]): st
 
   const outputAsset = assets.find((asset) => asset.id === workflow.outputAssetId);
 
-  if (workflow.generationStatus === "completed") {
-    return outputAsset ? `generated output ${workflow.outputAssetId}` : `generated output ${workflow.outputAssetId} is not registered`;
+  if (workflow.generationStatus === "approved") {
+    return outputAsset ? `approved output ${workflow.outputAssetId}` : `approved output ${workflow.outputAssetId} is not registered`;
+  }
+
+  if (workflow.generationStatus === "generated" || workflow.generationStatus === "review_required") {
+    return outputAsset ? `review output ${workflow.outputAssetId}` : `review output ${workflow.outputAssetId} is not registered`;
   }
 
   return outputAsset ? `planned output ${workflow.outputAssetId}` : `planned output ${workflow.outputAssetId} is not registered`;

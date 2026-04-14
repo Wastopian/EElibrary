@@ -344,10 +344,11 @@ async function persistDatasheetRevision(client: PoolClient, datasheetRevision: D
         page_count,
         file_asset_id,
         parse_confidence,
+        pin_table_status,
         source_record_id,
         last_updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         revision_label = EXCLUDED.revision_label,
@@ -355,6 +356,7 @@ async function persistDatasheetRevision(client: PoolClient, datasheetRevision: D
         page_count = EXCLUDED.page_count,
         file_asset_id = EXCLUDED.file_asset_id,
         parse_confidence = EXCLUDED.parse_confidence,
+        pin_table_status = EXCLUDED.pin_table_status,
         source_record_id = EXCLUDED.source_record_id,
         last_updated_at = EXCLUDED.last_updated_at
     `,
@@ -366,6 +368,7 @@ async function persistDatasheetRevision(client: PoolClient, datasheetRevision: D
       datasheetRevision.pageCount,
       datasheetRevision.fileAssetId,
       datasheetRevision.parseConfidence,
+      datasheetRevision.pinTableStatus,
       datasheetRevision.sourceRecordId,
       datasheetRevision.lastUpdatedAt
     ]

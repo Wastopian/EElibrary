@@ -10,16 +10,19 @@ import type {
   AssetGenerationOption,
   AssetType,
   BundleReadinessSummary,
+  GenerationRequest,
   GenerationTargetAssetType,
+  GenerationWorkflowState,
   GenerationWorkflow,
+  GenerationSourceReadiness,
   PartSearchRecord
 } from "./types";
 
 /** ENGINEERING_ASSET_TYPES is the normalized order for first-class engineering assets. */
 export const ENGINEERING_ASSET_TYPES = ["symbol", "footprint", "three_d_model", "datasheet", "mechanical_drawing"] as const satisfies readonly AssetType[];
 
-/** GENERATABLE_ASSET_TYPES are the asset classes supported by the Phase 3A generation foundation. */
-const GENERATABLE_ASSET_TYPES = new Set<AssetType>(["footprint", "symbol", "three_d_model"]);
+/** GENERATION_TARGET_ASSET_TYPES is the stable UI/API order for requestable CAD assets. */
+const GENERATION_TARGET_ASSET_TYPES = ["footprint", "symbol", "three_d_model"] as const satisfies readonly GenerationTargetAssetType[];
 
 /**
  * Groups assets by normalized engineering asset class and selects the best available asset in each group.
@@ -103,14 +106,27 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
 }
 
 /**
- * Builds generation options for missing or non-export-ready generatable asset classes.
+ * Builds requestability and workflow summaries for missing or non-export-ready generatable asset classes.
  */
 export function getGenerationOptions(record: PartSearchRecord, assetGroups: AssetClassSummary[] = resolveAssetClassSummaries(record.assets)): AssetGenerationOption[] {
-  return record.generationWorkflows
-    .filter((workflow) => GENERATABLE_ASSET_TYPES.has(workflow.targetAssetType))
-    .filter((workflow) => shouldShowGenerationOption(workflow, assetGroups))
-    .map((workflow) => buildGenerationOption(record, workflow))
-    .sort((left, right) => left.targetAssetType.localeCompare(right.targetAssetType) || left.workflowId.localeCompare(right.workflowId));
+  return GENERATION_TARGET_ASSET_TYPES
+    .filter((targetAssetType) => shouldShowGenerationOption(record, targetAssetType, assetGroups))
+    .map((targetAssetType) => buildGenerationOption(record, targetAssetType));
+}
+
+/**
+ * Evaluates whether a part has enough normalized source material to request generation.
+ */
+export function evaluateGenerationSourceReadiness(record: PartSearchRecord, targetAssetType: GenerationTargetAssetType): GenerationSourceReadiness {
+  if (targetAssetType === "footprint") {
+    return evaluateFootprintSourceReadiness(record);
+  }
+
+  if (targetAssetType === "symbol") {
+    return evaluateSymbolSourceReadiness(record);
+  }
+
+  return evaluateThreeDSourceReadiness(record);
 }
 
 /**
@@ -199,32 +215,48 @@ function resolveClassReadiness(bestAsset: Asset | null): AssetClassSummary["read
 }
 
 /**
- * Returns true when a workflow targets a class that still lacks an export-ready best asset.
+ * Returns true when a target class still lacks an export-ready best asset.
  */
-function shouldShowGenerationOption(workflow: GenerationWorkflow, assetGroups: AssetClassSummary[]): boolean {
-  if (workflow.generationStatus === "completed") {
-    return false;
+function shouldShowGenerationOption(record: PartSearchRecord, targetAssetType: GenerationTargetAssetType, assetGroups: AssetClassSummary[]): boolean {
+  const targetGroup = assetGroups.find((group) => group.assetType === targetAssetType);
+  const hasWorkflowState = record.generationRequests.some((request) => request.targetAssetType === targetAssetType) || record.generationWorkflows.some((workflow) => workflow.targetAssetType === targetAssetType && workflow.generationStatus !== "available_to_request" && workflow.generationStatus !== "unavailable");
+
+  if (hasWorkflowState) {
+    return true;
   }
 
-  const targetGroup = assetGroups.find((group) => group.assetType === workflow.targetAssetType);
-  return targetGroup?.bestAsset ? !isValidatedDownloadableAsset(targetGroup.bestAsset) : true;
+  if (!targetGroup?.bestAsset) {
+    return true;
+  }
+
+  return targetGroup.readiness === "missing" || targetGroup.readiness === "failed" || targetGroup.readiness === "reference_only";
 }
 
 /**
- * Builds one user-visible generation option from a stored workflow.
+ * Builds one user-visible generation option from readiness, requests, and workflow state.
  */
-function buildGenerationOption(record: PartSearchRecord, workflow: GenerationWorkflow): AssetGenerationOption {
-  const sourceAsset = workflow.sourceAssetId ? record.assets.find((asset) => asset.id === workflow.sourceAssetId) ?? null : null;
+function buildGenerationOption(record: PartSearchRecord, targetAssetType: GenerationTargetAssetType): AssetGenerationOption {
+  const sourceReadiness = evaluateGenerationSourceReadiness(record, targetAssetType);
+  const workflow = findWorkflow(record.generationWorkflows, targetAssetType);
+  const latestRequest = findLatestRequest(record.generationRequests, targetAssetType);
+  const workflowStatus = resolveWorkflowStatus(sourceReadiness, workflow, latestRequest);
 
   return {
-    confidenceScore: workflow.confidenceScore,
-    generationStatus: workflow.generationStatus,
-    label: generationOptionLabel(workflow.targetAssetType),
-    reason: generationOptionReason(workflow.targetAssetType, workflow, sourceAsset),
-    sourceAssetId: workflow.sourceAssetId,
-    sourceDatasheetRevisionId: workflow.sourceDatasheetRevisionId,
-    targetAssetType: workflow.targetAssetType,
-    workflowId: workflow.id
+    actionLabel: generationActionLabel(targetAssetType),
+    canRequest: workflowStatus === "available_to_request",
+    confidenceScore: workflow?.confidenceScore ?? 0,
+    generationStatus: workflowStatus,
+    label: generationOptionLabel(targetAssetType),
+    latestRequest,
+    reason: generationOptionReason(workflowStatus, sourceReadiness),
+    sourceAssetId: sourceReadiness.sourceAssetId,
+    sourceDatasheetRevisionId: sourceReadiness.sourceDatasheetRevisionId,
+    sourceReadiness,
+    targetAssetType,
+    workflow,
+    workflowId: workflow?.id ?? latestRequest?.workflowId ?? null,
+    workflowStatus,
+    workflowStatusLabel: workflowStatusLabel(workflowStatus)
   };
 }
 
@@ -242,24 +274,161 @@ function generationOptionLabel(targetAssetType: GenerationTargetAssetType): stri
 }
 
 /**
- * Explains why a generation option is available without claiming generation succeeded.
+ * Labels the request action without implying generation has already happened.
  */
-function generationOptionReason(targetAssetType: GenerationTargetAssetType, workflow: GenerationWorkflow, sourceAsset: Asset | null): string {
-  if (workflow.generationStatus === "blocked") {
-    return "Generation is blocked until required source data is reviewed.";
+function generationActionLabel(targetAssetType: GenerationTargetAssetType): string {
+  const labels: Record<GenerationTargetAssetType, string> = {
+    footprint: "Request footprint generation",
+    symbol: "Request symbol generation",
+    three_d_model: "Request 3D generation"
+  };
+
+  return labels[targetAssetType];
+}
+
+/**
+ * Explains why a generation option is available or blocked without claiming success.
+ */
+function generationOptionReason(workflowStatus: GenerationWorkflowState, sourceReadiness: GenerationSourceReadiness): string {
+  if (!sourceReadiness.ready) {
+    return sourceReadiness.reasons.join(" ");
   }
 
-  if (targetAssetType === "three_d_model" && sourceAsset?.assetType === "mechanical_drawing") {
-    return `${sourceAsset.assetState} mechanical drawing is available as generation input.`;
+  const statusReasons: Record<GenerationWorkflowState, string> = {
+    approved: "The generated asset has been approved, but export still requires a separate verified file-backed asset.",
+    available_to_request: sourceReadiness.reasons.join(" "),
+    failed: "The latest generation workflow failed; review the failure before requesting more work.",
+    generated: "A generated output is recorded and still needs review before it can be trusted.",
+    processing: "The generation workflow is processing and has not produced an export-ready asset.",
+    queued: "The generation request is queued and has not produced an output asset.",
+    requested: "The generation request has been recorded and is waiting for processing.",
+    review_required: "A generated output is waiting for review and is not export-ready.",
+    unavailable: sourceReadiness.reasons.join(" ")
+  };
+
+  return statusReasons[workflowStatus];
+}
+
+/**
+ * Labels workflow states for compact UI badges.
+ */
+function workflowStatusLabel(workflowStatus: GenerationWorkflowState): string {
+  const labels: Record<GenerationWorkflowState, string> = {
+    approved: "approved",
+    available_to_request: "request available",
+    failed: "failed",
+    generated: "generated, review needed",
+    processing: "processing",
+    queued: "queued",
+    requested: "requested",
+    review_required: "in review",
+    unavailable: "not available"
+  };
+
+  return labels[workflowStatus];
+}
+
+/**
+ * Finds the active workflow row for a target asset class.
+ */
+function findWorkflow(workflows: GenerationWorkflow[], targetAssetType: GenerationTargetAssetType): GenerationWorkflow | null {
+  return workflows.find((workflow) => workflow.targetAssetType === targetAssetType) ?? null;
+}
+
+/**
+ * Finds the latest persisted generation request for a target asset class.
+ */
+function findLatestRequest(requests: GenerationRequest[], targetAssetType: GenerationTargetAssetType): GenerationRequest | null {
+  return (
+    requests
+      .filter((request) => request.targetAssetType === targetAssetType)
+      .sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt) || right.id.localeCompare(left.id))[0] ?? null
+  );
+}
+
+/**
+ * Resolves a user-facing workflow state from source readiness plus persisted records.
+ */
+function resolveWorkflowStatus(sourceReadiness: GenerationSourceReadiness, workflow: GenerationWorkflow | null, latestRequest: GenerationRequest | null): GenerationWorkflowState {
+  if (latestRequest) {
+    return latestRequest.requestStatus;
   }
 
-  if (targetAssetType === "three_d_model") {
-    return "Mechanical drawing input is not registered yet.";
+  if (workflow && workflow.generationStatus !== "available_to_request" && workflow.generationStatus !== "unavailable") {
+    return workflow.generationStatus;
   }
 
-  if (sourceAsset?.assetType !== "datasheet") {
-    return "Datasheet-derived source data is not registered yet.";
+  return sourceReadiness.ready ? "available_to_request" : "unavailable";
+}
+
+/**
+ * Checks package and datasheet metadata needed to request footprint generation.
+ */
+function evaluateFootprintSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
+  const reasons: string[] = [];
+
+  if (!record.datasheetRevision) {
+    reasons.push("No datasheet revision is registered for package evidence.");
   }
 
-  return "Datasheet-derived source data is available for a generation workflow.";
+  if (record.package.pinCount === null) reasons.push("Package pin count is missing.");
+  if (record.package.pitchMm === null) reasons.push("Package pitch is missing.");
+  if (record.package.bodyLengthMm === null || record.package.bodyWidthMm === null) reasons.push("Package body dimensions are incomplete.");
+
+  return {
+    ready: reasons.length === 0,
+    reasons: reasons.length === 0 ? ["Package pin count, pitch, and body dimensions are available for a reviewed footprint request."] : reasons,
+    requiredMaterial: "package_mechanical_data",
+    sourceAssetId: record.datasheetRevision?.fileAssetId ?? null,
+    sourceDatasheetRevisionId: record.datasheetRevision?.id ?? null,
+    targetAssetType: "footprint"
+  };
+}
+
+/**
+ * Checks reviewed pin-table source metadata needed to request symbol generation.
+ */
+function evaluateSymbolSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
+  const reasons: string[] = [];
+
+  if (!record.datasheetRevision) {
+    reasons.push("No datasheet revision is registered for pin-table evidence.");
+  } else if (record.datasheetRevision.pinTableStatus === "not_available") {
+    reasons.push("No reviewed pin-table source is registered.");
+  } else if (record.datasheetRevision.pinTableStatus === "needs_review") {
+    reasons.push("Pin-table source is registered and will require review during generation.");
+  }
+
+  if (record.package.pinCount === null) {
+    reasons.push("Package pin count is missing.");
+  }
+
+  const ready = Boolean(record.datasheetRevision && record.datasheetRevision.pinTableStatus !== "not_available" && record.package.pinCount !== null);
+
+  return {
+    ready,
+    reasons: ready && reasons.length === 0 ? ["Reviewed pin-table source is available for a symbol request."] : reasons,
+    requiredMaterial: "pin_table_data",
+    sourceAssetId: record.datasheetRevision?.fileAssetId ?? null,
+    sourceDatasheetRevisionId: record.datasheetRevision?.id ?? null,
+    targetAssetType: "symbol"
+  };
+}
+
+/**
+ * Checks mechanical drawing availability needed to request 3D model generation.
+ */
+function evaluateThreeDSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
+  const mechanicalDrawing = selectBestAvailableAsset(record.assets.filter((asset) => asset.assetType === "mechanical_drawing"));
+  const hasUsableDrawing = Boolean(mechanicalDrawing && mechanicalDrawing.assetState !== "missing" && mechanicalDrawing.assetState !== "failed");
+  const reasons = hasUsableDrawing ? [`${mechanicalDrawing?.assetState ?? "Referenced"} mechanical drawing is available for a reviewed 3D request.`] : ["No usable mechanical drawing source is registered."];
+
+  return {
+    ready: hasUsableDrawing,
+    reasons,
+    requiredMaterial: "mechanical_drawing",
+    sourceAssetId: hasUsableDrawing ? mechanicalDrawing?.id ?? null : null,
+    sourceDatasheetRevisionId: record.datasheetRevision?.id ?? null,
+    targetAssetType: "three_d_model"
+  };
 }

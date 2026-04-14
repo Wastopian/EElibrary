@@ -11,6 +11,7 @@ import {
   companionRecommendations,
   connectorFamilies,
   datasheetRevisions,
+  generationRequests,
   generationWorkflows,
   manufacturers,
   mateRelations,
@@ -99,6 +100,7 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
   const partSimilarParts = sortRelationsByConfidence(similarPartRelations.filter((relation) => relation.partId === part.id));
   const partCompanions = sortRelationsByConfidence(companionRecommendations.filter((recommendation) => recommendation.partId === part.id));
   const partWorkflows = sortRelationsByConfidence(generationWorkflows.filter((workflow) => workflow.partId === part.id));
+  const partGenerationRequests = generationRequests.filter((request) => request.partId === part.id).sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt) || right.id.localeCompare(left.id));
 
   return {
     accessoryRequirements: partAccessories,
@@ -108,6 +110,7 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     companionRecommendations: partCompanions,
     connectorFamily: part.connectorFamilyId ? connectorFamilyById.get(part.connectorFamilyId) ?? null : null,
     datasheetRevision: partDatasheetRevision,
+    generationRequests: partGenerationRequests,
     generationWorkflows: partWorkflows,
     lastUpdatedAt: latestTimestamp([
       part.lastUpdatedAt,
