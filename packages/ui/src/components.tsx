@@ -61,6 +61,8 @@ export interface AssetCardProps {
   validationLabel: string;
   /** Preview readiness label. */
   previewLabel: string;
+  /** Optional review-state label for reviewer-facing workflows. */
+  reviewLabel?: string;
   /** Availability label derived from real storage state. */
   availabilityLabel: string;
   /** Availability tone selected by the consuming domain layer. */
@@ -69,6 +71,8 @@ export interface AssetCardProps {
   validationTone: BadgeTone;
   /** Preview tone selected by the consuming domain layer. */
   previewTone: BadgeTone;
+  /** Optional review tone selected by the consuming domain layer. */
+  reviewTone?: BadgeTone;
   /** Optional source attribution label supplied by the domain layer. */
   sourceLabel?: string;
   /** Optional last-updated label supplied by the domain layer. */
@@ -158,6 +162,8 @@ export function AssetCard({
   fileFormat,
   previewLabel,
   previewTone,
+  reviewLabel,
+  reviewTone = "neutral",
   sourceLabel,
   title,
   updatedLabel,
@@ -174,6 +180,7 @@ export function AssetCard({
         <StatusBadge label={validationLabel} tone={validationTone} />
         <StatusBadge label={previewLabel} tone={previewTone} />
         <StatusBadge label={availabilityLabel} tone={availabilityTone} />
+        {reviewLabel ? <StatusBadge label={reviewLabel} tone={reviewTone} /> : null}
       </div>
       {sourceLabel || updatedLabel ? (
         <div className="ui-asset-card__meta">

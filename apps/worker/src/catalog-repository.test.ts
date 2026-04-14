@@ -39,7 +39,9 @@ test("persistNormalizedPartRows persists connector relationships and generation 
   assert.match(sql, /INSERT INTO similar_part_relations/u);
   assert.match(sql, /INSERT INTO companion_recommendations/u);
   assert.match(sql, /INSERT INTO generation_workflows/u);
+  assert.match(sql, /INSERT INTO review_records/u);
   assert.ok(tableCallIndex(calls, "connector_families") < tableCallIndex(calls, "parts"));
+  assert.ok(tableCallIndex(calls, "generation_workflows") < tableCallIndex(calls, "review_records"));
 });
 
 /**
@@ -130,6 +132,20 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
         sourceAssetId: null,
         sourceDatasheetRevisionId: "dsr-test",
         targetAssetType: "three_d_model"
+      }
+    ],
+    reviewRecords: [
+      {
+        assetId: "asset-test-step",
+        generationWorkflowId: null,
+        id: "review-test-step",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        notes: "Reviewed by test fixture",
+        outcome: "approved",
+        partId: "part-test",
+        reviewedAt: "2026-04-12T00:00:00.000Z",
+        reviewer: "test-reviewer",
+        targetType: "asset"
       }
     ],
     manufacturer: {

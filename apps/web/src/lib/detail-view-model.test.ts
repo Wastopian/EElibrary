@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getPartDetail } from "@ee-library/shared/search";
-import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, getSearchExportReadiness, shouldRenderConnectorSections, shouldRenderGenerationOptions } from "./detail-view-model";
+import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getSearchExportReadiness, reviewStateTone, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
+import { getAssetReviewStatus, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
 
 /**
  * Verifies connector section visibility follows connector data presence.
@@ -74,6 +75,33 @@ test("engineering asset grouping exposes first-class sections and missing states
   assert.equal(groups.find((group) => group.assetType === "footprint")?.readiness, "missing");
   assert.equal(groups.find((group) => group.assetType === "three_d_model")?.readiness, "downloaded_file");
   assert.equal(groups.find((group) => group.assetType === "mechanical_drawing")?.readiness, "reference_only");
+});
+
+/**
+ * Verifies review wording keeps generated, reviewed, and export-verified states distinct.
+ */
+test("review status wording distinguishes pending, approved, rejected, and export-verified states", () => {
+  const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const connectorRecord = getSeedRecord("part-te-215079-8");
+  const microcontrollerRecord = getSeedRecord("part-stm32g031k8t6");
+  const pendingGeneratedAsset = regulatorRecord.assets.find((asset) => asset.id === "asset-tps7a02-3d");
+  const approvedNotExportAsset = connectorRecord.assets.find((asset) => asset.id === "asset-te-215079-8-3d");
+  const rejectedAsset = microcontrollerRecord.assets.find((asset) => asset.id === "asset-stm32g031-3d");
+  const exportVerifiedAsset = connectorRecord.assets.find((asset) => asset.id === "asset-te-215079-8-footprint");
+  const reviewWorkflow = regulatorRecord.generationWorkflows.find((workflow) => workflow.id === "gen-tps7a02-3d");
+
+  assert.ok(pendingGeneratedAsset, "expected generated pending review asset");
+  assert.ok(approvedNotExportAsset, "expected approved but not export-verified asset");
+  assert.ok(rejectedAsset, "expected rejected asset");
+  assert.ok(exportVerifiedAsset, "expected verified-for-export asset");
+  assert.ok(reviewWorkflow, "expected review-required generation workflow");
+  assert.equal(formatReviewStateLabel(getAssetReviewStatus(pendingGeneratedAsset, regulatorRecord.reviewRecords).state), "pending review");
+  assert.equal(formatReviewStateLabel(getAssetReviewStatus(approvedNotExportAsset, connectorRecord.reviewRecords).state), "approved");
+  assert.equal(formatReviewStateLabel(getAssetReviewStatus(rejectedAsset, microcontrollerRecord.reviewRecords).state), "rejected");
+  assert.equal(formatReviewStateLabel(getAssetReviewStatus(exportVerifiedAsset, connectorRecord.reviewRecords).state), "verified for export");
+  assert.equal(formatReviewStateLabel(getWorkflowReviewStatus(reviewWorkflow, regulatorRecord.reviewRecords).state), "pending review");
+  assert.equal(reviewStateTone("changes_requested"), "review");
+  assert.equal(shouldRenderReviewActions(getAssetReviewStatus(exportVerifiedAsset, connectorRecord.reviewRecords)), false);
 });
 
 /**

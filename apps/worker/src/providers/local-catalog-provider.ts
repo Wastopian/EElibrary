@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { deriveAssetState } from "@ee-library/shared/asset-state";
 import { normalizeAssetState, normalizeLifecycleStatus, normalizeMetricUnit, normalizeNullableNumber } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
-import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, SimilarPartRelation } from "@ee-library/shared/types";
+import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 
 /** LocalCatalogFile describes the adapter fixture envelope. */
@@ -50,6 +50,8 @@ interface LocalCatalogRecord {
   companionRecommendations?: CompanionRecommendation[];
   /** Optional raw generation workflow records. */
   generationWorkflows?: GenerationWorkflow[];
+  /** Optional raw review records for local review-state fixtures. */
+  reviewRecords?: ReviewRecord[];
 }
 
 /** LocalCatalogMetric describes one raw metric from the provider file. */
@@ -180,6 +182,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
       trustScore: record.part.trustScore
     },
     similarPartRelations: record.similarPartRelations ?? [],
+    reviewRecords: record.reviewRecords ?? [],
     sourceRecord: {
       fetchedAt: rawPayload.fetchedAt,
       id: sourceRecordId,

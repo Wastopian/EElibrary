@@ -66,6 +66,15 @@ export type GenerationStatus = GenerationWorkflowState;
 /** GenerationRequestStatus is the persisted state for user-created generation requests. */
 export type GenerationRequestStatus = Exclude<GenerationWorkflowState, "unavailable" | "available_to_request">;
 
+/** ReviewTargetType names the durable entities that can receive engineering review outcomes. */
+export type ReviewTargetType = "asset" | "generation_workflow";
+
+/** ReviewOutcome records explicit reviewer decisions without inferring export verification. */
+export type ReviewOutcome = "approved" | "rejected" | "changes_requested";
+
+/** ReviewState is the resolved status shown by API/UI for reviewable targets. */
+export type ReviewState = "pending_review" | "approved" | "rejected" | "changes_requested" | "verified_for_export" | "not_required";
+
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
   id: string;
@@ -248,6 +257,28 @@ export interface GenerationRequest {
   lastUpdatedAt: string;
 }
 
+/** ReviewRecord persists one explicit asset or workflow review decision. */
+export interface ReviewRecord {
+  id: string;
+  partId: string;
+  targetType: ReviewTargetType;
+  assetId: string | null;
+  generationWorkflowId: string | null;
+  outcome: ReviewOutcome;
+  reviewer: string;
+  notes: string | null;
+  reviewedAt: string;
+  lastUpdatedAt: string;
+}
+
+/** ReviewStatusSummary is the API-ready latest review state for one target. */
+export interface ReviewStatusSummary {
+  targetType: ReviewTargetType;
+  targetId: string;
+  state: ReviewState;
+  latestReview: ReviewRecord | null;
+}
+
 /** SourceReadinessRequirement names the source material checked before a request can be made. */
 export type SourceReadinessRequirement = "package_mechanical_data" | "pin_table_data" | "mechanical_drawing";
 
@@ -344,6 +375,7 @@ export interface PartSearchRecord {
   companionRecommendations: CompanionRecommendation[];
   generationWorkflows: GenerationWorkflow[];
   generationRequests: GenerationRequest[];
+  reviewRecords: ReviewRecord[];
   /** ISO timestamp for the latest joined record update. */
   lastUpdatedAt: string;
 }
@@ -363,6 +395,8 @@ export interface PartDetailResponse {
   assetGroups: AssetClassSummary[];
   bundleReadiness: BundleReadinessSummary;
   generationOptions: AssetGenerationOption[];
+  assetReviewStatuses: ReviewStatusSummary[];
+  workflowReviewStatuses: ReviewStatusSummary[];
 }
 
 /** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */
@@ -374,6 +408,21 @@ export interface GenerationRequestCreateInput {
 export interface GenerationRequestCreateResponse {
   request: GenerationRequest;
   generationOption: AssetGenerationOption;
+}
+
+/** ReviewActionInput is the minimal local/dev-safe body for asset and workflow review decisions. */
+export interface ReviewActionInput {
+  targetType: ReviewTargetType;
+  targetId: string;
+  outcome: ReviewOutcome;
+  notes?: string | null;
+}
+
+/** ReviewActionResponse returns the persisted review plus the updated target when applicable. */
+export interface ReviewActionResponse {
+  review: ReviewRecord;
+  updatedAsset?: Asset;
+  updatedWorkflow?: GenerationWorkflow;
 }
 
 /** SearchFacets contains the provider-neutral filter data for the search surface. */

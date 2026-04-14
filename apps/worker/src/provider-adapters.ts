@@ -15,6 +15,7 @@ import type {
   Package,
   Part,
   PartMetric,
+  ReviewRecord,
   SimilarPartRelation,
   SourceRecord
 } from "@ee-library/shared/types";
@@ -68,6 +69,8 @@ export interface NormalizedProviderPart {
   companionRecommendations: CompanionRecommendation[];
   /** Datasheet-driven generation workflows parsed from the provider payload. */
   generationWorkflows: GenerationWorkflow[];
+  /** Explicit review records parsed from the provider payload when local fixtures include them. */
+  reviewRecords: ReviewRecord[];
 }
 
 /** ProviderAdapter defines the worker boundary for provider-specific ingestion logic. */

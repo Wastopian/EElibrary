@@ -30,6 +30,10 @@
       "types": "./src/normalization.ts",
       "default": "./src/normalization.ts"
     },
+    "./review-workflow": {
+      "types": "./src/review-workflow.ts",
+      "default": "./src/review-workflow.ts"
+    },
     "./search": {
       "types": "./src/search.ts",
       "default": "./src/search.ts"

@@ -2,7 +2,7 @@
  * File header: Provides the web app's provider-neutral API access layer.
  */
 
-import type { ApiEnvelope, GenerationRequestCreateInput, GenerationRequestCreateResponse, GenerationTargetAssetType, PartDetailResponse, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared/types";
+import type { ApiEnvelope, GenerationRequestCreateInput, GenerationRequestCreateResponse, GenerationTargetAssetType, PartDetailResponse, PartSearchFilters, PartSearchRecord, ReviewActionInput, ReviewActionResponse, SearchFacets } from "@ee-library/shared/types";
 
 /**
  * Fetches provider-neutral search facets from the API boundary.
@@ -72,6 +72,28 @@ export async function createGenerationRequest(partId: string, targetAssetType: G
   }
 
   const envelope = (await response.json()) as ApiEnvelope<GenerationRequestCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates a DB-backed review action through the API without implying automatic export readiness.
+ */
+export async function createReviewAction(partId: string, input: ReviewActionInput): Promise<ReviewActionResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/reviews`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Review action failed with ${response.status}`);
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ReviewActionResponse>;
 
   return envelope.data;
 }

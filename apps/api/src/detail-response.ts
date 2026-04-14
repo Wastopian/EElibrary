@@ -4,6 +4,7 @@
 
 import type { PartDetailResponse, PartSearchRecord, RelatedPartSummary } from "@ee-library/shared/types";
 import { getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
+import { getAssetReviewStatuses, getWorkflowReviewStatuses } from "@ee-library/shared/review-workflow";
 
 /**
  * Builds the typed detail response from the same backing records used by the route.
@@ -30,10 +31,12 @@ export function buildPartDetailResponse(record: PartSearchRecord, records: PartS
   const assetGroups = resolveAssetClassSummaries(record.assets);
 
   return {
+    assetReviewStatuses: getAssetReviewStatuses(record.assets, record.reviewRecords),
     assetGroups,
     bundleReadiness: getBundleReadinessSummary(record),
     generationOptions: getGenerationOptions(record, assetGroups),
     record,
-    relatedPartSummaries
+    relatedPartSummaries,
+    workflowReviewStatuses: getWorkflowReviewStatuses(record.generationWorkflows, record.reviewRecords)
   };
 }

@@ -16,6 +16,7 @@ import type {
   Package,
   Part,
   PartMetric,
+  ReviewRecord,
   SimilarPartRelation,
   SourceRecord
 } from "@ee-library/shared/types";
@@ -92,6 +93,10 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
 
   for (const workflow of normalizedPart.generationWorkflows) {
     await persistGenerationWorkflow(client, workflow);
+  }
+
+  for (const reviewRecord of normalizedPart.reviewRecords) {
+    await persistReviewRecord(client, reviewRecord);
   }
 }
 
@@ -582,5 +587,50 @@ async function persistGenerationWorkflow(client: PoolClient, workflow: Generatio
         output_asset_id = EXCLUDED.output_asset_id
     `,
     [workflow.id, workflow.partId, workflow.targetAssetType, workflow.sourceDatasheetRevisionId, workflow.sourceAssetId, workflow.generationStatus, workflow.confidenceScore, workflow.outputAssetId]
+  );
+}
+
+/**
+ * Upserts one explicit asset or workflow review record.
+ */
+async function persistReviewRecord(client: PoolClient, reviewRecord: ReviewRecord): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO review_records (
+        id,
+        part_id,
+        target_type,
+        asset_id,
+        generation_workflow_id,
+        outcome,
+        reviewer,
+        notes,
+        reviewed_at,
+        last_updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO UPDATE SET
+        part_id = EXCLUDED.part_id,
+        target_type = EXCLUDED.target_type,
+        asset_id = EXCLUDED.asset_id,
+        generation_workflow_id = EXCLUDED.generation_workflow_id,
+        outcome = EXCLUDED.outcome,
+        reviewer = EXCLUDED.reviewer,
+        notes = EXCLUDED.notes,
+        reviewed_at = EXCLUDED.reviewed_at,
+        last_updated_at = EXCLUDED.last_updated_at
+    `,
+    [
+      reviewRecord.id,
+      reviewRecord.partId,
+      reviewRecord.targetType,
+      reviewRecord.assetId,
+      reviewRecord.generationWorkflowId,
+      reviewRecord.outcome,
+      reviewRecord.reviewer,
+      reviewRecord.notes,
+      reviewRecord.reviewedAt,
+      reviewRecord.lastUpdatedAt
+    ]
   );
 }

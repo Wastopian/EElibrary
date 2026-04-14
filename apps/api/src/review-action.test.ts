@@ -1,0 +1,294 @@
+/**
+ * File header: Tests explicit review action persistence and endpoint behavior.
+ */
+
+import assert from "node:assert/strict";
+import { Readable } from "node:stream";
+import test from "node:test";
+import { createReviewInDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import type { Pool } from "pg";
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+/**
+ * Verifies an approved eligible asset is persisted as verified_for_export only through review.
+ */
+test("createReviewInDatabase approves eligible assets into verified_for_export", async () => {
+  const pool = createFakeReviewPool();
+
+  try {
+    setCatalogStorePoolForTests(pool as unknown as Pool);
+    const result = await createReviewInDatabase(
+      "part-a",
+      {
+        outcome: "approved",
+        targetId: "asset-a-step",
+        targetType: "asset"
+      },
+      "api-review-test",
+      "2026-04-13T00:00:00.000Z"
+    );
+
+    assert.equal(result.status, "created");
+    assert.deepEqual(pool.assetRow, {
+      ...buildAssetRow(),
+      asset_state: "validated",
+      asset_status: "verified_for_export",
+      last_updated_at: "2026-04-13T00:00:00.000Z",
+      validation_status: "verified"
+    });
+  } finally {
+    setCatalogStorePoolForTests(null);
+  }
+});
+
+/**
+ * Verifies workflow review changes do not automatically verify output assets.
+ */
+test("createReviewInDatabase updates workflow review state without verifying output asset", async () => {
+  const pool = createFakeReviewPool();
+
+  try {
+    setCatalogStorePoolForTests(pool as unknown as Pool);
+    const result = await createReviewInDatabase(
+      "part-a",
+      {
+        outcome: "changes_requested",
+        targetId: "gen-a-step",
+        targetType: "generation_workflow"
+      },
+      "api-review-test",
+      "2026-04-13T00:00:00.000Z"
+    );
+
+    assert.equal(result.status, "created");
+    assert.equal(pool.workflowRow.generation_status, "review_required");
+    assert.equal(pool.assetRow.asset_status, "downloaded");
+  } finally {
+    setCatalogStorePoolForTests(null);
+  }
+});
+
+/**
+ * Verifies review write endpoints do not pretend to work without a configured database.
+ */
+test("review action endpoint requires configured database", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+
+  process.env.NODE_ENV = "test";
+  delete process.env.DATABASE_URL;
+  setCatalogStorePoolForTests(null);
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiRequest("POST", "/parts/part-a/reviews", {
+      outcome: "approved",
+      targetId: "asset-a-step",
+      targetType: "asset"
+    }, handleRequest);
+
+    assert.equal(result.statusCode, 503);
+    assert.equal(result.body.error.code, "DB_NOT_CONFIGURED");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+
+    if (previousDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+  }
+});
+
+/**
+ * Creates a fake Pool that stores one reviewable generated 3D asset and workflow.
+ */
+function createFakeReviewPool() {
+  const pool = {
+    assetRow: buildAssetRow(),
+    reviewRows: [] as any[],
+    workflowRow: buildWorkflowRow(),
+    async connect() {
+      return {
+        async query(text: string, values?: unknown[]) {
+          if (text.includes("INSERT INTO review_records") && values) {
+            pool.reviewRows.push({
+              asset_id: values[3],
+              generation_workflow_id: values[4],
+              id: values[0],
+              last_updated_at: values[8],
+              notes: values[7],
+              outcome: values[5],
+              part_id: values[1],
+              reviewed_at: values[8],
+              reviewer: values[6],
+              target_type: values[2]
+            });
+          }
+
+          if (text.includes("UPDATE assets") && values) {
+            pool.assetRow = {
+              ...pool.assetRow,
+              asset_state: values[1] as string,
+              asset_status: values[2] as string,
+              last_updated_at: values[4] as string,
+              validation_status: values[3] as string
+            };
+          }
+
+          if (text.includes("UPDATE generation_workflows") && values) {
+            pool.workflowRow = {
+              ...pool.workflowRow,
+              generation_status: values[1] as string
+            };
+          }
+
+          return { rows: [] };
+        },
+        release() {}
+      };
+    },
+    async query(text: string) {
+      if (text.includes("FROM parts")) return { rows: [buildPartRow()] };
+      if (text.includes("FROM part_metrics")) return { rows: [] };
+      if (text.includes("FROM assets")) return { rows: [pool.assetRow] };
+      if (text.includes("FROM datasheet_revisions")) return { rows: [buildDatasheetRow()] };
+      if (text.includes("FROM source_records")) return { rows: [] };
+      if (text.includes("FROM mate_relations")) return { rows: [] };
+      if (text.includes("FROM accessory_requirements")) return { rows: [] };
+      if (text.includes("FROM cable_compatibilities")) return { rows: [] };
+      if (text.includes("FROM similar_part_relations")) return { rows: [] };
+      if (text.includes("FROM companion_recommendations")) return { rows: [] };
+      if (text.includes("FROM generation_workflows")) return { rows: [pool.workflowRow] };
+      if (text.includes("FROM generation_requests")) return { rows: [] };
+      if (text.includes("FROM review_records")) return { rows: pool.reviewRows };
+
+      return { rows: [] };
+    }
+  };
+
+  return pool;
+}
+
+/**
+ * Builds the joined part row read by catalog-store.
+ */
+function buildPartRow() {
+  return {
+    body_height_mm: "2",
+    body_length_mm: "4",
+    body_width_mm: "5",
+    category: "Connector",
+    connector_family_description: null,
+    connector_family_id: null,
+    connector_family_name: null,
+    connector_family_series: null,
+    lifecycle_status: "active",
+    manufacturer_aliases: [],
+    manufacturer_id: "mfr-a",
+    manufacturer_name: "Manufacturer A",
+    manufacturer_website: null,
+    mpn: "PART-A",
+    package_id: "pkg-a",
+    package_name: "Package A",
+    part_id: "part-a",
+    part_last_updated_at: "2026-04-12T00:00:00.000Z",
+    pin_count: 8,
+    pitch_mm: "1.27",
+    trust_score: "0.8"
+  };
+}
+
+/**
+ * Builds the reviewable generated asset database row.
+ */
+function buildAssetRow() {
+  return {
+    asset_state: "downloaded",
+    asset_status: "downloaded",
+    asset_type: "three_d_model",
+    file_format: "step",
+    file_hash: "sha256:a",
+    generation_method: "mechanical_drawing_request",
+    generation_source_asset_id: null,
+    id: "asset-a-step",
+    last_updated_at: "2026-04-12T00:00:00.000Z",
+    license_mode: "redistribution_allowed",
+    part_id: "part-a",
+    preview_status: "pending",
+    provider_id: "review-test",
+    provenance: "generated",
+    source_record_id: null,
+    source_url: null,
+    storage_key: "generated/a.step",
+    validation_status: "needs_review"
+  };
+}
+
+/**
+ * Builds the generation workflow database row linked to the reviewable asset.
+ */
+function buildWorkflowRow() {
+  return {
+    confidence_score: "0.8",
+    generation_status: "review_required",
+    id: "gen-a-step",
+    output_asset_id: "asset-a-step",
+    part_id: "part-a",
+    source_asset_id: null,
+    source_datasheet_revision_id: "dsr-a",
+    target_asset_type: "three_d_model"
+  };
+}
+
+/**
+ * Builds a datasheet row so catalog-store can hydrate the part record.
+ */
+function buildDatasheetRow() {
+  return {
+    file_asset_id: null,
+    id: "dsr-a",
+    last_updated_at: "2026-04-12T00:00:00.000Z",
+    page_count: 1,
+    parse_confidence: "0.8",
+    part_id: "part-a",
+    pin_table_status: "available",
+    revision_date: "2026-01-01",
+    revision_label: "Rev A",
+    source_record_id: null
+  };
+}
+
+/**
+ * Invokes the API handler with a tiny in-memory HTTP request/response pair.
+ */
+async function invokeApiRequest(method: string, url: string, body: unknown, handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>): Promise<{ statusCode: number; body: Record<string, any> }> {
+  const request = Readable.from([JSON.stringify(body)]) as IncomingMessage;
+  let statusCode = 0;
+  let responseBody = "";
+  const response = {
+    end(payload: string) {
+      responseBody = payload;
+    },
+    writeHead(nextStatusCode: number) {
+      statusCode = nextStatusCode;
+      return response;
+    }
+  } as unknown as ServerResponse;
+
+  request.headers = { host: "localhost" };
+  request.method = method;
+  request.url = url;
+
+  await handleRequest(request, response);
+
+  return {
+    body: JSON.parse(responseBody) as Record<string, any>,
+    statusCode
+  };
+}

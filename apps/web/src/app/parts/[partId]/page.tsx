@@ -8,10 +8,10 @@ import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
-import { createGenerationRequest, fetchPartDetail } from "../../../lib/api-client";
-import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, shouldRenderConnectorSections, shouldRenderGenerationOptions } from "../../../lib/detail-view-model";
+import { createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
+import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, reviewStateTone, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetProvenance, BundleReadinessState, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetProvenance, BundleReadinessState, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +31,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     notFound();
   }
 
-  const { assetGroups, bundleReadiness, generationOptions, record, relatedPartSummaries } = detail;
+  const { assetGroups, assetReviewStatuses, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const bestMate = record.buildableMatingSet.bestMate;
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
   const exportActions = bundleReadiness.exportActions;
@@ -57,6 +57,28 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     }
 
     await createGenerationRequest(partId, targetAssetType);
+    revalidatePath(`/parts/${partId}`);
+  }
+
+  /**
+   * Persists an explicit review action without implying unreviewed export readiness.
+   */
+  async function submitReviewAction(formData: FormData) {
+    "use server";
+
+    const targetType = readReviewTargetType(formData.get("targetType"));
+    const targetId = readRequiredFormString(formData.get("targetId"));
+    const outcome = readReviewOutcome(formData.get("outcome"));
+
+    if (!targetType || !targetId || !outcome) {
+      return;
+    }
+
+    await createReviewAction(partId, {
+      outcome,
+      targetId,
+      targetType
+    });
     revalidatePath(`/parts/${partId}`);
   }
 
@@ -173,7 +195,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           {assetGroups.length > 0 ? (
             <div className="asset-grid">
               {assetGroups.map((group) => (
-                <EngineeringAssetSummary key={group.assetType} group={group} />
+                <EngineeringAssetSummary group={group} key={group.assetType} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} />
               ))}
             </div>
           ) : (
@@ -225,9 +247,24 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         {record.generationWorkflows.length > 0 ? (
           <SectionPanel description="Generation workflow state is shown separately from official or verified asset availability." title="Generation Workflow">
             <ul className="info-list">
-              {record.generationWorkflows.map((workflow) => (
-                <li key={workflow.id}>{formatGenerationWorkflowLabel(workflow, record.assets)}</li>
-              ))}
+              {record.generationWorkflows.map((workflow) => {
+                const reviewStatus = findReviewStatus(workflowReviewStatuses, "generation_workflow", workflow.id);
+
+                return (
+                  <li key={workflow.id}>
+                    <div className="datasheet-panel">
+                      <div>
+                        <p>{formatGenerationWorkflowLabel(workflow, record.assets)}</p>
+                        <p>Review state: {formatReviewStateLabel(reviewStatus.state)}.</p>
+                      </div>
+                      <div className="datasheet-panel__badges">
+                        <StatusBadge label={formatReviewStateLabel(reviewStatus.state)} tone={reviewStateTone(reviewStatus.state)} />
+                        <ReviewActionPanel reviewAction={submitReviewAction} reviewStatus={reviewStatus} targetId={workflow.id} targetType="generation_workflow" />
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </SectionPanel>
         ) : null}
@@ -261,7 +298,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 /**
  * Renders the best available asset for one engineering asset class.
  */
-function EngineeringAssetSummary({ group }: { group: AssetClassSummary }) {
+function EngineeringAssetSummary({ group, reviewAction, reviewStatuses }: { group: AssetClassSummary; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[] }) {
   const bestAsset = group.bestAsset;
 
   if (!bestAsset) {
@@ -280,19 +317,66 @@ function EngineeringAssetSummary({ group }: { group: AssetClassSummary }) {
     );
   }
 
+  const reviewStatus = findReviewStatus(reviewStatuses, "asset", bestAsset.id);
+
   return (
-    <AssetCard
-      availabilityLabel={`${assetClassReadinessLabel(group.readiness)} / ${provenanceLabel(bestAsset.provenance)}`}
-      availabilityTone={assetClassReadinessTone(group.readiness)}
-      fileFormat={bestAsset.fileFormat}
-      previewLabel={previewLabel(bestAsset.previewStatus)}
-      previewTone={previewTone(bestAsset.previewStatus)}
-      sourceLabel={bestAsset.providerId ? `Best of ${group.assets.length} / source ${bestAsset.providerId}` : `Best of ${group.assets.length} / no source`}
-      title={assetTypeLabel(group.assetType)}
-      updatedLabel={`Updated ${formatDateTime(bestAsset.lastUpdatedAt)}`}
-      validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetStatus(bestAsset.assetStatus)}`}
-      validationTone={validationTone(bestAsset.validationStatus)}
-    />
+    <div className="asset-review-card">
+      <AssetCard
+        availabilityLabel={`${assetClassReadinessLabel(group.readiness)} / ${provenanceLabel(bestAsset.provenance)}`}
+        availabilityTone={assetClassReadinessTone(group.readiness)}
+        fileFormat={bestAsset.fileFormat}
+        previewLabel={previewLabel(bestAsset.previewStatus)}
+        previewTone={previewTone(bestAsset.previewStatus)}
+        reviewLabel={formatReviewStateLabel(reviewStatus.state)}
+        reviewTone={reviewStateTone(reviewStatus.state)}
+        sourceLabel={bestAsset.providerId ? `Best of ${group.assets.length} / source ${bestAsset.providerId}` : `Best of ${group.assets.length} / no source`}
+        title={assetTypeLabel(group.assetType)}
+        updatedLabel={`Updated ${formatDateTime(bestAsset.lastUpdatedAt)}`}
+        validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetStatus(bestAsset.assetStatus)}`}
+        validationTone={validationTone(bestAsset.validationStatus)}
+      />
+      <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
+    </div>
+  );
+}
+
+/**
+ * Renders local review actions for one reviewable asset or workflow.
+ */
+function ReviewActionPanel({ reviewAction, reviewStatus, targetId, targetType }: { reviewAction: (formData: FormData) => Promise<void>; reviewStatus: ReviewStatusSummary; targetId: string; targetType: ReviewTargetType }) {
+  if (!shouldRenderReviewActions(reviewStatus)) {
+    return null;
+  }
+
+  return (
+    <form action={reviewAction} className="review-action-panel">
+      <input name="targetId" type="hidden" value={targetId} />
+      <input name="targetType" type="hidden" value={targetType} />
+      <span>Local review actions</span>
+      <button name="outcome" type="submit" value="approved">
+        Approve
+      </button>
+      <button name="outcome" type="submit" value="changes_requested">
+        Request changes
+      </button>
+      <button name="outcome" type="submit" value="rejected">
+        Reject
+      </button>
+    </form>
+  );
+}
+
+/**
+ * Finds a precomputed review status and falls back to a neutral state if the target is not reviewable.
+ */
+function findReviewStatus(reviewStatuses: ReviewStatusSummary[], targetType: ReviewTargetType, targetId: string): ReviewStatusSummary {
+  return (
+    reviewStatuses.find((status) => status.targetType === targetType && status.targetId === targetId) ?? {
+      latestReview: null,
+      state: "not_required",
+      targetId,
+      targetType
+    }
   );
 }
 
@@ -475,6 +559,35 @@ function readGenerationTargetAssetType(value: FormDataEntryValue | null): Genera
   }
 
   return null;
+}
+
+/**
+ * Reads a review target type from form data without trusting arbitrary input.
+ */
+function readReviewTargetType(value: FormDataEntryValue | null): ReviewTargetType | null {
+  if (value === "asset" || value === "generation_workflow") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a review outcome from form data without trusting arbitrary input.
+ */
+function readReviewOutcome(value: FormDataEntryValue | null): ReviewOutcome | null {
+  if (value === "approved" || value === "changes_requested" || value === "rejected") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a required string from form data without accepting empty strings.
+ */
+function readRequiredFormString(value: FormDataEntryValue | null): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 /**

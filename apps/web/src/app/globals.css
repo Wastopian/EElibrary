@@ -574,6 +574,32 @@ select {
   gap: 4px;
 }
 
+/* Asset review cards keep review actions visually attached to the selected asset. */
+.asset-review-card {
+  display: grid;
+  gap: 8px;
+}
+
+/* Review actions are local workflow controls, not export buttons. */
+.review-action-panel {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Review action labels keep the local/dev scope explicit. */
+.review-action-panel span {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+/* Review action buttons are compact because there are three outcomes per target. */
+.review-action-panel button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 /* Source list presents provenance rows as repeated audit items. */
 .source-list {
   display: grid;

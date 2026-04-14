@@ -16,6 +16,9 @@ const assetPipelineMigrationSql = readFileSync(new URL("../../../infra/postgres/
 /** generationRequestMigrationSql loads the Phase 3B generation request migration under test. */
 const generationRequestMigrationSql = readFileSync(new URL("../../../infra/postgres/005_phase3b_generation_requests.sql", import.meta.url), "utf8");
 
+/** reviewRecordsMigrationSql loads the Phase 4A review record migration under test. */
+const reviewRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/006_phase4a_review_records.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -118,9 +121,12 @@ test("connector hardening migration upgrades old schemas safely", () => {
     VALUES ('gen-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'ready', 0.8, 'asset-a-step');
   `);
   db.public.none(generationRequestMigrationSql);
+  db.public.none(reviewRecordsMigrationSql);
   db.public.none(`
     INSERT INTO generation_requests (id, part_id, target_asset_type, source_datasheet_revision_id, source_asset_id, request_status, requested_at, requested_by, workflow_id)
     VALUES ('genreq-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'requested', '2026-04-13T00:00:00.000Z', 'smoke-test', 'gen-a-step');
+    INSERT INTO review_records (id, part_id, target_type, asset_id, generation_workflow_id, outcome, reviewer, notes, reviewed_at)
+    VALUES ('review-a-step', 'part-a', 'asset', 'asset-a-step', NULL, 'approved', 'smoke-test', 'migration smoke review', '2026-04-13T00:00:00.000Z');
   `);
 
   const asset = db.public.one(`SELECT asset_state, asset_status, provenance FROM assets WHERE id = 'asset-a-step'`);
@@ -129,6 +135,7 @@ test("connector hardening migration upgrades old schemas safely", () => {
   const relation = db.public.one(`SELECT relationship_type FROM mate_relations WHERE id = 'mate-a-b'`);
   const workflow = db.public.one(`SELECT generation_status FROM generation_workflows WHERE id = 'gen-a-step'`);
   const request = db.public.one(`SELECT request_status FROM generation_requests WHERE id = 'genreq-a-step'`);
+  const review = db.public.one(`SELECT outcome FROM review_records WHERE id = 'review-a-step'`);
 
   assert.deepEqual(asset, { asset_state: "validated", asset_status: "validated", provenance: "manual_internal" });
   assert.equal(datasheet.pin_table_status, "not_available");
@@ -136,4 +143,5 @@ test("connector hardening migration upgrades old schemas safely", () => {
   assert.equal(relation.relationship_type, "best_mate");
   assert.equal(workflow.generation_status, "available_to_request");
   assert.equal(request.request_status, "requested");
+  assert.equal(review.outcome, "approved");
 });

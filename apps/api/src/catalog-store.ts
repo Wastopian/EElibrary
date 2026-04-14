@@ -5,6 +5,7 @@
 import { Pool } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
+import { applyAssetReviewOutcome, applyWorkflowReviewOutcome } from "@ee-library/shared/review-workflow";
 import type {
   AccessoryRequirement,
   Asset,
@@ -22,6 +23,9 @@ import type {
   Part,
   PartMetric,
   PartSearchRecord,
+  ReviewActionInput,
+  ReviewActionResponse,
+  ReviewRecord,
   SimilarPartRelation,
   SourceRecord
 } from "@ee-library/shared/types";
@@ -43,6 +47,12 @@ export type GenerationRequestCreateResult =
   | { status: "not_configured" }
   | { status: "not_found" }
   | { status: "not_requestable"; reason: string };
+
+/** ReviewActionResult reports review persistence or explicit target failure. */
+export type ReviewActionResult =
+  | { status: "created"; records: PartSearchRecord[]; response: ReviewActionResponse }
+  | { status: "not_configured" }
+  | { status: "not_found"; reason: string };
 
 /** CatalogStoreFailureKind distinguishes operational outages from schema/data shape problems. */
 export type CatalogStoreFailureKind = "database_unavailable" | "schema_mismatch" | "query_failed";
@@ -217,6 +227,21 @@ interface DatabaseGenerationRequestRow {
   last_updated_at: Date | string;
 }
 
+/** DatabaseReviewRow is the review record shape read from Postgres. */
+interface DatabaseReviewRow {
+  /** ReviewRecord fields from review_records. */
+  id: string;
+  part_id: string;
+  target_type: ReviewRecord["targetType"];
+  asset_id: string | null;
+  generation_workflow_id: string | null;
+  outcome: ReviewRecord["outcome"];
+  reviewer: string;
+  notes: string | null;
+  reviewed_at: Date | string;
+  last_updated_at: Date | string;
+}
+
 /** DatabaseDatasheetRow is the datasheet row shape read from Postgres. */
 interface DatabaseDatasheetRow {
   /** DatasheetRevision fields from datasheet_revisions. */
@@ -248,6 +273,13 @@ interface DatabaseSourceRow {
 
 /** pool is initialized lazily so tests and seed fallback do not require DATABASE_URL. */
 let pool: Pool | null = null;
+
+/**
+ * Replaces the database pool for tests that use an in-memory Postgres adapter.
+ */
+export function setCatalogStorePoolForTests(databasePool: Pool | null): void {
+  pool = databasePool;
+}
 
 /**
  * Returns every canonical part record from Postgres, or an explicit not-configured status.
@@ -399,12 +431,128 @@ export async function createGenerationRequestInDatabase(partId: string, targetAs
 }
 
 /**
+ * Creates an explicit asset or workflow review and updates only the reviewed target state.
+ */
+export async function createReviewInDatabase(partId: string, input: ReviewActionInput, reviewer = "local-dev-review", reviewedAt = new Date().toISOString()): Promise<ReviewActionResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const primaryRecords = await readCatalogRecords(databasePool, [partId]);
+  const primaryRecord = primaryRecords.find((record) => record.part.id === partId);
+
+  if (!primaryRecord) {
+    return { reason: "Part not found.", status: "not_found" };
+  }
+
+  const reviewId = buildReviewId(partId, input.targetType, input.targetId, input.outcome, reviewedAt);
+  const reviewRecord = buildReviewRecord(reviewId, partId, input, reviewer, reviewedAt);
+  const targetAsset = input.targetType === "asset" ? primaryRecord.assets.find((asset) => asset.id === input.targetId) ?? null : null;
+  const targetWorkflow = input.targetType === "generation_workflow" ? primaryRecord.generationWorkflows.find((workflow) => workflow.id === input.targetId) ?? null : null;
+
+  if (input.targetType === "asset" && !targetAsset) {
+    return { reason: "Asset review target not found for this part.", status: "not_found" };
+  }
+
+  if (input.targetType === "generation_workflow" && !targetWorkflow) {
+    return { reason: "Generation workflow review target not found for this part.", status: "not_found" };
+  }
+
+  const updatedAsset = targetAsset ? { ...applyAssetReviewOutcome(targetAsset, input.outcome), lastUpdatedAt: reviewedAt } : undefined;
+  const updatedWorkflow = targetWorkflow ? applyWorkflowReviewOutcome(targetWorkflow, input.outcome) : undefined;
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        INSERT INTO review_records (
+          id,
+          part_id,
+          target_type,
+          asset_id,
+          generation_workflow_id,
+          outcome,
+          reviewer,
+          notes,
+          reviewed_at,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+        ON CONFLICT (id) DO UPDATE SET
+          outcome = EXCLUDED.outcome,
+          reviewer = EXCLUDED.reviewer,
+          notes = EXCLUDED.notes,
+          reviewed_at = EXCLUDED.reviewed_at,
+          last_updated_at = EXCLUDED.last_updated_at
+      `,
+      [reviewRecord.id, reviewRecord.partId, reviewRecord.targetType, reviewRecord.assetId, reviewRecord.generationWorkflowId, reviewRecord.outcome, reviewRecord.reviewer, reviewRecord.notes, reviewRecord.reviewedAt]
+    );
+
+    if (updatedAsset) {
+      await client.query(
+        `
+          UPDATE assets
+          SET asset_state = $2,
+              asset_status = $3,
+              validation_status = $4,
+              last_updated_at = $5
+          WHERE id = $1 AND part_id = $6
+        `,
+        [updatedAsset.id, updatedAsset.assetState, updatedAsset.assetStatus, updatedAsset.validationStatus, reviewedAt, partId]
+      );
+    }
+
+    if (updatedWorkflow) {
+      await client.query(
+        `
+          UPDATE generation_workflows
+          SET generation_status = $2
+          WHERE id = $1 AND part_id = $3
+        `,
+        [updatedWorkflow.id, updatedWorkflow.generationStatus, partId]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw toCatalogStoreError(error);
+  } finally {
+    client.release();
+  }
+
+  const detailResult = await readPartDetailRecordsFromDatabase(partId);
+
+  if (detailResult.status !== "available") {
+    return { status: "not_configured" };
+  }
+
+  const refreshedRecord = detailResult.records.find((record) => record.part.id === partId);
+  const refreshedReview = refreshedRecord?.reviewRecords.find((review) => review.id === reviewId) ?? reviewRecord;
+  const refreshedAsset = updatedAsset ? refreshedRecord?.assets.find((asset) => asset.id === updatedAsset.id) ?? updatedAsset : undefined;
+  const refreshedWorkflow = updatedWorkflow ? refreshedRecord?.generationWorkflows.find((workflow) => workflow.id === updatedWorkflow.id) ?? updatedWorkflow : undefined;
+
+  return {
+    records: detailResult.records,
+    response: {
+      review: refreshedReview,
+      ...(refreshedAsset ? { updatedAsset: refreshedAsset } : {}),
+      ...(refreshedWorkflow ? { updatedWorkflow: refreshedWorkflow } : {})
+    },
+    status: "created"
+  };
+}
+
+/**
  * Reads joined catalog records from Postgres with an optional part-id scope.
  */
 async function readCatalogRecords(databasePool: Pool, partIds: string[] | null): Promise<PartSearchRecord[]> {
   try {
     const params = [partIds];
-    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows, requestRows] = await Promise.all([
+    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows, requestRows, reviewRows] = await Promise.all([
       databasePool.query<DatabasePartRow>(PART_ROWS_SQL, params),
       databasePool.query<DatabaseMetricRow>(METRIC_ROWS_SQL, params),
       databasePool.query<DatabaseAssetRow>(ASSET_ROWS_SQL, params),
@@ -416,10 +564,11 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null):
       databasePool.query<DatabaseSimilarPartRow>(SIMILAR_PART_ROWS_SQL, params),
       databasePool.query<DatabaseCompanionRow>(COMPANION_ROWS_SQL, params),
       databasePool.query<DatabaseGenerationWorkflowRow>(GENERATION_WORKFLOW_ROWS_SQL, params),
-      databasePool.query<DatabaseGenerationRequestRow>(GENERATION_REQUEST_ROWS_SQL, params)
+      databasePool.query<DatabaseGenerationRequestRow>(GENERATION_REQUEST_ROWS_SQL, params),
+      databasePool.query<DatabaseReviewRow>(REVIEW_ROWS_SQL, params)
     ]);
 
-    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows, requestRows.rows);
+    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows, requestRows.rows, reviewRows.rows);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -456,6 +605,10 @@ export async function getCatalogStoreStatus(): Promise<CatalogStoreStatus> {
  * Lazily creates the Postgres pool when DATABASE_URL exists.
  */
 function getDatabasePool(): Pool | null {
+  if (pool) {
+    return pool;
+  }
+
   if (!process.env.DATABASE_URL) {
     return null;
   }
@@ -533,6 +686,31 @@ function buildGenerationRequestId(partId: string, targetAssetType: GenerationTar
 }
 
 /**
+ * Builds a deterministic review record id from target, outcome, and timestamp.
+ */
+function buildReviewId(partId: string, targetType: ReviewActionInput["targetType"], targetId: string, outcome: ReviewActionInput["outcome"], reviewedAt: string): string {
+  return `review-${partId}-${targetType}-${targetId}-${outcome}-${reviewedAt.replace(/\D/gu, "")}`;
+}
+
+/**
+ * Builds a review record with exactly one linked review target.
+ */
+function buildReviewRecord(id: string, partId: string, input: ReviewActionInput, reviewer: string, reviewedAt: string): ReviewRecord {
+  return {
+    assetId: input.targetType === "asset" ? input.targetId : null,
+    generationWorkflowId: input.targetType === "generation_workflow" ? input.targetId : null,
+    id,
+    lastUpdatedAt: reviewedAt,
+    notes: input.notes ?? null,
+    outcome: input.outcome,
+    partId,
+    reviewedAt,
+    reviewer,
+    targetType: input.targetType
+  };
+}
+
+/**
  * Builds joined API records from flat database row sets.
  */
 function buildPartRecords(
@@ -547,7 +725,8 @@ function buildPartRecords(
   similarRows: DatabaseSimilarPartRow[],
   companionRows: DatabaseCompanionRow[],
   workflowRows: DatabaseGenerationWorkflowRow[],
-  requestRows: DatabaseGenerationRequestRow[]
+  requestRows: DatabaseGenerationRequestRow[],
+  reviewRows: DatabaseReviewRow[]
 ): PartSearchRecord[] {
   const metricsByPartId = groupBy(metricRows.map(mapMetricRow), (metric) => metric.partId);
   const assetsByPartId = groupBy(assetRows.map(mapAssetRow), (asset) => asset.partId);
@@ -560,6 +739,7 @@ function buildPartRecords(
   const companionsByPartId = groupBy(companionRows.map(mapCompanionRow), (relation) => relation.partId);
   const workflowsByPartId = groupBy(workflowRows.map(mapGenerationWorkflowRow), (workflow) => workflow.partId);
   const requestsByPartId = groupBy(requestRows.map(mapGenerationRequestRow), (request) => request.partId);
+  const reviewsByPartId = groupBy(reviewRows.map(mapReviewRow), (review) => review.partId);
 
   return partRows.map((row) => {
     const part = mapPartRow(row);
@@ -574,7 +754,8 @@ function buildPartRecords(
     const companionRecommendations = companionsByPartId.get(part.id) ?? [];
     const generationWorkflows = workflowsByPartId.get(part.id) ?? [];
     const generationRequests = requestsByPartId.get(part.id) ?? [];
-    const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt), ...generationRequests.map((request) => request.lastUpdatedAt)]);
+    const reviewRecords = reviewsByPartId.get(part.id) ?? [];
+    const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt), ...generationRequests.map((request) => request.lastUpdatedAt), ...reviewRecords.map((review) => review.lastUpdatedAt)]);
 
     return {
       accessoryRequirements,
@@ -592,6 +773,7 @@ function buildPartRecords(
       metrics,
       package: mapPackageRow(row),
       part,
+      reviewRecords,
       similarParts,
       sources
     };
@@ -805,6 +987,24 @@ function mapGenerationRequestRow(row: DatabaseGenerationRequestRow): GenerationR
     sourceDatasheetRevisionId: row.source_datasheet_revision_id,
     targetAssetType: row.target_asset_type,
     workflowId: row.workflow_id
+  };
+}
+
+/**
+ * Maps a database row into the shared ReviewRecord type.
+ */
+function mapReviewRow(row: DatabaseReviewRow): ReviewRecord {
+  return {
+    assetId: row.asset_id,
+    generationWorkflowId: row.generation_workflow_id,
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    notes: row.notes,
+    outcome: row.outcome,
+    partId: row.part_id,
+    reviewedAt: toIsoTimestamp(row.reviewed_at),
+    reviewer: row.reviewer,
+    targetType: row.target_type
   };
 }
 
@@ -1082,6 +1282,24 @@ const GENERATION_REQUEST_ROWS_SQL = `
   FROM generation_requests
   WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY requested_at DESC, id DESC
+`;
+
+/** REVIEW_ROWS_SQL reads explicit asset and workflow review decisions. */
+const REVIEW_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    target_type,
+    asset_id,
+    generation_workflow_id,
+    outcome,
+    reviewer,
+    notes,
+    reviewed_at,
+    last_updated_at
+  FROM review_records
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY reviewed_at DESC, id DESC
 `;
 
 /** DATASHEET_ROWS_SQL reads datasheet revision records. */

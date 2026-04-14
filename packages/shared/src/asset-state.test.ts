@@ -114,6 +114,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       packageId: "pkg-test",
       trustScore: 0
     },
+    reviewRecords: [],
     similarParts: [],
     sources: []
   };

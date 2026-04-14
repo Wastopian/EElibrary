@@ -147,6 +147,32 @@
           "sourceDatasheetRevisionId": "dsr-tps7a02-rev-e",
           "targetAssetType": "three_d_model"
         }
+      ],
+      "reviewRecords": [
+        {
+          "assetId": "asset-tps7a02-datasheet",
+          "generationWorkflowId": null,
+          "id": "review-tps7a02-datasheet-approved",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "Datasheet reference reviewed as source evidence; no export file is implied.",
+          "outcome": "approved",
+          "partId": "part-tps7a02dbvr",
+          "reviewedAt": "2026-04-12T00:00:00.000Z",
+          "reviewer": "local-fixture",
+          "targetType": "asset"
+        },
+        {
+          "assetId": "asset-tps7a02-mechanical",
+          "generationWorkflowId": null,
+          "id": "review-tps7a02-mechanical-changes",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "Mechanical drawing needs source-page confirmation before reuse.",
+          "outcome": "changes_requested",
+          "partId": "part-tps7a02dbvr",
+          "reviewedAt": "2026-04-12T00:00:00.000Z",
+          "reviewer": "local-fixture",
+          "targetType": "asset"
+        }
       ]
     },
     {
@@ -219,11 +245,25 @@
           "id": "asset-stm32g031-3d",
           "licenseMode": "unknown",
           "provenance": "manual_internal",
-          "assetStatus": "missing",
+          "assetStatus": "failed",
           "previewStatus": "not_available",
           "sourceUrl": null,
-          "state": "missing",
-          "validationStatus": "not_validated"
+          "state": "failed",
+          "validationStatus": "failed"
+        }
+      ],
+      "reviewRecords": [
+        {
+          "assetId": "asset-stm32g031-3d",
+          "generationWorkflowId": null,
+          "id": "review-stm32g031-3d-rejected",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "No usable mechanical source was available for 3D review.",
+          "outcome": "rejected",
+          "partId": "part-stm32g031k8t6",
+          "reviewedAt": "2026-04-12T00:00:00.000Z",
+          "reviewer": "local-fixture",
+          "targetType": "asset"
         }
       ]
     }

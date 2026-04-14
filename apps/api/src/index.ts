@@ -4,10 +4,10 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { filterPartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, getCatalogStoreStatus, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase } from "./catalog-store";
 import { resolveCatalogRecords } from "./catalog-resolver";
 import { buildPartDetailResponse } from "./detail-response";
-import type { ApiEnvelope, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord } from "@ee-library/shared/types";
+import type { ApiEnvelope, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord, ReviewActionInput, ReviewOutcome, ReviewTargetType } from "@ee-library/shared/types";
 
 /** port is the local HTTP port for the API process. */
 const port = Number(process.env.API_PORT ?? 4000);
@@ -15,7 +15,7 @@ const port = Number(process.env.API_PORT ?? 4000);
 /**
  * Handles every incoming HTTP request with explicit route boundaries.
  */
-async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+export async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   if (!request.url) {
     sendJson(response, 400, { error: "Missing request URL" });
     return;
@@ -23,14 +23,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
   const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(url.pathname);
+  const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
 
   if (request.method === "POST" && generationRequestMatch?.[1]) {
     await handleGenerationRequestCreate(request, response, generationRequestMatch[1]);
     return;
   }
 
+  if (request.method === "POST" && reviewActionMatch?.[1]) {
+    await handleReviewActionCreate(request, response, reviewActionMatch[1]);
+    return;
+  }
+
   if (request.method !== "GET") {
-    sendJson(response, 405, { error: "Only GET and generation-request POST routes are enabled for the catalog API" });
+    sendJson(response, 405, { error: "Only GET, generation-request POST, and review POST routes are enabled for the catalog API" });
     return;
   }
 
@@ -156,6 +162,56 @@ async function handleGenerationRequestCreate(request: IncomingMessage, response:
 }
 
 /**
+ * Handles local/dev-safe review actions without simulating generation or export verification.
+ */
+async function handleReviewActionCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
+  const body = await readJsonBody<ReviewActionInput>(request);
+
+  if (!body || !isReviewTargetType(body.targetType) || !isReviewOutcome(body.outcome) || typeof body.targetId !== "string" || body.targetId.trim().length === 0) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_REVIEW_ACTION",
+        message: "Review actions require targetType, targetId, and an outcome of approved, rejected, or changes_requested."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await createReviewInDatabase(partId, {
+      notes: typeof body.notes === "string" ? body.notes : null,
+      outcome: body.outcome,
+      targetId: body.targetId,
+      targetType: body.targetType
+    });
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Review actions require a configured database so review state can be persisted."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "REVIEW_TARGET_NOT_FOUND",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Converts URL search parameters into strict shared search filters.
  */
 function readSearchFilters(url: URL): PartSearchFilters {
@@ -220,6 +276,20 @@ function isGenerationTargetAssetType(value: unknown): value is GenerationTargetA
 }
 
 /**
+ * Checks review target values without trusting the JSON body.
+ */
+function isReviewTargetType(value: unknown): value is ReviewTargetType {
+  return value === "asset" || value === "generation_workflow";
+}
+
+/**
+ * Checks review outcome values without trusting the JSON body.
+ */
+function isReviewOutcome(value: unknown): value is ReviewOutcome {
+  return value === "approved" || value === "rejected" || value === "changes_requested";
+}
+
+/**
  * Sends a JSON response with a stable content type.
  */
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
@@ -255,7 +325,7 @@ function sendCatalogStoreError(response: ServerResponse, error: unknown): void {
   sendJson(response, 500, {
     error: {
       code: "QUERY_FAILED",
-      message: "Generation request persistence failed."
+      message: "Catalog write persistence failed."
     }
   });
 }
@@ -269,14 +339,16 @@ async function loadSeedCatalogRecords(): Promise<PartSearchRecord[]> {
   return getAllPartRecords();
 }
 
-/** server starts the provider-neutral API process. */
-const server = createServer((request, response) => {
-  handleRequest(request, response).catch((error: unknown) => {
-    console.error("Unhandled API route error.", error);
-    sendJson(response, 500, { error: "Internal API error" });
+if (process.env.NODE_ENV !== "test") {
+  /** server starts the provider-neutral API process. */
+  const server = createServer((request, response) => {
+    handleRequest(request, response).catch((error: unknown) => {
+      console.error("Unhandled API route error.", error);
+      sendJson(response, 500, { error: "Internal API error" });
+    });
   });
-});
 
-server.listen(port, () => {
-  console.log(`EE Library API listening on http://localhost:${port}`);
-});
+  server.listen(port, () => {
+    console.log(`EE Library API listening on http://localhost:${port}`);
+  });
+}

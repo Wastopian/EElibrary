@@ -16,6 +16,7 @@ import type {
   Package,
   Part,
   PartMetric,
+  ReviewRecord,
   SimilarPartRelation,
   SourceRecord
 } from "./types";
@@ -462,7 +463,7 @@ export const assets = [
   },
   {
     assetState: "validated",
-    assetStatus: "validated",
+    assetStatus: "reviewed",
     assetType: "three_d_model",
     fileFormat: "step",
     fileHash: "sha256:seed-step-215079",
@@ -721,8 +722,8 @@ export const assets = [
     validationStatus: "needs_review"
   },
   {
-    assetState: "missing",
-    assetStatus: "missing",
+    assetState: "failed",
+    assetStatus: "failed",
     assetType: "three_d_model",
     fileFormat: "unknown",
     fileHash: null,
@@ -738,7 +739,7 @@ export const assets = [
     sourceRecordId: "source-seed-stm32g031",
     sourceUrl: null,
     storageKey: null,
-    validationStatus: "not_validated"
+    validationStatus: "failed"
   }
 ] satisfies Asset[];
 
@@ -880,3 +881,103 @@ export const generationRequests = [
     workflowId: "gen-tps7a02-3d"
   }
 ] satisfies GenerationRequest[];
+
+/** reviewRecords seed explicit review decisions without auto-verifying every reviewed asset. */
+export const reviewRecords = [
+  {
+    assetId: "asset-te-215079-8-footprint",
+    generationWorkflowId: null,
+    id: "review-asset-te-215079-footprint-approved",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Internal footprint passed review and is allowed in export bundles.",
+    outcome: "approved",
+    partId: "part-te-215079-8",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-te-215079-8-symbol",
+    generationWorkflowId: null,
+    id: "review-asset-te-215079-symbol-approved",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Internal symbol passed review and is allowed in export bundles.",
+    outcome: "approved",
+    partId: "part-te-215079-8",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-te-215079-8-3d",
+    generationWorkflowId: null,
+    id: "review-asset-te-215079-3d-approved-not-export",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Geometry was reviewed, but export verification remains separate.",
+    outcome: "approved",
+    partId: "part-te-215079-8",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-grm188-footprint",
+    generationWorkflowId: null,
+    id: "review-asset-grm188-footprint-approved",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Internal footprint passed review and is allowed in export bundles.",
+    outcome: "approved",
+    partId: "part-grm188r71c104ka01d",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-grm188-symbol",
+    generationWorkflowId: null,
+    id: "review-asset-grm188-symbol-approved",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Internal symbol passed review and is allowed in export bundles.",
+    outcome: "approved",
+    partId: "part-grm188r71c104ka01d",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-grm188-3d",
+    generationWorkflowId: null,
+    id: "review-asset-grm188-3d-approved",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Internal 3D model passed review and is allowed in export bundles.",
+    outcome: "approved",
+    partId: "part-grm188r71c104ka01d",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-tps7a02-mechanical",
+    generationWorkflowId: null,
+    id: "review-asset-tps7a02-mechanical-changes",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Mechanical drawing reference needs source-page confirmation before reuse.",
+    outcome: "changes_requested",
+    partId: "part-tps7a02dbvr",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  },
+  {
+    assetId: "asset-stm32g031-3d",
+    generationWorkflowId: null,
+    id: "review-asset-stm32g031-3d-rejected",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "No usable 3D source was available for review.",
+    outcome: "rejected",
+    partId: "part-stm32g031k8t6",
+    reviewedAt: LAST_UPDATED_AT,
+    reviewer: "seed:library-review",
+    targetType: "asset"
+  }
+] satisfies ReviewRecord[];

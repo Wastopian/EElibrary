@@ -18,6 +18,7 @@ import {
   partMetrics,
   partPackages,
   parts,
+  reviewRecords,
   similarPartRelations,
   sourceRecords
 } from "./seed";
@@ -101,6 +102,7 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
   const partCompanions = sortRelationsByConfidence(companionRecommendations.filter((recommendation) => recommendation.partId === part.id));
   const partWorkflows = sortRelationsByConfidence(generationWorkflows.filter((workflow) => workflow.partId === part.id));
   const partGenerationRequests = generationRequests.filter((request) => request.partId === part.id).sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt) || right.id.localeCompare(left.id));
+  const partReviewRecords = reviewRecords.filter((review) => review.partId === part.id).sort((left, right) => Date.parse(right.reviewedAt) - Date.parse(left.reviewedAt) || right.id.localeCompare(left.id));
 
   return {
     accessoryRequirements: partAccessories,
@@ -112,12 +114,14 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     datasheetRevision: partDatasheetRevision,
     generationRequests: partGenerationRequests,
     generationWorkflows: partWorkflows,
+    reviewRecords: partReviewRecords,
     lastUpdatedAt: latestTimestamp([
       part.lastUpdatedAt,
       ...partAssets.map((asset) => asset.lastUpdatedAt),
       ...partMetricsForRecord.map((metric) => metric.lastUpdatedAt),
       ...(partDatasheetRevision ? [partDatasheetRevision.lastUpdatedAt] : []),
-      ...partSources.map((sourceRecord) => sourceRecord.lastUpdatedAt)
+      ...partSources.map((sourceRecord) => sourceRecord.lastUpdatedAt),
+      ...partReviewRecords.map((review) => review.lastUpdatedAt)
     ]),
     manufacturer,
     mateRelations: partMateRelations,

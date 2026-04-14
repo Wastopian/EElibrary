@@ -3,7 +3,7 @@
  */
 
 import { getBundleReadinessSummary } from "@ee-library/shared/asset-resolution";
-import type { Asset, AssetGenerationOption, BundleReadinessState, GenerationWorkflow, PartSearchRecord } from "@ee-library/shared/types";
+import type { Asset, AssetGenerationOption, BundleReadinessState, GenerationWorkflow, PartSearchRecord, ReviewState, ReviewStatusSummary } from "@ee-library/shared/types";
 
 /** ViewTone mirrors shared badge tones without coupling this helper to UI components. */
 export type ViewTone = "neutral" | "info" | "verified" | "review" | "danger";
@@ -44,6 +44,45 @@ export function formatGenerationWorkflowLabel(workflow: GenerationWorkflow, asse
  */
 export function shouldRenderGenerationOptions(generationOptions: AssetGenerationOption[]): boolean {
   return generationOptions.length > 0;
+}
+
+/**
+ * Formats review state for reviewer-facing asset and workflow badges.
+ */
+export function formatReviewStateLabel(state: ReviewState): string {
+  const labels: Record<ReviewState, string> = {
+    approved: "approved",
+    changes_requested: "changes requested",
+    not_required: "no review required",
+    pending_review: "pending review",
+    rejected: "rejected",
+    verified_for_export: "verified for export"
+  };
+
+  return labels[state];
+}
+
+/**
+ * Maps review state into UI tones without putting UI code into shared runtime helpers.
+ */
+export function reviewStateTone(state: ReviewState): ViewTone {
+  const tones: Record<ReviewState, ViewTone> = {
+    approved: "verified",
+    changes_requested: "review",
+    not_required: "neutral",
+    pending_review: "review",
+    rejected: "danger",
+    verified_for_export: "verified"
+  };
+
+  return tones[state];
+}
+
+/**
+ * Returns true when local/dev review action buttons should be visible for a target.
+ */
+export function shouldRenderReviewActions(status: ReviewStatusSummary): boolean {
+  return status.state !== "verified_for_export" && status.state !== "not_required";
 }
 
 /**

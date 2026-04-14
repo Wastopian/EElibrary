@@ -10,3 +10,4 @@ export * from "./asset-resolution";
 export * from "./catalog-runtime";
 export * from "./connector-intelligence";
 export * from "./normalization";
+export * from "./review-workflow";
