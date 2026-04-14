@@ -14,6 +14,7 @@
     "dev:web": "npm run dev -w @ee-library/web",
     "dev:worker": "npm run dev -w @ee-library/worker",
     "ingest:local": "npm run ingest -w @ee-library/worker",
+    "ingest:jlcparts": "npm run ingest:jlcparts -w @ee-library/worker",
     "lint": "npm run lint --workspaces",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces"

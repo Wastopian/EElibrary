@@ -19,6 +19,7 @@ import type {
   SimilarPartRelation,
   SourceRecord
 } from "@ee-library/shared/types";
+import { jlcpartsProviderAdapter } from "./providers/jlcparts-provider";
 import { localCatalogProviderAdapter } from "./providers/local-catalog-provider";
 
 /** ProviderPartRequest describes the minimum lookup input for future provider fetches. */
@@ -88,4 +89,4 @@ export interface ProviderAdapter {
 }
 
 /** providerAdapters registers worker-only provider implementations. */
-export const providerAdapters: ProviderAdapter[] = [localCatalogProviderAdapter];
+export const providerAdapters: ProviderAdapter[] = [localCatalogProviderAdapter, jlcpartsProviderAdapter];

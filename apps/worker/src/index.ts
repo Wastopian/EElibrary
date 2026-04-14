@@ -1,5 +1,5 @@
 /**
- * File header: Runs Phase 2 worker status and local provider ingestion commands.
+ * File header: Runs worker status and provider ingestion commands.
  */
 
 import { providerAdapters } from "./provider-adapters";
@@ -51,16 +51,26 @@ function getWorkerStatus(): WorkerStatus {
 }
 
 /**
- * Ingests all locally available provider records into Postgres.
+ * Ingests all locally available requests from one provider adapter into Postgres.
  */
-async function ingestLocalCatalog(): Promise<void> {
-  const adapter = getProviderAdapter("local-catalog");
+async function ingestAvailableProviderRequests(adapterId: string): Promise<void> {
+  const adapter = getProviderAdapter(adapterId);
 
   await assertDatabaseReady();
 
   for (const request of await adapter.listAvailablePartRequests()) {
     await ingestPart(adapter, request);
   }
+}
+
+/**
+ * Ingests a single provider lookup request into Postgres.
+ */
+async function ingestProviderPart(adapterId: string, request: ProviderPartRequest): Promise<void> {
+  const adapter = getProviderAdapter(adapterId);
+
+  await assertDatabaseReady();
+  await ingestPart(adapter, request);
 }
 
 /**
@@ -99,7 +109,16 @@ async function main(): Promise<void> {
   }
 
   if (command === "ingest") {
-    await ingestLocalCatalog();
+    const adapterId = process.argv[3] ?? "local-catalog";
+    const mpn = process.argv[4];
+    const manufacturerName = process.argv[5];
+
+    if (mpn) {
+      await ingestProviderPart(adapterId, manufacturerName ? { manufacturerName, mpn } : { mpn });
+      return;
+    }
+
+    await ingestAvailableProviderRequests(adapterId);
     return;
   }
 
