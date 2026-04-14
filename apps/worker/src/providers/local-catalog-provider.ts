@@ -4,7 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { deriveAssetState } from "@ee-library/shared/asset-state";
+import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { normalizeAssetState, normalizeLifecycleStatus, normalizeMetricUnit, normalizeNullableNumber } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
 import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation } from "@ee-library/shared/types";
@@ -228,7 +228,7 @@ function normalizeAsset(asset: LocalCatalogAsset, record: LocalCatalogRecord, ra
     validationStatus: normalizedState === "failed" ? "failed" : asset.validationStatus
   });
 
-  return {
+  return withCanonicalAssetTruth({
     assetState,
     assetStatus: asset.assetStatus ?? assetState,
     assetType: asset.assetType,
@@ -247,7 +247,7 @@ function normalizeAsset(asset: LocalCatalogAsset, record: LocalCatalogRecord, ra
     sourceUrl: asset.sourceUrl,
     storageKey: asset.storageKey ?? null,
     validationStatus: normalizedState === "failed" ? "failed" : asset.validationStatus
-  };
+  });
 }
 
 /**

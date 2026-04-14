@@ -67,7 +67,7 @@ export function formatReviewStateLabel(state: ReviewState): string {
  */
 export function reviewStateTone(state: ReviewState): ViewTone {
   const tones: Record<ReviewState, ViewTone> = {
-    approved: "verified",
+    approved: "info",
     changes_requested: "review",
     not_required: "neutral",
     pending_review: "review",

@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getPartDetail } from "./search";
+import { withCanonicalAssetTruth } from "./asset-state";
 import { evaluateGenerationSourceReadiness, getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries, selectBestAvailableAsset } from "./asset-resolution";
 import type { Asset, PartSearchRecord } from "./types";
 
@@ -109,7 +110,7 @@ test("generation options follow stored workflow and target readiness state", () 
  * Builds a default footprint asset for ranking tests.
  */
 function buildAsset(overrides: Partial<Asset> = {}): Asset {
-  return {
+  return withCanonicalAssetTruth({
     assetState: "validated",
     assetStatus: "verified_for_export",
     assetType: "footprint",
@@ -129,7 +130,7 @@ function buildAsset(overrides: Partial<Asset> = {}): Asset {
     storageKey: "cad/test/default.kicad_mod",
     validationStatus: "verified",
     ...overrides
-  };
+  });
 }
 
 /**

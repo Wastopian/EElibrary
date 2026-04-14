@@ -100,6 +100,7 @@ test("review status wording distinguishes pending, approved, rejected, and expor
   assert.equal(formatReviewStateLabel(getAssetReviewStatus(rejectedAsset, microcontrollerRecord.reviewRecords).state), "rejected");
   assert.equal(formatReviewStateLabel(getAssetReviewStatus(exportVerifiedAsset, connectorRecord.reviewRecords).state), "verified for export");
   assert.equal(formatReviewStateLabel(getWorkflowReviewStatus(reviewWorkflow, regulatorRecord.reviewRecords).state), "pending review");
+  assert.equal(reviewStateTone("approved"), "info");
   assert.equal(reviewStateTone("changes_requested"), "review");
   assert.equal(shouldRenderReviewActions(getAssetReviewStatus(exportVerifiedAsset, connectorRecord.reviewRecords)), false);
 });

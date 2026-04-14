@@ -31,7 +31,7 @@ import type {
   SearchFacets
 } from "./types";
 
-export { filterPartRecords, formatAssetStatus, formatMetricLabel, formatMetricValue, getExportAvailability, getSearchFacetsFromRecords, getVerifiedCadAssetCount } from "./catalog-runtime";
+export { filterPartRecords, formatAssetAvailabilityStatus, formatAssetExportStatus, formatAssetStatus, formatMetricLabel, formatMetricValue, getExportAvailability, getSearchFacetsFromRecords, getVerifiedCadAssetCount } from "./catalog-runtime";
 export { buildBuildableMatingSet } from "./connector-intelligence";
 
 /** manufacturerById supports deterministic joining from seed tables. */

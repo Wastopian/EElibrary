@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
-import { formatAssetStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
+import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
 import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, reviewStateTone, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
@@ -322,7 +322,7 @@ function EngineeringAssetSummary({ group, reviewAction, reviewStatuses }: { grou
   return (
     <div className="asset-review-card">
       <AssetCard
-        availabilityLabel={`${assetClassReadinessLabel(group.readiness)} / ${provenanceLabel(bestAsset.provenance)}`}
+        availabilityLabel={`${formatAssetAvailabilityStatus(bestAsset.availabilityStatus)} / ${provenanceLabel(bestAsset.provenance)}`}
         availabilityTone={assetClassReadinessTone(group.readiness)}
         fileFormat={bestAsset.fileFormat}
         previewLabel={previewLabel(bestAsset.previewStatus)}
@@ -332,7 +332,7 @@ function EngineeringAssetSummary({ group, reviewAction, reviewStatuses }: { grou
         sourceLabel={bestAsset.providerId ? `Best of ${group.assets.length} / source ${bestAsset.providerId}` : `Best of ${group.assets.length} / no source`}
         title={assetTypeLabel(group.assetType)}
         updatedLabel={`Updated ${formatDateTime(bestAsset.lastUpdatedAt)}`}
-        validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetStatus(bestAsset.assetStatus)}`}
+        validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetExportStatus(bestAsset.exportStatus)}`}
         validationTone={validationTone(bestAsset.validationStatus)}
       />
       <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
@@ -486,22 +486,6 @@ function validationTone(status: ValidationStatus): BadgeTone {
 }
 
 /**
- * Maps asset class readiness into explicit user-facing copy.
- */
-function assetClassReadinessLabel(readiness: AssetClassReadiness): string {
-  const labels: Record<AssetClassReadiness, string> = {
-    downloaded_file: "Downloaded file",
-    export_ready: "Export-ready file",
-    failed: "Failed asset",
-    missing: "Missing asset",
-    reference_only: "Reference only",
-    validated_file: "Validated file"
-  };
-
-  return labels[readiness];
-}
-
-/**
  * Maps asset class readiness into badge tone.
  */
 function assetClassReadinessTone(readiness: AssetClassReadiness): BadgeTone {
@@ -536,7 +520,7 @@ function bundleReadinessTone(state: BundleReadinessState): BadgeTone {
  */
 function generationWorkflowTone(state: GenerationWorkflowState): BadgeTone {
   const tones: Record<GenerationWorkflowState, BadgeTone> = {
-    approved: "verified",
+    approved: "info",
     available_to_request: "info",
     failed: "danger",
     generated: "review",

@@ -53,7 +53,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     <main className="search-layout">
       <section className="search-hero">
         <div>
-          <p className="app-kicker">Phase 2 foundation</p>
+          <p className="app-kicker">Engineering workspace</p>
           <h2>Search parts, inspect provenance, and keep export readiness honest.</h2>
         </div>
         <form className="search-bar" action="/" method="get">
@@ -122,8 +122,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               CAD files
               <select defaultValue={cadAvailability} name="cad">
                 <option value="any">Any CAD state</option>
-                <option value="available">Validated downloadable</option>
-                <option value="unavailable">Needs validation</option>
+                <option value="available">Verified file-backed CAD</option>
+                <option value="unavailable">Missing verified CAD</option>
               </select>
             </label>
             <button type="submit">Apply filters</button>

@@ -132,6 +132,9 @@ interface DatabaseAssetRow {
   provider_id: string | null;
   license_mode: Asset["licenseMode"];
   provenance: Asset["provenance"];
+  availability_status: Asset["availabilityStatus"];
+  review_status: Asset["reviewStatus"];
+  export_status: Asset["exportStatus"];
   asset_status: Asset["assetStatus"];
   generation_method: string | null;
   generation_source_asset_id: string | null;
@@ -497,11 +500,14 @@ export async function createReviewInDatabase(partId: string, input: ReviewAction
           UPDATE assets
           SET asset_state = $2,
               asset_status = $3,
-              validation_status = $4,
-              last_updated_at = $5
-          WHERE id = $1 AND part_id = $6
+              availability_status = $4,
+              review_status = $5,
+              export_status = $6,
+              validation_status = $7,
+              last_updated_at = $8
+          WHERE id = $1 AND part_id = $9
         `,
-        [updatedAsset.id, updatedAsset.assetState, updatedAsset.assetStatus, updatedAsset.validationStatus, reviewedAt, partId]
+        [updatedAsset.id, updatedAsset.assetState, updatedAsset.assetStatus, updatedAsset.availabilityStatus, updatedAsset.reviewStatus, updatedAsset.exportStatus, updatedAsset.validationStatus, reviewedAt, partId]
       );
     }
 
@@ -864,6 +870,7 @@ function mapMetricRow(row: DatabaseMetricRow): PartMetric {
  */
 function mapAssetRow(row: DatabaseAssetRow): Asset {
   return {
+    availabilityStatus: row.availability_status,
     assetState: row.asset_state,
     assetStatus: row.asset_status,
     assetType: row.asset_type,
@@ -878,6 +885,8 @@ function mapAssetRow(row: DatabaseAssetRow): Asset {
     previewStatus: row.preview_status,
     providerId: row.provider_id,
     provenance: row.provenance,
+    reviewStatus: row.review_status,
+    exportStatus: row.export_status,
     sourceRecordId: row.source_record_id,
     sourceUrl: row.source_url,
     storageKey: row.storage_key,
@@ -1165,6 +1174,9 @@ const ASSET_ROWS_SQL = `
     provider_id,
     license_mode,
     provenance,
+    availability_status,
+    review_status,
+    export_status,
     asset_status,
     generation_method,
     generation_source_asset_id,

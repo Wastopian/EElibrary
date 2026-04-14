@@ -282,6 +282,9 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
         provider_id,
         license_mode,
         provenance,
+        availability_status,
+        review_status,
+        export_status,
         asset_status,
         generation_method,
         generation_source_asset_id,
@@ -292,7 +295,7 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
         source_record_id,
         last_updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         asset_type = EXCLUDED.asset_type,
@@ -302,6 +305,9 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
         provider_id = EXCLUDED.provider_id,
         license_mode = EXCLUDED.license_mode,
         provenance = EXCLUDED.provenance,
+        availability_status = EXCLUDED.availability_status,
+        review_status = EXCLUDED.review_status,
+        export_status = EXCLUDED.export_status,
         asset_status = EXCLUDED.asset_status,
         generation_method = EXCLUDED.generation_method,
         generation_source_asset_id = EXCLUDED.generation_source_asset_id,
@@ -322,6 +328,9 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
       asset.providerId,
       asset.licenseMode,
       asset.provenance,
+      asset.availabilityStatus,
+      asset.reviewStatus,
+      asset.exportStatus,
       asset.assetStatus,
       asset.generationMethod,
       asset.generationSourceAssetId,

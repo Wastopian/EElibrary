@@ -20,6 +20,7 @@ import type {
   SimilarPartRelation,
   SourceRecord
 } from "./types";
+import { withCanonicalAssetTruth } from "./asset-state";
 
 /** LAST_UPDATED_AT keeps seed timestamps deterministic for repeatable local runs. */
 const LAST_UPDATED_AT = "2026-04-12T00:00:00.000Z";
@@ -399,8 +400,8 @@ export const partMetrics = [
   }
 ] satisfies PartMetric[];
 
-/** assets keep provenance, lifecycle, and export verification explicitly separate. */
-export const assets = [
+/** seedAssetRows keep legacy mirrors so local fallback can exercise upgrade behavior. */
+const seedAssetRows = [
   {
     assetState: "referenced",
     assetStatus: "reviewed",
@@ -741,7 +742,10 @@ export const assets = [
     storageKey: null,
     validationStatus: "failed"
   }
-] satisfies Asset[];
+] satisfies Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus">[];
+
+/** assets keep provenance, availability, review, and export verification explicitly separate. */
+export const assets = seedAssetRows.map(withCanonicalAssetTruth) satisfies Asset[];
 
 /** mateRelations seed direct connector mating relationships with confidence. */
 export const mateRelations = [

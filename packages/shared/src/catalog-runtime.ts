@@ -5,6 +5,8 @@
 import { isValidatedDownloadableAsset } from "./asset-state";
 import type {
   Asset,
+  AssetAvailabilityStatus,
+  AssetExportStatus,
   AssetStatus,
   AssetType,
   CadAvailabilityFilter,
@@ -82,7 +84,35 @@ export function formatMetricValue(metric: PartMetric): string {
 }
 
 /**
- * Formats asset status without collapsing review state into file availability.
+ * Formats canonical availability status without implying review or export readiness.
+ */
+export function formatAssetAvailabilityStatus(status: AssetAvailabilityStatus): string {
+  const labels: Record<AssetAvailabilityStatus, string> = {
+    downloaded: "Downloaded file",
+    failed: "Failed asset",
+    missing: "Missing asset",
+    referenced: "Referenced only",
+    validated: "Validated file"
+  };
+
+  return labels[status];
+}
+
+/**
+ * Formats canonical export status without implying missing bundle pieces exist.
+ */
+export function formatAssetExportStatus(status: AssetExportStatus): string {
+  const labels: Record<AssetExportStatus, string> = {
+    not_exportable: "Not exportable",
+    partially_exportable: "Partially exportable",
+    verified_for_export: "Verified for export"
+  };
+
+  return labels[status];
+}
+
+/**
+ * Formats legacy asset status without collapsing review state into file availability.
  */
 export function formatAssetStatus(assetStatus: AssetStatus): string {
   const labels: Record<AssetStatus, string> = {

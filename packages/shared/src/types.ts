@@ -23,18 +23,20 @@ export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown"
 /** Provenance makes source trust explicit without assuming correctness. */
 export type AssetProvenance = "official" | "trusted_external" | "generated" | "manual_internal";
 
-/** Asset status keeps metadata review and export verification separate from file storage. */
-export type AssetStatus =
-  | "missing"
-  | "referenced"
-  | "downloaded"
-  | "validated"
-  | "failed"
-  | "reviewed"
-  | "verified_for_export";
+/** AssetAvailabilityStatus answers whether an asset actually exists locally or only as a reference. */
+export type AssetAvailabilityStatus = "missing" | "referenced" | "downloaded" | "validated" | "failed";
 
-/** Concrete asset file lifecycle values never treat references as downloaded files. */
-export type AssetState = "missing" | "referenced" | "downloaded" | "validated" | "failed";
+/** AssetReviewStatus keeps engineering review separate from storage and export readiness. */
+export type AssetReviewStatus = "not_reviewed" | "review_required" | "approved" | "rejected" | "changes_requested";
+
+/** AssetExportStatus prevents vague export claims when only partial or referenced evidence exists. */
+export type AssetExportStatus = "not_exportable" | "partially_exportable" | "verified_for_export";
+
+/** AssetState is the legacy storage-field name retained while migrations carry compatibility columns. */
+export type AssetState = AssetAvailabilityStatus;
+
+/** AssetStatus is the legacy combined status retained for older fixtures and rows. */
+export type AssetStatus = AssetAvailabilityStatus | "reviewed" | "verified_for_export";
 
 /** Validation status describes trust in the asset or metadata. */
 export type ValidationStatus = "verified" | "needs_review" | "not_validated" | "failed";
@@ -155,12 +157,17 @@ export interface Asset {
   providerId: string | null;
   licenseMode: LicenseMode;
   provenance: AssetProvenance;
+  availabilityStatus: AssetAvailabilityStatus;
+  reviewStatus: AssetReviewStatus;
+  exportStatus: AssetExportStatus;
+  /** Legacy availability mirror for older code paths and migrations. */
+  assetState: AssetState;
+  /** Legacy combined review/export mirror for older code paths and migrations. */
   assetStatus: AssetStatus;
   generationMethod: string | null;
   generationSourceAssetId: string | null;
   validationStatus: ValidationStatus;
   previewStatus: PreviewStatus;
-  assetState: AssetState;
   sourceUrl: string | null;
   sourceRecordId: string | null;
   lastUpdatedAt: string;

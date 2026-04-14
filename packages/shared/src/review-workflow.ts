@@ -2,7 +2,7 @@
  * File header: Defines seed-free review status resolution and approval transition rules.
  */
 
-import { isFileBackedAsset, isValidatedDownloadableAsset } from "./asset-state";
+import { isFileBackedAsset, isValidatedDownloadableAsset, withCanonicalAssetTruth } from "./asset-state";
 import type { Asset, GenerationWorkflow, ReviewOutcome, ReviewRecord, ReviewState, ReviewStatusSummary } from "./types";
 
 /** EXPORT_REVIEW_ASSET_TYPES are the CAD classes that can become export-package inputs. */
@@ -71,7 +71,7 @@ export function canAssetBecomeVerifiedForExport(asset: Asset, outcome: ReviewOut
   return (
     outcome === "approved" &&
     EXPORT_REVIEW_ASSET_TYPES.has(asset.assetType) &&
-    (asset.assetState === "downloaded" || asset.assetState === "validated") &&
+    (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated") &&
     asset.validationStatus !== "failed" &&
     asset.licenseMode === "redistribution_allowed" &&
     isFileBackedAsset(asset)
@@ -85,8 +85,11 @@ export function applyAssetReviewOutcome(asset: Asset, outcome: ReviewOutcome): A
   if (outcome === "rejected") {
     return {
       ...asset,
+      availabilityStatus: "failed",
       assetState: "failed",
       assetStatus: "failed",
+      exportStatus: "not_exportable",
+      reviewStatus: "rejected",
       validationStatus: "failed"
     };
   }
@@ -95,6 +98,8 @@ export function applyAssetReviewOutcome(asset: Asset, outcome: ReviewOutcome): A
     return {
       ...asset,
       assetStatus: "reviewed",
+      exportStatus: "not_exportable",
+      reviewStatus: "changes_requested",
       validationStatus: "needs_review"
     };
   }
@@ -102,17 +107,20 @@ export function applyAssetReviewOutcome(asset: Asset, outcome: ReviewOutcome): A
   if (canAssetBecomeVerifiedForExport(asset, outcome)) {
     return {
       ...asset,
+      availabilityStatus: "validated",
       assetState: "validated",
       assetStatus: "verified_for_export",
+      exportStatus: "verified_for_export",
+      reviewStatus: "approved",
       validationStatus: "verified"
     };
   }
 
-  return {
+  return withCanonicalAssetTruth({
     ...asset,
     assetStatus: "reviewed",
     validationStatus: asset.validationStatus === "failed" ? "failed" : "verified"
-  };
+  });
 }
 
 /**
@@ -142,11 +150,19 @@ function resolveAssetReviewState(asset: Asset, latestReview: ReviewRecord | null
     return latestReview.outcome;
   }
 
-  if (asset.assetStatus === "failed" || asset.validationStatus === "failed" || asset.assetState === "failed") {
+  if (asset.reviewStatus === "rejected" || asset.validationStatus === "failed" || asset.availabilityStatus === "failed") {
     return "rejected";
   }
 
-  if (asset.provenance === "generated" || asset.assetStatus === "downloaded" || asset.assetStatus === "validated" || asset.assetStatus === "reviewed" || asset.validationStatus === "needs_review") {
+  if (asset.reviewStatus === "changes_requested") {
+    return "changes_requested";
+  }
+
+  if (asset.reviewStatus === "approved") {
+    return "approved";
+  }
+
+  if (asset.provenance === "generated" || asset.reviewStatus === "review_required" || asset.validationStatus === "needs_review") {
     return "pending_review";
   }
 

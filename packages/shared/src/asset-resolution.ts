@@ -56,7 +56,7 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
   const cadAssets = record.assets.filter((asset) => asset.assetType === "footprint" || asset.assetType === "symbol" || asset.assetType === "three_d_model");
   const verifiedCadAssetCount = cadAssets.filter(isValidatedDownloadableAsset).length;
   const fileBackedCadAssetCount = cadAssets.filter(isFileBackedAsset).length;
-  const referencedAssetCount = record.assets.filter((asset) => asset.assetState === "referenced").length;
+  const referencedAssetCount = record.assets.filter((asset) => asset.availabilityStatus === "referenced").length;
 
   if (readyBundleCount > 0) {
     return {
@@ -153,7 +153,7 @@ function assetRankingScore(asset: Asset): number {
 function readinessScore(asset: Asset): number {
   if (isValidatedDownloadableAsset(asset)) return 600;
 
-  const stateScores: Record<Asset["assetState"], number> = {
+  const stateScores: Record<Asset["availabilityStatus"], number> = {
     downloaded: 250,
     failed: -200,
     missing: 0,
@@ -161,7 +161,7 @@ function readinessScore(asset: Asset): number {
     validated: 400
   };
 
-  return stateScores[asset.assetState];
+  return stateScores[asset.availabilityStatus];
 }
 
 /**
@@ -174,17 +174,20 @@ function validationScore(asset: Asset): number {
     not_validated: 0,
     verified: 80
   };
-  const statusScores: Record<Asset["assetStatus"], number> = {
-    downloaded: 20,
-    failed: -100,
-    missing: 0,
-    referenced: 10,
-    reviewed: 30,
-    validated: 60,
+  const reviewScores: Record<Asset["reviewStatus"], number> = {
+    approved: 30,
+    changes_requested: -20,
+    not_reviewed: 0,
+    rejected: -100,
+    review_required: 10
+  };
+  const exportScores: Record<Asset["exportStatus"], number> = {
+    not_exportable: 0,
+    partially_exportable: 50,
     verified_for_export: 120
   };
 
-  return validationScores[asset.validationStatus] + statusScores[asset.assetStatus];
+  return validationScores[asset.validationStatus] + reviewScores[asset.reviewStatus] + exportScores[asset.exportStatus];
 }
 
 /**
@@ -207,10 +210,10 @@ function provenanceScore(asset: Asset): number {
 function resolveClassReadiness(bestAsset: Asset | null): AssetClassSummary["readiness"] {
   if (!bestAsset) return "missing";
   if (isValidatedDownloadableAsset(bestAsset)) return "export_ready";
-  if (bestAsset.assetState === "validated") return "validated_file";
-  if (bestAsset.assetState === "downloaded") return "downloaded_file";
-  if (bestAsset.assetState === "referenced") return "reference_only";
-  if (bestAsset.assetState === "failed") return "failed";
+  if (bestAsset.availabilityStatus === "validated") return "validated_file";
+  if (bestAsset.availabilityStatus === "downloaded") return "downloaded_file";
+  if (bestAsset.availabilityStatus === "referenced") return "reference_only";
+  if (bestAsset.availabilityStatus === "failed") return "failed";
   return "missing";
 }
 
@@ -420,8 +423,8 @@ function evaluateSymbolSourceReadiness(record: PartSearchRecord): GenerationSour
  */
 function evaluateThreeDSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
   const mechanicalDrawing = selectBestAvailableAsset(record.assets.filter((asset) => asset.assetType === "mechanical_drawing"));
-  const hasUsableDrawing = Boolean(mechanicalDrawing && mechanicalDrawing.assetState !== "missing" && mechanicalDrawing.assetState !== "failed");
-  const reasons = hasUsableDrawing ? [`${mechanicalDrawing?.assetState ?? "Referenced"} mechanical drawing is available for a reviewed 3D request.`] : ["No usable mechanical drawing source is registered."];
+  const hasUsableDrawing = Boolean(mechanicalDrawing && mechanicalDrawing.availabilityStatus !== "missing" && mechanicalDrawing.availabilityStatus !== "failed");
+  const reasons = hasUsableDrawing ? [`${mechanicalDrawing?.availabilityStatus ?? "referenced"} mechanical drawing is available for a reviewed 3D request.`] : ["No usable mechanical drawing source is registered."];
 
   return {
     ready: hasUsableDrawing,

@@ -1,52 +1,124 @@
-# EE Library Starter Pack
+# EE Library
 
-This pack gives you a sane starting point for building an **advanced EE library platform** with Codex.
+EE Library is a normalized engineering platform for electrical engineers that helps users:
 
-## Included
-- `AGENTS.md` - repo rules for Codex and other coding agents
-- `docs/PRODUCT_REQUIREMENTS.md` - product scope and feature priorities
-- `docs/SYSTEM_ARCHITECTURE.md` - system design and module boundaries
-- `docs/DATA_MODEL.md` - normalized entities and ingestion model
-- `docs/UI_UX_BRIEF.md` - page map and interface direction
-- `docs/ROADMAP.md` - phased implementation plan
+- find the right part
+- resolve the right mates and companion parts
+- understand which CAD/assets actually exist
+- track provenance and trust
+- recover missing CAD through datasheet-driven generation workflows
+- export only when assets are truly ready
+
+This is **not** a naive scraper and **not** just another footprint download site.
+
+It is built around canonical part records, connector intelligence, engineering asset truth, and strict export honesty.
+
+---
+
+## Core differentiators
+
+### Connector Intelligence
+For connector parts, the platform can model:
+
+- best mate
+- alternate mates
+- required accessories
+- optional accessories
+- cable compatibility
+- buildable mating sets
+
+### Engineering Asset Truth
+Each engineering asset is tracked with explicit provenance and lifecycle state.
+
+Examples:
+- official
+- trusted external
+- generated
+- manual internal
+- reviewed
+- verified for export
+
+Lifecycle states include:
+- missing
+- referenced
+- downloaded
+- validated
+- failed
+
+### Datasheet-to-CAD Recovery
+When symbol, footprint, or 3D assets are missing, the platform can expose fallback generation workflows based on available source material such as:
+
+- package/mechanical data
+- pin table data
+- mechanical drawings
+
+### Honest Export Gating
+Export actions are enabled only when validated, downloadable assets truly exist.
+Referenced URLs alone do not count as exportable files.
+
+---
+
+## Current implementation status
+
+### Implemented
+- monorepo foundation for web, API, worker, UI, and shared packages
+- canonical domain types and normalized catalog model
+- DB-backed catalog flows
+- connector intelligence foundation
+- engineering asset ranking and grouped asset summaries
+- bundle readiness and precise asset/export wording
+- generation request and workflow state pipeline
+- review/approval workflow for generated and sourced engineering assets
+- strict seed fallback controls for local development only
+
+### Not yet implemented
+- production provider integrations
+- large-scale external ingestion
+- full datasheet parsing/extraction engine
+- automatic CAD generation
+
+---
+
+## Monorepo structure
+
+- `apps/web` - Next.js UI for search, detail views, engineering assets, and workflow states
+- `apps/api` - provider-neutral HTTP API over DB-backed catalog data
+- `apps/worker` - ingestion and persistence boundary for provider adapters and workflow jobs
+- `packages/shared` - canonical domain types, runtime resolvers, and catalog logic
+- `packages/ui` - reusable UI primitives and design system
+- `infra/postgres` - incremental SQL schema and migrations
+
+---
 
 ## Product truth
-A platform that exposes **every** component footprint, 3D model, and perfect datasheet metric does not exist by magic.
+
+A platform that exposes every component footprint, 3D model, perfect metric, and perfect mate does not exist by magic.
 
 Some parts will have:
+
 - incomplete metadata
-- no STEP file
-- terrible PDF formatting
+- missing CAD
+- conflicting source data
+- messy datasheets
 - licensing limits on redistribution
-- conflicting package data across sources
 
-So build this as a **normalized engineering asset system**, not as a naive scraper.
+EE Library is designed to handle that reality explicitly through normalization, provenance, workflow state, and reviewable generation paths.
 
-## Best first milestone
-1. Search
-2. Component detail page
-3. Asset registry
-4. Export bundle flow
+---
 
-That gets you to something useful instead of a massive half-built cathedral.
+## Architecture principles
 
-## Phase 0 and Phase 1 scaffold
-- `apps/web` - Next.js search and component detail shell.
-- `apps/api` - provider-neutral HTTP API skeleton over seeded shared data.
-- `apps/worker` - worker boundary with documented ingestion stages only.
-- `packages/shared` - normalized domain types, seed records, search helpers, and export availability rules.
-- `packages/ui` - provider-neutral dark-mode UI primitives.
-- `infra/postgres` - Phase 1 SQL schema aligned to `docs/DATA_MODEL.md`.
+- canonical DB is the source of truth
+- UI stays provider-neutral
+- source provenance is explicit
+- generated assets never pretend to be official
+- export readiness must be earned
+- DB failures must not be silently masked by seed data except in explicit local fallback mode
 
-## Phase 2 data flow
-- `apps/worker` includes a `local-catalog` provider adapter that reads deterministic provider payloads, normalizes them through shared helpers, and persists canonical rows into Postgres.
-- `infra/postgres/002_phase2_asset_registry.sql` adds source-record provenance, record update timestamps, and asset lifecycle states: `missing`, `referenced`, `downloaded`, `validated`, and `failed`.
-- `infra/postgres/003_connector_intelligence_hardening.sql` upgrades older databases with connector relationship tables, asset provenance/status columns, generation workflows, and conservative backfills.
-- `apps/api` reads parts, facets, and details from Postgres when `DATABASE_URL` is configured and reachable. It uses seed data only when `EE_LIBRARY_ALLOW_SEED_FALLBACK=true` is explicitly set for local development.
-- `apps/web` stays provider-neutral and reads provenance, asset state, confidence, and updated timestamps from the API response.
-- Export actions require validated downloadable assets with storage and hash evidence. Referenced URLs do not count as downloaded files.
+---
 
 ## Local workflow
+
 ```bash
 npm install
 npm run typecheck
@@ -57,8 +129,3 @@ npm run dev:api
 npm run dev:worker
 npm run ingest:local
 ```
-
-For DB-backed local ingestion, start Postgres and set `DATABASE_URL` before running `npm run ingest:local`.
-For seed-only local API development, set `EE_LIBRARY_ALLOW_SEED_FALLBACK=true`; DB schema or access failures are otherwise returned explicitly.
-Seed assets intentionally mix referenced metadata, missing files, validated files, and export-verified files so export actions can demonstrate strict gating.
-The web app reads search and detail data through `apps/api`; run `npm run dev` for both services together.

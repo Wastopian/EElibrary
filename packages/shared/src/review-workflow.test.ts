@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { withCanonicalAssetTruth } from "./asset-state";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, canAssetBecomeVerifiedForExport, getAssetReviewStatus, getWorkflowReviewStatus } from "./review-workflow";
 import type { Asset, GenerationWorkflow, ReviewRecord } from "./types";
 
@@ -97,7 +98,7 @@ test("workflow review transitions do not imply output asset export verification"
  * Builds an asset fixture for review workflow tests.
  */
 function buildAsset(overrides: Partial<Asset>): Asset {
-  return {
+  return withCanonicalAssetTruth({
     assetState: "missing",
     assetStatus: "missing",
     assetType: "three_d_model",
@@ -117,7 +118,7 @@ function buildAsset(overrides: Partial<Asset>): Asset {
     storageKey: null,
     validationStatus: "not_validated",
     ...overrides
-  };
+  });
 }
 
 /**

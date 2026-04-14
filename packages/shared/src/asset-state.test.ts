@@ -4,11 +4,11 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deriveAssetState, getExportAvailability, isValidatedDownloadableAsset } from "./index";
+import { deriveAssetState, getExportAvailability, isValidatedDownloadableAsset, withCanonicalAssetTruth } from "./index";
 import type { Asset, PartSearchRecord } from "./index";
 
 /** baseAsset supplies a complete asset shape for focused state tests. */
-const baseAsset: Asset = {
+const baseAssetRow = {
   assetState: "missing",
   assetStatus: "missing",
   assetType: "three_d_model",
@@ -27,7 +27,12 @@ const baseAsset: Asset = {
   sourceUrl: null,
   storageKey: null,
   validationStatus: "not_validated"
-};
+} satisfies Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus">;
+
+/** buildAsset keeps canonical truth fields aligned after individual test overrides. */
+function buildAsset(overrides: Partial<Asset> = {}): Asset {
+  return withCanonicalAssetTruth({ ...baseAssetRow, ...overrides });
+}
 
 /**
  * Verifies asset state derivation does not treat references as downloads.
@@ -44,23 +49,22 @@ test("deriveAssetState distinguishes missing, referenced, downloaded, validated,
  * Verifies export helpers require validation plus captured file evidence.
  */
 test("isValidatedDownloadableAsset requires validated state, storage key, hash, and verified status", () => {
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "referenced", validationStatus: "needs_review" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "downloaded", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "not_validated" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", assetStatus: "validated", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", assetStatus: "verified_for_export", fileHash: null, storageKey: "assets/test.step", validationStatus: "verified" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", assetStatus: "verified_for_export", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" }), true);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "referenced", validationStatus: "needs_review" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "downloaded", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "not_validated" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "validated", assetStatus: "validated", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "validated", assetStatus: "verified_for_export", fileHash: null, storageKey: "assets/test.step", validationStatus: "verified" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "validated", assetStatus: "verified_for_export", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" })), true);
 });
 
 /**
  * Verifies export availability stays disabled for referenced-only assets.
  */
 test("getExportAvailability disables neutral CAD for referenced-only STEP assets", () => {
-  const referencedStepAsset: Asset = {
-    ...baseAsset,
+  const referencedStepAsset = buildAsset({
     assetState: "referenced",
     sourceUrl: "https://example.com/model.step",
     validationStatus: "needs_review"
-  };
+  });
   const record = buildRecord([referencedStepAsset]);
 
   assert.equal(getExportAvailability(record).find((action) => action.id === "neutral_cad")?.available, false);

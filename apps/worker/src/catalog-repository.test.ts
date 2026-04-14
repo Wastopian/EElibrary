@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { persistNormalizedPartRows } from "./catalog-repository";
 import type { PoolClient } from "pg";
 import type { NormalizedProviderPart } from "./provider-adapters";
@@ -61,7 +62,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
       }
     ],
     assets: [
-      {
+      withCanonicalAssetTruth({
         assetState: "validated",
         assetStatus: "validated",
         assetType: "three_d_model",
@@ -80,7 +81,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
         sourceUrl: null,
         storageKey: "cad/test.step",
         validationStatus: "verified"
-      }
+      })
     ],
     cableCompatibilities: [
       {

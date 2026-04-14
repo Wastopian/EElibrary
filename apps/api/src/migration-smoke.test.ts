@@ -19,6 +19,9 @@ const generationRequestMigrationSql = readFileSync(new URL("../../../infra/postg
 /** reviewRecordsMigrationSql loads the Phase 4A review record migration under test. */
 const reviewRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/006_phase4a_review_records.sql", import.meta.url), "utf8");
 
+/** assetTruthMigrationSql loads the docs-aligned asset truth migration under test. */
+const assetTruthMigrationSql = readFileSync(new URL("../../../infra/postgres/007_docs_aligned_asset_truth.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -122,6 +125,7 @@ test("connector hardening migration upgrades old schemas safely", () => {
   `);
   db.public.none(generationRequestMigrationSql);
   db.public.none(reviewRecordsMigrationSql);
+  db.public.none(assetTruthMigrationSql);
   db.public.none(`
     INSERT INTO generation_requests (id, part_id, target_asset_type, source_datasheet_revision_id, source_asset_id, request_status, requested_at, requested_by, workflow_id)
     VALUES ('genreq-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'requested', '2026-04-13T00:00:00.000Z', 'smoke-test', 'gen-a-step');
@@ -129,7 +133,7 @@ test("connector hardening migration upgrades old schemas safely", () => {
     VALUES ('review-a-step', 'part-a', 'asset', 'asset-a-step', NULL, 'approved', 'smoke-test', 'migration smoke review', '2026-04-13T00:00:00.000Z');
   `);
 
-  const asset = db.public.one(`SELECT asset_state, asset_status, provenance FROM assets WHERE id = 'asset-a-step'`);
+  const asset = db.public.one(`SELECT asset_state, asset_status, availability_status, review_status, export_status, provenance FROM assets WHERE id = 'asset-a-step'`);
   const datasheet = db.public.one(`SELECT pin_table_status FROM datasheet_revisions WHERE id = 'dsr-a'`);
   const part = db.public.one(`SELECT connector_family_id FROM parts WHERE id = 'part-a'`);
   const relation = db.public.one(`SELECT relationship_type FROM mate_relations WHERE id = 'mate-a-b'`);
@@ -137,7 +141,7 @@ test("connector hardening migration upgrades old schemas safely", () => {
   const request = db.public.one(`SELECT request_status FROM generation_requests WHERE id = 'genreq-a-step'`);
   const review = db.public.one(`SELECT outcome FROM review_records WHERE id = 'review-a-step'`);
 
-  assert.deepEqual(asset, { asset_state: "validated", asset_status: "validated", provenance: "manual_internal" });
+  assert.deepEqual(asset, { asset_state: "validated", asset_status: "validated", availability_status: "validated", review_status: "review_required", export_status: "partially_exportable", provenance: "manual_internal" });
   assert.equal(datasheet.pin_table_status, "not_available");
   assert.equal(part.connector_family_id, "cf-test");
   assert.equal(relation.relationship_type, "best_mate");

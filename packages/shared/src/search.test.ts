@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildBuildableMatingSet, formatAssetStatus, getExportAvailability, getPartDetail, getSearchFacets } from "./search";
+import { buildBuildableMatingSet, formatAssetAvailabilityStatus, formatAssetExportStatus, formatAssetStatus, getExportAvailability, getPartDetail, getSearchFacets } from "./search";
 
 test("connector record exposes typed buildable mating set", () => {
   const record = getPartDetail("part-te-215079-8");
@@ -139,6 +139,8 @@ test("export availability requires file-backed assets verified for export", () =
 });
 
 test("asset status labels stay explicit and honest", () => {
+  assert.equal(formatAssetAvailabilityStatus("referenced"), "Referenced only");
+  assert.equal(formatAssetExportStatus("partially_exportable"), "Partially exportable");
   assert.equal(formatAssetStatus("missing"), "Missing");
   assert.equal(formatAssetStatus("validated"), "Validated");
   assert.equal(formatAssetStatus("verified_for_export"), "Verified for export");

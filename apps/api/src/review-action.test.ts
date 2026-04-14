@@ -31,9 +31,12 @@ test("createReviewInDatabase approves eligible assets into verified_for_export",
     assert.equal(result.status, "created");
     assert.deepEqual(pool.assetRow, {
       ...buildAssetRow(),
+      availability_status: "validated",
       asset_state: "validated",
       asset_status: "verified_for_export",
+      export_status: "verified_for_export",
       last_updated_at: "2026-04-13T00:00:00.000Z",
+      review_status: "approved",
       validation_status: "verified"
     });
   } finally {
@@ -136,8 +139,11 @@ function createFakeReviewPool() {
               ...pool.assetRow,
               asset_state: values[1] as string,
               asset_status: values[2] as string,
-              last_updated_at: values[4] as string,
-              validation_status: values[3] as string
+              availability_status: values[3] as string,
+              review_status: values[4] as string,
+              export_status: values[5] as string,
+              validation_status: values[6] as string,
+              last_updated_at: values[7] as string
             };
           }
 
@@ -212,6 +218,8 @@ function buildAssetRow() {
     asset_state: "downloaded",
     asset_status: "downloaded",
     asset_type: "three_d_model",
+    availability_status: "downloaded",
+    export_status: "partially_exportable",
     file_format: "step",
     file_hash: "sha256:a",
     generation_method: "mechanical_drawing_request",
@@ -223,6 +231,7 @@ function buildAssetRow() {
     preview_status: "pending",
     provider_id: "review-test",
     provenance: "generated",
+    review_status: "review_required",
     source_record_id: null,
     source_url: null,
     storage_key: "generated/a.step",
