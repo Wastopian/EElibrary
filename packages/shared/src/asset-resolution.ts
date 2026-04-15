@@ -15,7 +15,9 @@ import type {
   GenerationWorkflowState,
   GenerationWorkflow,
   GenerationSourceReadiness,
-  PartSearchRecord
+  PartSearchRecord,
+  SourceExtractionSignal,
+  SourceExtractionSignalType
 } from "./types";
 
 /** ENGINEERING_ASSET_TYPES is the normalized order for first-class engineering assets. */
@@ -369,21 +371,24 @@ function resolveWorkflowStatus(sourceReadiness: GenerationSourceReadiness, workf
  */
 function evaluateFootprintSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
   const reasons: string[] = [];
+  const signal = selectBestExtractionSignal(record.extractionSignals, "package_mechanical_dimensions");
 
-  if (!record.datasheetRevision) {
-    reasons.push("No datasheet revision is registered for package evidence.");
-  }
+  appendExtractionSignalReason(reasons, signal, "Package/mechanical dimensions");
 
   if (record.package.pinCount === null) reasons.push("Package pin count is missing.");
   if (record.package.pitchMm === null) reasons.push("Package pitch is missing.");
   if (record.package.bodyLengthMm === null || record.package.bodyWidthMm === null) reasons.push("Package body dimensions are incomplete.");
 
+  const ready = Boolean(signal && supportsExtraction(signal) && record.package.pinCount !== null && record.package.pitchMm !== null && record.package.bodyLengthMm !== null && record.package.bodyWidthMm !== null);
+
   return {
-    ready: reasons.length === 0,
-    reasons: reasons.length === 0 ? ["Package pin count, pitch, and body dimensions are available for a reviewed footprint request."] : reasons,
+    extractionConfidence: signal?.confidenceScore ?? 0,
+    extractionSignalIds: signal ? [signal.id] : [],
+    ready,
+    reasons: ready ? [successExtractionReason(signal, "Package pin count, pitch, and body dimensions support a footprint request.")] : reasons,
     requiredMaterial: "package_mechanical_data",
-    sourceAssetId: record.datasheetRevision?.fileAssetId ?? null,
-    sourceDatasheetRevisionId: record.datasheetRevision?.id ?? null,
+    sourceAssetId: signal?.assetId ?? record.datasheetRevision?.fileAssetId ?? null,
+    sourceDatasheetRevisionId: signal?.datasheetRevisionId ?? record.datasheetRevision?.id ?? null,
     targetAssetType: "footprint"
   };
 }
@@ -393,27 +398,24 @@ function evaluateFootprintSourceReadiness(record: PartSearchRecord): GenerationS
  */
 function evaluateSymbolSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
   const reasons: string[] = [];
+  const signal = selectBestExtractionSignal(record.extractionSignals, "pin_table");
 
-  if (!record.datasheetRevision) {
-    reasons.push("No datasheet revision is registered for pin-table evidence.");
-  } else if (record.datasheetRevision.pinTableStatus === "not_available") {
-    reasons.push("No reviewed pin-table source is registered.");
-  } else if (record.datasheetRevision.pinTableStatus === "needs_review") {
-    reasons.push("Pin-table source is registered and will require review during generation.");
-  }
+  appendExtractionSignalReason(reasons, signal, "Pin table");
 
   if (record.package.pinCount === null) {
     reasons.push("Package pin count is missing.");
   }
 
-  const ready = Boolean(record.datasheetRevision && record.datasheetRevision.pinTableStatus !== "not_available" && record.package.pinCount !== null);
+  const ready = Boolean(signal && supportsExtraction(signal) && record.package.pinCount !== null);
 
   return {
+    extractionConfidence: signal?.confidenceScore ?? 0,
+    extractionSignalIds: signal ? [signal.id] : [],
     ready,
-    reasons: ready && reasons.length === 0 ? ["Reviewed pin-table source is available for a symbol request."] : reasons,
+    reasons: ready ? [successExtractionReason(signal, "Extracted pin table and package pin count support a symbol request.")] : reasons,
     requiredMaterial: "pin_table_data",
-    sourceAssetId: record.datasheetRevision?.fileAssetId ?? null,
-    sourceDatasheetRevisionId: record.datasheetRevision?.id ?? null,
+    sourceAssetId: signal?.assetId ?? record.datasheetRevision?.fileAssetId ?? null,
+    sourceDatasheetRevisionId: signal?.datasheetRevisionId ?? record.datasheetRevision?.id ?? null,
     targetAssetType: "symbol"
   };
 }
@@ -423,15 +425,101 @@ function evaluateSymbolSourceReadiness(record: PartSearchRecord): GenerationSour
  */
 function evaluateThreeDSourceReadiness(record: PartSearchRecord): GenerationSourceReadiness {
   const mechanicalDrawing = selectBestAvailableAsset(record.assets.filter((asset) => asset.assetType === "mechanical_drawing"));
+  const signal = selectBestExtractionSignal(record.extractionSignals, "mechanical_drawing");
   const hasUsableDrawing = Boolean(mechanicalDrawing && mechanicalDrawing.availabilityStatus !== "missing" && mechanicalDrawing.availabilityStatus !== "failed");
-  const reasons = hasUsableDrawing ? [`${mechanicalDrawing?.availabilityStatus ?? "referenced"} mechanical drawing is available for a reviewed 3D request.`] : ["No usable mechanical drawing source is registered."];
+  const reasons: string[] = [];
+  appendExtractionSignalReason(reasons, signal, "Mechanical drawing");
+
+  if (!hasUsableDrawing) {
+    reasons.push("No usable mechanical drawing asset is registered.");
+  }
+
+  const ready = Boolean(signal && supportsExtraction(signal) && hasUsableDrawing);
 
   return {
-    ready: hasUsableDrawing,
-    reasons,
+    extractionConfidence: signal?.confidenceScore ?? 0,
+    extractionSignalIds: signal ? [signal.id] : [],
+    ready,
+    reasons: ready ? [successExtractionReason(signal, `${mechanicalDrawing?.availabilityStatus ?? "referenced"} mechanical drawing supports a reviewed 3D request.`)] : reasons,
     requiredMaterial: "mechanical_drawing",
-    sourceAssetId: hasUsableDrawing ? mechanicalDrawing?.id ?? null : null,
-    sourceDatasheetRevisionId: record.datasheetRevision?.id ?? null,
+    sourceAssetId: ready ? signal?.assetId ?? mechanicalDrawing?.id ?? null : null,
+    sourceDatasheetRevisionId: signal?.datasheetRevisionId ?? record.datasheetRevision?.id ?? null,
     targetAssetType: "three_d_model"
   };
+}
+
+/**
+ * Selects the strongest extraction signal for one source material type.
+ */
+function selectBestExtractionSignal(signals: SourceExtractionSignal[], signalType: SourceExtractionSignalType): SourceExtractionSignal | null {
+  return [...signals]
+    .filter((signal) => signal.signalType === signalType)
+    .sort((left, right) => extractionSignalScore(right) - extractionSignalScore(left) || Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt) || left.id.localeCompare(right.id))[0] ?? null;
+}
+
+/**
+ * Scores extracted evidence while keeping unavailable records below usable evidence.
+ */
+function extractionSignalScore(signal: SourceExtractionSignal): number {
+  const statusScores: Record<SourceExtractionSignal["extractionStatus"], number> = {
+    available: 200,
+    needs_review: 120,
+    not_available: 0
+  };
+
+  return statusScores[signal.extractionStatus] + signal.confidenceScore;
+}
+
+/**
+ * Checks whether a signal is real extraction support, even if review is still needed.
+ */
+function supportsExtraction(signal: SourceExtractionSignal): boolean {
+  return signal.extractionStatus === "available" || signal.extractionStatus === "needs_review";
+}
+
+/**
+ * Adds explicit unavailable/review reasons for a source extraction signal.
+ */
+function appendExtractionSignalReason(reasons: string[], signal: SourceExtractionSignal | null, label: string): void {
+  if (!signal) {
+    reasons.push(`No extracted ${label.toLowerCase()} signal is registered.`);
+    return;
+  }
+
+  if (signal.extractionStatus === "not_available") {
+    reasons.push(`${label} extraction is not available.${signal.notes ? ` ${signal.notes}` : ""}`);
+    return;
+  }
+
+  if (signal.extractionStatus === "needs_review") {
+    reasons.push(`${label} extraction exists but needs review before generation work can be trusted.${signal.notes ? ` ${signal.notes}` : ""}`);
+  }
+}
+
+/**
+ * Builds one concise success reason from an extraction signal.
+ */
+function successExtractionReason(signal: SourceExtractionSignal | null, baseReason: string): string {
+  if (!signal) {
+    return baseReason;
+  }
+
+  const confidence = `${Math.round(signal.confidenceScore * 100)}% extraction confidence`;
+  const reviewNote = signal.extractionStatus === "needs_review" ? " It still needs review before output trust can increase." : "";
+
+  return `${baseReason} Source signal ${signal.id} has ${confidence} from ${formatExtractionSource(signal.extractionSource)}.${reviewNote}`;
+}
+
+/**
+ * Formats extraction source classes for API/UI reasons without naming provider internals.
+ */
+function formatExtractionSource(source: SourceExtractionSignal["extractionSource"]): string {
+  const labels: Record<SourceExtractionSignal["extractionSource"], string> = {
+    asset_reference: "an asset reference",
+    datasheet_metadata: "datasheet metadata",
+    manual_internal: "internal review metadata",
+    provider_structured_metadata: "structured provider metadata"
+  };
+
+  return labels[source];
 }

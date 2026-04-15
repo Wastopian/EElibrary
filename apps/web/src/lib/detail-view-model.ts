@@ -3,7 +3,8 @@
  */
 
 import { getBundleReadinessSummary } from "@ee-library/shared/asset-resolution";
-import type { Asset, AssetGenerationOption, BundleReadinessState, GenerationWorkflow, PartSearchRecord, ReviewState, ReviewStatusSummary } from "@ee-library/shared/types";
+import { isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
+import type { Asset, AssetGenerationOption, AssetPromotionSummary, AssetValidationSummary, BundleReadinessState, GenerationWorkflow, PartSearchRecord, ReviewState, ReviewStatusSummary } from "@ee-library/shared/types";
 
 /** ViewTone mirrors shared badge tones without coupling this helper to UI components. */
 export type ViewTone = "neutral" | "info" | "verified" | "review" | "danger";
@@ -63,6 +64,17 @@ export function formatReviewStateLabel(state: ReviewState): string {
 }
 
 /**
+ * Formats asset source context without hiding generated draft provenance.
+ */
+export function formatAssetSourceLabel(asset: Asset, assetCount: number): string {
+  if (asset.provenance === "generated") {
+    return `Best of ${assetCount} / generated draft`;
+  }
+
+  return asset.sourceRecordId ? `Best of ${assetCount} / source record attached` : `Best of ${assetCount} / no source record`;
+}
+
+/**
  * Maps review state into UI tones without putting UI code into shared runtime helpers.
  */
 export function reviewStateTone(state: ReviewState): ViewTone {
@@ -79,10 +91,91 @@ export function reviewStateTone(state: ReviewState): ViewTone {
 }
 
 /**
+ * Formats the asset trust stage without collapsing generated, approved, and verified states.
+ */
+export function formatAssetTrustStageLabel(asset: Asset, state: ReviewState): string {
+  if (isValidatedDownloadableAsset(asset)) {
+    return "verified for export";
+  }
+
+  if (asset.provenance === "generated" && state === "approved") {
+    return "approved draft";
+  }
+
+  if (asset.provenance === "generated" && state === "rejected") {
+    return "rejected draft";
+  }
+
+  if (asset.provenance === "generated" && state === "changes_requested") {
+    return "changes requested";
+  }
+
+  if (asset.provenance === "generated") {
+    return "generated draft";
+  }
+
+  return formatReviewStateLabel(state);
+}
+
+/**
+ * Maps asset trust stage into UI tones with generated drafts staying review-colored.
+ */
+export function assetTrustStageTone(asset: Asset, state: ReviewState): ViewTone {
+  if (isValidatedDownloadableAsset(asset)) {
+    return "verified";
+  }
+
+  if (asset.provenance === "generated" && state === "approved") {
+    return "info";
+  }
+
+  if (asset.provenance === "generated" && state === "rejected") {
+    return "danger";
+  }
+
+  return reviewStateTone(state);
+}
+
+/**
  * Returns true when local/dev review action buttons should be visible for a target.
  */
 export function shouldRenderReviewActions(status: ReviewStatusSummary): boolean {
   return status.state !== "verified_for_export" && status.state !== "not_required";
+}
+
+/**
+ * Returns true only when precomputed validation-backed promotion rules allow the action.
+ */
+export function shouldRenderAssetPromotionAction(summary: AssetPromotionSummary): boolean {
+  return summary.canPromote;
+}
+
+/**
+ * Formats latest validation evidence for the engineering asset card body.
+ */
+export function formatAssetValidationEvidence(summary: AssetValidationSummary): string {
+  return summary.reason;
+}
+
+/**
+ * Formats the latest promotion audit without implying a successful promotion happened.
+ */
+export function formatAssetPromotionHistory(summary: AssetPromotionSummary): string {
+  if (!summary.latestPromotion) {
+    return "No promotion attempts have been recorded.";
+  }
+
+  const blockerText = summary.latestPromotion.blockerReasons.length > 0 ? ` Blockers: ${summary.latestPromotion.blockerReasons.join(" ")}` : "";
+  const validationText = summary.latestPromotion.validationRecordId ? ` Evidence: ${summary.latestPromotion.validationRecordId}.` : "";
+
+  return `${summary.latestPromotion.promotionOutcome} at ${summary.latestPromotion.createdAt} by ${summary.latestPromotion.actor}.${validationText}${blockerText}`;
+}
+
+/**
+ * Formats current promotion blockers for disabled or hidden promotion actions.
+ */
+export function formatAssetPromotionBlockers(summary: AssetPromotionSummary): string {
+  return summary.blockerReasons.length > 0 ? summary.blockerReasons.join(" ") : "Promotion requirements are satisfied.";
 }
 
 /**

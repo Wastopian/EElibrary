@@ -6,6 +6,8 @@ import { filterPartRecords, getSearchFacetsFromRecords } from "./catalog-runtime
 import { buildBuildableMatingSet } from "./connector-intelligence";
 import {
   accessoryRequirements,
+  assetPromotionAudits,
+  assetValidationRecords,
   assets,
   cableCompatibilities,
   companionRecommendations,
@@ -20,6 +22,7 @@ import {
   parts,
   reviewRecords,
   similarPartRelations,
+  sourceExtractionSignals,
   sourceRecords
 } from "./seed";
 import type {
@@ -97,12 +100,15 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
   const partAccessories = sortRelationsByConfidence(accessoryRequirements.filter((requirement) => requirement.partId === part.id));
   const partCables = sortRelationsByConfidence(cableCompatibilities.filter((compatibility) => compatibility.partId === part.id));
   const partMetricsForRecord = sortById(partMetrics.filter((metric) => metric.partId === part.id));
-  const partSources = sourceRecords.filter((sourceRecord) => sourceRecord.partId === part.id).sort((left, right) => Date.parse(right.fetchedAt) - Date.parse(left.fetchedAt) || left.id.localeCompare(right.id));
+  const partSources = sourceRecords.filter((sourceRecord) => sourceRecord.partId === part.id).sort((left, right) => Date.parse(right.sourceLastSeenAt) - Date.parse(left.sourceLastSeenAt) || left.id.localeCompare(right.id));
+  const partExtractionSignals = sourceExtractionSignals.filter((signal) => signal.partId === part.id).sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt) || left.id.localeCompare(right.id));
   const partSimilarParts = sortRelationsByConfidence(similarPartRelations.filter((relation) => relation.partId === part.id));
   const partCompanions = sortRelationsByConfidence(companionRecommendations.filter((recommendation) => recommendation.partId === part.id));
   const partWorkflows = sortRelationsByConfidence(generationWorkflows.filter((workflow) => workflow.partId === part.id));
   const partGenerationRequests = generationRequests.filter((request) => request.partId === part.id).sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt) || right.id.localeCompare(left.id));
   const partReviewRecords = reviewRecords.filter((review) => review.partId === part.id).sort((left, right) => Date.parse(right.reviewedAt) - Date.parse(left.reviewedAt) || right.id.localeCompare(left.id));
+  const partValidationRecords = assetValidationRecords.filter((validation) => validation.partId === part.id).sort((left, right) => Date.parse(right.validatedAt) - Date.parse(left.validatedAt) || right.id.localeCompare(left.id));
+  const partPromotionAudits = assetPromotionAudits.filter((audit) => audit.partId === part.id).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id));
 
   return {
     accessoryRequirements: partAccessories,
@@ -112,8 +118,10 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     companionRecommendations: partCompanions,
     connectorFamily: part.connectorFamilyId ? connectorFamilyById.get(part.connectorFamilyId) ?? null : null,
     datasheetRevision: partDatasheetRevision,
+    extractionSignals: partExtractionSignals,
     generationRequests: partGenerationRequests,
     generationWorkflows: partWorkflows,
+    promotionAudits: partPromotionAudits,
     reviewRecords: partReviewRecords,
     lastUpdatedAt: latestTimestamp([
       part.lastUpdatedAt,
@@ -121,7 +129,10 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
       ...partMetricsForRecord.map((metric) => metric.lastUpdatedAt),
       ...(partDatasheetRevision ? [partDatasheetRevision.lastUpdatedAt] : []),
       ...partSources.map((sourceRecord) => sourceRecord.lastUpdatedAt),
-      ...partReviewRecords.map((review) => review.lastUpdatedAt)
+      ...partExtractionSignals.map((signal) => signal.lastUpdatedAt),
+      ...partReviewRecords.map((review) => review.lastUpdatedAt),
+      ...partValidationRecords.map((validation) => validation.lastUpdatedAt),
+      ...partPromotionAudits.map((audit) => audit.createdAt)
     ]),
     manufacturer,
     mateRelations: partMateRelations,
@@ -129,7 +140,8 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     package: packageRecord,
     part,
     similarParts: partSimilarParts,
-    sources: partSources
+    sources: partSources,
+    validationRecords: partValidationRecords
   };
 }
 

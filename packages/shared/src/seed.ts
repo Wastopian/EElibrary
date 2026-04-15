@@ -5,6 +5,8 @@
 import type {
   AccessoryRequirement,
   Asset,
+  AssetPromotionAuditRecord,
+  AssetValidationRecord,
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
@@ -18,6 +20,7 @@ import type {
   PartMetric,
   ReviewRecord,
   SimilarPartRelation,
+  SourceExtractionSignal,
   SourceRecord
 } from "./types";
 import { withCanonicalAssetTruth } from "./asset-state";
@@ -225,59 +228,161 @@ export const sourceRecords = [
   {
     fetchedAt: LAST_UPDATED_AT,
     id: "source-seed-te-215079-8",
+    importErrorDetails: null,
+    importStatus: "imported",
     lastUpdatedAt: LAST_UPDATED_AT,
     normalizedAt: LAST_UPDATED_AT,
     partId: "part-te-215079-8",
     providerId: "seed:local-catalog",
     providerPartKey: "215079-8",
     rawPayload: { mpn: "215079-8" },
+    sourceLastImportedAt: LAST_UPDATED_AT,
+    sourceLastSeenAt: LAST_UPDATED_AT,
     sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215079"
   },
   {
     fetchedAt: LAST_UPDATED_AT,
     id: "source-seed-te-215083-8",
+    importErrorDetails: null,
+    importStatus: "imported",
     lastUpdatedAt: LAST_UPDATED_AT,
     normalizedAt: LAST_UPDATED_AT,
     partId: "part-te-215083-8",
     providerId: "seed:local-catalog",
     providerPartKey: "215083-8",
     rawPayload: { mpn: "215083-8" },
+    sourceLastImportedAt: LAST_UPDATED_AT,
+    sourceLastSeenAt: LAST_UPDATED_AT,
     sourceUrl: "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=215083"
   },
   {
     fetchedAt: LAST_UPDATED_AT,
     id: "source-seed-tps7a02",
+    importErrorDetails: null,
+    importStatus: "imported",
     lastUpdatedAt: LAST_UPDATED_AT,
     normalizedAt: LAST_UPDATED_AT,
     partId: "part-tps7a02dbvr",
     providerId: "seed:local-catalog",
     providerPartKey: "TPS7A02DBVR",
     rawPayload: { mpn: "TPS7A02DBVR" },
+    sourceLastImportedAt: LAST_UPDATED_AT,
+    sourceLastSeenAt: LAST_UPDATED_AT,
     sourceUrl: "https://www.ti.com/product/TPS7A02"
   },
   {
     fetchedAt: LAST_UPDATED_AT,
     id: "source-seed-grm188",
+    importErrorDetails: null,
+    importStatus: "imported",
     lastUpdatedAt: LAST_UPDATED_AT,
     normalizedAt: LAST_UPDATED_AT,
     partId: "part-grm188r71c104ka01d",
     providerId: "seed:local-catalog",
     providerPartKey: "GRM188R71C104KA01D",
     rawPayload: { mpn: "GRM188R71C104KA01D" },
+    sourceLastImportedAt: LAST_UPDATED_AT,
+    sourceLastSeenAt: LAST_UPDATED_AT,
     sourceUrl: "https://www.murata.com/en-us/products/productdetail?partno=GRM188R71C104KA01D"
   },
   {
     fetchedAt: LAST_UPDATED_AT,
     id: "source-seed-stm32g031",
+    importErrorDetails: null,
+    importStatus: "imported",
     lastUpdatedAt: LAST_UPDATED_AT,
     normalizedAt: LAST_UPDATED_AT,
     partId: "part-stm32g031k8t6",
     providerId: "seed:local-catalog",
     providerPartKey: "STM32G031K8T6",
     rawPayload: { mpn: "STM32G031K8T6" },
+    sourceLastImportedAt: LAST_UPDATED_AT,
+    sourceLastSeenAt: LAST_UPDATED_AT,
     sourceUrl: "https://www.st.com/en/microcontrollers-microprocessors/stm32g031k8.html"
   }
 ] satisfies SourceRecord[];
+
+/** sourceExtractionSignals seed explicit CAD-recovery source evidence without claiming full PDF parsing. */
+export const sourceExtractionSignals = [
+  {
+    assetId: "asset-tps7a02-datasheet",
+    confidenceScore: 0.78,
+    datasheetRevisionId: "dsr-tps7a02-rev-e",
+    extractionSource: "datasheet_metadata",
+    extractionStatus: "available",
+    id: "sig-tps7a02-package-mechanical",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Package pin count, pitch, and body dimensions are normalized from reviewed package metadata.",
+    partId: "part-tps7a02dbvr",
+    signalType: "package_mechanical_dimensions",
+    sourceRecordId: "source-seed-tps7a02"
+  },
+  {
+    assetId: "asset-tps7a02-datasheet",
+    confidenceScore: 0.74,
+    datasheetRevisionId: "dsr-tps7a02-rev-e",
+    extractionSource: "datasheet_metadata",
+    extractionStatus: "available",
+    id: "sig-tps7a02-pin-table",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Pin table is available as structured source evidence for a symbol request.",
+    partId: "part-tps7a02dbvr",
+    signalType: "pin_table",
+    sourceRecordId: "source-seed-tps7a02"
+  },
+  {
+    assetId: "asset-tps7a02-mechanical",
+    confidenceScore: 0.68,
+    datasheetRevisionId: "dsr-tps7a02-rev-e",
+    extractionSource: "asset_reference",
+    extractionStatus: "needs_review",
+    id: "sig-tps7a02-mechanical-drawing",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "Mechanical drawing reference exists, but geometry extraction remains review-required.",
+    partId: "part-tps7a02dbvr",
+    signalType: "mechanical_drawing",
+    sourceRecordId: "source-seed-tps7a02"
+  },
+  {
+    assetId: "asset-stm32g031-datasheet",
+    confidenceScore: 0.66,
+    datasheetRevisionId: "dsr-stm32g031-rev-7",
+    extractionSource: "datasheet_metadata",
+    extractionStatus: "available",
+    id: "sig-stm32g031-package-mechanical",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "QFN package dimensions are normalized, but this does not imply symbol or 3D readiness.",
+    partId: "part-stm32g031k8t6",
+    signalType: "package_mechanical_dimensions",
+    sourceRecordId: "source-seed-stm32g031"
+  },
+  {
+    assetId: "asset-stm32g031-datasheet",
+    confidenceScore: 0,
+    datasheetRevisionId: "dsr-stm32g031-rev-7",
+    extractionSource: "datasheet_metadata",
+    extractionStatus: "not_available",
+    id: "sig-stm32g031-pin-table",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "No reviewed pin-table extraction is available yet.",
+    partId: "part-stm32g031k8t6",
+    signalType: "pin_table",
+    sourceRecordId: "source-seed-stm32g031"
+  },
+  {
+    assetId: null,
+    confidenceScore: 0,
+    datasheetRevisionId: "dsr-stm32g031-rev-7",
+    extractionSource: "datasheet_metadata",
+    extractionStatus: "not_available",
+    id: "sig-stm32g031-mechanical-drawing",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    notes: "No usable mechanical drawing extraction signal is available for 3D generation.",
+    partId: "part-stm32g031k8t6",
+    signalType: "mechanical_drawing",
+    sourceRecordId: "source-seed-stm32g031"
+  }
+] satisfies SourceExtractionSignal[];
 
 /** partMetrics seed normalized values and confidence scores from datasheet revisions. */
 export const partMetrics = [
@@ -985,3 +1090,112 @@ export const reviewRecords = [
     targetType: "asset"
   }
 ] satisfies ReviewRecord[];
+
+/** assetValidationRecords seed durable evidence for export-promotion and trust UI examples. */
+export const assetValidationRecords = [
+  {
+    assetId: "asset-te-215079-8-footprint",
+    id: "validation-te-215079-footprint-geometry",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-te-215079-8",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "Pad geometry, pitch, and courtyard were checked against reviewed package dimensions.",
+    validationStatus: "verified",
+    validationType: "footprint_geometry",
+    validator: "seed:library-validation"
+  },
+  {
+    assetId: "asset-te-215079-8-symbol",
+    id: "validation-te-215079-symbol-pins",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-te-215079-8",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "Pin count and connector numbering were checked against the datasheet table.",
+    validationStatus: "verified",
+    validationType: "symbol_pin_mapping",
+    validator: "seed:library-validation"
+  },
+  {
+    assetId: "asset-te-215079-8-3d",
+    id: "validation-te-215079-3d-manual",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-te-215079-8",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "Model geometry was reviewed, but export promotion has not been performed.",
+    validationStatus: "verified",
+    validationType: "three_d_geometry",
+    validator: "seed:library-validation"
+  },
+  {
+    assetId: "asset-grm188-footprint",
+    id: "validation-grm188-footprint-geometry",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-grm188r71c104ka01d",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "Footprint dimensions match the internal capacitor package rule.",
+    validationStatus: "verified",
+    validationType: "footprint_geometry",
+    validator: "seed:library-validation"
+  },
+  {
+    assetId: "asset-grm188-symbol",
+    id: "validation-grm188-symbol-pins",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-grm188r71c104ka01d",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "Passive two-pin symbol mapping was checked.",
+    validationStatus: "verified",
+    validationType: "symbol_pin_mapping",
+    validator: "seed:library-validation"
+  },
+  {
+    assetId: "asset-grm188-3d",
+    id: "validation-grm188-3d-geometry",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-grm188r71c104ka01d",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "STEP body envelope was checked against 0603 package dimensions.",
+    validationStatus: "verified",
+    validationType: "three_d_geometry",
+    validator: "seed:library-validation"
+  },
+  {
+    assetId: "asset-tps7a02-3d",
+    id: "validation-tps7a02-3d-review-needed",
+    lastUpdatedAt: LAST_UPDATED_AT,
+    partId: "part-tps7a02dbvr",
+    validatedAt: LAST_UPDATED_AT,
+    validationNotes: "Generated model exists but still needs engineering validation before promotion.",
+    validationStatus: "needs_review",
+    validationType: "three_d_geometry",
+    validator: "seed:generation-workflow"
+  }
+] satisfies AssetValidationRecord[];
+
+/** assetPromotionAudits seed historical promotion attempts without changing asset state by inference. */
+export const assetPromotionAudits = [
+  {
+    actor: "seed:library-promotion",
+    assetId: "asset-grm188-footprint",
+    blockerReasons: [],
+    createdAt: LAST_UPDATED_AT,
+    id: "promotion-grm188-footprint-promoted",
+    newExportStatus: "verified_for_export",
+    partId: "part-grm188r71c104ka01d",
+    priorExportStatus: "not_exportable",
+    promotionOutcome: "promoted",
+    validationRecordId: "validation-grm188-footprint-geometry"
+  },
+  {
+    actor: "seed:library-promotion",
+    assetId: "asset-te-215079-8-3d",
+    blockerReasons: ["Approved review exists, but export verification was not promoted yet."],
+    createdAt: LAST_UPDATED_AT,
+    id: "promotion-te-215079-3d-denied",
+    newExportStatus: "partially_exportable",
+    partId: "part-te-215079-8",
+    priorExportStatus: "partially_exportable",
+    promotionOutcome: "denied",
+    validationRecordId: null
+  }
+] satisfies AssetPromotionAuditRecord[];

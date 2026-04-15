@@ -69,13 +69,20 @@ Referenced URLs alone do not count as exportable files.
 - bundle readiness and precise asset/export wording
 - generation request and workflow state pipeline
 - review/approval workflow for generated and sourced engineering assets
+- review-assisted promotion from approved drafts to verified-for-export assets
+- first structured provider metadata adapter for JLCPCB/LCSC data through the worker layer
+- idempotent provider import persistence with source freshness and failure diagnostics
+- structured source extraction signals for missing-CAD requestability groundwork
+- draft footprint and symbol generation from structured extraction signals
+- validation evidence and promotion audit records for verified-for-export transitions
 - strict seed fallback controls for local development only
 
 ### Not yet implemented
-- production provider integrations
+- multi-provider ingestion and provider conflict resolution
 - large-scale external ingestion
 - full datasheet parsing/extraction engine
-- automatic CAD generation
+- production-grade automatic CAD generation
+- 3D draft generation from mechanical drawings
 
 ---
 
@@ -128,4 +135,24 @@ npm run dev:web
 npm run dev:api
 npm run dev:worker
 npm run ingest:local
+npm run ingest:jlcparts
+npm run imports:providers
+```
+
+DB-backed ingestion requires `DATABASE_URL`.
+
+PowerShell examples:
+
+```powershell
+$env:DATABASE_URL="postgres://ee_library:ee_library@127.0.0.1:5432/ee_library"
+npm run ingest:local
+npm run ingest -w @ee-library/worker -- jlcparts RC-02W300JT
+npm run imports:providers
+npm run imports -w @ee-library/worker -- failed
+```
+
+Seed fallback for the API is local-only and must be explicit:
+
+```powershell
+$env:EE_LIBRARY_ALLOW_SEED_FALLBACK="true"
 ```

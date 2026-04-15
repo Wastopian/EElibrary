@@ -22,6 +22,15 @@ const reviewRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/
 /** assetTruthMigrationSql loads the docs-aligned asset truth migration under test. */
 const assetTruthMigrationSql = readFileSync(new URL("../../../infra/postgres/007_docs_aligned_asset_truth.sql", import.meta.url), "utf8");
 
+/** providerImportHardeningMigrationSql loads the Phase 4C provider import hardening migration under test. */
+const providerImportHardeningMigrationSql = readFileSync(new URL("../../../infra/postgres/008_phase4c_provider_import_hardening.sql", import.meta.url), "utf8");
+
+/** sourceExtractionSignalsMigrationSql loads the Phase 5A source extraction migration under test. */
+const sourceExtractionSignalsMigrationSql = readFileSync(new URL("../../../infra/postgres/009_phase5a_source_extraction_signals.sql", import.meta.url), "utf8");
+
+/** validationPromotionAuditMigrationSql loads the Phase 5D validation and promotion audit migration under test. */
+const validationPromotionAuditMigrationSql = readFileSync(new URL("../../../infra/postgres/010_phase5d_validation_promotion_audit.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -116,6 +125,8 @@ test("connector hardening migration upgrades old schemas safely", () => {
   db.public.none(hardeningMigrationSql);
   db.public.none(assetPipelineMigrationSql);
   db.public.none(`
+    INSERT INTO source_records (id, provider_id, provider_part_key, part_id, source_url, fetched_at, raw_payload, normalized_at, last_updated_at)
+    VALUES ('source-smoke-old', 'smoke-provider', 'A', 'part-a', 'https://example.test/a', '2026-04-12T00:00:00.000Z', '{"mpn":"A"}'::jsonb, '2026-04-12T00:00:00.000Z', '2026-04-12T00:00:00.000Z');
     INSERT INTO connector_families (id, name, series, description) VALUES ('cf-test', 'Test Family', 'Test Series', 'Test connector family');
     UPDATE parts SET connector_family_id = 'cf-test' WHERE id = 'part-a';
     INSERT INTO mate_relations (id, part_id, mate_part_id, relationship_type, confidence_score, source_revision_id, notes)
@@ -126,11 +137,20 @@ test("connector hardening migration upgrades old schemas safely", () => {
   db.public.none(generationRequestMigrationSql);
   db.public.none(reviewRecordsMigrationSql);
   db.public.none(assetTruthMigrationSql);
+  db.public.none(providerImportHardeningMigrationSql);
+  db.public.none(sourceExtractionSignalsMigrationSql);
+  db.public.none(validationPromotionAuditMigrationSql);
   db.public.none(`
     INSERT INTO generation_requests (id, part_id, target_asset_type, source_datasheet_revision_id, source_asset_id, request_status, requested_at, requested_by, workflow_id)
     VALUES ('genreq-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'requested', '2026-04-13T00:00:00.000Z', 'smoke-test', 'gen-a-step');
     INSERT INTO review_records (id, part_id, target_type, asset_id, generation_workflow_id, outcome, reviewer, notes, reviewed_at)
     VALUES ('review-a-step', 'part-a', 'asset', 'asset-a-step', NULL, 'approved', 'smoke-test', 'migration smoke review', '2026-04-13T00:00:00.000Z');
+    INSERT INTO asset_validation_records (id, part_id, asset_id, validation_status, validation_type, validation_notes, validated_at, validator, last_updated_at)
+    VALUES ('validation-a-step', 'part-a', 'asset-a-step', 'verified', 'three_d_geometry', 'smoke validation evidence', '2026-04-13T00:05:00.000Z', 'smoke-test', '2026-04-13T00:05:00.000Z');
+    INSERT INTO asset_promotion_audits (id, part_id, asset_id, prior_export_status, new_export_status, promotion_outcome, blocker_reasons, validation_record_id, actor, created_at)
+    VALUES ('promotion-a-step-denied', 'part-a', 'asset-a-step', 'partially_exportable', 'partially_exportable', 'denied', '{"smoke blocker"}', NULL, 'smoke-test', '2026-04-13T00:06:00.000Z');
+    INSERT INTO source_extraction_signals (id, part_id, source_record_id, datasheet_revision_id, asset_id, signal_type, extraction_status, confidence_score, extraction_source, notes)
+    VALUES ('sig-a-mechanical', 'part-a', 'source-smoke-old', 'dsr-a', 'asset-a-step', 'mechanical_drawing', 'needs_review', 0.6, 'asset_reference', 'smoke test extraction signal');
   `);
 
   const asset = db.public.one(`SELECT asset_state, asset_status, availability_status, review_status, export_status, provenance FROM assets WHERE id = 'asset-a-step'`);
@@ -140,6 +160,10 @@ test("connector hardening migration upgrades old schemas safely", () => {
   const workflow = db.public.one(`SELECT generation_status FROM generation_workflows WHERE id = 'gen-a-step'`);
   const request = db.public.one(`SELECT request_status FROM generation_requests WHERE id = 'genreq-a-step'`);
   const review = db.public.one(`SELECT outcome FROM review_records WHERE id = 'review-a-step'`);
+  const source = db.public.one(`SELECT import_status, import_error_details, source_last_seen_at, source_last_imported_at FROM source_records WHERE id = 'source-smoke-old'`);
+  const signal = db.public.one(`SELECT signal_type, extraction_status FROM source_extraction_signals WHERE id = 'sig-a-mechanical'`);
+  const validation = db.public.one(`SELECT validation_status, validation_type FROM asset_validation_records WHERE id = 'validation-a-step'`);
+  const promotionAudit = db.public.one(`SELECT promotion_outcome, blocker_reasons, validation_record_id FROM asset_promotion_audits WHERE id = 'promotion-a-step-denied'`);
 
   assert.deepEqual(asset, { asset_state: "validated", asset_status: "validated", availability_status: "validated", review_status: "review_required", export_status: "partially_exportable", provenance: "manual_internal" });
   assert.equal(datasheet.pin_table_status, "not_available");
@@ -148,4 +172,11 @@ test("connector hardening migration upgrades old schemas safely", () => {
   assert.equal(workflow.generation_status, "available_to_request");
   assert.equal(request.request_status, "requested");
   assert.equal(review.outcome, "approved");
+  assert.equal(source.import_status, "imported");
+  assert.equal(source.import_error_details, null);
+  assert.ok(source.source_last_seen_at);
+  assert.ok(source.source_last_imported_at);
+  assert.deepEqual(signal, { extraction_status: "needs_review", signal_type: "mechanical_drawing" });
+  assert.deepEqual(validation, { validation_status: "verified", validation_type: "three_d_geometry" });
+  assert.deepEqual(promotionAudit, { blocker_reasons: ["smoke blocker"], promotion_outcome: "denied", validation_record_id: null });
 });

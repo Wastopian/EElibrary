@@ -8,10 +8,10 @@ import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
-import { createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
-import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, reviewStateTone, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
+import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetProvenance, BundleReadinessState, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +31,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     notFound();
   }
 
-  const { assetGroups, assetReviewStatuses, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
+  const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const bestMate = record.buildableMatingSet.bestMate;
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
   const exportActions = bundleReadiness.exportActions;
@@ -82,6 +82,22 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     revalidatePath(`/parts/${partId}`);
   }
 
+  /**
+   * Promotes an approved asset to verified-for-export through an explicit API action.
+   */
+  async function submitAssetPromotionAction(formData: FormData) {
+    "use server";
+
+    const assetId = readRequiredFormString(formData.get("assetId"));
+
+    if (!assetId) {
+      return;
+    }
+
+    await createAssetPromotion(partId, assetId);
+    revalidatePath(`/parts/${partId}`);
+  }
+
   return (
     <main className="detail-layout">
       <Link className="back-link" href="/">
@@ -120,13 +136,31 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                   </div>
                   <dl>
                     <div>
+                      <dt>Import status</dt>
+                      <dd>{source.importStatus === "imported" ? "Imported" : "Failed import"}</dd>
+                    </div>
+                    <div>
                       <dt>Fetched</dt>
                       <dd>{formatDateTime(source.fetchedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Last seen</dt>
+                      <dd>{formatDateTime(source.sourceLastSeenAt)}</dd>
                     </div>
                     <div>
                       <dt>Normalized</dt>
                       <dd>{source.normalizedAt ? formatDateTime(source.normalizedAt) : "Not normalized"}</dd>
                     </div>
+                    <div>
+                      <dt>Last imported</dt>
+                      <dd>{source.sourceLastImportedAt ? formatDateTime(source.sourceLastImportedAt) : "No successful import"}</dd>
+                    </div>
+                    {source.importErrorDetails ? (
+                      <div>
+                        <dt>Import error</dt>
+                        <dd>{source.importErrorDetails}</dd>
+                      </div>
+                    ) : null}
                     <div>
                       <dt>Source</dt>
                       <dd>{source.sourceUrl ? <a href={source.sourceUrl}>{source.sourceUrl}</a> : "No source URL"}</dd>
@@ -185,7 +219,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </div>
             <div className="datasheet-panel__badges">
               <StatusBadge label={formatDatasheetParseConfidence(record.datasheetRevision?.parseConfidence)} tone={record.datasheetRevision ? scoreTone(record.datasheetRevision.parseConfidence) : "neutral"} />
-              <StatusBadge label={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "Stored file" : "Metadata only"} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
+              <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
               <StatusBadge label={latestSource ? `Source ${latestSource.providerId}` : "No source"} tone={latestSource ? "info" : "neutral"} />
             </div>
           </div>
@@ -195,7 +229,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           {assetGroups.length > 0 ? (
             <div className="asset-grid">
               {assetGroups.map((group) => (
-                <EngineeringAssetSummary group={group} key={group.assetType} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} />
+                <EngineeringAssetSummary group={group} key={group.assetType} promotionAction={submitAssetPromotionAction} promotionSummaries={assetPromotionSummaries} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} validationSummaries={assetValidationSummaries} />
               ))}
             </div>
           ) : (
@@ -213,10 +247,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                       <strong>{option.label}</strong>
                       <p>{option.reason}</p>
                       <p>Source check: {option.sourceReadiness.reasons.join(" ")}</p>
+                      <p>Extraction support: {formatExtractionSupport(option.sourceReadiness)}</p>
                     </div>
                     <div className="datasheet-panel__badges">
                       <StatusBadge label={option.workflowStatusLabel} tone={generationWorkflowTone(option.workflowStatus)} />
-                      <StatusBadge label={option.sourceReadiness.ready ? "source ready" : "source incomplete"} tone={option.sourceReadiness.ready ? "verified" : "review"} />
+                      <StatusBadge label={option.sourceReadiness.ready ? "extracted support found" : "source incomplete"} tone={option.sourceReadiness.ready ? "info" : "review"} />
                       <form action={requestGenerationAction}>
                         <input name="targetAssetType" type="hidden" value={option.targetAssetType} />
                         <button className="export-action" disabled={!option.canRequest} type="submit">
@@ -296,9 +331,35 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 }
 
 /**
+ * Labels datasheet file state without treating references as stored files.
+ */
+function datasheetAssetLabel(asset: Asset | undefined): string {
+  if (!asset) {
+    return "No datasheet asset";
+  }
+
+  if (isFileBackedAsset(asset)) {
+    return "Stored datasheet file";
+  }
+
+  return asset.sourceUrl ? "Referenced datasheet only" : "Datasheet metadata only";
+}
+
+/**
+ * Formats structured extraction signals without implying parsing is complete or trusted.
+ */
+function formatExtractionSupport(sourceReadiness: GenerationSourceReadiness): string {
+  if (sourceReadiness.extractionSignalIds.length === 0) {
+    return "No extracted source signal registered";
+  }
+
+  return `${Math.round(sourceReadiness.extractionConfidence * 100)}% extraction confidence from ${sourceReadiness.extractionSignalIds.join(", ")}`;
+}
+
+/**
  * Renders the best available asset for one engineering asset class.
  */
-function EngineeringAssetSummary({ group, reviewAction, reviewStatuses }: { group: AssetClassSummary; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[] }) {
+function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewAction, reviewStatuses, validationSummaries }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[]; validationSummaries: AssetValidationSummary[] }) {
   const bestAsset = group.bestAsset;
 
   if (!bestAsset) {
@@ -318,6 +379,8 @@ function EngineeringAssetSummary({ group, reviewAction, reviewStatuses }: { grou
   }
 
   const reviewStatus = findReviewStatus(reviewStatuses, "asset", bestAsset.id);
+  const validationSummary = findAssetValidationSummary(validationSummaries, bestAsset);
+  const promotionSummary = findAssetPromotionSummary(promotionSummaries, bestAsset);
 
   return (
     <div className="asset-review-card">
@@ -327,16 +390,69 @@ function EngineeringAssetSummary({ group, reviewAction, reviewStatuses }: { grou
         fileFormat={bestAsset.fileFormat}
         previewLabel={previewLabel(bestAsset.previewStatus)}
         previewTone={previewTone(bestAsset.previewStatus)}
-        reviewLabel={formatReviewStateLabel(reviewStatus.state)}
-        reviewTone={reviewStateTone(reviewStatus.state)}
-        sourceLabel={bestAsset.providerId ? `Best of ${group.assets.length} / source ${bestAsset.providerId}` : `Best of ${group.assets.length} / no source`}
+        reviewLabel={formatAssetTrustStageLabel(bestAsset, reviewStatus.state)}
+        reviewTone={assetTrustStageTone(bestAsset, reviewStatus.state)}
+        sourceLabel={formatAssetSourceLabel(bestAsset, group.assets.length)}
         title={assetTypeLabel(group.assetType)}
         updatedLabel={`Updated ${formatDateTime(bestAsset.lastUpdatedAt)}`}
         validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetExportStatus(bestAsset.exportStatus)}`}
         validationTone={validationTone(bestAsset.validationStatus)}
       />
+      <div className="asset-review-card__evidence">
+        <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
+        <p>Promotion audit: {formatAssetPromotionHistory(promotionSummary)}</p>
+        <p>Promotion blockers: {formatAssetPromotionBlockers(promotionSummary)}</p>
+      </div>
       <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
+      <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
     </div>
+  );
+}
+
+/**
+ * Renders the separate verified-for-export promotion action when review has earned it.
+ */
+function AssetPromotionPanel({ asset, promotionAction, promotionSummary }: { asset: Asset; promotionAction: (formData: FormData) => Promise<void>; promotionSummary: AssetPromotionSummary }) {
+  if (!shouldRenderAssetPromotionAction(promotionSummary)) {
+    return null;
+  }
+
+  return (
+    <form action={promotionAction} className="review-action-panel">
+      <input name="assetId" type="hidden" value={asset.id} />
+      <span>Export promotion</span>
+      <button type="submit">Promote to verified for export</button>
+    </form>
+  );
+}
+
+/**
+ * Finds validation evidence for one asset and falls back to explicit missing evidence.
+ */
+function findAssetValidationSummary(summaries: AssetValidationSummary[], asset: Asset): AssetValidationSummary {
+  return (
+    summaries.find((summary) => summary.assetId === asset.id) ?? {
+      assetId: asset.id,
+      label: "No validation evidence",
+      latestValidation: null,
+      reason: "No durable validation evidence is recorded for this asset."
+    }
+  );
+}
+
+/**
+ * Finds promotion history for one asset and falls back to current blockers being unknown.
+ */
+function findAssetPromotionSummary(summaries: AssetPromotionSummary[], asset: Asset): AssetPromotionSummary {
+  return (
+    summaries.find((summary) => summary.assetId === asset.id) ?? {
+      assetId: asset.id,
+      blockerReasons: ["Promotion state is unavailable from the API response."],
+      canPromote: false,
+      label: "No promotion attempts",
+      latestPromotion: null,
+      promotionHistory: []
+    }
   );
 }
 
@@ -352,7 +468,7 @@ function ReviewActionPanel({ reviewAction, reviewStatus, targetId, targetType }:
     <form action={reviewAction} className="review-action-panel">
       <input name="targetId" type="hidden" value={targetId} />
       <input name="targetType" type="hidden" value={targetType} />
-      <span>Local review actions</span>
+      <span>Local/dev review actions</span>
       <button name="outcome" type="submit" value="approved">
         Approve
       </button>

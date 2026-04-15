@@ -7,7 +7,9 @@ import test from "node:test";
 import { getPartDetail } from "./search";
 import { withCanonicalAssetTruth } from "./asset-state";
 import { evaluateGenerationSourceReadiness, getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries, selectBestAvailableAsset } from "./asset-resolution";
-import type { Asset, PartSearchRecord } from "./types";
+import { getExportAvailability } from "./catalog-runtime";
+import { applyAssetReviewOutcome, promoteAssetToVerifiedForExport } from "./review-workflow";
+import type { Asset, AssetValidationRecord, PartSearchRecord } from "./types";
 
 /**
  * Verifies export-ready file evidence outranks an official metadata reference.
@@ -67,6 +69,43 @@ test("bundle readiness distinguishes bundle, partial, references-only, and empty
 });
 
 /**
+ * Verifies generated draft CAD does not enable export actions before review and verification.
+ */
+test("generated review-required drafts do not satisfy export gating", () => {
+  const baseRecord = getSeedRecord("part-grm188r71c104ka01d");
+  const generatedFootprint = buildGeneratedDraftAsset("asset-draft-footprint", "footprint", "kicad_mod");
+  const generatedSymbol = buildGeneratedDraftAsset("asset-draft-symbol", "symbol", "kicad_sym");
+  const approvedFootprint = applyAssetReviewOutcome(generatedFootprint, "approved");
+  const approvedSymbol = applyAssetReviewOutcome(generatedSymbol, "approved");
+  const validationRecords = [buildValidationRecord(approvedFootprint, "footprint_geometry"), buildValidationRecord(approvedSymbol, "symbol_pin_mapping")];
+  const promotedRecord: PartSearchRecord = {
+    ...baseRecord,
+    assets: [promoteAssetToVerifiedForExport(approvedFootprint, validationRecords), promoteAssetToVerifiedForExport(approvedSymbol, validationRecords)],
+    validationRecords
+  };
+  const draftRecord: PartSearchRecord = {
+    ...baseRecord,
+    assets: [generatedFootprint, generatedSymbol]
+  };
+  const approvedDraftRecord: PartSearchRecord = {
+    ...baseRecord,
+    assets: [approvedFootprint, approvedSymbol]
+  };
+
+  assert.deepEqual(
+    getExportAvailability(draftRecord).map((action) => [action.id, action.available]),
+    [
+      ["altium", false],
+      ["solidworks", false],
+      ["neutral_cad", false]
+    ]
+  );
+  assert.equal(getBundleReadinessSummary(draftRecord).state, "partial_bundle");
+  assert.equal(getExportAvailability(approvedDraftRecord).find((action) => action.id === "altium")?.available, false);
+  assert.equal(getExportAvailability(promotedRecord).find((action) => action.id === "altium")?.available, true);
+});
+
+/**
  * Verifies source-readiness evaluation stays explicit and source-specific.
  */
 test("source-readiness evaluation explains requestable and unavailable generation inputs", () => {
@@ -74,15 +113,20 @@ test("source-readiness evaluation explains requestable and unavailable generatio
   const microcontrollerRecord = getSeedRecord("part-stm32g031k8t6");
   const mechanicalOnlyRecord: PartSearchRecord = {
     ...regulatorRecord,
-    datasheetRevision: null
+    datasheetRevision: null,
+    extractionSignals: regulatorRecord.extractionSignals.map((signal) => (signal.signalType === "mechanical_drawing" ? { ...signal, datasheetRevisionId: null } : signal))
   };
 
   assert.equal(evaluateGenerationSourceReadiness(regulatorRecord, "symbol").ready, true);
+  assert.deepEqual(evaluateGenerationSourceReadiness(regulatorRecord, "symbol").extractionSignalIds, ["sig-tps7a02-pin-table"]);
+  assert.match(evaluateGenerationSourceReadiness(regulatorRecord, "symbol").reasons.join(" "), /74% extraction confidence/u);
   assert.equal(evaluateGenerationSourceReadiness(microcontrollerRecord, "footprint").ready, true);
   assert.equal(evaluateGenerationSourceReadiness(microcontrollerRecord, "three_d_model").ready, false);
-  assert.match(evaluateGenerationSourceReadiness(microcontrollerRecord, "three_d_model").reasons.join(" "), /mechanical drawing/u);
+  assert.match(evaluateGenerationSourceReadiness(microcontrollerRecord, "three_d_model").reasons.join(" "), /Mechanical drawing extraction is not available/u);
   assert.equal(evaluateGenerationSourceReadiness(mechanicalOnlyRecord, "three_d_model").ready, true);
   assert.equal(evaluateGenerationSourceReadiness(mechanicalOnlyRecord, "three_d_model").sourceDatasheetRevisionId, null);
+  assert.equal(evaluateGenerationSourceReadiness({ ...regulatorRecord, extractionSignals: [] }, "symbol").ready, false);
+  assert.match(evaluateGenerationSourceReadiness({ ...regulatorRecord, extractionSignals: [] }, "symbol").reasons.join(" "), /No extracted pin table signal/u);
 });
 
 /**
@@ -131,6 +175,45 @@ function buildAsset(overrides: Partial<Asset> = {}): Asset {
     validationStatus: "verified",
     ...overrides
   });
+}
+
+/**
+ * Builds a generated draft CAD asset that is file-backed but not export verified.
+ */
+function buildGeneratedDraftAsset(id: string, assetType: "footprint" | "symbol", fileFormat: "kicad_mod" | "kicad_sym"): Asset {
+  return {
+    ...buildAsset({
+      assetType,
+      fileFormat,
+      id,
+      storageKey: `generated/drafts/part-test/${assetType}.${fileFormat}`
+    }),
+    assetState: "downloaded",
+    assetStatus: "downloaded",
+    availabilityStatus: "downloaded",
+    exportStatus: "not_exportable",
+    generationMethod: `draft_${assetType}_from_extraction_signal`,
+    provenance: "generated",
+    reviewStatus: "review_required",
+    validationStatus: "needs_review"
+  };
+}
+
+/**
+ * Builds validation evidence that is strong enough to support explicit promotion.
+ */
+function buildValidationRecord(asset: Asset, validationType: AssetValidationRecord["validationType"]): AssetValidationRecord {
+  return {
+    assetId: asset.id,
+    id: `validation-${asset.id}`,
+    lastUpdatedAt: "2026-04-13T00:00:00.000Z",
+    partId: asset.partId,
+    validatedAt: "2026-04-13T00:00:00.000Z",
+    validationNotes: "Test validation evidence.",
+    validationStatus: "verified",
+    validationType,
+    validator: "test-validator"
+  };
 }
 
 /**

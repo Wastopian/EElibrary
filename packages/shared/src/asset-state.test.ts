@@ -87,6 +87,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     companionRecommendations: [],
     connectorFamily: null,
     datasheetRevision: null,
+    extractionSignals: [],
     generationRequests: [],
     generationWorkflows: [],
     lastUpdatedAt: "2026-04-12T00:00:00.000Z",
@@ -118,8 +119,10 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       packageId: "pkg-test",
       trustScore: 0
     },
+    promotionAudits: [],
     reviewRecords: [],
     similarParts: [],
-    sources: []
+    sources: [],
+    validationRecords: []
   };
 }

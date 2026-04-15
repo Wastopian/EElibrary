@@ -5,14 +5,14 @@
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { createReviewInDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { createReviewInDatabase, promoteAssetForExportInDatabase, setCatalogStorePoolForTests } from "./catalog-store";
 import type { Pool } from "pg";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 /**
- * Verifies an approved eligible asset is persisted as verified_for_export only through review.
+ * Verifies an approved eligible asset is still not export verified until explicit promotion.
  */
-test("createReviewInDatabase approves eligible assets into verified_for_export", async () => {
+test("createReviewInDatabase approves assets without automatically verifying export", async () => {
   const pool = createFakeReviewPool();
 
   try {
@@ -31,11 +31,57 @@ test("createReviewInDatabase approves eligible assets into verified_for_export",
     assert.equal(result.status, "created");
     assert.deepEqual(pool.assetRow, {
       ...buildAssetRow(),
+      asset_status: "reviewed",
+      export_status: "not_exportable",
+      last_updated_at: "2026-04-13T00:00:00.000Z",
+      review_status: "approved",
+      validation_status: "verified"
+    });
+  } finally {
+    setCatalogStorePoolForTests(null);
+  }
+});
+
+/**
+ * Verifies explicit promotion is required before an approved asset reaches verified_for_export.
+ */
+test("promoteAssetForExportInDatabase verifies export only after approved review state", async () => {
+  const pool = createFakeReviewPool();
+
+  try {
+    setCatalogStorePoolForTests(pool as unknown as Pool);
+
+    const blockedResult = await promoteAssetForExportInDatabase("part-a", "asset-a-step", "2026-04-13T00:10:00.000Z");
+
+    assert.equal(blockedResult.status, "not_promotable");
+    assert.equal(pool.promotionAuditRows[0]?.promotion_outcome, "denied");
+    assert.match(pool.promotionAuditRows[0]?.blocker_reasons.join(" ") ?? "", /approved review/u);
+
+    await createReviewInDatabase(
+      "part-a",
+      {
+        outcome: "approved",
+        targetId: "asset-a-step",
+        targetType: "asset"
+      },
+      "api-review-test",
+      "2026-04-13T00:00:00.000Z"
+    );
+    pool.validationRows.push(buildValidationRow());
+
+    const promotedResult = await promoteAssetForExportInDatabase("part-a", "asset-a-step", "2026-04-13T00:15:00.000Z");
+
+    assert.equal(promotedResult.status, "promoted");
+    assert.equal(promotedResult.response.promotionAudit.promotionOutcome, "promoted");
+    assert.equal(promotedResult.response.promotionAudit.validationRecordId, "validation-asset-a-step-geometry");
+    assert.equal(pool.promotionAuditRows.at(-1)?.promotion_outcome, "promoted");
+    assert.deepEqual(pool.assetRow, {
+      ...buildAssetRow(),
       availability_status: "validated",
       asset_state: "validated",
       asset_status: "verified_for_export",
       export_status: "verified_for_export",
-      last_updated_at: "2026-04-13T00:00:00.000Z",
+      last_updated_at: "2026-04-13T00:15:00.000Z",
       review_status: "approved",
       validation_status: "verified"
     });
@@ -109,12 +155,49 @@ test("review action endpoint requires configured database", async () => {
 });
 
 /**
+ * Verifies promotion endpoints do not pretend to work without a configured database.
+ */
+test("asset promotion endpoint requires configured database", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+
+  process.env.NODE_ENV = "test";
+  delete process.env.DATABASE_URL;
+  setCatalogStorePoolForTests(null);
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiRequest("POST", "/parts/part-a/asset-promotions", {
+      assetId: "asset-a-step"
+    }, handleRequest);
+
+    assert.equal(result.statusCode, 503);
+    assert.equal(result.body.error.code, "DB_NOT_CONFIGURED");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+
+    if (previousDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+  }
+});
+
+/**
  * Creates a fake Pool that stores one reviewable generated 3D asset and workflow.
  */
 function createFakeReviewPool() {
   const pool = {
     assetRow: buildAssetRow(),
+    promotionAuditRows: [] as any[],
     reviewRows: [] as any[],
+    validationRows: [] as any[],
     workflowRow: buildWorkflowRow(),
     async connect() {
       return {
@@ -131,6 +214,21 @@ function createFakeReviewPool() {
               reviewed_at: values[8],
               reviewer: values[6],
               target_type: values[2]
+            });
+          }
+
+          if (text.includes("INSERT INTO asset_promotion_audits") && values) {
+            pool.promotionAuditRows.push({
+              actor: values[8],
+              asset_id: values[2],
+              blocker_reasons: values[6],
+              created_at: values[9],
+              id: values[0],
+              new_export_status: values[4],
+              part_id: values[1],
+              prior_export_status: values[3],
+              promotion_outcome: values[5],
+              validation_record_id: values[7]
             });
           }
 
@@ -165,6 +263,7 @@ function createFakeReviewPool() {
       if (text.includes("FROM assets")) return { rows: [pool.assetRow] };
       if (text.includes("FROM datasheet_revisions")) return { rows: [buildDatasheetRow()] };
       if (text.includes("FROM source_records")) return { rows: [] };
+      if (text.includes("FROM source_extraction_signals")) return { rows: [] };
       if (text.includes("FROM mate_relations")) return { rows: [] };
       if (text.includes("FROM accessory_requirements")) return { rows: [] };
       if (text.includes("FROM cable_compatibilities")) return { rows: [] };
@@ -173,6 +272,8 @@ function createFakeReviewPool() {
       if (text.includes("FROM generation_workflows")) return { rows: [pool.workflowRow] };
       if (text.includes("FROM generation_requests")) return { rows: [] };
       if (text.includes("FROM review_records")) return { rows: pool.reviewRows };
+      if (text.includes("FROM asset_validation_records")) return { rows: pool.validationRows };
+      if (text.includes("FROM asset_promotion_audits")) return { rows: pool.promotionAuditRows };
 
       return { rows: [] };
     }
@@ -219,7 +320,7 @@ function buildAssetRow() {
     asset_status: "downloaded",
     asset_type: "three_d_model",
     availability_status: "downloaded",
-    export_status: "partially_exportable",
+    export_status: "not_exportable",
     file_format: "step",
     file_hash: "sha256:a",
     generation_method: "mechanical_drawing_request",
@@ -236,6 +337,23 @@ function buildAssetRow() {
     source_url: null,
     storage_key: "generated/a.step",
     validation_status: "needs_review"
+  };
+}
+
+/**
+ * Builds validation evidence that qualifies the generated 3D asset for promotion after approval.
+ */
+function buildValidationRow() {
+  return {
+    asset_id: "asset-a-step",
+    id: "validation-asset-a-step-geometry",
+    last_updated_at: "2026-04-13T00:12:00.000Z",
+    part_id: "part-a",
+    validated_at: "2026-04-13T00:12:00.000Z",
+    validation_notes: "3D draft geometry was checked against the mechanical drawing.",
+    validation_status: "verified",
+    validation_type: "three_d_geometry",
+    validator: "api-validation-test"
   };
 }
 

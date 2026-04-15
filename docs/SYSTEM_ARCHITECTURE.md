@@ -307,12 +307,15 @@ Responsibilities:
 - track review records
 - support approve / reject / changes requested workflows
 - separate reviewed from verified_for_export
+- store validation evidence before export promotion
+- audit successful and denied export-promotion attempts
 - expose review state to API and UI
 - preserve reviewer notes and auditability
 
 Rules:
 - generated does not imply approved
-- approved does not automatically imply verified_for_export unless export rules are satisfied
+- approved does not automatically imply verified_for_export; a separate promotion step must satisfy export rules
+- promotion to verified_for_export requires qualifying validation evidence
 - export readiness must be explicit and earned
 
 ---
@@ -348,11 +351,13 @@ The ingestion pipeline should follow this general pattern:
 2. store raw source snapshot
 3. normalize into canonical contract
 4. register or update source record
-5. register or update part metrics
-6. register or update asset metadata
-7. register or update connector and recommendation relationships
-8. run validation and readiness updates
-9. publish searchable canonical state
+5. record source freshness, import status, and any import failure details
+6. register or update extracted source-readiness signals
+7. register or update part metrics
+8. register or update asset metadata
+9. register or update connector and recommendation relationships
+10. run validation and readiness updates
+11. publish searchable canonical state
 
 This architecture allows the system to absorb data from multiple providers without letting any one provider dictate the internal model.
 
@@ -402,6 +407,7 @@ Use PostgreSQL for:
 - connector relations
 - asset metadata
 - generation requests and workflows
+- source extraction signals
 - review records
 - export state
 

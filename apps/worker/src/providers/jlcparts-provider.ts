@@ -5,7 +5,7 @@
 import { gunzipSync } from "node:zlib";
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
-import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric } from "@ee-library/shared/types";
+import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 
 /** JLC_PARTS_PROVIDER_ID is the canonical worker-only provider identifier. */
@@ -131,6 +131,14 @@ interface MetricCandidate {
   confidenceScore: number;
 }
 
+/** NormalizedManufacturerName separates the canonical maker name from provider aliases. */
+interface NormalizedManufacturerName {
+  /** Canonical manufacturer display name persisted to the shared model. */
+  canonicalName: string;
+  /** Alias strings retained for search and provenance without leaking parser rules. */
+  aliases: string[];
+}
+
 /** jlcpartsProviderAdapter fetches and normalizes structured JLCPCB/LCSC metadata. */
 export const jlcpartsProviderAdapter: ProviderAdapter = {
   async fetchRawPart(request) {
@@ -211,9 +219,10 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
   const component = payload.component;
   const componentKey = slugify(component.lcsc);
   const partId = `part-jlcparts-${componentKey}`;
-  const manufacturerName = readStringAttribute(component.attributes, "Manufacturer") ?? "Unknown manufacturer";
-  const packageName = readStringAttribute(component.attributes, "Package") ?? "Unknown package";
-  const manufacturerId = `mfr-jlcparts-${slugify(manufacturerName)}`;
+  const manufacturerName = normalizeManufacturerName(readStringAttribute(component.attributes, "Manufacturer") ?? "Unknown manufacturer");
+  const packageName = normalizePackageName(readStringAttribute(component.attributes, "Package") ?? "Unknown package");
+  const partCategory = normalizePartCategory(payload.categoryName, payload.subcategoryName);
+  const manufacturerId = `mfr-jlcparts-${slugify(manufacturerName.canonicalName)}`;
   const packageId = `pkg-jlcparts-${slugify(packageName)}`;
   const sourceRecordId = `source-jlcparts-${componentKey}`;
   const datasheetRevisionId = `dsr-jlcparts-${componentKey}`;
@@ -229,11 +238,12 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     datasheetRevisions: [
       buildDatasheetRevision(component, partId, datasheetRevisionId, datasheetAssetId, sourceRecordId, lastUpdatedAt)
     ],
+    extractionSignals: buildSourceExtractionSignals(component, partId, sourceRecordId, datasheetRevisionId, datasheetAssetId, lastUpdatedAt),
     generationWorkflows: [],
     manufacturer: {
-      aliases: [],
+      aliases: manufacturerName.aliases,
       id: manufacturerId,
-      name: manufacturerName,
+      name: manufacturerName.canonicalName,
       website: null
     },
     mateRelations: [],
@@ -248,7 +258,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
       pitchMm: null
     },
     part: {
-      category: payload.subcategoryName,
+      category: partCategory,
       connectorFamilyId: null,
       id: partId,
       lastUpdatedAt,
@@ -258,17 +268,23 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
       packageId,
       trustScore: 0.62
     },
+    promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    validationRecords: [],
     sourceRecord: {
       fetchedAt: rawPayload.fetchedAt,
       id: sourceRecordId,
+      importErrorDetails: null,
+      importStatus: "imported",
       lastUpdatedAt,
       normalizedAt: lastUpdatedAt,
       partId,
       providerId: JLC_PARTS_PROVIDER_ID,
       providerPartKey: component.lcsc,
       rawPayload: payload,
+      sourceLastImportedAt: lastUpdatedAt,
+      sourceLastSeenAt: rawPayload.fetchedAt,
       sourceUrl: buildProductUrl(component)
     }
   };
@@ -385,6 +401,57 @@ function buildDatasheetRevision(component: JlcPartsComponent, partId: string, da
 }
 
 /**
+ * Builds explicit extraction signals from structured provider metadata without claiming PDF parsing.
+ */
+function buildSourceExtractionSignals(component: JlcPartsComponent, partId: string, sourceRecordId: string, datasheetRevisionId: string, datasheetAssetId: string | null, lastUpdatedAt: string): SourceExtractionSignal[] {
+  const componentKey = slugify(component.lcsc);
+  const hasPackageCode = readStringAttribute(component.attributes, "Package") !== null;
+  const hasPinCount = component.joints !== null && component.joints > 0;
+
+  return [
+    {
+      assetId: datasheetAssetId,
+      confidenceScore: hasPackageCode || hasPinCount ? 0.35 : 0,
+      datasheetRevisionId,
+      extractionSource: "provider_structured_metadata",
+      extractionStatus: hasPackageCode || hasPinCount ? "needs_review" : "not_available",
+      id: `sig-jlcparts-${componentKey}-package`,
+      lastUpdatedAt,
+      notes: hasPackageCode || hasPinCount ? "Provider package code or pin count was mapped; body and pitch dimensions were not extracted." : "No package/mechanical source signal was available in provider metadata.",
+      partId,
+      signalType: "package_mechanical_dimensions",
+      sourceRecordId
+    },
+    {
+      assetId: datasheetAssetId,
+      confidenceScore: 0,
+      datasheetRevisionId,
+      extractionSource: "provider_structured_metadata",
+      extractionStatus: "not_available",
+      id: `sig-jlcparts-${componentKey}-pin-table`,
+      lastUpdatedAt,
+      notes: "No reviewed pin table was extracted from the structured provider metadata.",
+      partId,
+      signalType: "pin_table",
+      sourceRecordId
+    },
+    {
+      assetId: null,
+      confidenceScore: 0,
+      datasheetRevisionId,
+      extractionSource: "provider_structured_metadata",
+      extractionStatus: "not_available",
+      id: `sig-jlcparts-${componentKey}-mechanical-drawing`,
+      lastUpdatedAt,
+      notes: "No mechanical drawing extraction signal was available in provider metadata.",
+      partId,
+      signalType: "mechanical_drawing",
+      sourceRecordId
+    }
+  ];
+}
+
+/**
  * Builds normalized metrics from structured provider attributes only.
  */
 function buildMetrics(component: JlcPartsComponent, partId: string, datasheetRevisionId: string, sourceRecordId: string, lastUpdatedAt: string): PartMetric[] {
@@ -471,7 +538,10 @@ function readLifecycleStatus(component: JlcPartsComponent): LifecycleStatus {
 function matchesPartRequest(component: JlcPartsComponent, lookup: string, manufacturerName: string | undefined): boolean {
   const manufacturer = readStringAttribute(component.attributes, "Manufacturer");
   const matchesIdentifier = component.mfr.toLowerCase() === lookup || component.lcsc.toLowerCase() === lookup;
-  const matchesManufacturer = !manufacturerName || manufacturer?.toLowerCase().includes(manufacturerName.toLowerCase()) === true;
+  const normalizedManufacturer = manufacturer ? normalizeManufacturerName(manufacturer) : null;
+  const manufacturerSearchValues = normalizedManufacturer && manufacturer ? [manufacturer, normalizedManufacturer.canonicalName, ...normalizedManufacturer.aliases] : [];
+  const normalizedRequestManufacturer = manufacturerName ? normalizeComparableText(manufacturerName) : null;
+  const matchesManufacturer = !normalizedRequestManufacturer || manufacturerSearchValues.some((value) => normalizeComparableText(value).includes(normalizedRequestManufacturer));
 
   return matchesIdentifier && matchesManufacturer;
 }
@@ -518,6 +588,77 @@ function readJlcPartsRawPayload(rawPayload: RawProviderPayload): JlcPartsRawPayl
   }
 
   return payload as JlcPartsRawPayload;
+}
+
+/**
+ * Normalizes provider manufacturer aliases such as "FH(Guangdong Fenghua Advanced Tech)".
+ */
+function normalizeManufacturerName(rawName: string): NormalizedManufacturerName {
+  const collapsedName = collapseWhitespace(rawName);
+  const parentheticalAlias = /^([^()]+)\(([^()]+)\)$/u.exec(collapsedName);
+
+  if (!parentheticalAlias) {
+    return {
+      aliases: [],
+      canonicalName: collapsedName
+    };
+  }
+
+  const shortName = parentheticalAlias[1]?.trim();
+  const fullName = parentheticalAlias[2]?.trim();
+
+  if (!shortName || !fullName) {
+    return {
+      aliases: [],
+      canonicalName: collapsedName
+    };
+  }
+
+  return {
+    aliases: uniqueStrings([shortName, collapsedName]),
+    canonicalName: fullName
+  };
+}
+
+/**
+ * Normalizes package labels while keeping provider-specific package parsing in the worker.
+ */
+function normalizePackageName(rawName: string): string {
+  const collapsedName = collapseWhitespace(rawName);
+  const chipPackage = /^(\d{4})(?:\s|\(|$)/u.exec(collapsedName);
+
+  return chipPackage?.[1] ?? collapsedName.toUpperCase();
+}
+
+/**
+ * Builds a stable category path from provider category and subcategory names.
+ */
+function normalizePartCategory(categoryName: string, subcategoryName: string): string {
+  const category = collapseWhitespace(categoryName);
+  const subcategory = collapseWhitespace(subcategoryName);
+
+  return category === subcategory ? category : `${category} / ${subcategory}`;
+}
+
+/**
+ * Collapses repeated whitespace in provider text values.
+ */
+function collapseWhitespace(value: string): string {
+  return value.trim().replace(/\s+/gu, " ") || "Unknown";
+}
+
+/**
+ * Normalizes strings used only for loose provider lookup comparison.
+ */
+function normalizeComparableText(value: string): string {
+  return collapseWhitespace(value).toLowerCase();
+}
+
+/**
+ * Returns strings once while preserving deterministic order.
+ */
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.length > 0)));
 }
 
 /**

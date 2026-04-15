@@ -41,6 +41,12 @@ export type AssetStatus = AssetAvailabilityStatus | "reviewed" | "verified_for_e
 /** Validation status describes trust in the asset or metadata. */
 export type ValidationStatus = "verified" | "needs_review" | "not_validated" | "failed";
 
+/** AssetValidationType names reviewable evidence without claiming a broad validation engine. */
+export type AssetValidationType = "file_integrity" | "footprint_geometry" | "symbol_pin_mapping" | "three_d_geometry" | "manual_engineering_review";
+
+/** AssetPromotionOutcome records whether an export-promotion attempt succeeded or was denied. */
+export type AssetPromotionOutcome = "promoted" | "denied";
+
 /** Preview status describes whether a visual preview can be rendered. */
 export type PreviewStatus = "ready" | "pending" | "not_available";
 
@@ -76,6 +82,18 @@ export type ReviewOutcome = "approved" | "rejected" | "changes_requested";
 
 /** ReviewState is the resolved status shown by API/UI for reviewable targets. */
 export type ReviewState = "pending_review" | "approved" | "rejected" | "changes_requested" | "verified_for_export" | "not_required";
+
+/** SourceImportStatus makes provider import outcomes queryable without provider-specific strings. */
+export type SourceImportStatus = "imported" | "failed";
+
+/** SourceExtractionSignalType names explicit source material extracted for CAD recovery. */
+export type SourceExtractionSignalType = "package_mechanical_dimensions" | "pin_table" | "mechanical_drawing";
+
+/** SourceExtractionStatus keeps extraction evidence honest and review-aware. */
+export type SourceExtractionStatus = "available" | "needs_review" | "not_available";
+
+/** SourceExtractionSource identifies the source class without leaking provider-specific parsers. */
+export type SourceExtractionSource = "provider_structured_metadata" | "datasheet_metadata" | "asset_reference" | "manual_internal";
 
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
@@ -128,6 +146,39 @@ export interface SourceRecord {
   fetchedAt: string;
   rawPayload: unknown;
   normalizedAt: string | null;
+  sourceLastSeenAt: string;
+  sourceLastImportedAt: string | null;
+  importStatus: SourceImportStatus;
+  importErrorDetails: string | null;
+  lastUpdatedAt: string;
+}
+
+/** ProviderImportDiagnostic is the compact debug view for provider import health. */
+export interface ProviderImportDiagnostic {
+  id: string;
+  providerId: string;
+  providerPartKey: string;
+  partId: string | null;
+  sourceUrl: string | null;
+  importStatus: SourceImportStatus;
+  importErrorDetails: string | null;
+  sourceLastSeenAt: string;
+  sourceLastImportedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** SourceExtractionSignal stores one structured readiness signal for CAD recovery. */
+export interface SourceExtractionSignal {
+  id: string;
+  partId: string;
+  sourceRecordId: string | null;
+  datasheetRevisionId: string | null;
+  assetId: string | null;
+  signalType: SourceExtractionSignalType;
+  extractionStatus: SourceExtractionStatus;
+  confidenceScore: number;
+  extractionSource: SourceExtractionSource;
+  notes: string | null;
   lastUpdatedAt: string;
 }
 
@@ -278,12 +329,57 @@ export interface ReviewRecord {
   lastUpdatedAt: string;
 }
 
+/** AssetValidationRecord persists one concrete validation evidence item for an asset. */
+export interface AssetValidationRecord {
+  id: string;
+  partId: string;
+  assetId: string;
+  validationStatus: ValidationStatus;
+  validationType: AssetValidationType;
+  validationNotes: string | null;
+  validatedAt: string;
+  validator: string;
+  lastUpdatedAt: string;
+}
+
+/** AssetPromotionAuditRecord persists one explicit export-promotion attempt. */
+export interface AssetPromotionAuditRecord {
+  id: string;
+  partId: string;
+  assetId: string;
+  priorExportStatus: AssetExportStatus;
+  newExportStatus: AssetExportStatus;
+  promotionOutcome: AssetPromotionOutcome;
+  blockerReasons: string[];
+  validationRecordId: string | null;
+  actor: string;
+  createdAt: string;
+}
+
 /** ReviewStatusSummary is the API-ready latest review state for one target. */
 export interface ReviewStatusSummary {
   targetType: ReviewTargetType;
   targetId: string;
   state: ReviewState;
   latestReview: ReviewRecord | null;
+}
+
+/** AssetValidationSummary exposes latest validation evidence without making the UI infer it. */
+export interface AssetValidationSummary {
+  assetId: string;
+  latestValidation: AssetValidationRecord | null;
+  label: string;
+  reason: string;
+}
+
+/** AssetPromotionSummary exposes promotion history and current blocker reasons for one asset. */
+export interface AssetPromotionSummary {
+  assetId: string;
+  latestPromotion: AssetPromotionAuditRecord | null;
+  promotionHistory: AssetPromotionAuditRecord[];
+  canPromote: boolean;
+  blockerReasons: string[];
+  label: string;
 }
 
 /** SourceReadinessRequirement names the source material checked before a request can be made. */
@@ -297,6 +393,8 @@ export interface GenerationSourceReadiness {
   reasons: string[];
   sourceDatasheetRevisionId: string | null;
   sourceAssetId: string | null;
+  extractionSignalIds: string[];
+  extractionConfidence: number;
 }
 
 /** AssetClassReadiness summarizes the best concrete evidence for one asset class. */
@@ -382,7 +480,10 @@ export interface PartSearchRecord {
   companionRecommendations: CompanionRecommendation[];
   generationWorkflows: GenerationWorkflow[];
   generationRequests: GenerationRequest[];
+  extractionSignals: SourceExtractionSignal[];
   reviewRecords: ReviewRecord[];
+  validationRecords: AssetValidationRecord[];
+  promotionAudits: AssetPromotionAuditRecord[];
   /** ISO timestamp for the latest joined record update. */
   lastUpdatedAt: string;
 }
@@ -404,6 +505,8 @@ export interface PartDetailResponse {
   generationOptions: AssetGenerationOption[];
   assetReviewStatuses: ReviewStatusSummary[];
   workflowReviewStatuses: ReviewStatusSummary[];
+  assetValidationSummaries: AssetValidationSummary[];
+  assetPromotionSummaries: AssetPromotionSummary[];
 }
 
 /** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */
@@ -430,6 +533,17 @@ export interface ReviewActionResponse {
   review: ReviewRecord;
   updatedAsset?: Asset;
   updatedWorkflow?: GenerationWorkflow;
+}
+
+/** AssetPromotionInput is the explicit request to promote one reviewed asset for export. */
+export interface AssetPromotionInput {
+  assetId: string;
+}
+
+/** AssetPromotionResponse returns the asset after an explicit export-verification promotion. */
+export interface AssetPromotionResponse {
+  updatedAsset: Asset;
+  promotionAudit: AssetPromotionAuditRecord;
 }
 
 /** SearchFacets contains the provider-neutral filter data for the search surface. */

@@ -13,15 +13,22 @@ import type { RawProviderPayload } from "./provider-adapters";
 test("jlcparts provider normalizes structured metadata without implying CAD availability", () => {
   const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload());
 
-  assert.equal(normalized.manufacturer.name, "FH(Guangdong Fenghua Advanced Tech)");
+  assert.equal(normalized.manufacturer.name, "Guangdong Fenghua Advanced Tech");
+  assert.deepEqual(normalized.manufacturer.aliases, ["FH", "FH(Guangdong Fenghua Advanced Tech)"]);
   assert.equal(normalized.part.mpn, "RC-02W300JT");
-  assert.equal(normalized.part.category, "Chip Resistor - Surface Mount");
+  assert.equal(normalized.part.category, "Resistors / Chip Resistor - Surface Mount");
   assert.equal(normalized.part.lifecycleStatus, "active");
   assert.equal(normalized.package.packageName, "0402");
   assert.equal(normalized.package.pinCount, 2);
   assert.equal(normalized.sourceRecord.providerId, "jlcparts");
   assert.equal(normalized.sourceRecord.providerPartKey, "C1091");
+  assert.equal(normalized.sourceRecord.importStatus, "imported");
+  assert.equal(normalized.sourceRecord.sourceLastImportedAt, "2026-04-12T06:57:40.000Z");
+  assert.equal(normalized.sourceRecord.sourceLastSeenAt, "2026-04-12T06:57:40.000Z");
   assert.match(normalized.sourceRecord.sourceUrl ?? "", /lcsc\.com\/product-detail/u);
+  assert.equal(normalized.extractionSignals.find((signal) => signal.signalType === "package_mechanical_dimensions")?.extractionStatus, "needs_review");
+  assert.equal(normalized.extractionSignals.find((signal) => signal.signalType === "pin_table")?.extractionStatus, "not_available");
+  assert.equal(normalized.extractionSignals.find((signal) => signal.signalType === "mechanical_drawing")?.extractionStatus, "not_available");
 
   const datasheet = normalized.assets.find((asset) => asset.assetType === "datasheet");
 

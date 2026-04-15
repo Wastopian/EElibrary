@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getPartDetail } from "@ee-library/shared/search";
-import { formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getSearchExportReadiness, reviewStateTone, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
-import { getAssetReviewStatus, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
+import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
+import type { Asset, AssetValidationRecord } from "@ee-library/shared/types";
 
 /**
  * Verifies connector section visibility follows connector data presence.
@@ -62,6 +63,9 @@ test("generation option visibility follows stored missing-asset workflows", () =
   assert.equal(shouldRenderGenerationOptions(connectorOptions), false);
   assert.deepEqual(regulatorOptions.map((option) => option.label), ["Generate footprint from datasheet", "Generate symbol from pin table", "Generate 3D from mechanical drawing"]);
   assert.deepEqual(regulatorOptions.map((option) => option.workflowStatusLabel), ["request available", "request available", "in review"]);
+  assert.match(regulatorOptions.find((option) => option.targetAssetType === "symbol")?.reason ?? "", /extraction confidence/u);
+  assert.equal(getGenerationOptions({ ...regulatorRecord, extractionSignals: [] }, regulatorGroups).find((option) => option.targetAssetType === "symbol")?.canRequest, false);
+  assert.match(getGenerationOptions({ ...regulatorRecord, extractionSignals: [] }, regulatorGroups).find((option) => option.targetAssetType === "symbol")?.reason ?? "", /No extracted pin table signal/u);
 });
 
 /**
@@ -106,6 +110,70 @@ test("review status wording distinguishes pending, approved, rejected, and expor
 });
 
 /**
+ * Verifies generated draft asset wording stays review-oriented and non-exportable.
+ */
+test("generated draft assets use honest source and review wording", () => {
+  const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const sourceAsset = regulatorRecord.assets.find((asset) => asset.assetType === "datasheet");
+
+  assert.ok(sourceAsset, "expected a datasheet source asset to clone");
+
+  const generatedDraftAsset = {
+    ...sourceAsset,
+    assetState: "downloaded" as const,
+    assetStatus: "downloaded" as const,
+    assetType: "footprint" as const,
+    availabilityStatus: "downloaded" as const,
+    exportStatus: "not_exportable" as const,
+    fileFormat: "kicad_mod" as const,
+    fileHash: "sha256:generated-draft",
+    generationMethod: "draft_footprint_from_extraction_signal",
+    id: "asset-draft-regulator-footprint",
+    licenseMode: "redistribution_allowed" as const,
+    provenance: "generated" as const,
+    reviewStatus: "review_required" as const,
+    storageKey: "generated/drafts/part-tps7a02dbvr/footprint.kicad_mod",
+    validationStatus: "needs_review" as const
+  };
+  const approvedDraftAsset = {
+    ...generatedDraftAsset,
+    assetStatus: "reviewed" as const,
+    reviewStatus: "approved" as const,
+    validationStatus: "verified" as const
+  };
+  const promotedDraftAsset = {
+    ...approvedDraftAsset,
+    assetState: "validated" as const,
+    assetStatus: "verified_for_export" as const,
+    availabilityStatus: "validated" as const,
+    exportStatus: "verified_for_export" as const
+  };
+  const validationRecord = buildValidationRecord(approvedDraftAsset, "footprint_geometry");
+  const generatedPromotionSummary = getAssetPromotionSummary(generatedDraftAsset, [], []);
+  const approvedPromotionSummary = getAssetPromotionSummary(approvedDraftAsset, [validationRecord], []);
+  const approvedWithoutEvidenceSummary = getAssetPromotionSummary(approvedDraftAsset, [], []);
+  const promotedPromotionSummary = getAssetPromotionSummary(promotedDraftAsset, [validationRecord], []);
+  const validationSummary = getAssetValidationSummary(approvedDraftAsset, [validationRecord]);
+
+  assert.equal(formatAssetSourceLabel(generatedDraftAsset, 1), "Best of 1 / generated draft");
+  assert.equal(formatAssetTrustStageLabel(generatedDraftAsset, getAssetReviewStatus(generatedDraftAsset, []).state), "generated draft");
+  assert.equal(formatAssetTrustStageLabel(approvedDraftAsset, getAssetReviewStatus(approvedDraftAsset, []).state), "approved draft");
+  assert.equal(formatAssetTrustStageLabel({ ...generatedDraftAsset, reviewStatus: "rejected", validationStatus: "failed", availabilityStatus: "failed" }, "rejected"), "rejected draft");
+  assert.equal(formatAssetTrustStageLabel({ ...generatedDraftAsset, reviewStatus: "changes_requested" }, "changes_requested"), "changes requested");
+  assert.equal(formatAssetTrustStageLabel(promotedDraftAsset, getAssetReviewStatus(promotedDraftAsset, []).state), "verified for export");
+  assert.equal(assetTrustStageTone(approvedDraftAsset, "approved"), "info");
+  assert.equal(formatReviewStateLabel(getAssetReviewStatus(generatedDraftAsset, []).state), "pending review");
+  assert.match(formatAssetValidationEvidence(validationSummary), /Footprint geometry/u);
+  assert.equal(formatAssetPromotionHistory(approvedPromotionSummary), "No promotion attempts have been recorded.");
+  assert.equal(formatAssetPromotionBlockers(approvedPromotionSummary), "Promotion requirements are satisfied.");
+  assert.match(formatAssetPromotionBlockers(approvedWithoutEvidenceSummary), /qualifying verified validation evidence/u);
+  assert.equal(shouldRenderAssetPromotionAction(generatedPromotionSummary), false);
+  assert.equal(shouldRenderAssetPromotionAction(approvedPromotionSummary), true);
+  assert.equal(shouldRenderAssetPromotionAction(promotedPromotionSummary), false);
+  assert.equal(getSearchExportReadiness({ ...regulatorRecord, assets: [generatedDraftAsset] }).label, "partial bundle");
+});
+
+/**
  * Verifies search export labels use precise bundle readiness language.
  */
 test("search export readiness labels distinguish bundles from single verified CAD assets", () => {
@@ -129,4 +197,21 @@ function getSeedRecord(partId: string) {
 
   assert.ok(record, `expected seed part ${partId}`);
   return record;
+}
+
+/**
+ * Builds validation evidence strong enough for promotion UI eligibility tests.
+ */
+function buildValidationRecord(asset: Asset, validationType: AssetValidationRecord["validationType"]): AssetValidationRecord {
+  return {
+    assetId: asset.id,
+    id: `validation-${asset.id}`,
+    lastUpdatedAt: "2026-04-13T00:00:00.000Z",
+    partId: asset.partId,
+    validatedAt: "2026-04-13T00:00:00.000Z",
+    validationNotes: "UI test validation evidence.",
+    validationStatus: "verified",
+    validationType,
+    validator: "ui-test-validator"
+  };
 }

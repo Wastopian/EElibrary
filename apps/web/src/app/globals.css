@@ -151,6 +151,21 @@ select {
   max-width: 820px;
 }
 
+/* Status rows keep catalog mode and dependency truth close to the primary workflow. */
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* Mode warnings make seed fallback explicit without styling it as a fatal error. */
+.mode-warning {
+  color: var(--color-review);
+  margin: 12px 0 0;
+  max-width: 760px;
+}
+
 /* Search controls keep input and action in one stable row. */
 .search-bar {
   display: grid;
@@ -170,6 +185,134 @@ select {
   gap: 18px;
   grid-template-columns: 280px minmax(0, 1fr);
   margin-top: 18px;
+}
+
+/* Dashboard grid surfaces local boot status before search results. */
+.dashboard-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr) minmax(280px, 0.7fr);
+  margin-top: 18px;
+}
+
+/* Health grid uses compact numeric cells for workstation scanning. */
+.health-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Health labels stay muted so counts remain primary. */
+.health-grid span {
+  color: var(--color-muted);
+  display: block;
+  font-size: 0.82rem;
+}
+
+/* Health count values use a stable mono-friendly size. */
+.health-grid strong {
+  display: block;
+  font-size: 1.4rem;
+  margin-top: 4px;
+}
+
+/* Provider summary keeps status and explanation paired. */
+.provider-summary {
+  display: grid;
+  gap: 12px;
+}
+
+/* Provider summary copy avoids excess panel spacing. */
+.provider-summary p {
+  color: var(--color-muted);
+  margin: 0;
+}
+
+/* Quick actions are navigation shortcuts, not export actions. */
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Sample part grid gives the homepage useful records before filtering. */
+.sample-part-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Sample part cards are compact record links with explicit readiness badges. */
+.sample-part-card {
+  background: var(--color-panel-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  color: var(--color-text);
+  display: grid;
+  gap: 8px;
+  min-height: 150px;
+  padding: 14px;
+}
+
+/* Secondary sample metadata stays quiet but readable. */
+.sample-part-card span:not(.ui-badge) {
+  color: var(--color-muted);
+}
+
+/* Setup panel replaces runtime crashes with actionable local boot guidance. */
+.setup-panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+/* Setup panel heading keeps the recovery state prominent. */
+.setup-panel h2,
+.setup-panel p {
+  margin: 0;
+}
+
+/* Setup copy uses muted text except for command rows. */
+.setup-panel p {
+  color: var(--color-muted);
+  max-width: 760px;
+}
+
+/* Setup steps compare DB-backed boot and explicit seed boot. */
+.setup-steps {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Setup step blocks are repeated operational notes. */
+.setup-steps div {
+  background: var(--color-panel-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+/* Setup commands use mono wrapping so PowerShell examples stay inside the card. */
+.setup-steps code {
+  background: #0f1214;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  color: var(--color-text);
+  display: block;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  padding: 10px;
+}
+
+/* Setup notes keep local seed truth visible. */
+.setup-steps span {
+  color: var(--color-muted);
 }
 
 /* Filter rail keeps filters visually distinct from provider data. */
@@ -580,6 +723,19 @@ select {
   gap: 8px;
 }
 
+/* Validation evidence keeps trust and audit text close to the asset it explains. */
+.asset-review-card__evidence {
+  color: var(--color-muted);
+  display: grid;
+  font-size: 0.82rem;
+  gap: 4px;
+}
+
+/* Evidence paragraphs avoid excess spacing inside dense engineering asset cards. */
+.asset-review-card__evidence p {
+  margin: 0;
+}
+
 /* Review actions are local workflow controls, not export buttons. */
 .review-action-panel {
   align-items: center;
@@ -685,6 +841,7 @@ select {
 
 /* Medium displays keep the experience usable without pretending to be mobile-first. */
 @media (max-width: 1100px) {
+  .dashboard-grid,
   .detail-grid,
   .search-workspace {
     grid-template-columns: 1fr;
@@ -730,7 +887,12 @@ select {
 
   .dimension-grid,
   .result-row,
+  .sample-part-grid,
   .search-bar__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-steps {
     grid-template-columns: 1fr;
   }
 }

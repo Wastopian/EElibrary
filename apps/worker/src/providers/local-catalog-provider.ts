@@ -6,8 +6,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { normalizeAssetState, normalizeLifecycleStatus, normalizeMetricUnit, normalizeNullableNumber } from "@ee-library/shared/normalization";
-import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
-import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation } from "@ee-library/shared/types";
+import type { Asset, AssetPromotionAuditRecord, AssetValidationRecord, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
+import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 
 /** LocalCatalogFile describes the adapter fixture envelope. */
@@ -52,6 +52,12 @@ interface LocalCatalogRecord {
   generationWorkflows?: GenerationWorkflow[];
   /** Optional raw review records for local review-state fixtures. */
   reviewRecords?: ReviewRecord[];
+  /** Optional raw validation evidence for local trust-state fixtures. */
+  validationRecords?: AssetValidationRecord[];
+  /** Optional raw promotion audit history for local trust-state fixtures. */
+  promotionAudits?: AssetPromotionAuditRecord[];
+  /** Optional structured source extraction signals for local recovery fixtures. */
+  extractionSignals?: SourceExtractionSignal[];
 }
 
 /** LocalCatalogMetric describes one raw metric from the provider file. */
@@ -166,6 +172,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
       }
     ],
     generationWorkflows: record.generationWorkflows ?? [],
+    extractionSignals: record.extractionSignals ?? [],
     manufacturer: record.manufacturer,
     mateRelations: record.mateRelations ?? [],
     metrics: record.metrics.map((metric) => normalizeMetric(metric, record, rawPayload, sourceRecordId)),
@@ -181,17 +188,23 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
       packageId: record.package.id,
       trustScore: record.part.trustScore
     },
+    promotionAudits: record.promotionAudits ?? [],
     similarPartRelations: record.similarPartRelations ?? [],
     reviewRecords: record.reviewRecords ?? [],
+    validationRecords: record.validationRecords ?? [],
     sourceRecord: {
       fetchedAt: rawPayload.fetchedAt,
       id: sourceRecordId,
+      importErrorDetails: null,
+      importStatus: "imported",
       lastUpdatedAt,
       normalizedAt: lastUpdatedAt,
       partId: record.part.id,
       providerId: rawPayload.providerId,
       providerPartKey: record.providerPartKey,
       rawPayload: rawPayload.payload,
+      sourceLastImportedAt: lastUpdatedAt,
+      sourceLastSeenAt: rawPayload.fetchedAt,
       sourceUrl: record.sourceUrl
     }
   };

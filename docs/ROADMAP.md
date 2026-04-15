@@ -112,34 +112,115 @@ Outcome:
 ## Phase 4B: First Real Provider Integration
 Connect the platform to real external sources through one production-style ingestion path.
 
-Planned:
-- first official metadata provider adapter
-- normalized ingestion into canonical DB records
-- source freshness tracking
-- source conflict policy
-- initial asset reference ingestion
+Delivered:
+- first structured metadata provider adapter through the worker layer
+- lookup/import by MPN or LCSC id for the initial JLCPCB/LCSC metadata slice
+- normalized ingestion into canonical manufacturer, part, package, metric, source, datasheet, and asset records
+- initial reference-only datasheet asset ingestion
 - no runtime scraping dependency
 
 Outcome:
 - the platform begins operating on real external part data instead of only local/seed fixtures
 
+Still planned:
+- multi-provider ingestion
+- source conflict policy
+- broader source freshness dashboards
+
 ---
 
-## Phase 5: Datasheet Extraction and Asset Generation Engine
+## Phase 4C: Provider Ingestion Hardening
+Make the first real provider import path more reliable before adding more sources.
+
+Delivered:
+- repeat imports upsert canonical manufacturer, package, part, and source rows
+- source last seen and last imported metadata
+- import status and error diagnostics on source records
+- worker command for recent and failed import diagnostics
+- hardened JLCPCB/LCSC manufacturer, package, and category normalization
+- repeat-import and migration smoke coverage for source freshness fields
+
+Outcome:
+- the first provider slice is safer to run repeatedly and easier to diagnose without introducing multi-provider conflict resolution yet
+
+Still planned:
+- cross-provider conflict policy
+- provider reconciliation UI
+- bulk ingestion scheduling
+
+---
+
+## Phase 5A: Datasheet Extraction Groundwork
+Make missing-CAD recovery depend on structured extraction evidence instead of coarse source flags.
+
+Delivered:
+- source extraction signal model for package/mechanical dimensions, pin tables, and mechanical drawings
+- DB-backed source_extraction_signals persistence and API projection
+- worker mapping of extraction signals for local fixture data and the first JLCPCB/LCSC provider slice
+- source-readiness evaluation based on extracted evidence and confidence
+- UI wording for extraction support, missing signals, and review-required source evidence
+
+Outcome:
+- generation requestability is now grounded in explicit source evidence without claiming OCR, full PDF parsing, or generated CAD success
+
+Still planned:
+- actual extraction jobs
+- generated CAD draft pipeline
+- review preparation for generated outputs
+
+---
+
+## Phase 5B: Datasheet Extraction and Asset Generation Engine
 Build the recovery engine that turns source material into draft engineering assets.
 
-Planned:
-- datasheet extraction groundwork
-- structured package/mechanical extraction
-- pin-table extraction
-- mechanical drawing extraction
-- footprint generation pipeline
-- symbol generation pipeline
-- 3D draft generation pipeline
-- review-required outputs by default
+Delivered:
+- worker-side draft footprint generation from structured package/mechanical extraction signals
+- worker-side draft symbol generation from structured pin-table extraction signals
+- deterministic draft asset records linked to generation workflows
+- generated outputs marked generated, review_required, needs_review, and not_exportable by default
+- API/detail and UI coverage for generated draft truth labels
 
 Outcome:
 - the platform can recover missing engineering assets from source material in a controlled, reviewable way
+
+Still planned:
+- extraction job execution beyond provider-structured source signals
+- 3D draft generation pipeline
+- richer draft artifact storage and preview generation
+
+---
+
+## Phase 5C: Review-Assisted Promotion Workflow
+Separate generated, approved, and verified-for-export states with explicit promotion.
+
+Delivered:
+- approval, rejection, and changes-requested review transitions for generated drafts
+- approved drafts remain non-exportable until a separate promotion action succeeds
+- explicit asset promotion API action for eligible approved file-backed CAD assets
+- UI wording for generated draft, approved draft, rejected draft, changes requested, and verified for export
+- export gating tests before and after explicit promotion
+
+Outcome:
+- generated draft assets can move toward trusted export state without collapsing review and export verification
+
+Still planned:
+- production validation jobs beyond manually recorded evidence
+- richer review queues and permissions
+
+---
+
+## Phase 5D: Validation and Promotion Audit Backbone
+Make verified-for-export promotion depend on durable evidence and leave an audit trail.
+
+Delivered:
+- asset validation evidence records
+- export-promotion audit records for promoted and denied attempts
+- promotion rules that require qualifying validation evidence
+- API/detail exposure of validation evidence, promotion history, and blocker reasons
+- UI wording for validation evidence and promotion audit state
+
+Outcome:
+- verified_for_export transitions are now evidence-backed and auditable instead of only an asset-state mutation
 
 ---
 

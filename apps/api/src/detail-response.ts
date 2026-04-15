@@ -4,7 +4,7 @@
 
 import type { PartDetailResponse, PartSearchRecord, RelatedPartSummary } from "@ee-library/shared/types";
 import { getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
-import { getAssetReviewStatuses, getWorkflowReviewStatuses } from "@ee-library/shared/review-workflow";
+import { getAssetPromotionSummaries, getAssetReviewStatuses, getAssetValidationSummaries, getWorkflowReviewStatuses } from "@ee-library/shared/review-workflow";
 
 /**
  * Builds the typed detail response from the same backing records used by the route.
@@ -33,6 +33,8 @@ export function buildPartDetailResponse(record: PartSearchRecord, records: PartS
   return {
     assetReviewStatuses: getAssetReviewStatuses(record.assets, record.reviewRecords),
     assetGroups,
+    assetPromotionSummaries: getAssetPromotionSummaries(record.assets, record.validationRecords, record.promotionAudits),
+    assetValidationSummaries: getAssetValidationSummaries(record.assets, record.validationRecords),
     bundleReadiness: getBundleReadinessSummary(record),
     generationOptions: getGenerationOptions(record, assetGroups),
     record,

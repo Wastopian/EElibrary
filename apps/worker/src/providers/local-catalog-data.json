@@ -148,6 +148,47 @@
           "targetAssetType": "three_d_model"
         }
       ],
+      "extractionSignals": [
+        {
+          "assetId": "asset-tps7a02-datasheet",
+          "confidenceScore": 0.78,
+          "datasheetRevisionId": "dsr-tps7a02-rev-e",
+          "extractionSource": "datasheet_metadata",
+          "extractionStatus": "available",
+          "id": "sig-tps7a02-package-mechanical",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "Package pin count, pitch, and body dimensions are normalized from reviewed package metadata.",
+          "partId": "part-tps7a02dbvr",
+          "signalType": "package_mechanical_dimensions",
+          "sourceRecordId": "source-local-catalog-tps7a02dbvr"
+        },
+        {
+          "assetId": "asset-tps7a02-datasheet",
+          "confidenceScore": 0.74,
+          "datasheetRevisionId": "dsr-tps7a02-rev-e",
+          "extractionSource": "datasheet_metadata",
+          "extractionStatus": "available",
+          "id": "sig-tps7a02-pin-table",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "Pin table is available as structured source evidence for a symbol request.",
+          "partId": "part-tps7a02dbvr",
+          "signalType": "pin_table",
+          "sourceRecordId": "source-local-catalog-tps7a02dbvr"
+        },
+        {
+          "assetId": "asset-tps7a02-mechanical",
+          "confidenceScore": 0.68,
+          "datasheetRevisionId": "dsr-tps7a02-rev-e",
+          "extractionSource": "asset_reference",
+          "extractionStatus": "needs_review",
+          "id": "sig-tps7a02-mechanical-drawing",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "Mechanical drawing reference exists, but geometry extraction remains review-required.",
+          "partId": "part-tps7a02dbvr",
+          "signalType": "mechanical_drawing",
+          "sourceRecordId": "source-local-catalog-tps7a02dbvr"
+        }
+      ],
       "reviewRecords": [
         {
           "assetId": "asset-tps7a02-datasheet",
@@ -250,6 +291,47 @@
           "sourceUrl": null,
           "state": "failed",
           "validationStatus": "failed"
+        }
+      ],
+      "extractionSignals": [
+        {
+          "assetId": "asset-stm32g031-datasheet",
+          "confidenceScore": 0.66,
+          "datasheetRevisionId": "dsr-stm32g031-rev-7",
+          "extractionSource": "datasheet_metadata",
+          "extractionStatus": "available",
+          "id": "sig-stm32g031-package-mechanical",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "QFN package dimensions are normalized, but this does not imply symbol or 3D readiness.",
+          "partId": "part-stm32g031k8t6",
+          "signalType": "package_mechanical_dimensions",
+          "sourceRecordId": "source-local-catalog-stm32g031k8t6"
+        },
+        {
+          "assetId": "asset-stm32g031-datasheet",
+          "confidenceScore": 0,
+          "datasheetRevisionId": "dsr-stm32g031-rev-7",
+          "extractionSource": "datasheet_metadata",
+          "extractionStatus": "not_available",
+          "id": "sig-stm32g031-pin-table",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "No reviewed pin-table extraction is available yet.",
+          "partId": "part-stm32g031k8t6",
+          "signalType": "pin_table",
+          "sourceRecordId": "source-local-catalog-stm32g031k8t6"
+        },
+        {
+          "assetId": null,
+          "confidenceScore": 0,
+          "datasheetRevisionId": "dsr-stm32g031-rev-7",
+          "extractionSource": "datasheet_metadata",
+          "extractionStatus": "not_available",
+          "id": "sig-stm32g031-mechanical-drawing",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "No usable mechanical drawing extraction signal is available for 3D generation.",
+          "partId": "part-stm32g031k8t6",
+          "signalType": "mechanical_drawing",
+          "sourceRecordId": "source-local-catalog-stm32g031k8t6"
         }
       ],
       "reviewRecords": [

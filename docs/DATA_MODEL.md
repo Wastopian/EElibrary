@@ -79,18 +79,22 @@ Represents a normalized source snapshot used to derive facts for a part.
 Fields:
 - `id`
 - `part_id`
-- `source_name`
-- `source_type` (`manufacturer`, `distributor`, `cad_provider`, `internal`, `generated`)
-- `source_part_key`
+- `provider_id`
+- `provider_part_key`
 - `source_url`
-- `revision_label`
-- `revision_date`
-- `retrieved_at`
-- `raw_payload_hash`
+- `fetched_at`
+- `normalized_at`
+- `source_last_seen_at`
+- `source_last_imported_at`
+- `import_status` (`imported`, `failed`)
+- `import_error_details`
+- `raw_payload`
+- `last_updated_at`
 
 Purpose:
 - provides provenance for metrics, relationships, and assets
 - allows conflict handling and source freshness tracking
+- records provider import failures without implying a canonical part was created
 
 ### PartMetric
 Represents a normalized technical metric for a part.
@@ -195,6 +199,27 @@ Fields:
 
 Purpose:
 - gives generation/review workflows a traceable datasheet source
+
+### SourceExtractionSignal
+Represents one explicit source-readiness signal extracted or mapped for CAD recovery.
+
+Fields:
+- `id`
+- `part_id`
+- `source_record_id`
+- `datasheet_revision_id`
+- `asset_id`
+- `signal_type` (`package_mechanical_dimensions`, `pin_table`, `mechanical_drawing`)
+- `extraction_status` (`available`, `needs_review`, `not_available`)
+- `confidence_score`
+- `extraction_source` (`provider_structured_metadata`, `datasheet_metadata`, `asset_reference`, `manual_internal`)
+- `notes`
+- `last_updated_at`
+
+Purpose:
+- improves source-readiness decisions without claiming full PDF intelligence
+- keeps missing-CAD requestability grounded in explicit evidence
+- records partial and review-required extraction states honestly
 
 ---
 
@@ -370,6 +395,43 @@ Purpose:
   - reviewed
   - verified for export
 
+### AssetValidationRecord
+Represents durable validation evidence for one engineering asset.
+
+Fields:
+- `id`
+- `part_id`
+- `asset_id`
+- `validation_status`
+- `validation_type`
+- `validation_notes`
+- `validated_at`
+- `validator`
+- `last_updated_at`
+
+Purpose:
+- records the evidence used to decide whether an asset can be promoted
+- prevents review approval from standing in for export validation
+
+### AssetPromotionAuditRecord
+Represents one attempt to promote an asset into `verified_for_export`.
+
+Fields:
+- `id`
+- `part_id`
+- `asset_id`
+- `prior_export_status`
+- `new_export_status`
+- `promotion_outcome`
+- `blocker_reasons`
+- `validation_record_id`
+- `actor`
+- `created_at`
+
+Purpose:
+- records successful and denied promotion attempts
+- keeps blocker reasons reviewable instead of hidden in transient API logic
+
 ---
 
 ## Derived platform concepts
@@ -434,7 +496,8 @@ Purpose:
 5. Generate draft output
 6. Route to review
 7. Approve or reject
-8. Mark export readiness explicitly
+8. Promote to export verification explicitly when rules pass
+9. Mark export readiness explicitly
 
 ---
 
@@ -453,6 +516,7 @@ Purpose:
 - downloaded assets are not the same as validated assets
 - validated assets are not the same as reviewed assets
 - reviewed assets are not automatically verified for export
+- approved generated drafts remain non-exportable until an explicit promotion step succeeds
 - generated assets must always remain visibly marked as generated unless superseded by approved internal review logic
 
 ---

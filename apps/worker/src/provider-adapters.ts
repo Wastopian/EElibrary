@@ -5,6 +5,8 @@
 import type {
   AccessoryRequirement,
   Asset,
+  AssetPromotionAuditRecord,
+  AssetValidationRecord,
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
@@ -17,6 +19,7 @@ import type {
   PartMetric,
   ReviewRecord,
   SimilarPartRelation,
+  SourceExtractionSignal,
   SourceRecord
 } from "@ee-library/shared/types";
 import { jlcpartsProviderAdapter } from "./providers/jlcparts-provider";
@@ -72,6 +75,12 @@ export interface NormalizedProviderPart {
   generationWorkflows: GenerationWorkflow[];
   /** Explicit review records parsed from the provider payload when local fixtures include them. */
   reviewRecords: ReviewRecord[];
+  /** Explicit validation evidence parsed from fixtures or future validation jobs. */
+  validationRecords: AssetValidationRecord[];
+  /** Historical export-promotion audits parsed only when fixture data explicitly includes them. */
+  promotionAudits: AssetPromotionAuditRecord[];
+  /** Structured source extraction signals parsed or mapped for missing-CAD readiness. */
+  extractionSignals: SourceExtractionSignal[];
 }
 
 /** ProviderAdapter defines the worker boundary for provider-specific ingestion logic. */

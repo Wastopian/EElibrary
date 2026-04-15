@@ -2,13 +2,17 @@
  * File header: Reads provider-neutral catalog records from Postgres for the API service.
  */
 
-import { Pool } from "pg";
+import { performance } from "node:perf_hooks";
+import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
-import { applyAssetReviewOutcome, applyWorkflowReviewOutcome } from "@ee-library/shared/review-workflow";
+import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
 import type {
   AccessoryRequirement,
+  AssetPromotionAuditRecord,
+  AssetPromotionResponse,
   Asset,
+  AssetValidationRecord,
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
@@ -27,6 +31,8 @@ import type {
   ReviewActionResponse,
   ReviewRecord,
   SimilarPartRelation,
+  SourceExtractionSignal,
+  SourceImportStatus,
   SourceRecord
 } from "@ee-library/shared/types";
 
@@ -36,6 +42,26 @@ export interface CatalogStoreStatus {
   connected: boolean;
   /** User-facing service status for the health endpoint. */
   label: "connected" | "not_configured" | "unavailable";
+}
+
+/** CatalogQueryTiming reports one DB query duration without exposing SQL text or provider details. */
+export interface CatalogQueryTiming {
+  /** Stable query family name for logs and Server-Timing headers. */
+  name: string;
+  /** Query duration in milliseconds. */
+  durationMs: number;
+  /** Number of rows returned when the query completed. */
+  rowCount: number | null;
+  /** True when the query ran for a scoped detail subset instead of the full catalog. */
+  scoped: boolean;
+  /** Query status for failure-safe diagnostics. */
+  status: "ok" | "failed";
+}
+
+/** CatalogReadOptions lets API routes collect DB timings without changing response data. */
+export interface CatalogReadOptions {
+  /** Optional sink for query timing records. */
+  onQueryTiming?: (timing: CatalogQueryTiming) => void;
 }
 
 /** CatalogReadResult makes the configured-vs-readable database state explicit. */
@@ -53,6 +79,13 @@ export type ReviewActionResult =
   | { status: "created"; records: PartSearchRecord[]; response: ReviewActionResponse }
   | { status: "not_configured" }
   | { status: "not_found"; reason: string };
+
+/** AssetPromotionResult reports explicit export-verification promotion status. */
+export type AssetPromotionResult =
+  | { status: "promoted"; records: PartSearchRecord[]; response: AssetPromotionResponse }
+  | { status: "not_configured" }
+  | { status: "not_found"; reason: string }
+  | { status: "not_promotable"; reason: string };
 
 /** CatalogStoreFailureKind distinguishes operational outages from schema/data shape problems. */
 export type CatalogStoreFailureKind = "database_unavailable" | "schema_mismatch" | "query_failed";
@@ -245,6 +278,35 @@ interface DatabaseReviewRow {
   last_updated_at: Date | string;
 }
 
+/** DatabaseAssetValidationRow is the durable validation evidence shape read from Postgres. */
+interface DatabaseAssetValidationRow {
+  /** AssetValidationRecord fields from asset_validation_records. */
+  id: string;
+  part_id: string;
+  asset_id: string;
+  validation_status: AssetValidationRecord["validationStatus"];
+  validation_type: AssetValidationRecord["validationType"];
+  validation_notes: string | null;
+  validated_at: Date | string;
+  validator: string;
+  last_updated_at: Date | string;
+}
+
+/** DatabaseAssetPromotionAuditRow is the promotion audit shape read from Postgres. */
+interface DatabaseAssetPromotionAuditRow {
+  /** AssetPromotionAuditRecord fields from asset_promotion_audits. */
+  id: string;
+  part_id: string;
+  asset_id: string;
+  prior_export_status: AssetPromotionAuditRecord["priorExportStatus"];
+  new_export_status: AssetPromotionAuditRecord["newExportStatus"];
+  promotion_outcome: AssetPromotionAuditRecord["promotionOutcome"];
+  blocker_reasons: string[];
+  validation_record_id: string | null;
+  actor: string;
+  created_at: Date | string;
+}
+
 /** DatabaseDatasheetRow is the datasheet row shape read from Postgres. */
 interface DatabaseDatasheetRow {
   /** DatasheetRevision fields from datasheet_revisions. */
@@ -271,6 +333,26 @@ interface DatabaseSourceRow {
   fetched_at: Date | string;
   raw_payload: unknown;
   normalized_at: Date | string | null;
+  source_last_seen_at: Date | string;
+  source_last_imported_at: Date | string | null;
+  import_status: SourceImportStatus;
+  import_error_details: string | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabaseSourceExtractionSignalRow is the source extraction signal shape read from Postgres. */
+interface DatabaseSourceExtractionSignalRow {
+  /** SourceExtractionSignal fields from source_extraction_signals. */
+  id: string;
+  part_id: string;
+  source_record_id: string | null;
+  datasheet_revision_id: string | null;
+  asset_id: string | null;
+  signal_type: SourceExtractionSignal["signalType"];
+  extraction_status: SourceExtractionSignal["extractionStatus"];
+  confidence_score: string;
+  extraction_source: SourceExtractionSignal["extractionSource"];
+  notes: string | null;
   last_updated_at: Date | string;
 }
 
@@ -287,27 +369,27 @@ export function setCatalogStorePoolForTests(databasePool: Pool | null): void {
 /**
  * Returns every canonical part record from Postgres, or an explicit not-configured status.
  */
-export async function readCatalogRecordsFromDatabase(): Promise<CatalogReadResult> {
+export async function readCatalogRecordsFromDatabase(options: CatalogReadOptions = {}): Promise<CatalogReadResult> {
   const databasePool = getDatabasePool();
 
   if (!databasePool) {
     return { status: "not_configured" };
   }
 
-  return { records: await readCatalogRecords(databasePool, null), status: "available" };
+  return { records: await readCatalogRecords(databasePool, null, options), status: "available" };
 }
 
 /**
  * Returns the requested part plus relationship targets from Postgres without loading the full catalog.
  */
-export async function readPartDetailRecordsFromDatabase(partId: string): Promise<CatalogReadResult> {
+export async function readPartDetailRecordsFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<CatalogReadResult> {
   const databasePool = getDatabasePool();
 
   if (!databasePool) {
     return { status: "not_configured" };
   }
 
-  const primaryRecords = await readCatalogRecords(databasePool, [partId]);
+  const primaryRecords = await readCatalogRecords(databasePool, [partId], options);
   const primaryRecord = primaryRecords.find((record) => record.part.id === partId);
 
   if (!primaryRecord) {
@@ -315,9 +397,13 @@ export async function readPartDetailRecordsFromDatabase(partId: string): Promise
   }
 
   const relatedIds = collectRelatedPartIds(primaryRecord);
-  const detailPartIds = Array.from(new Set([partId, ...relatedIds])).sort();
+  const relatedSummaryIds = Array.from(new Set(relatedIds)).filter((relatedId) => relatedId !== partId).sort();
 
-  return { records: await readCatalogRecords(databasePool, detailPartIds), status: "available" };
+  if (relatedSummaryIds.length === 0) {
+    return { records: primaryRecords, status: "available" };
+  }
+
+  return { records: [...primaryRecords, ...(await readPartSummaryRecords(databasePool, relatedSummaryIds, options))], status: "available" };
 }
 
 /**
@@ -553,30 +639,159 @@ export async function createReviewInDatabase(partId: string, input: ReviewAction
 }
 
 /**
+ * Promotes an approved file-backed CAD asset to verified_for_export through an explicit action.
+ */
+export async function promoteAssetForExportInDatabase(partId: string, assetId: string, promotedAt = new Date().toISOString()): Promise<AssetPromotionResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const primaryRecords = await readCatalogRecords(databasePool, [partId]);
+  const primaryRecord = primaryRecords.find((record) => record.part.id === partId);
+
+  if (!primaryRecord) {
+    return { reason: "Part not found.", status: "not_found" };
+  }
+
+  const targetAsset = primaryRecord.assets.find((asset) => asset.id === assetId) ?? null;
+
+  if (!targetAsset) {
+    return { reason: "Asset promotion target not found for this part.", status: "not_found" };
+  }
+
+  const blockers = getAssetPromotionBlockers(targetAsset, primaryRecord.validationRecords);
+  const deniedAudit = buildPromotionAuditRecord(partId, targetAsset, targetAsset.exportStatus, "denied", blockers, null, promotedAt);
+
+  if (blockers.length > 0) {
+    await persistPromotionAuditInDatabase(databasePool, deniedAudit);
+    return { reason: blockers.join(" "), status: "not_promotable" };
+  }
+
+  const updatedAsset = { ...promoteAssetToVerifiedForExport(targetAsset, primaryRecord.validationRecords), lastUpdatedAt: promotedAt };
+  const validationRecord = getQualifyingValidationForAsset(targetAsset, primaryRecord.validationRecords);
+  const promotionAudit = buildPromotionAuditRecord(partId, targetAsset, updatedAsset.exportStatus, "promoted", [], validationRecord?.id ?? null, promotedAt);
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await persistPromotionAuditRows(client, promotionAudit);
+    await client.query(
+      `
+        UPDATE assets
+        SET asset_state = $2,
+            asset_status = $3,
+            availability_status = $4,
+            review_status = $5,
+            export_status = $6,
+            validation_status = $7,
+            last_updated_at = $8
+        WHERE id = $1 AND part_id = $9
+      `,
+      [updatedAsset.id, updatedAsset.assetState, updatedAsset.assetStatus, updatedAsset.availabilityStatus, updatedAsset.reviewStatus, updatedAsset.exportStatus, updatedAsset.validationStatus, promotedAt, partId]
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw toCatalogStoreError(error);
+  } finally {
+    client.release();
+  }
+
+  const detailResult = await readPartDetailRecordsFromDatabase(partId);
+
+  if (detailResult.status !== "available") {
+    return { status: "not_configured" };
+  }
+
+  const refreshedRecord = detailResult.records.find((record) => record.part.id === partId);
+  const refreshedAsset = refreshedRecord?.assets.find((asset) => asset.id === updatedAsset.id) ?? updatedAsset;
+  const refreshedAudit = refreshedRecord?.promotionAudits.find((audit) => audit.id === promotionAudit.id) ?? promotionAudit;
+
+  return {
+    records: detailResult.records,
+    response: {
+      promotionAudit: refreshedAudit,
+      updatedAsset: refreshedAsset
+    },
+    status: "promoted"
+  };
+}
+
+/**
  * Reads joined catalog records from Postgres with an optional part-id scope.
  */
-async function readCatalogRecords(databasePool: Pool, partIds: string[] | null): Promise<PartSearchRecord[]> {
+async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, options: CatalogReadOptions = {}): Promise<PartSearchRecord[]> {
   try {
     const params = [partIds];
-    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows, requestRows, reviewRows] = await Promise.all([
-      databasePool.query<DatabasePartRow>(PART_ROWS_SQL, params),
-      databasePool.query<DatabaseMetricRow>(METRIC_ROWS_SQL, params),
-      databasePool.query<DatabaseAssetRow>(ASSET_ROWS_SQL, params),
-      databasePool.query<DatabaseDatasheetRow>(DATASHEET_ROWS_SQL, params),
-      databasePool.query<DatabaseSourceRow>(SOURCE_ROWS_SQL, params),
-      databasePool.query<DatabaseMateRow>(MATE_ROWS_SQL, params),
-      databasePool.query<DatabaseAccessoryRow>(ACCESSORY_ROWS_SQL, params),
-      databasePool.query<DatabaseCableRow>(CABLE_ROWS_SQL, params),
-      databasePool.query<DatabaseSimilarPartRow>(SIMILAR_PART_ROWS_SQL, params),
-      databasePool.query<DatabaseCompanionRow>(COMPANION_ROWS_SQL, params),
-      databasePool.query<DatabaseGenerationWorkflowRow>(GENERATION_WORKFLOW_ROWS_SQL, params),
-      databasePool.query<DatabaseGenerationRequestRow>(GENERATION_REQUEST_ROWS_SQL, params),
-      databasePool.query<DatabaseReviewRow>(REVIEW_ROWS_SQL, params)
+    const [partRows, metricRows, assetRows, datasheetRows, sourceRows, extractionSignalRows, mateRows, accessoryRows, cableRows, similarRows, companionRows, workflowRows, requestRows, reviewRows, validationRows, promotionAuditRows] = await Promise.all([
+      timedCatalogQuery<DatabasePartRow>(databasePool, "parts", PART_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseMetricRow>(databasePool, "metrics", METRIC_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseAssetRow>(databasePool, "assets", ASSET_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseDatasheetRow>(databasePool, "datasheets", DATASHEET_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseSourceRow>(databasePool, "sources", SOURCE_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseSourceExtractionSignalRow>(databasePool, "source_extraction_signals", SOURCE_EXTRACTION_SIGNAL_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseMateRow>(databasePool, "mate_relations", MATE_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseAccessoryRow>(databasePool, "accessory_requirements", ACCESSORY_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseCableRow>(databasePool, "cable_compatibilities", CABLE_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseSimilarPartRow>(databasePool, "similar_part_relations", SIMILAR_PART_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseCompanionRow>(databasePool, "companion_recommendations", COMPANION_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseGenerationWorkflowRow>(databasePool, "generation_workflows", GENERATION_WORKFLOW_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseGenerationRequestRow>(databasePool, "generation_requests", GENERATION_REQUEST_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseReviewRow>(databasePool, "review_records", REVIEW_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseAssetValidationRow>(databasePool, "asset_validation_records", ASSET_VALIDATION_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseAssetPromotionAuditRow>(databasePool, "asset_promotion_audits", ASSET_PROMOTION_AUDIT_ROWS_SQL, params, options)
     ]);
 
-    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows, requestRows.rows, reviewRows.rows);
+    return buildPartRecords(partRows.rows, metricRows.rows, assetRows.rows, datasheetRows.rows, sourceRows.rows, extractionSignalRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, similarRows.rows, companionRows.rows, workflowRows.rows, requestRows.rows, reviewRows.rows, validationRows.rows, promotionAuditRows.rows);
   } catch (error) {
     throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads only identity rows for related parts used by the detail response summary list.
+ */
+async function readPartSummaryRecords(databasePool: Pool, partIds: string[], options: CatalogReadOptions): Promise<PartSearchRecord[]> {
+  if (partIds.length === 0) {
+    return [];
+  }
+
+  try {
+    const partRows = await timedCatalogQuery<DatabasePartRow>(databasePool, "related_part_summaries", PART_ROWS_SQL, [partIds], options);
+
+    return buildPartRecords(partRows.rows, [], [], [], [], [], [], [], [], [], [], [], [], [], [], []);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Executes one catalog query and reports timing without changing query semantics.
+ */
+async function timedCatalogQuery<TRow extends QueryResultRow>(databasePool: Pool, name: string, sql: string, params: unknown[], options: CatalogReadOptions): Promise<QueryResult<TRow>> {
+  const startedAt = performance.now();
+  const scoped = Array.isArray(params[0]);
+  let rowCount: number | null = null;
+  let status: CatalogQueryTiming["status"] = "ok";
+
+  try {
+    const result = await databasePool.query<TRow>(sql, params);
+    rowCount = result.rowCount ?? result.rows.length;
+
+    return result;
+  } catch (error) {
+    status = "failed";
+    throw error;
+  } finally {
+    options.onQueryTiming?.({
+      durationMs: performance.now() - startedAt,
+      name,
+      rowCount,
+      scoped,
+      status
+    });
   }
 }
 
@@ -717,6 +932,84 @@ function buildReviewRecord(id: string, partId: string, input: ReviewActionInput,
 }
 
 /**
+ * Builds a deterministic audit row for one export-promotion attempt.
+ */
+function buildPromotionAuditRecord(partId: string, asset: Asset, newExportStatus: Asset["exportStatus"], promotionOutcome: AssetPromotionAuditRecord["promotionOutcome"], blockerReasons: string[], validationRecordId: string | null, promotedAt: string): AssetPromotionAuditRecord {
+  return {
+    actor: "local-dev-promotion",
+    assetId: asset.id,
+    blockerReasons,
+    createdAt: promotedAt,
+    id: `promotion-${partId}-${asset.id}-${promotionOutcome}-${promotedAt.replace(/\D/gu, "")}`,
+    newExportStatus,
+    partId,
+    priorExportStatus: asset.exportStatus,
+    promotionOutcome,
+    validationRecordId
+  };
+}
+
+/**
+ * Persists one promotion audit row without requiring the caller to own a transaction.
+ */
+async function persistPromotionAuditInDatabase(databasePool: Pool, auditRecord: AssetPromotionAuditRecord): Promise<void> {
+  const client = await databasePool.connect();
+
+  try {
+    await persistPromotionAuditRows(client, auditRecord);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Persists one promotion audit row inside an existing transaction-capable client.
+ */
+async function persistPromotionAuditRows(client: PoolClient, auditRecord: AssetPromotionAuditRecord): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO asset_promotion_audits (
+        id,
+        part_id,
+        asset_id,
+        prior_export_status,
+        new_export_status,
+        promotion_outcome,
+        blocker_reasons,
+        validation_record_id,
+        actor,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO UPDATE SET
+        part_id = EXCLUDED.part_id,
+        asset_id = EXCLUDED.asset_id,
+        prior_export_status = EXCLUDED.prior_export_status,
+        new_export_status = EXCLUDED.new_export_status,
+        promotion_outcome = EXCLUDED.promotion_outcome,
+        blocker_reasons = EXCLUDED.blocker_reasons,
+        validation_record_id = EXCLUDED.validation_record_id,
+        actor = EXCLUDED.actor,
+        created_at = EXCLUDED.created_at
+    `,
+    [
+      auditRecord.id,
+      auditRecord.partId,
+      auditRecord.assetId,
+      auditRecord.priorExportStatus,
+      auditRecord.newExportStatus,
+      auditRecord.promotionOutcome,
+      auditRecord.blockerReasons,
+      auditRecord.validationRecordId,
+      auditRecord.actor,
+      auditRecord.createdAt
+    ]
+  );
+}
+
+/**
  * Builds joined API records from flat database row sets.
  */
 function buildPartRecords(
@@ -725,6 +1018,7 @@ function buildPartRecords(
   assetRows: DatabaseAssetRow[],
   datasheetRows: DatabaseDatasheetRow[],
   sourceRows: DatabaseSourceRow[],
+  extractionSignalRows: DatabaseSourceExtractionSignalRow[],
   mateRows: DatabaseMateRow[],
   accessoryRows: DatabaseAccessoryRow[],
   cableRows: DatabaseCableRow[],
@@ -732,12 +1026,15 @@ function buildPartRecords(
   companionRows: DatabaseCompanionRow[],
   workflowRows: DatabaseGenerationWorkflowRow[],
   requestRows: DatabaseGenerationRequestRow[],
-  reviewRows: DatabaseReviewRow[]
+  reviewRows: DatabaseReviewRow[],
+  validationRows: DatabaseAssetValidationRow[],
+  promotionAuditRows: DatabaseAssetPromotionAuditRow[]
 ): PartSearchRecord[] {
   const metricsByPartId = groupBy(metricRows.map(mapMetricRow), (metric) => metric.partId);
   const assetsByPartId = groupBy(assetRows.map(mapAssetRow), (asset) => asset.partId);
   const datasheetsByPartId = groupBy(datasheetRows.map(mapDatasheetRow), (datasheet) => datasheet.partId);
   const sourcesByPartId = groupBy(sourceRows.map(mapSourceRow), (source) => source.partId ?? "");
+  const extractionSignalsByPartId = groupBy(extractionSignalRows.map(mapSourceExtractionSignalRow), (signal) => signal.partId);
   const matesByPartId = groupBy(mateRows.map(mapMateRow), (relation) => relation.partId);
   const accessoriesByPartId = groupBy(accessoryRows.map(mapAccessoryRow), (relation) => relation.partId);
   const cablesByPartId = groupBy(cableRows.map(mapCableRow), (relation) => relation.partId);
@@ -746,6 +1043,8 @@ function buildPartRecords(
   const workflowsByPartId = groupBy(workflowRows.map(mapGenerationWorkflowRow), (workflow) => workflow.partId);
   const requestsByPartId = groupBy(requestRows.map(mapGenerationRequestRow), (request) => request.partId);
   const reviewsByPartId = groupBy(reviewRows.map(mapReviewRow), (review) => review.partId);
+  const validationsByPartId = groupBy(validationRows.map(mapAssetValidationRow), (validation) => validation.partId);
+  const promotionAuditsByPartId = groupBy(promotionAuditRows.map(mapAssetPromotionAuditRow), (audit) => audit.partId);
 
   return partRows.map((row) => {
     const part = mapPartRow(row);
@@ -753,6 +1052,7 @@ function buildPartRecords(
     const assets = assetsByPartId.get(part.id) ?? [];
     const datasheets = datasheetsByPartId.get(part.id) ?? [];
     const sources = sourcesByPartId.get(part.id) ?? [];
+    const extractionSignals = extractionSignalsByPartId.get(part.id) ?? [];
     const mateRelations = matesByPartId.get(part.id) ?? [];
     const accessoryRequirements = accessoriesByPartId.get(part.id) ?? [];
     const cableCompatibilities = cablesByPartId.get(part.id) ?? [];
@@ -761,7 +1061,9 @@ function buildPartRecords(
     const generationWorkflows = workflowsByPartId.get(part.id) ?? [];
     const generationRequests = requestsByPartId.get(part.id) ?? [];
     const reviewRecords = reviewsByPartId.get(part.id) ?? [];
-    const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt), ...generationRequests.map((request) => request.lastUpdatedAt), ...reviewRecords.map((review) => review.lastUpdatedAt)]);
+    const validationRecords = validationsByPartId.get(part.id) ?? [];
+    const promotionAudits = promotionAuditsByPartId.get(part.id) ?? [];
+    const lastUpdatedAt = latestTimestamp([part.lastUpdatedAt, ...metrics.map((metric) => metric.lastUpdatedAt), ...assets.map((asset) => asset.lastUpdatedAt), ...datasheets.map((datasheet) => datasheet.lastUpdatedAt), ...sources.map((source) => source.lastUpdatedAt), ...extractionSignals.map((signal) => signal.lastUpdatedAt), ...generationRequests.map((request) => request.lastUpdatedAt), ...reviewRecords.map((review) => review.lastUpdatedAt), ...validationRecords.map((validation) => validation.lastUpdatedAt), ...promotionAudits.map((audit) => audit.createdAt)]);
 
     return {
       accessoryRequirements,
@@ -771,6 +1073,7 @@ function buildPartRecords(
       companionRecommendations,
       connectorFamily: mapConnectorFamilyRow(row),
       datasheetRevision: selectLatestDatasheet(datasheets),
+      extractionSignals,
       generationRequests,
       generationWorkflows,
       lastUpdatedAt,
@@ -779,9 +1082,11 @@ function buildPartRecords(
       metrics,
       package: mapPackageRow(row),
       part,
+      promotionAudits,
       reviewRecords,
       similarParts,
-      sources
+      sources,
+      validationRecords
     };
   });
 }
@@ -1018,6 +1323,41 @@ function mapReviewRow(row: DatabaseReviewRow): ReviewRecord {
 }
 
 /**
+ * Maps a database row into durable asset validation evidence.
+ */
+function mapAssetValidationRow(row: DatabaseAssetValidationRow): AssetValidationRecord {
+  return {
+    assetId: row.asset_id,
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    partId: row.part_id,
+    validatedAt: toIsoTimestamp(row.validated_at),
+    validationNotes: row.validation_notes,
+    validationStatus: row.validation_status,
+    validationType: row.validation_type,
+    validator: row.validator
+  };
+}
+
+/**
+ * Maps a database row into one export-promotion audit record.
+ */
+function mapAssetPromotionAuditRow(row: DatabaseAssetPromotionAuditRow): AssetPromotionAuditRecord {
+  return {
+    actor: row.actor,
+    assetId: row.asset_id,
+    blockerReasons: row.blocker_reasons,
+    createdAt: toIsoTimestamp(row.created_at),
+    id: row.id,
+    newExportStatus: row.new_export_status,
+    partId: row.part_id,
+    priorExportStatus: row.prior_export_status,
+    promotionOutcome: row.promotion_outcome,
+    validationRecordId: row.validation_record_id
+  };
+}
+
+/**
  * Maps a database row into the shared DatasheetRevision type.
  */
 function mapDatasheetRow(row: DatabaseDatasheetRow): DatasheetRevision {
@@ -1042,13 +1382,36 @@ function mapSourceRow(row: DatabaseSourceRow): SourceRecord {
   return {
     fetchedAt: toIsoTimestamp(row.fetched_at),
     id: row.id,
+    importErrorDetails: row.import_error_details,
+    importStatus: row.import_status,
     lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
     normalizedAt: row.normalized_at ? toIsoTimestamp(row.normalized_at) : null,
     partId: row.part_id,
     providerId: row.provider_id,
     providerPartKey: row.provider_part_key,
     rawPayload: row.raw_payload,
+    sourceLastImportedAt: row.source_last_imported_at ? toIsoTimestamp(row.source_last_imported_at) : null,
+    sourceLastSeenAt: toIsoTimestamp(row.source_last_seen_at),
     sourceUrl: row.source_url
+  };
+}
+
+/**
+ * Maps a database row into the shared SourceExtractionSignal type.
+ */
+function mapSourceExtractionSignalRow(row: DatabaseSourceExtractionSignalRow): SourceExtractionSignal {
+  return {
+    assetId: row.asset_id,
+    confidenceScore: toNumber(row.confidence_score),
+    datasheetRevisionId: row.datasheet_revision_id,
+    extractionSource: row.extraction_source,
+    extractionStatus: row.extraction_status,
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    notes: row.notes,
+    partId: row.part_id,
+    signalType: row.signal_type,
+    sourceRecordId: row.source_record_id
   };
 }
 
@@ -1314,6 +1677,41 @@ const REVIEW_ROWS_SQL = `
   ORDER BY reviewed_at DESC, id DESC
 `;
 
+/** ASSET_VALIDATION_ROWS_SQL reads durable validation evidence for asset trust decisions. */
+const ASSET_VALIDATION_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    asset_id,
+    validation_status,
+    validation_type,
+    validation_notes,
+    validated_at,
+    validator,
+    last_updated_at
+  FROM asset_validation_records
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY validated_at DESC, id DESC
+`;
+
+/** ASSET_PROMOTION_AUDIT_ROWS_SQL reads explicit export-promotion attempts. */
+const ASSET_PROMOTION_AUDIT_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    asset_id,
+    prior_export_status,
+    new_export_status,
+    promotion_outcome,
+    blocker_reasons,
+    validation_record_id,
+    actor,
+    created_at
+  FROM asset_promotion_audits
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY created_at DESC, id DESC
+`;
+
 /** DATASHEET_ROWS_SQL reads datasheet revision records. */
 const DATASHEET_ROWS_SQL = `
   SELECT
@@ -1343,8 +1741,31 @@ const SOURCE_ROWS_SQL = `
     fetched_at,
     raw_payload,
     normalized_at,
+    source_last_seen_at,
+    source_last_imported_at,
+    import_status,
+    import_error_details,
     last_updated_at
   FROM source_records
   WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
-  ORDER BY fetched_at DESC
+  ORDER BY source_last_seen_at DESC, id ASC
+`;
+
+/** SOURCE_EXTRACTION_SIGNAL_ROWS_SQL reads structured CAD-recovery source signals. */
+const SOURCE_EXTRACTION_SIGNAL_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    source_record_id,
+    datasheet_revision_id,
+    asset_id,
+    signal_type,
+    extraction_status,
+    confidence_score,
+    extraction_source,
+    notes,
+    last_updated_at
+  FROM source_extraction_signals
+  WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
+  ORDER BY confidence_score DESC, last_updated_at DESC, id ASC
 `;

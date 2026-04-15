@@ -3,14 +3,43 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { performance } from "node:perf_hooks";
 import { filterPartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase } from "./catalog-store";
 import { resolveCatalogRecords } from "./catalog-resolver";
 import { buildPartDetailResponse } from "./detail-response";
-import type { ApiEnvelope, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord, ReviewActionInput, ReviewOutcome, ReviewTargetType } from "@ee-library/shared/types";
+import type { CatalogQueryTiming } from "./catalog-store";
+import type { ApiEnvelope, AssetPromotionInput, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord, ReviewActionInput, ReviewOutcome, ReviewTargetType } from "@ee-library/shared/types";
 
 /** port is the local HTTP port for the API process. */
 const port = Number(process.env.API_PORT ?? 4000);
+
+/** RouteTiming stores one measured operation for headers and local logs. */
+interface RouteTiming {
+  /** Stable operation name used by Server-Timing. */
+  name: string;
+  /** Duration in milliseconds. */
+  durationMs: number;
+  /** Optional row count or result size detail for local logs. */
+  detail?: string;
+}
+
+/** RouteTelemetry tracks one HTTP request without changing response payloads. */
+interface RouteTelemetry {
+  /** Route operation name, such as api-search or api-part-detail. */
+  operation: string;
+  /** Request path for local structured logs. */
+  path: string;
+  /** Request method. */
+  method: string;
+  /** Request start time from the monotonic clock. */
+  startedAt: number;
+  /** Timed route and DB operations. */
+  timings: RouteTiming[];
+}
+
+/** responseTelemetry carries request timing state until sendJson writes the response. */
+const responseTelemetry = new WeakMap<ServerResponse, RouteTelemetry>();
 
 /**
  * Handles every incoming HTTP request with explicit route boundaries.
@@ -22,7 +51,9 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+  beginRouteTelemetry(response, request.method ?? "UNKNOWN", url.pathname);
   const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(url.pathname);
+  const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(url.pathname);
   const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
 
   if (request.method === "POST" && generationRequestMatch?.[1]) {
@@ -35,13 +66,18 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && promotionActionMatch?.[1]) {
+    await handleAssetPromotionCreate(request, response, promotionActionMatch[1]);
+    return;
+  }
+
   if (request.method !== "GET") {
-    sendJson(response, 405, { error: "Only GET, generation-request POST, and review POST routes are enabled for the catalog API" });
+    sendJson(response, 405, { error: "Only GET, generation-request POST, review POST, and asset-promotion POST routes are enabled for the catalog API" });
     return;
   }
 
   if (url.pathname === "/health") {
-    const database = await getCatalogStoreStatus();
+    const database = await timeRouteOperation(response, "catalog-status", () => getCatalogStoreStatus(), (status) => status.label);
 
     sendJson(response, 200, {
       dependencies: {
@@ -57,26 +93,40 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (url.pathname === "/parts") {
     const filters = readSearchFilters(url);
-    const catalog = await resolveCatalogRecords(readCatalogRecordsFromDatabase, loadSeedCatalogRecords);
+    const catalog = await timeRouteOperation(
+      response,
+      "catalog-resolve-search",
+      () => resolveCatalogRecords(() => readCatalogRecordsFromDatabase({ onQueryTiming: buildQueryTimingSink(response) }), loadSeedCatalogRecords),
+      (result) => (result.ok ? `${result.records.length} records from ${result.source}` : result.body.error.code)
+    );
 
     if (!catalog.ok) {
       sendJson(response, catalog.statusCode, catalog.body);
       return;
     }
 
-    sendCatalogJson(response, filterPartRecords(catalog.records, filters), catalog.source, catalog.warnings);
+    const filteredRecords = timeSyncRouteOperation(response, "search-filter", () => filterPartRecords(catalog.records, filters), (records) => `${records.length} records`);
+
+    sendCatalogJson(response, filteredRecords, catalog.source, catalog.warnings);
     return;
   }
 
   if (url.pathname === "/parts/facets") {
-    const catalog = await resolveCatalogRecords(readCatalogRecordsFromDatabase, loadSeedCatalogRecords);
+    const catalog = await timeRouteOperation(
+      response,
+      "catalog-resolve-facets",
+      () => resolveCatalogRecords(() => readCatalogRecordsFromDatabase({ onQueryTiming: buildQueryTimingSink(response) }), loadSeedCatalogRecords),
+      (result) => (result.ok ? `${result.records.length} records from ${result.source}` : result.body.error.code)
+    );
 
     if (!catalog.ok) {
       sendJson(response, catalog.statusCode, catalog.body);
       return;
     }
 
-    sendCatalogJson(response, getSearchFacetsFromRecords(catalog.records), catalog.source, catalog.warnings);
+    const facets = timeSyncRouteOperation(response, "search-facets", () => getSearchFacetsFromRecords(catalog.records), (result) => `${result.manufacturers.length} manufacturers`);
+
+    sendCatalogJson(response, facets, catalog.source, catalog.warnings);
     return;
   }
 
@@ -84,7 +134,12 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (partMatch?.[1]) {
     const partId = partMatch[1];
-    const catalog = await resolveCatalogRecords(() => readPartDetailRecordsFromDatabase(partId), loadSeedCatalogRecords);
+    const catalog = await timeRouteOperation(
+      response,
+      "catalog-resolve-detail",
+      () => resolveCatalogRecords(() => readPartDetailRecordsFromDatabase(partId, { onQueryTiming: buildQueryTimingSink(response) }), loadSeedCatalogRecords),
+      (result) => (result.ok ? `${result.records.length} records from ${result.source}` : result.body.error.code)
+    );
 
     if (!catalog.ok) {
       sendJson(response, catalog.statusCode, catalog.body);
@@ -99,7 +154,9 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
       return;
     }
 
-    sendCatalogJson(response, buildPartDetailResponse(record, records), catalog.source, catalog.warnings);
+    const detailResponse = timeSyncRouteOperation(response, "detail-build", () => buildPartDetailResponse(record, records), (result) => `${result.relatedPartSummaries.length} related summaries`);
+
+    sendCatalogJson(response, detailResponse, catalog.source, catalog.warnings);
     return;
   }
 
@@ -123,7 +180,7 @@ async function handleGenerationRequestCreate(request: IncomingMessage, response:
   }
 
   try {
-    const result = await createGenerationRequestInDatabase(partId, body.targetAssetType);
+    const result = await timeRouteOperation(response, "generation-request-create", () => createGenerationRequestInDatabase(partId, body.targetAssetType), (value) => value.status);
 
     if (result.status === "not_configured") {
       sendJson(response, 503, {
@@ -178,12 +235,18 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
   }
 
   try {
-    const result = await createReviewInDatabase(partId, {
-      notes: typeof body.notes === "string" ? body.notes : null,
-      outcome: body.outcome,
-      targetId: body.targetId,
-      targetType: body.targetType
-    });
+    const result = await timeRouteOperation(
+      response,
+      "review-action-create",
+      () =>
+        createReviewInDatabase(partId, {
+          notes: typeof body.notes === "string" ? body.notes : null,
+          outcome: body.outcome,
+          targetId: body.targetId,
+          targetType: body.targetType
+        }),
+      (value) => value.status
+    );
 
     if (result.status === "not_configured") {
       sendJson(response, 503, {
@@ -199,6 +262,61 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
       sendJson(response, 404, {
         error: {
           code: "REVIEW_TARGET_NOT_FOUND",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles explicit promotion from approved draft/reviewed asset into export verification.
+ */
+async function handleAssetPromotionCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
+  const body = await readJsonBody<AssetPromotionInput>(request);
+
+  if (!body || typeof body.assetId !== "string" || body.assetId.trim().length === 0) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_ASSET_PROMOTION",
+        message: "Asset promotion requires an assetId."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "promotion-action-create", () => promoteAssetForExportInDatabase(partId, body.assetId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Asset promotion requires a configured database so export verification can be persisted."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "PROMOTION_TARGET_NOT_FOUND",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_promotable") {
+      sendJson(response, 409, {
+        error: {
+          code: "ASSET_NOT_PROMOTABLE",
           message: result.reason
         }
       });
@@ -290,11 +408,155 @@ function isReviewOutcome(value: unknown): value is ReviewOutcome {
 }
 
 /**
+ * Starts telemetry for one HTTP response so every route can share one sendJson hook.
+ */
+function beginRouteTelemetry(response: ServerResponse, method: string, pathname: string): void {
+  responseTelemetry.set(response, {
+    method,
+    operation: classifyRouteOperation(method, pathname),
+    path: pathname,
+    startedAt: performance.now(),
+    timings: []
+  });
+}
+
+/**
+ * Measures one async route operation and stores the result for headers and local logs.
+ */
+async function timeRouteOperation<TValue>(response: ServerResponse, name: string, operation: () => Promise<TValue>, describe?: (value: TValue) => string): Promise<TValue> {
+  const startedAt = performance.now();
+
+  try {
+    const value = await operation();
+
+    addRouteTiming(response, name, performance.now() - startedAt, describe?.(value));
+
+    return value;
+  } catch (error) {
+    addRouteTiming(response, name, performance.now() - startedAt, "failed");
+    throw error;
+  }
+}
+
+/**
+ * Measures one synchronous route operation such as filtering or response projection.
+ */
+function timeSyncRouteOperation<TValue>(response: ServerResponse, name: string, operation: () => TValue, describe?: (value: TValue) => string): TValue {
+  const startedAt = performance.now();
+
+  try {
+    const value = operation();
+
+    addRouteTiming(response, name, performance.now() - startedAt, describe?.(value));
+
+    return value;
+  } catch (error) {
+    addRouteTiming(response, name, performance.now() - startedAt, "failed");
+    throw error;
+  }
+}
+
+/**
+ * Converts catalog query timings into route timings without exposing raw SQL.
+ */
+function buildQueryTimingSink(response: ServerResponse): (timing: CatalogQueryTiming) => void {
+  return (timing) => {
+    addRouteTiming(response, `db-${timing.name}`, timing.durationMs, `${timing.status}${timing.rowCount === null ? "" : ` ${timing.rowCount} rows`}${timing.scoped ? " scoped" : ""}`);
+  };
+}
+
+/**
+ * Adds a timing record if this response is currently being observed.
+ */
+function addRouteTiming(response: ServerResponse, name: string, durationMs: number, detail?: string): void {
+  const telemetry = responseTelemetry.get(response);
+
+  if (!telemetry) {
+    return;
+  }
+
+  telemetry.timings.push({
+    durationMs,
+    name: sanitizeTimingName(name),
+    ...(detail !== undefined ? { detail } : {})
+  });
+}
+
+/**
+ * Builds response headers and emits one local structured timing log.
+ */
+function buildTelemetryHeaders(response: ServerResponse, statusCode: number): Record<string, string> {
+  const telemetry = responseTelemetry.get(response);
+
+  if (!telemetry) {
+    return {};
+  }
+
+  responseTelemetry.delete(response);
+
+  const totalDurationMs = performance.now() - telemetry.startedAt;
+  const timings = [{ durationMs: totalDurationMs, name: telemetry.operation }, ...telemetry.timings];
+
+  if (process.env.NODE_ENV !== "test") {
+    console.info(
+      JSON.stringify({
+        durationMs: roundDuration(totalDurationMs),
+        method: telemetry.method,
+        operation: telemetry.operation,
+        path: telemetry.path,
+        statusCode,
+        timings: timings.map((timing) => ({
+          detail: timing.detail,
+          durationMs: roundDuration(timing.durationMs),
+          name: timing.name
+        }))
+      })
+    );
+  }
+
+  return {
+    "Server-Timing": timings.map((timing) => `${timing.name};dur=${roundDuration(timing.durationMs)}`).join(", "),
+    "X-EE-Operation": telemetry.operation,
+    "X-EE-Operation-Duration-Ms": roundDuration(totalDurationMs).toString()
+  };
+}
+
+/**
+ * Classifies an HTTP route into one provider-neutral operation family.
+ */
+function classifyRouteOperation(method: string, pathname: string): string {
+  if (method === "GET" && pathname === "/parts") return "api-search";
+  if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
+  if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
+  if (method === "POST" && /^\/parts\/[^/]+\/generation-requests$/u.test(pathname)) return "api-generation-request";
+  if (method === "POST" && /^\/parts\/[^/]+\/reviews$/u.test(pathname)) return "api-review-action";
+  if (method === "POST" && /^\/parts\/[^/]+\/asset-promotions$/u.test(pathname)) return "api-promotion-action";
+  if (method === "GET" && pathname === "/health") return "api-health";
+
+  return "api-route";
+}
+
+/**
+ * Keeps Server-Timing metric names within the HTTP token-safe subset.
+ */
+function sanitizeTimingName(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/gu, "-");
+}
+
+/**
+ * Rounds durations to one decimal place for stable logs and tests.
+ */
+function roundDuration(value: number): number {
+  return Number(value.toFixed(1));
+}
+
+/**
  * Sends a JSON response with a stable content type.
  */
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8"
+    "Content-Type": "application/json; charset=utf-8",
+    ...buildTelemetryHeaders(response, statusCode)
   });
   response.end(JSON.stringify(payload, null, 2));
 }
