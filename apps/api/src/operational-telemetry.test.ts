@@ -31,7 +31,8 @@ test("API route instrumentation adds timing headers without changing search and 
     assert.equal(searchResult.headers["X-EE-Operation"], "api-search");
     assert.match(searchResult.headers["Server-Timing"] ?? "", /api-search;dur=/u);
     assert.match(searchResult.headers["Server-Timing"] ?? "", /catalog-resolve-search;dur=/u);
-    assert.match(searchResult.headers["Server-Timing"] ?? "", /search-filter;dur=/u);
+    assert.equal(searchResult.body.pagination.page, 1);
+    assert.equal(searchResult.body.pagination.sort, "mpn_asc");
     assert.equal(searchResult.body.data.some((record: { part: { mpn: string } }) => record.part.mpn === "TPS7A02DBVR"), true);
 
     assert.equal(detailResult.statusCode, 200);

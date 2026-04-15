@@ -4,12 +4,12 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
-import { filterPartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase } from "./catalog-store";
-import { resolveCatalogRecords } from "./catalog-resolver";
+import { filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
+import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase, readPartSearchRecordsFromDatabase } from "./catalog-store";
+import { resolveCatalogRecords, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse } from "./detail-response";
 import type { CatalogQueryTiming } from "./catalog-store";
-import type { ApiEnvelope, AssetPromotionInput, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord, ReviewActionInput, ReviewOutcome, ReviewTargetType } from "@ee-library/shared/types";
+import type { ApiEnvelope, AssetPromotionInput, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord, PartSearchSort, ReviewActionInput, ReviewOutcome, ReviewTargetType, SearchPagination } from "@ee-library/shared/types";
 
 /** port is the local HTTP port for the API process. */
 const port = Number(process.env.API_PORT ?? 4000);
@@ -96,8 +96,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const catalog = await timeRouteOperation(
       response,
       "catalog-resolve-search",
-      () => resolveCatalogRecords(() => readCatalogRecordsFromDatabase({ onQueryTiming: buildQueryTimingSink(response) }), loadSeedCatalogRecords),
-      (result) => (result.ok ? `${result.records.length} records from ${result.source}` : result.body.error.code)
+      () => resolveCatalogSearchRecords(() => readPartSearchRecordsFromDatabase(filters, { onQueryTiming: buildQueryTimingSink(response) }), () => loadSeedSearchRecords(filters)),
+      (result) => (result.ok ? `${result.records.length}/${result.pagination.totalRecords} records from ${result.source}` : result.body.error.code)
     );
 
     if (!catalog.ok) {
@@ -105,9 +105,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
       return;
     }
 
-    const filteredRecords = timeSyncRouteOperation(response, "search-filter", () => filterPartRecords(catalog.records, filters), (records) => `${records.length} records`);
-
-    sendCatalogJson(response, filteredRecords, catalog.source, catalog.warnings);
+    sendCatalogJson(response, catalog.records, catalog.source, catalog.warnings, catalog.pagination);
     return;
   }
 
@@ -339,7 +337,10 @@ function readSearchFilters(url: URL): PartSearchFilters {
     lifecycleStatus: readLifecycleStatus(url.searchParams.get("lifecycleStatus")),
     manufacturerId: url.searchParams.get("manufacturerId") ?? undefined,
     packageId: url.searchParams.get("packageId") ?? undefined,
-    query: url.searchParams.get("q") ?? undefined
+    page: readPositiveInteger(url.searchParams.get("page")),
+    pageSize: readPositiveInteger(url.searchParams.get("pageSize")),
+    query: url.searchParams.get("q") ?? undefined,
+    sort: readPartSearchSort(url.searchParams.get("sort"))
   };
 }
 
@@ -363,6 +364,30 @@ function readLifecycleStatus(value: string | null): PartSearchFilters["lifecycle
   }
 
   return undefined;
+}
+
+/**
+ * Reads search sort values without accepting arbitrary SQL-oriented strings.
+ */
+function readPartSearchSort(value: string | null): PartSearchSort | undefined {
+  if (value === "mpn_asc" || value === "mpn_desc" || value === "updated_desc" || value === "trust_desc") {
+    return value;
+  }
+
+  return undefined;
+}
+
+/**
+ * Reads positive integer URL parameters for pagination.
+ */
+function readPositiveInteger(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsedValue = Number(value);
+
+  return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : undefined;
 }
 
 /**
@@ -564,8 +589,13 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
 /**
  * Sends a typed catalog data envelope with optional degraded-state warnings.
  */
-function sendCatalogJson<TData>(response: ServerResponse, data: TData, source: CatalogDataSource, warnings?: string[]): void {
-  const payload: ApiEnvelope<TData> = warnings && warnings.length > 0 ? { data, source, warnings } : { data, source };
+function sendCatalogJson<TData>(response: ServerResponse, data: TData, source: CatalogDataSource, warnings?: string[], pagination?: SearchPagination): void {
+  const payload: ApiEnvelope<TData> = {
+    data,
+    ...(pagination ? { pagination } : {}),
+    source,
+    ...(warnings && warnings.length > 0 ? { warnings } : {})
+  };
 
   sendJson(response, 200, payload);
 }
@@ -599,6 +629,13 @@ async function loadSeedCatalogRecords(): Promise<PartSearchRecord[]> {
   const { getAllPartRecords } = await import("@ee-library/shared/search");
 
   return getAllPartRecords();
+}
+
+/**
+ * Dynamically loads and pages seed data only when explicit local fallback is enabled.
+ */
+async function loadSeedSearchRecords(filters: PartSearchFilters): Promise<{ pagination: SearchPagination; records: PartSearchRecord[] }> {
+  return filterSortAndPaginatePartRecords(await loadSeedCatalogRecords(), filters);
 }
 
 if (process.env.NODE_ENV !== "test") {

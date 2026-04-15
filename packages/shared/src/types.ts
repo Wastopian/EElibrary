@@ -452,6 +452,9 @@ export interface BuildableMatingSet {
 /** CAD availability filters let search distinguish exportable records from unavailable ones. */
 export type CadAvailabilityFilter = "any" | "available" | "unavailable";
 
+/** PartSearchSort names stable SQL-backed search sort modes. */
+export type PartSearchSort = "mpn_asc" | "mpn_desc" | "updated_desc" | "trust_desc";
+
 /** PartSearchFilters are provider-neutral search filters accepted by API and UI. */
 export interface PartSearchFilters {
   query?: string | undefined;
@@ -460,6 +463,21 @@ export interface PartSearchFilters {
   packageId?: string | undefined;
   lifecycleStatus?: LifecycleStatus | undefined;
   cadAvailability?: CadAvailabilityFilter | undefined;
+  /** One-based result page used by SQL-backed search. */
+  page?: number | undefined;
+  /** Bounded page size used by SQL-backed search. */
+  pageSize?: number | undefined;
+  /** Stable sort mode used by SQL-backed search. */
+  sort?: PartSearchSort | undefined;
+}
+
+/** SearchPagination describes a bounded result window without changing result truth. */
+export interface SearchPagination {
+  page: number;
+  pageSize: number;
+  totalRecords: number;
+  totalPages: number;
+  sort: PartSearchSort;
 }
 
 /** PartSearchRecord is the joined record shape consumed by API and web search/detail pages. */
@@ -570,6 +588,8 @@ export type CatalogDataSource = "database" | "seed_fallback";
 export interface ApiEnvelope<TData> {
   data: TData;
   source?: CatalogDataSource;
+  /** Optional pagination metadata for paged search responses. */
+  pagination?: SearchPagination;
   /** Explicit degraded-state warnings, such as allowed local seed fallback. */
   warnings?: string[];
 }

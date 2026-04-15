@@ -397,10 +397,38 @@ select {
   margin: 0;
 }
 
+/* Result range copy keeps pagination state near the search count. */
+.results-panel__range {
+  color: var(--color-muted);
+  margin-top: 6px;
+}
+
 /* Results list keeps result rows separated without nested cards. */
 .results-list {
   display: grid;
   gap: 10px;
+}
+
+/* Pagination controls keep SQL-backed result windows explicit. */
+.pagination-bar {
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+/* Disabled pagination labels preserve control spacing without implying clickability. */
+.pagination-bar span {
+  color: var(--color-muted);
+}
+
+/* Pagination page text stays compact in dense result lists. */
+.pagination-bar strong {
+  color: var(--color-muted);
+  font-size: 0.9rem;
 }
 
 /* Each result row is a fixed grid tuned for desktop workstation scanning. */

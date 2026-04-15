@@ -8,7 +8,7 @@ import { EmptyState, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/u
 import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../lib/api-client";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CadAvailabilityFilter, CatalogDataSource, LifecycleStatus, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared/types";
+import type { CadAvailabilityFilter, CatalogDataSource, LifecycleStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
 import type { ApiHealth } from "../lib/api-client";
 
 /** PageSearchParams mirrors the GET filters used by the search form. */
@@ -18,7 +18,10 @@ type PageSearchParams = {
   manufacturerId?: string | string[];
   packageId?: string | string[];
   lifecycleStatus?: string | string[];
+  page?: string | string[];
+  pageSize?: string | string[];
   q?: string | string[];
+  sort?: string | string[];
 };
 
 /** HomepageCatalogState makes setup-vs-data rendering explicit. */
@@ -30,6 +33,8 @@ type HomepageCatalogState =
       facets: SearchFacets;
       /** Search results for the current filter set. */
       results: PartSearchRecord[];
+      /** Pagination metadata for the current search result window. */
+      pagination: SearchPagination;
       /** Catalog source reported by the API envelope. */
       source: CatalogDataSource;
       /** Explicit source/degraded-mode warnings from the API envelope. */
@@ -68,13 +73,19 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const packageId = readSingleParam(resolvedSearchParams?.packageId);
   const lifecycleStatus = readLifecycleStatus(readSingleParam(resolvedSearchParams?.lifecycleStatus));
   const cadAvailability = readCadAvailability(readSingleParam(resolvedSearchParams?.cad));
+  const page = readPositiveInteger(readSingleParam(resolvedSearchParams?.page));
+  const pageSize = readPositiveInteger(readSingleParam(resolvedSearchParams?.pageSize));
+  const sort = readSearchSort(readSingleParam(resolvedSearchParams?.sort));
   const filters: PartSearchFilters = {
     cadAvailability,
     category,
     lifecycleStatus,
     manufacturerId,
     packageId,
-    query
+    page,
+    pageSize,
+    query,
+    sort
   };
   const catalogState = await loadHomepageCatalog(filters);
 
@@ -82,10 +93,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     return <HomepageSetupState catalogState={catalogState} />;
   }
 
-  const { facets, health, results, source, warnings } = catalogState;
-  const catalogStats = buildCatalogStats(results);
+  const { facets, health, pagination, results, source, warnings } = catalogState;
+  const catalogStats = buildCatalogStats(results, pagination.totalRecords);
   const sampleParts = selectSampleParts(results);
   const providerSummary = buildProviderSummary(results, source, health);
+  const resultRange = buildResultRange(pagination, results.length);
 
   return (
     <main className="search-layout">
@@ -126,6 +138,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           <input name="packageId" type="hidden" value={packageId} />
           <input name="lifecycleStatus" type="hidden" value={lifecycleStatus} />
           <input name="cad" type="hidden" value={cadAvailability} />
+          <input name="sort" type="hidden" value={sort} />
           <div className="search-bar__controls">
             <input defaultValue={query} id="q" name="q" placeholder="TPS7A02, 0603, QFN..." />
             <button type="submit">Search</button>
@@ -137,15 +150,19 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <SectionPanel description="Fast checks for the current catalog result set and trust posture." title="Catalog mode">
           <div className="health-grid">
             <div>
-              <span>Total records</span>
-              <strong>{catalogStats.totalRecords}</strong>
+              <span>Total matches</span>
+              <strong>{catalogStats.totalMatches}</strong>
             </div>
             <div>
-              <span>Verified CAD records</span>
+              <span>Visible records</span>
+              <strong>{catalogStats.visibleRecords}</strong>
+            </div>
+            <div>
+              <span>Verified CAD on page</span>
               <strong>{catalogStats.verifiedCadRecords}</strong>
             </div>
             <div>
-              <span>Connector records</span>
+              <span>Connectors on page</span>
               <strong>{catalogStats.connectorRecords}</strong>
             </div>
             <div>
@@ -262,6 +279,15 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 <option value="unavailable">Missing verified CAD</option>
               </select>
             </label>
+            <label>
+              Sort
+              <select defaultValue={sort} name="sort">
+                <option value="mpn_asc">MPN A-Z</option>
+                <option value="mpn_desc">MPN Z-A</option>
+                <option value="updated_desc">Recently updated</option>
+                <option value="trust_desc">Trust score</option>
+              </select>
+            </label>
             <button type="submit">Apply filters</button>
           </form>
         </aside>
@@ -270,7 +296,10 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           <div className="results-panel__header">
             <div>
               <p className="app-kicker">Search results</p>
-              <h2>{results.length} matched records</h2>
+              <h2>{pagination.totalRecords} matched records</h2>
+              <p className="results-panel__range">
+                Showing {resultRange.start}-{resultRange.end} on page {pagination.page} of {pagination.totalPages}
+              </p>
             </div>
             <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
           </div>
@@ -321,6 +350,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           ) : (
             <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD availability filter." title="No matching parts" />
           )}
+          <SearchPaginationControls filters={filters} pagination={pagination} />
         </section>
       </div>
     </main>
@@ -340,6 +370,7 @@ async function loadHomepageCatalog(filters: PartSearchFilters): Promise<Homepage
     return {
       facets: facetsEnvelope.data,
       health,
+      pagination: resultsEnvelope.pagination ?? buildFallbackPagination(resultsEnvelope.data.length, filters),
       results: resultsEnvelope.data,
       source,
       status: "ready",
@@ -348,6 +379,40 @@ async function loadHomepageCatalog(filters: PartSearchFilters): Promise<Homepage
   } catch (error) {
     return buildSetupCatalogState(error, await healthPromise);
   }
+}
+
+/**
+ * Renders deterministic page navigation while preserving active search filters.
+ */
+function SearchPaginationControls({ filters, pagination }: { filters: PartSearchFilters; pagination: SearchPagination }) {
+  if (pagination.totalPages <= 1) {
+    return null;
+  }
+
+  const previousPage = pagination.page - 1;
+  const nextPage = pagination.page + 1;
+
+  return (
+    <nav aria-label="Search pagination" className="pagination-bar">
+      {previousPage >= 1 ? (
+        <Link className="button-link" href={buildSearchHref(filters, previousPage)}>
+          Previous page
+        </Link>
+      ) : (
+        <span>Previous page</span>
+      )}
+      <strong>
+        Page {pagination.page} / {pagination.totalPages}
+      </strong>
+      {nextPage <= pagination.totalPages ? (
+        <Link className="button-link" href={buildSearchHref(filters, nextPage)}>
+          Next page
+        </Link>
+      ) : (
+        <span>Next page</span>
+      )}
+    </nav>
+  );
 }
 
 /**
@@ -419,11 +484,12 @@ function HomepageSetupState({ catalogState }: { catalogState: Extract<HomepageCa
 /**
  * Builds compact homepage counters from the active result set.
  */
-function buildCatalogStats(records: PartSearchRecord[]) {
+function buildCatalogStats(records: PartSearchRecord[], totalMatches: number) {
   return {
+    totalMatches,
     connectorRecords: records.filter((record) => record.connectorFamily !== null || record.part.category.toLowerCase().includes("connector")).length,
     generationWorkflowCount: records.reduce((total, record) => total + record.generationWorkflows.length, 0),
-    totalRecords: records.length,
+    visibleRecords: records.length,
     verifiedCadRecords: records.filter((record) => record.assets.some((asset) => asset.exportStatus === "verified_for_export" && asset.storageKey !== null && asset.fileHash !== null)).length
   };
 }
@@ -517,6 +583,30 @@ function readCadAvailability(value: string | undefined): CadAvailabilityFilter {
 }
 
 /**
+ * Normalizes search sort values into the provider-neutral sort union.
+ */
+function readSearchSort(value: string | undefined): PartSearchSort {
+  if (value === "mpn_desc" || value === "updated_desc" || value === "trust_desc") {
+    return value;
+  }
+
+  return "mpn_asc";
+}
+
+/**
+ * Reads positive integer query parameters used by pagination.
+ */
+function readPositiveInteger(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsedValue = Number(value);
+
+  return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : undefined;
+}
+
+/**
  * Normalizes lifecycle query parameters into strict domain values.
  */
 function readLifecycleStatus(value: string | undefined): LifecycleStatus | undefined {
@@ -554,4 +644,63 @@ function scoreTone(score: number): BadgeTone {
   }
 
   return "danger";
+}
+
+/**
+ * Builds a fallback pagination object for older or mocked API envelopes.
+ */
+function buildFallbackPagination(totalRecords: number, filters: PartSearchFilters): SearchPagination {
+  return {
+    page: filters.page ?? 1,
+    pageSize: filters.pageSize ?? 20,
+    sort: filters.sort ?? "mpn_asc",
+    totalPages: Math.max(1, Math.ceil(totalRecords / (filters.pageSize ?? 20))),
+    totalRecords
+  };
+}
+
+/**
+ * Calculates the visible one-based result range for the current page.
+ */
+function buildResultRange(pagination: SearchPagination, visibleCount: number): { end: number; start: number } {
+  if (pagination.totalRecords === 0 || visibleCount === 0) {
+    return { end: 0, start: 0 };
+  }
+
+  const start = (pagination.page - 1) * pagination.pageSize + 1;
+
+  return {
+    end: start + visibleCount - 1,
+    start
+  };
+}
+
+/**
+ * Builds a search URL for page navigation without dropping active filters.
+ */
+function buildSearchHref(filters: PartSearchFilters, page: number): string {
+  const params = new URLSearchParams();
+
+  appendHrefParam(params, "q", filters.query);
+  appendHrefParam(params, "manufacturerId", filters.manufacturerId);
+  appendHrefParam(params, "category", filters.category);
+  appendHrefParam(params, "packageId", filters.packageId);
+  appendHrefParam(params, "lifecycleStatus", filters.lifecycleStatus);
+  appendHrefParam(params, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  appendHrefParam(params, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
+  appendHrefParam(params, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
+  appendHrefParam(params, "page", page > 1 ? page.toString() : undefined);
+
+  const queryString = params.toString();
+
+  return queryString ? `/?${queryString}` : "/";
+}
+
+/**
+ * Appends one href parameter only when it carries useful state.
+ */
+function appendHrefParam(params: URLSearchParams, key: string, value: string | undefined): void {
+  if (value && value.trim().length > 0) {
+    params.set(key, value);
+  }
 }

@@ -14,11 +14,19 @@ import type {
   PartMetric,
   PartSearchFilters,
   PartSearchRecord,
+  PartSearchSort,
+  SearchPagination,
   SearchFacets
 } from "./types";
 
 /** CAD_ASSET_TYPES defines which asset classes count for CAD availability filters. */
 const CAD_ASSET_TYPES = new Set<AssetType>(["footprint", "symbol", "three_d_model"]);
+
+/** DEFAULT_SEARCH_PAGE_SIZE keeps first-page search responses compact and predictable. */
+export const DEFAULT_SEARCH_PAGE_SIZE = 20;
+
+/** MAX_SEARCH_PAGE_SIZE prevents accidental oversized search payloads. */
+export const MAX_SEARCH_PAGE_SIZE = 100;
 
 /**
  * Builds provider-neutral search facets from joined records.
@@ -48,6 +56,65 @@ export function filterPartRecords(records: PartSearchRecord[], filters: PartSear
 
     return hasQueryMatch && hasManufacturerMatch && hasCategoryMatch && hasPackageMatch && hasLifecycleMatch && hasCadMatch;
   });
+}
+
+/**
+ * Sorts joined records with the same stable modes used by SQL-backed search.
+ */
+export function sortPartRecords(records: PartSearchRecord[], sort: PartSearchSort = "mpn_asc"): PartSearchRecord[] {
+  return [...records].sort((left, right) => {
+    if (sort === "updated_desc") {
+      return Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt) || compareMpnAsc(left, right) || left.part.id.localeCompare(right.part.id);
+    }
+
+    if (sort === "trust_desc") {
+      return right.part.trustScore - left.part.trustScore || compareMpnAsc(left, right) || left.part.id.localeCompare(right.part.id);
+    }
+
+    if (sort === "mpn_desc") {
+      return right.part.mpn.localeCompare(left.part.mpn) || right.part.id.localeCompare(left.part.id);
+    }
+
+    return compareMpnAsc(left, right) || left.part.id.localeCompare(right.part.id);
+  });
+}
+
+/**
+ * Applies bounded pagination to already-filtered records for explicit local seed fallback.
+ */
+export function paginatePartRecords(records: PartSearchRecord[], filters: PartSearchFilters = {}): { pagination: SearchPagination; records: PartSearchRecord[] } {
+  const pagination = buildSearchPagination(records.length, filters);
+  const offset = (pagination.page - 1) * pagination.pageSize;
+
+  return {
+    pagination,
+    records: records.slice(offset, offset + pagination.pageSize)
+  };
+}
+
+/**
+ * Builds normalized pagination metadata from total count and untrusted filter values.
+ */
+export function buildSearchPagination(totalRecords: number, filters: PartSearchFilters = {}): SearchPagination {
+  const pageSize = clampInteger(filters.pageSize, DEFAULT_SEARCH_PAGE_SIZE, 1, MAX_SEARCH_PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+  const page = Math.min(clampInteger(filters.page, 1, 1, Number.MAX_SAFE_INTEGER), totalPages);
+  const sort = normalizeSearchSort(filters.sort);
+
+  return {
+    page,
+    pageSize,
+    sort,
+    totalPages,
+    totalRecords
+  };
+}
+
+/**
+ * Filters, sorts, and pages seed fallback records without importing seed data into runtime code.
+ */
+export function filterSortAndPaginatePartRecords(records: PartSearchRecord[], filters: PartSearchFilters = {}): { pagination: SearchPagination; records: PartSearchRecord[] } {
+  return paginatePartRecords(sortPartRecords(filterPartRecords(records, filters), normalizeSearchSort(filters.sort)), filters);
 }
 
 /**
@@ -196,6 +263,31 @@ function matchesCadAvailability(assetsForPart: Asset[], availability: CadAvailab
   const hasAvailableCadAsset = assetsForPart.some((asset) => CAD_ASSET_TYPES.has(asset.assetType) && isValidatedDownloadableAsset(asset));
 
   return availability === "available" ? hasAvailableCadAsset : !hasAvailableCadAsset;
+}
+
+/**
+ * Compares MPNs case-insensitively while keeping the original string as a tie-break.
+ */
+function compareMpnAsc(left: PartSearchRecord, right: PartSearchRecord): number {
+  return left.part.mpn.localeCompare(right.part.mpn, undefined, { sensitivity: "base" }) || left.part.mpn.localeCompare(right.part.mpn);
+}
+
+/**
+ * Normalizes unknown sort values to the stable default.
+ */
+function normalizeSearchSort(sort: PartSearchSort | undefined): PartSearchSort {
+  return sort === "mpn_desc" || sort === "updated_desc" || sort === "trust_desc" ? sort : "mpn_asc";
+}
+
+/**
+ * Parses and clamps numeric pagination fields without trusting caller input.
+ */
+function clampInteger(value: number | undefined, defaultValue: number, minValue: number, maxValue: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return defaultValue;
+  }
+
+  return Math.min(Math.max(value, minValue), maxValue);
 }
 
 /**

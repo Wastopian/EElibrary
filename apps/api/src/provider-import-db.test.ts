@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { buildPartDetailResponse } from "./detail-response";
-import { readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
-import type { Pool } from "pg";
+import { readPartDetailRecordsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import type { CatalogQueryTiming } from "./catalog-store";
+import type { Pool, PoolClient } from "pg";
 
 /** TestPool is the pg-mem pool shape used by catalog-store tests. */
 type TestPool = Pool & {
@@ -24,7 +25,7 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
   try {
     setCatalogStorePoolForTests(pool);
 
-    const searchResult = await readCatalogRecordsFromDatabase();
+    const searchResult = await readPartSearchRecordsFromDatabase({ query: "RC-02W300JT" });
     const detailResult = await readPartDetailRecordsFromDatabase("part-jlcparts-c1091");
 
     assert.equal(searchResult.status, "available");
@@ -33,6 +34,9 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     if (searchResult.status !== "available" || detailResult.status !== "available") {
       throw new Error("expected DB-backed records");
     }
+
+    assert.equal(searchResult.pagination.totalRecords, 1);
+    assert.equal(searchResult.pagination.page, 1);
 
     const searchRecord = searchResult.records.find((record) => record.part.id === "part-jlcparts-c1091");
     const detailRecord = detailResult.records.find((record) => record.part.id === "part-jlcparts-c1091");
@@ -44,7 +48,8 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     assert.equal(searchRecord.sources[0]?.importStatus, "imported");
     assert.equal(searchRecord.sources[0]?.sourceLastImportedAt, "2026-04-12T06:57:40.000Z");
     assert.equal(searchRecord.extractionSignals.find((signal) => signal.signalType === "package_mechanical_dimensions")?.extractionStatus, "needs_review");
-    assert.equal(searchRecord.metrics.find((metric) => metric.metricKey === "resistance")?.metricValue, 30);
+    assert.equal(searchRecord.metrics.length, 0);
+    assert.equal(detailRecord.metrics.find((metric) => metric.metricKey === "resistance")?.metricValue, 30);
 
     const detailResponse = buildPartDetailResponse(detailRecord, detailResult.records);
     const datasheetGroup = detailResponse.assetGroups.find((group) => group.assetType === "datasheet");
@@ -55,6 +60,55 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     assert.match(detailResponse.bundleReadiness.reason, /no file-backed CAD assets/u);
     assert.equal(detailResponse.generationOptions.find((option) => option.targetAssetType === "symbol")?.canRequest, false);
     assert.match(detailResponse.generationOptions.find((option) => option.targetAssetType === "footprint")?.reason ?? "", /Package\/mechanical dimensions extraction/u);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies SQL-backed search applies filters, pagination, stable sorting, and query timings.
+ */
+test("DB-backed search filters, sorts, and paginates in SQL", async () => {
+  const pool = createProviderImportPool();
+  const timings: CatalogQueryTiming[] = [];
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await seedSearchRows(pool);
+
+    const firstPage = await readPartSearchRecordsFromDatabase({ page: 1, pageSize: 2, sort: "mpn_asc" }, { onQueryTiming: (timing) => timings.push(timing) });
+    const secondPage = await readPartSearchRecordsFromDatabase({ page: 2, pageSize: 2, sort: "mpn_asc" });
+    const manufacturerFiltered = await readPartSearchRecordsFromDatabase({ manufacturerId: "mfr-search-alpha", sort: "mpn_asc" });
+    const lifecycleFiltered = await readPartSearchRecordsFromDatabase({ lifecycleStatus: "obsolete", sort: "mpn_asc" });
+    const cadAvailable = await readPartSearchRecordsFromDatabase({ cadAvailability: "available", sort: "mpn_asc" });
+    const trustSorted = await readPartSearchRecordsFromDatabase({ pageSize: 2, sort: "trust_desc" });
+
+    assert.equal(firstPage.status, "available");
+    assert.equal(secondPage.status, "available");
+    assert.equal(manufacturerFiltered.status, "available");
+    assert.equal(lifecycleFiltered.status, "available");
+    assert.equal(cadAvailable.status, "available");
+    assert.equal(trustSorted.status, "available");
+
+    if (firstPage.status !== "available" || secondPage.status !== "available" || manufacturerFiltered.status !== "available" || lifecycleFiltered.status !== "available" || cadAvailable.status !== "available" || trustSorted.status !== "available") {
+      throw new Error("expected DB-backed search records");
+    }
+
+    assert.deepEqual(firstPage.records.map((record) => record.part.mpn), ["AAA-100", "BBB-200"]);
+    assert.deepEqual(secondPage.records.map((record) => record.part.mpn), ["CCC-300", "RC-02W300JT"]);
+    assert.equal(firstPage.pagination.totalRecords, 4);
+    assert.equal(firstPage.pagination.totalPages, 2);
+    assert.deepEqual(manufacturerFiltered.records.map((record) => record.part.mpn), ["AAA-100", "CCC-300"]);
+    assert.deepEqual(lifecycleFiltered.records.map((record) => record.part.mpn), ["BBB-200"]);
+    assert.deepEqual(cadAvailable.records.map((record) => record.part.mpn), ["AAA-100"]);
+    assert.deepEqual(trustSorted.records.map((record) => record.part.mpn), ["BBB-200", "CCC-300"]);
+    assert.equal(firstPage.records[0]?.metrics.length, 0);
+    assert.equal(firstPage.records[0]?.similarParts.length, 0);
+    assert.equal(firstPage.records[0]?.assets[0]?.exportStatus, "verified_for_export");
+    assert.ok(timings.some((timing) => timing.name === "search_count" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_part_ids" && timing.status === "ok"));
+    assert.equal(timings.some((timing) => timing.name === "metrics"), false);
   } finally {
     setCatalogStorePoolForTests(null);
     await pool.end();
@@ -257,6 +311,45 @@ function buildProviderImportRowsSql(): string {
     INSERT INTO source_extraction_signals VALUES ('sig-jlcparts-c1091-pin-table', 'part-jlcparts-c1091', 'source-jlcparts-c1091', 'dsr-jlcparts-c1091', 'asset-jlcparts-c1091-datasheet', 'pin_table', 'not_available', 0, 'provider_structured_metadata', 'No reviewed pin table was extracted from the structured provider metadata.', '2026-04-12T06:57:40.000Z');
     INSERT INTO part_metrics VALUES ('metric-jlcparts-c1091-resistance-1', 'part-jlcparts-c1091', 'resistance', 30, 'ohm', NULL, NULL, 0.72, 'dsr-jlcparts-c1091', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
   `;
+}
+
+/**
+ * Seeds deterministic rows that exercise SQL-backed search filters and pagination.
+ */
+async function seedSearchRows(pool: TestPool): Promise<void> {
+  const client = await pool.connect();
+
+  try {
+    await insertSearchIdentityRows(client);
+    await insertSearchAssetRows(client);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Inserts identity rows with deliberate MPN and trust-score ordering ties.
+ */
+async function insertSearchIdentityRows(client: PoolClient): Promise<void> {
+  await client.query(`
+    INSERT INTO manufacturers VALUES ('mfr-search-alpha', 'Alpha Components', '{"Alpha"}', NULL);
+    INSERT INTO manufacturers VALUES ('mfr-search-beta', 'Beta Components', '{"Beta"}', NULL);
+    INSERT INTO packages VALUES ('pkg-search-sot23', 'SOT-23', 3, NULL, NULL, NULL, NULL);
+    INSERT INTO packages VALUES ('pkg-search-qfn', 'QFN-16', 16, 0.5, 3, 3, 0.85);
+    INSERT INTO parts VALUES ('part-search-a', 'AAA-100', 'mfr-search-alpha', 'Connector', 'active', 'pkg-search-sot23', NULL, 0.7, '2026-04-10T00:00:00.000Z');
+    INSERT INTO parts VALUES ('part-search-b', 'BBB-200', 'mfr-search-beta', 'Power', 'obsolete', 'pkg-search-qfn', NULL, 0.95, '2026-04-11T00:00:00.000Z');
+    INSERT INTO parts VALUES ('part-search-c', 'CCC-300', 'mfr-search-alpha', 'Connector', 'active', 'pkg-search-qfn', NULL, 0.95, '2026-04-12T00:00:00.000Z');
+  `);
+}
+
+/**
+ * Inserts one verified CAD asset and one non-exportable draft to test CAD truth filters.
+ */
+async function insertSearchAssetRows(client: PoolClient): Promise<void> {
+  await client.query(`
+    INSERT INTO assets VALUES ('asset-search-a-footprint', 'part-search-a', 'footprint', 'kicad_mod', 'cad/aaa-100.kicad_mod', 'sha256:aaa-footprint', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-c-symbol-draft', 'part-search-c', 'symbol', 'kicad_sym', 'generated/drafts/ccc-300.kicad_sym', 'sha256:ccc-symbol', NULL, 'redistribution_allowed', 'generated', 'downloaded', 'review_required', 'not_exportable', 'downloaded', 'draft_symbol_from_extraction_signal', NULL, 'needs_review', 'pending', 'downloaded', NULL, NULL, '2026-04-12T00:00:00.000Z');
+  `);
 }
 
 /**

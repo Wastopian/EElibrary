@@ -83,6 +83,9 @@ export async function fetchPartSearchEnvelope(filters: PartSearchFilters): Promi
   appendSearchParam(searchParams, "packageId", filters.packageId);
   appendSearchParam(searchParams, "lifecycleStatus", filters.lifecycleStatus);
   appendSearchParam(searchParams, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  appendSearchParam(searchParams, "page", filters.page && filters.page > 1 ? filters.page.toString() : undefined);
+  appendSearchParam(searchParams, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
+  appendSearchParam(searchParams, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
 
   const query = searchParams.toString();
 

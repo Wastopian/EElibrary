@@ -5,6 +5,7 @@
 import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
+import { buildSearchPagination } from "@ee-library/shared/catalog-runtime";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
 import type {
@@ -26,10 +27,13 @@ import type {
   Package,
   Part,
   PartMetric,
+  PartSearchFilters,
   PartSearchRecord,
+  PartSearchSort,
   ReviewActionInput,
   ReviewActionResponse,
   ReviewRecord,
+  SearchPagination,
   SimilarPartRelation,
   SourceExtractionSignal,
   SourceImportStatus,
@@ -66,6 +70,9 @@ export interface CatalogReadOptions {
 
 /** CatalogReadResult makes the configured-vs-readable database state explicit. */
 export type CatalogReadResult = { status: "available"; records: PartSearchRecord[] } | { status: "not_configured" };
+
+/** CatalogSearchReadResult adds pagination metadata for SQL-backed search reads. */
+export type CatalogSearchReadResult = { status: "available"; records: PartSearchRecord[]; pagination: SearchPagination } | { status: "not_configured" };
 
 /** GenerationRequestCreateResult reports creation or explicit requestability failure. */
 export type GenerationRequestCreateResult =
@@ -356,6 +363,14 @@ interface DatabaseSourceExtractionSignalRow {
   last_updated_at: Date | string;
 }
 
+/** SearchSqlFilter is the parameterized WHERE clause for one SQL-backed search read. */
+interface SearchSqlFilter {
+  /** SQL WHERE clause assembled from present filters only. */
+  whereSql: string;
+  /** Parameter values matching the assembled WHERE clause placeholders. */
+  params: unknown[];
+}
+
 /** pool is initialized lazily so tests and seed fallback do not require DATABASE_URL. */
 let pool: Pool | null = null;
 
@@ -377,6 +392,38 @@ export async function readCatalogRecordsFromDatabase(options: CatalogReadOptions
   }
 
   return { records: await readCatalogRecords(databasePool, null, options), status: "available" };
+}
+
+/**
+ * Returns SQL-filtered and paginated search summary records without loading the full catalog.
+ */
+export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilters = {}, options: CatalogReadOptions = {}): Promise<CatalogSearchReadResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const cadAvailability = filters.cadAvailability ?? "any";
+  const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
+  const totalCount = await readSearchResultCount(databasePool, searchFilter, options);
+  const pagination = buildSearchPagination(totalCount, filters);
+  const offset = (pagination.page - 1) * pagination.pageSize;
+  const partIds = await readSearchPartIds(databasePool, searchFilter, pagination.sort, pagination.pageSize, offset, options);
+
+  if (partIds.length === 0) {
+    return {
+      pagination,
+      records: [],
+      status: "available"
+    };
+  }
+
+  return {
+    pagination,
+    records: await readPartSearchSummaryRecords(databasePool, partIds, options),
+    status: "available"
+  };
 }
 
 /**
@@ -762,6 +809,63 @@ async function readPartSummaryRecords(databasePool: Pool, partIds: string[], opt
     const partRows = await timedCatalogQuery<DatabasePartRow>(databasePool, "related_part_summaries", PART_ROWS_SQL, [partIds], options);
 
     return buildPartRecords(partRows.rows, [], [], [], [], [], [], [], [], [], [], [], [], [], [], []);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads only the summary tables needed by search result rows for already-filtered part ids.
+ */
+async function readPartSearchSummaryRecords(databasePool: Pool, partIds: string[], options: CatalogReadOptions): Promise<PartSearchRecord[]> {
+  if (partIds.length === 0) {
+    return [];
+  }
+
+  try {
+    const params = [partIds];
+    const [partRows, assetRows, datasheetRows, sourceRows, extractionSignalRows, mateRows, accessoryRows, cableRows, workflowRows, requestRows] = await Promise.all([
+      timedCatalogQuery<DatabasePartRow>(databasePool, "search_parts", PART_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseAssetRow>(databasePool, "search_assets", ASSET_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseDatasheetRow>(databasePool, "search_datasheets", DATASHEET_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseSourceRow>(databasePool, "search_sources", SOURCE_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseSourceExtractionSignalRow>(databasePool, "search_source_extraction_signals", SOURCE_EXTRACTION_SIGNAL_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseMateRow>(databasePool, "search_mate_relations", MATE_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseAccessoryRow>(databasePool, "search_accessory_requirements", ACCESSORY_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseCableRow>(databasePool, "search_cable_compatibilities", CABLE_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseGenerationWorkflowRow>(databasePool, "search_generation_workflows", GENERATION_WORKFLOW_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabaseGenerationRequestRow>(databasePool, "search_generation_requests", GENERATION_REQUEST_ROWS_SQL, params, options)
+    ]);
+    const records = buildPartRecords(partRows.rows, [], assetRows.rows, datasheetRows.rows, sourceRows.rows, extractionSignalRows.rows, mateRows.rows, accessoryRows.rows, cableRows.rows, [], [], workflowRows.rows, requestRows.rows, [], [], []);
+    const recordById = new Map(records.map((record) => [record.part.id, record]));
+
+    return partIds.map((partId) => recordById.get(partId)).filter((record): record is PartSearchRecord => Boolean(record));
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Counts matching parts using the same SQL predicate as the paged search id query.
+ */
+async function readSearchResultCount(databasePool: Pool, searchFilter: SearchSqlFilter, options: CatalogReadOptions): Promise<number> {
+  try {
+    const result = await timedCatalogQuery<{ total_count: string }>(databasePool, "search_count", buildSearchCountSql(searchFilter.whereSql), searchFilter.params, options);
+
+    return Number(result.rows[0]?.total_count ?? 0);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads only matching part identifiers for the current page and stable sort mode.
+ */
+async function readSearchPartIds(databasePool: Pool, searchFilter: SearchSqlFilter, sort: PartSearchSort, pageSize: number, offset: number, options: CatalogReadOptions): Promise<string[]> {
+  try {
+    const result = await timedCatalogQuery<{ id: string }>(databasePool, "search_part_ids", buildSearchPartIdsSql(searchFilter, sort), [...searchFilter.params, pageSize, offset], options);
+
+    return result.rows.map((row) => row.id);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -1473,6 +1577,132 @@ function toIsoTimestamp(value: Date | string): string {
 function toIsoDate(value: Date | string): string {
   return toIsoTimestamp(value).slice(0, 10);
 }
+
+/**
+ * Converts a free-text query into a lower-case SQL LIKE pattern.
+ */
+function buildSearchQueryPattern(query: string | undefined): string | null {
+  const normalizedQuery = query?.trim().toLowerCase();
+
+  return normalizedQuery ? `%${normalizedQuery}%` : null;
+}
+
+/**
+ * Builds the paged search identifier query with a safe static ORDER BY clause.
+ */
+function buildSearchPartIdsSql(searchFilter: SearchSqlFilter, sort: PartSearchSort): string {
+  const limitParamIndex = searchFilter.params.length + 1;
+  const offsetParamIndex = searchFilter.params.length + 2;
+
+  return `
+    SELECT p.id
+    ${SEARCH_PART_FROM_SQL}
+    ${searchFilter.whereSql}
+    ${searchOrderByClause(sort)}
+    LIMIT $${limitParamIndex}::integer
+    OFFSET $${offsetParamIndex}::integer
+  `;
+}
+
+/**
+ * Builds the matching count query with the same CAD predicate as the id query.
+ */
+function buildSearchCountSql(whereSql: string): string {
+  return `
+    SELECT count(*)::text AS total_count
+    ${SEARCH_PART_FROM_SQL}
+    ${whereSql}
+  `;
+}
+
+/**
+ * Builds a parameterized WHERE clause from present filters only.
+ */
+function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartSearchFilters["cadAvailability"]): SearchSqlFilter {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  const queryPattern = buildSearchQueryPattern(filters.query);
+
+  if (queryPattern) {
+    params.push(queryPattern);
+    clauses.push(`(
+      lower(p.mpn) LIKE $${params.length}
+      OR lower(p.category) LIKE $${params.length}
+      OR lower(m.name) LIKE $${params.length}
+      OR lower(pk.package_name) LIKE $${params.length}
+      OR lower(COALESCE(cf.name, '')) LIKE $${params.length}
+    )`);
+  }
+
+  appendTextFilterClause(clauses, params, "p.manufacturer_id", filters.manufacturerId);
+  appendTextFilterClause(clauses, params, "p.category", filters.category);
+  appendTextFilterClause(clauses, params, "p.package_id", filters.packageId);
+  appendTextFilterClause(clauses, params, "p.lifecycle_status", filters.lifecycleStatus);
+
+  if (cadAvailability === "available") {
+    clauses.push(`p.id IN (${CAD_READY_PART_IDS_SQL})`);
+  }
+
+  if (cadAvailability === "unavailable") {
+    clauses.push(`p.id NOT IN (${CAD_READY_PART_IDS_SQL})`);
+  }
+
+  return {
+    params,
+    whereSql: clauses.length > 0 ? `WHERE ${clauses.join("\n    AND ")}` : ""
+  };
+}
+
+/**
+ * Appends one exact-match text filter when a URL parameter has a useful value.
+ */
+function appendTextFilterClause(clauses: string[], params: unknown[], columnName: string, value: string | undefined): void {
+  if (!value || value.trim().length === 0) {
+    return;
+  }
+
+  params.push(value);
+  clauses.push(`${columnName} = $${params.length}`);
+}
+
+/**
+ * Maps a typed sort value into a fixed SQL ordering with deterministic tie-breaks.
+ */
+function searchOrderByClause(sort: PartSearchSort): string {
+  if (sort === "updated_desc") {
+    return "ORDER BY p.last_updated_at DESC, lower(p.mpn) ASC, p.id ASC";
+  }
+
+  if (sort === "trust_desc") {
+    return "ORDER BY p.trust_score DESC, lower(p.mpn) ASC, p.id ASC";
+  }
+
+  if (sort === "mpn_desc") {
+    return "ORDER BY lower(p.mpn) DESC, p.id DESC";
+  }
+
+  return "ORDER BY lower(p.mpn) ASC, p.id ASC";
+}
+
+/** CAD_READY_PART_IDS_SQL returns parts with verified file-backed CAD evidence. */
+const CAD_READY_PART_IDS_SQL = `
+  SELECT part_id
+  FROM assets
+  WHERE asset_type IN ('footprint', 'symbol', 'three_d_model')
+    AND availability_status = 'validated'
+    AND export_status = 'verified_for_export'
+    AND storage_key IS NOT NULL
+    AND file_hash IS NOT NULL
+    AND validation_status = 'verified'
+`;
+
+/** SEARCH_PART_FROM_SQL contains the DB-backed search joins shared by count and id queries. */
+const SEARCH_PART_FROM_SQL = `
+  FROM parts p
+  JOIN manufacturers m ON m.id = p.manufacturer_id
+  JOIN packages pk ON pk.id = p.package_id
+  LEFT JOIN connector_families cf ON cf.id = p.connector_family_id
+`;
 
 /** PART_ROWS_SQL reads canonical parts with manufacturer and package joins. */
 const PART_ROWS_SQL = `
