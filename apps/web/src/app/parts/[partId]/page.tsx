@@ -9,7 +9,7 @@ import { AssetCard, EmptyState, MetricTable, SectionPanel, StatusBadge, TrustMet
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
-import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
@@ -36,6 +36,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
   const exportActions = bundleReadiness.exportActions;
   const hasConnectorIntelligence = shouldRenderConnectorSections(record);
+  const assetTruthSummary = getAssetTruthSummary(record);
+  const connectorSummary = getConnectorWorkflowSummary(record);
+  const recoverySummary = getRecoveryWorkflowSummary(record);
+  const reviewWorkflowSummary = buildReviewWorkflowSummary(assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
   const latestSource = record.sources[0];
   const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
     label: formatMetricLabel(metric.metricKey),
@@ -113,11 +117,19 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </p>
         </div>
         <div className="detail-hero__status">
+          <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
           <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name} family` : "General component"} tone={record.connectorFamily ? "info" : "neutral"} />
           <StatusBadge label={`${record.sources.length} source records`} tone={record.sources.length > 0 ? "info" : "neutral"} />
           <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
           <TrustMeter label="Trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
         </div>
+      </section>
+
+      <section className="detail-priority-grid" aria-label="Part trust summary">
+        <TrustSummaryCard detail={bundleReadiness.reason} label="Export readiness" tone={bundleReadinessTone(bundleReadiness.state)} value={bundleReadiness.label} />
+        <TrustSummaryCard detail={assetTruthSummary.detail} label="Engineering assets" tone={assetTruthSummary.tone} value={assetTruthSummary.label} />
+        <TrustSummaryCard detail={connectorSummary?.detail ?? recoverySummary.detail} label={connectorSummary ? "Connector intelligence" : "Missing-CAD recovery"} tone={connectorSummary?.tone ?? recoverySummary.tone} value={connectorSummary?.label ?? recoverySummary.label} />
+        <TrustSummaryCard detail={reviewWorkflowSummary.detail} label="Review / promotion" tone={reviewWorkflowSummary.tone} value={reviewWorkflowSummary.label} />
       </section>
 
       <div className="detail-grid">
@@ -328,6 +340,80 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
       </div>
     </main>
   );
+}
+
+/**
+ * Renders one top-level truth cue for fast detail-page scanning.
+ */
+function TrustSummaryCard({ detail, label, tone, value }: { detail: string; label: string; tone: BadgeTone; value: string }) {
+  return (
+    <article className="trust-summary-card">
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+      <StatusBadge label={value} tone={tone} />
+      <p>{detail}</p>
+    </article>
+  );
+}
+
+/**
+ * Summarizes review and promotion state without treating approval as export verification.
+ */
+function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], workflowReviewStatuses: ReviewStatusSummary[], promotionSummaries: AssetPromotionSummary[]): { detail: string; label: string; tone: BadgeTone } {
+  const statuses = [...assetReviewStatuses, ...workflowReviewStatuses];
+  const promotionReadyCount = promotionSummaries.filter((summary) => summary.canPromote).length;
+  const pendingCount = statuses.filter((status) => status.state === "pending_review").length;
+  const changesRequestedCount = statuses.filter((status) => status.state === "changes_requested").length;
+  const rejectedCount = statuses.filter((status) => status.state === "rejected").length;
+  const verifiedCount = statuses.filter((status) => status.state === "verified_for_export").length;
+
+  if (promotionReadyCount > 0) {
+    return {
+      detail: "Validation evidence is present. Verified-for-export still requires the explicit promotion action.",
+      label: `${promotionReadyCount} promotion ${promotionReadyCount === 1 ? "candidate" : "candidates"}`,
+      tone: "info"
+    };
+  }
+
+  if (pendingCount > 0) {
+    return {
+      detail: "Generated or newly sourced outputs are waiting for review and are not export-ready.",
+      label: `${pendingCount} pending review`,
+      tone: "review"
+    };
+  }
+
+  if (changesRequestedCount > 0) {
+    return {
+      detail: "At least one reviewed output needs changes before approval or promotion can continue.",
+      label: "changes requested",
+      tone: "review"
+    };
+  }
+
+  if (rejectedCount > 0) {
+    return {
+      detail: "Rejected outputs stay outside trust and export readiness until replaced or reworked.",
+      label: "rejected output",
+      tone: "danger"
+    };
+  }
+
+  if (verifiedCount > 0) {
+    return {
+      detail: "At least one asset has passed review, validation evidence, and explicit export promotion.",
+      label: `${verifiedCount} verified for export`,
+      tone: "verified"
+    };
+  }
+
+  return {
+    detail: "No asset or generation workflow is currently waiting for review.",
+    label: "no active review",
+    tone: "neutral"
+  };
 }
 
 /**

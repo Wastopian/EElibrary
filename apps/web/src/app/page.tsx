@@ -6,7 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { EmptyState, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../lib/api-client";
-import { getSearchExportReadiness } from "../lib/detail-view-model";
+import { getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CadAvailabilityFilter, CatalogDataSource, LifecycleStatus, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared/types";
 import type { ApiHealth } from "../lib/api-client";
@@ -100,6 +100,24 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           </div>
           {warnings.length > 0 ? <p className="mode-warning">{warnings.join(" ")}</p> : null}
           {source === "seed_fallback" ? <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p> : null}
+          <div className="workspace-priorities" aria-label="Core engineering workflows">
+            <div>
+              <strong>Exact MPN lookup</strong>
+              <span>Start with the part number and preserve source truth.</span>
+            </div>
+            <div>
+              <strong>Connector mate set</strong>
+              <span>Check mates, accessories, tooling, and cable options.</span>
+            </div>
+            <div>
+              <strong>Verified CAD evidence</strong>
+              <span>Separate file-backed assets from references and drafts.</span>
+            </div>
+            <div>
+              <strong>Missing-CAD recovery</strong>
+              <span>Request drafts only when extracted source material supports it.</span>
+            </div>
+          </div>
         </div>
         <form className="search-bar" action="/" method="get">
           <label htmlFor="q">MPN or keyword</label>
@@ -164,6 +182,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           <div className="sample-part-grid">
             {sampleParts.map((record) => {
               const exportReadiness = getSearchExportReadiness(record);
+              const assetTruth = getAssetTruthSummary(record);
+              const recoveryStatus = getRecoveryWorkflowSummary(record);
 
               return (
                 <Link className="sample-part-card" href={`/parts/${record.part.id}`} key={record.part.id}>
@@ -172,7 +192,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                   <span>
                     {record.part.category} / {record.package.packageName}
                   </span>
-                  <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
+                  <div className="sample-part-card__badges">
+                    <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
+                    <StatusBadge label={assetTruth.label} tone={assetTruth.tone} />
+                    <StatusBadge label={recoveryStatus.label} tone={recoveryStatus.tone} />
+                  </div>
                 </Link>
               );
             })}
@@ -231,7 +255,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               </select>
             </label>
             <label>
-              CAD files
+              CAD / export evidence
               <select defaultValue={cadAvailability} name="cad">
                 <option value="any">Any CAD state</option>
                 <option value="available">Verified file-backed CAD</option>
@@ -255,6 +279,9 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             <div className="results-list">
               {results.map((record) => {
                 const exportReadiness = getSearchExportReadiness(record);
+                const assetTruth = getAssetTruthSummary(record);
+                const connectorHint = getConnectorWorkflowSummary(record);
+                const recoveryStatus = getRecoveryWorkflowSummary(record);
 
                 return (
                   <article className="result-row" key={record.part.id}>
@@ -269,6 +296,18 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                     <div className="result-row__package">
                       <span>Package</span>
                       <strong>{record.package.packageName}</strong>
+                    </div>
+                    <div className="result-row__signals">
+                      <div>
+                        <span>Asset truth</span>
+                        <strong>{assetTruth.label}</strong>
+                        <small>{assetTruth.detail}</small>
+                      </div>
+                      <div>
+                        <span>{connectorHint ? "Connector" : "Recovery"}</span>
+                        <strong>{connectorHint?.label ?? recoveryStatus.label}</strong>
+                        <small>{connectorHint?.detail ?? recoveryStatus.detail}</small>
+                      </div>
                     </div>
                     <div className="result-row__badges">
                       <StatusBadge label={record.part.lifecycleStatus} tone="info" />

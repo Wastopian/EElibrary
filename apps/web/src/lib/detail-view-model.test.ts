@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getPartDetail } from "@ee-library/shared/search";
-import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
 import type { Asset, AssetValidationRecord } from "@ee-library/shared/types";
 
@@ -171,6 +171,24 @@ test("generated draft assets use honest source and review wording", () => {
   assert.equal(shouldRenderAssetPromotionAction(approvedPromotionSummary), true);
   assert.equal(shouldRenderAssetPromotionAction(promotedPromotionSummary), false);
   assert.equal(getSearchExportReadiness({ ...regulatorRecord, assets: [generatedDraftAsset] }).label, "partial bundle");
+});
+
+/**
+ * Verifies compact workflow summaries make scan-speed cues honest.
+ */
+test("search and detail workflow summaries preserve asset and recovery truth", () => {
+  const connectorRecord = getSeedRecord("part-te-215079-8");
+  const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const microcontrollerRecord = getSeedRecord("part-stm32g031k8t6");
+
+  assert.equal(getAssetTruthSummary(connectorRecord).label, "2 verified CAD assets");
+  assert.match(getAssetTruthSummary(connectorRecord).detail, /only verified assets count/u);
+  assert.equal(getConnectorWorkflowSummary(connectorRecord)?.label, "mate set mapped");
+  assert.match(getConnectorWorkflowSummary(connectorRecord)?.detail ?? "", /cable/u);
+  assert.equal(getRecoveryWorkflowSummary(regulatorRecord).label, "draft output in review");
+  assert.match(getRecoveryWorkflowSummary(regulatorRecord).detail, /remain outside export readiness/u);
+  assert.equal(getAssetTruthSummary(microcontrollerRecord).label, "no usable CAD files");
+  assert.match(getAssetTruthSummary(microcontrollerRecord).detail, /No file-backed CAD assets/u);
 });
 
 /**

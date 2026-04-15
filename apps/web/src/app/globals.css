@@ -166,6 +166,34 @@ select {
   max-width: 760px;
 }
 
+/* Workspace priorities make the homepage useful without turning it into marketing copy. */
+.workspace-priorities {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+/* Priority cells are compact workflow reminders, not navigation cards. */
+.workspace-priorities div {
+  border-left: 2px solid var(--color-border);
+  display: grid;
+  gap: 4px;
+  padding-left: 10px;
+}
+
+/* Priority labels stay prominent while explanations remain secondary. */
+.workspace-priorities strong {
+  font-size: 0.9rem;
+}
+
+/* Priority explanations use muted text and wrap long engineering terms. */
+.workspace-priorities span {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
 /* Search controls keep input and action in one stable row. */
 .search-bar {
   display: grid;
@@ -257,6 +285,13 @@ select {
 /* Secondary sample metadata stays quiet but readable. */
 .sample-part-card span:not(.ui-badge) {
   color: var(--color-muted);
+}
+
+/* Sample readiness badges reveal asset and recovery truth before opening detail. */
+.sample-part-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* Setup panel replaces runtime crashes with actionable local boot guidance. */
@@ -376,7 +411,7 @@ select {
   border-radius: var(--radius-card);
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(260px, 1.7fr) minmax(120px, 0.6fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr);
+  grid-template-columns: minmax(240px, 1.4fr) minmax(120px, 0.45fr) minmax(260px, 1.1fr) minmax(170px, 0.65fr) minmax(170px, 0.65fr);
   min-height: 112px;
   padding: 18px;
 }
@@ -398,6 +433,31 @@ select {
 .result-row__package {
   display: grid;
   gap: 6px;
+}
+
+/* Result signals explain the engineering truth behind badge shorthand. */
+.result-row__signals {
+  display: grid;
+  gap: 10px;
+}
+
+/* Each result signal keeps a muted label, strong state, and exact reason. */
+.result-row__signals div {
+  display: grid;
+  gap: 3px;
+}
+
+/* Signal labels stay small so the state text scans first. */
+.result-row__signals span {
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+/* Signal details wrap inside the result row instead of expanding the layout. */
+.result-row__signals small {
+  color: var(--color-muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 /* Result badges wrap without changing neighboring column widths. */
@@ -446,6 +506,48 @@ select {
 .detail-hero__status {
   display: grid;
   gap: 14px;
+}
+
+/* Detail priority grid puts trust, recovery, and export truth above longer panels. */
+.detail-priority-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Trust summary cards are repeated status items for fast engineering triage. */
+.trust-summary-card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 12px;
+  min-height: 156px;
+  padding: 16px;
+}
+
+/* Summary card headings keep state labels compact. */
+.trust-summary-card div {
+  display: grid;
+  gap: 4px;
+}
+
+/* Summary category text stays muted while the state remains primary. */
+.trust-summary-card span {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+/* Summary state text wraps long statuses such as verified-for-export. */
+.trust-summary-card strong {
+  overflow-wrap: anywhere;
+}
+
+/* Summary details explain why a trust state exists. */
+.trust-summary-card p {
+  color: var(--color-muted);
+  line-height: 1.35;
+  margin: 0;
 }
 
 /* Detail grid follows a two-column workstation layout. */
@@ -854,6 +956,11 @@ select {
   .result-row {
     grid-template-columns: minmax(0, 1fr) minmax(120px, 0.6fr);
   }
+
+  .detail-priority-grid,
+  .workspace-priorities {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Narrow displays keep text inside parents and controls stacked. */
@@ -886,8 +993,10 @@ select {
   }
 
   .dimension-grid,
+  .detail-priority-grid,
   .result-row,
   .sample-part-grid,
+  .workspace-priorities,
   .search-bar__controls {
     grid-template-columns: 1fr;
   }
