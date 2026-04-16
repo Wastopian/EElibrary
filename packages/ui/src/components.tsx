@@ -5,7 +5,7 @@
 import React, { type ReactNode } from "react";
 
 /** BadgeTone maps domain state into visual emphasis without embedding domain rules. */
-export type BadgeTone = "neutral" | "info" | "verified" | "review" | "danger";
+export type BadgeTone = "neutral" | "info" | "verified" | "review" | "danger" | "generated";
 
 /** StatusBadgeProps defines a concise status label for dense engineering screens. */
 export interface StatusBadgeProps {
@@ -96,6 +96,35 @@ export function StatusBadge({ label, tone = "neutral" }: StatusBadgeProps) {
   return <span className={`ui-badge ui-badge--${tone}`}>{label}</span>;
 }
 
+/** SectionHeadingProps renders an editorial section title for workspace pages. */
+export interface SectionHeadingProps {
+  /** Stable id for aria-labelledby. */
+  id: string;
+  /** Short section index label such as "01". */
+  index: string;
+  /** Primary section title. */
+  title: string;
+  /** Optional supporting line under the title. */
+  subtitle?: string;
+}
+
+/**
+ * Renders a numbered section heading for long-form detail layouts.
+ */
+export function SectionHeading({ id, index, subtitle, title }: SectionHeadingProps) {
+  return (
+    <header className="ui-section-heading" id={id}>
+      <span aria-hidden className="ui-section-heading__index">
+        {index}
+      </span>
+      <div>
+        <h2 className="ui-section-heading__title">{title}</h2>
+        {subtitle ? <p className="ui-section-heading__subtitle">{subtitle}</p> : null}
+      </div>
+    </header>
+  );
+}
+
 /**
  * Renders a reusable panel with optional context copy.
  */
@@ -133,8 +162,8 @@ export function MetricTable({ rows }: MetricTableProps) {
         <thead>
           <tr>
             <th>Metric</th>
-            <th>Normalized value</th>
-            <th>Confidence</th>
+            <th>Value</th>
+            <th>Source confidence</th>
           </tr>
         </thead>
         <tbody>

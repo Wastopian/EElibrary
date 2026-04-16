@@ -7,7 +7,7 @@ import { isFileBackedAsset, isValidatedDownloadableAsset } from "@ee-library/sha
 import type { Asset, AssetGenerationOption, AssetPromotionSummary, AssetValidationSummary, BundleReadinessState, GenerationWorkflow, PartSearchRecord, ReviewState, ReviewStatusSummary } from "@ee-library/shared/types";
 
 /** ViewTone mirrors shared badge tones without coupling this helper to UI components. */
-export type ViewTone = "neutral" | "info" | "verified" | "review" | "danger";
+export type ViewTone = "neutral" | "info" | "verified" | "review" | "danger" | "generated";
 
 /** ExportReadinessLabel is the search-card label plus its visual tone. */
 export interface ExportReadinessLabel {
@@ -143,6 +143,14 @@ export function assetTrustStageTone(asset: Asset, state: ReviewState): ViewTone 
     return "danger";
   }
 
+  if (asset.provenance === "generated" && state === "changes_requested") {
+    return "review";
+  }
+
+  if (asset.provenance === "generated") {
+    return "generated";
+  }
+
   return reviewStateTone(state);
 }
 
@@ -222,7 +230,7 @@ export function getAssetTruthSummary(record: PartSearchRecord): WorkflowSignalLa
     return {
       detail: `${generatedDraftCount} generated CAD ${pluralize("draft", generatedDraftCount)} must be reviewed and promoted before export.`,
       label: "draft CAD needs review",
-      tone: "review"
+      tone: "generated"
     };
   }
 
@@ -263,7 +271,7 @@ export function getRecoveryWorkflowSummary(record: PartSearchRecord): WorkflowSi
     return {
       detail: `${reviewCount} generated ${pluralize("output", reviewCount)} await review and remain outside export readiness.`,
       label: "draft output in review",
-      tone: "review"
+      tone: "generated"
     };
   }
 

@@ -8,7 +8,7 @@ import "./globals.css";
 
 /** Metadata describes the engineering workspace in browser chrome. */
 export const metadata: Metadata = {
-  description: "Engineering-first component search, inspection, and export workspace.",
+  description: "Normalized component search, connector build sets, and file-honest CAD export readiness.",
   title: "EE Library"
 };
 
@@ -23,10 +23,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <header className="app-header">
             <div>
               <p className="app-kicker">EE Library</p>
-              <h1>Component workspace</h1>
+              <h1>Engineering catalog</h1>
             </div>
             <nav aria-label="Primary navigation" className="app-nav">
-              <a href="/">Search</a>
+              <a href="/">Catalog</a>
               <span>Compare</span>
               <span>Tools</span>
               <span>Admin</span>

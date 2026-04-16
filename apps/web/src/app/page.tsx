@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import React from "react";
-import { EmptyState, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../lib/api-client";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
 import type { BadgeTone } from "@ee-library/ui";
@@ -27,38 +27,24 @@ type PageSearchParams = {
 /** HomepageCatalogState makes setup-vs-data rendering explicit. */
 type HomepageCatalogState =
   | {
-      /** Ready means the API returned either DB-backed data or explicit local seed data. */
       status: "ready";
-      /** Search facets for the filter rail. */
       facets: SearchFacets;
-      /** Search results for the current filter set. */
       results: PartSearchRecord[];
-      /** Pagination metadata for the current search result window. */
       pagination: SearchPagination;
-      /** Catalog source reported by the API envelope. */
       source: CatalogDataSource;
-      /** Explicit source/degraded-mode warnings from the API envelope. */
       warnings: string[];
-      /** Operational API health if the health endpoint was reachable. */
       health: ApiHealth | null;
     }
   | {
-      /** Setup required means the homepage should not pretend records are available. */
       status: "setup_required";
-      /** Machine-readable reason for the setup state. */
       code: string;
-      /** Actionable setup copy. */
       message: string;
-      /** Operational API health if the health endpoint was reachable. */
       health: ApiHealth | null;
     };
 
-/** dynamic forces search data to flow through the API service at request time. */
 export const dynamic = "force-dynamic";
 
-/** SearchPageProps supports both current and previous Next.js searchParams shapes. */
 interface SearchPageProps {
-  /** Query string filters from the app router. */
   searchParams: Promise<PageSearchParams>;
 }
 
@@ -100,101 +86,99 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const resultRange = buildResultRange(pagination, results.length);
 
   return (
-    <main className="search-layout">
-      <section className="search-hero">
-        <div>
-          <p className="app-kicker">Engineering workspace / {catalogModeLabel(source)}</p>
-          <h2>Search parts, inspect provenance, and keep export readiness honest.</h2>
-          <div className="status-row">
+    <main>
+      <section aria-label="Search workspace" className="hero-editorial">
+        <div className="hero-editorial__inner">
+          <p className="app-kicker">EE Library</p>
+          <h1>Find parts with honest CAD and export readiness.</h1>
+          <p className="hero-lede">Normalized specs, connector build sets, and file-backed engineering assets—without treating references, drafts, or approvals as production-ready exports.</p>
+
+          <form className="search-bar" action="/" method="get">
+            <label htmlFor="q">Search by MPN or keyword</label>
+            <input name="manufacturerId" type="hidden" value={manufacturerId} />
+            <input name="category" type="hidden" value={category} />
+            <input name="packageId" type="hidden" value={packageId} />
+            <input name="lifecycleStatus" type="hidden" value={lifecycleStatus} />
+            <input name="cad" type="hidden" value={cadAvailability} />
+            <input name="sort" type="hidden" value={sort} />
+            <div className="search-bar__controls">
+              <input defaultValue={query} id="q" name="q" placeholder="TPS7A02, QFN-16, connector series…" />
+              <button type="submit">Search catalog</button>
+            </div>
+          </form>
+
+          <div className="catalog-strip" role="status">
+            <span className="catalog-strip__label">Catalog</span>
             <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
             <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
             <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
           {warnings.length > 0 ? <p className="mode-warning">{warnings.join(" ")}</p> : null}
-          {source === "seed_fallback" ? <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p> : null}
-          <div className="workspace-priorities" aria-label="Core engineering workflows">
-            <div>
-              <strong>Exact MPN lookup</strong>
-              <span>Start with the part number and preserve source truth.</span>
-            </div>
-            <div>
-              <strong>Connector mate set</strong>
-              <span>Check mates, accessories, tooling, and cable options.</span>
-            </div>
-            <div>
-              <strong>Verified CAD evidence</strong>
-              <span>Separate file-backed assets from references and drafts.</span>
-            </div>
-            <div>
-              <strong>Missing-CAD recovery</strong>
-              <span>Request drafts only when extracted source material supports it.</span>
-            </div>
+          {source === "seed_fallback" ? (
+            <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p>
+          ) : null}
+
+          <div className="quick-actions-row">
+            <Link className="button-link button-link--quiet" href="/#import-by-mpn">
+              Import by MPN
+            </Link>
+            <Link className="button-link button-link--quiet" href="/?category=Connector">
+              Browse connectors
+            </Link>
+            <Link className="button-link button-link--quiet" href="/?cad=unavailable">
+              Review generated drafts
+            </Link>
           </div>
+
+          <details className="import-guide" id="import-by-mpn">
+            <summary>How to import a part by MPN (worker)</summary>
+            <p className="muted-copy" style={{ marginTop: 12 }}>
+              Imports run outside the browser through the worker. Use a configured <span className="ui-mono">DATABASE_URL</span>, then:
+            </p>
+            <pre>{`npm run ingest -w @ee-library/worker -- jlcparts <MPN_OR_LCSC_ID>
+npm run imports:providers`}</pre>
+          </details>
         </div>
-        <form className="search-bar" action="/" method="get">
-          <label htmlFor="q">MPN or keyword</label>
-          <input name="manufacturerId" type="hidden" value={manufacturerId} />
-          <input name="category" type="hidden" value={category} />
-          <input name="packageId" type="hidden" value={packageId} />
-          <input name="lifecycleStatus" type="hidden" value={lifecycleStatus} />
-          <input name="cad" type="hidden" value={cadAvailability} />
-          <input name="sort" type="hidden" value={sort} />
-          <div className="search-bar__controls">
-            <input defaultValue={query} id="q" name="q" placeholder="TPS7A02, 0603, QFN..." />
-            <button type="submit">Search</button>
-          </div>
-        </form>
       </section>
 
-      <section className="dashboard-grid" aria-label="Homepage status and shortcuts">
-        <SectionPanel description="Fast checks for the current catalog result set and trust posture." title="Catalog mode">
-          <div className="health-grid">
+      <div className="home-secondary">
+        <div>
+          <div className="health-compact" aria-label="Snapshot of this page">
             <div>
-              <span>Total matches</span>
+              <span>Matches (total)</span>
               <strong>{catalogStats.totalMatches}</strong>
             </div>
             <div>
-              <span>Visible records</span>
+              <span>On this page</span>
               <strong>{catalogStats.visibleRecords}</strong>
             </div>
             <div>
-              <span>Verified CAD on page</span>
+              <span>Verified CAD (page)</span>
               <strong>{catalogStats.verifiedCadRecords}</strong>
             </div>
             <div>
-              <span>Connectors on page</span>
+              <span>Connectors (page)</span>
               <strong>{catalogStats.connectorRecords}</strong>
             </div>
             <div>
-              <span>Generation workflows</span>
+              <span>Generation jobs (page)</span>
               <strong>{catalogStats.generationWorkflowCount}</strong>
             </div>
+            <div>
+              <span>Sources</span>
+              <strong>
+                <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
+              </strong>
+            </div>
           </div>
-        </SectionPanel>
+          <p className="muted-copy" style={{ fontSize: "0.88rem", marginTop: 12 }}>
+            {providerSummary.detail}
+          </p>
+        </div>
+      </div>
 
-        <SectionPanel description={providerSummary.description} title="Import / provider health">
-          <div className="provider-summary">
-            <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
-            <p>{providerSummary.detail}</p>
-          </div>
-        </SectionPanel>
-
-        <SectionPanel description="Start from common engineering workflows without changing catalog truth." title="Quick navigation">
-          <div className="quick-actions">
-            <Link className="button-link" href="/?cad=available">
-              Verified CAD
-            </Link>
-            <Link className="button-link" href="/?cad=unavailable">
-              Missing CAD
-            </Link>
-            <Link className="button-link" href="/?category=Connector">
-              Connectors
-            </Link>
-          </div>
-        </SectionPanel>
-      </section>
-
-      <SectionPanel description="Latest records from the active catalog mode. Seed mode examples are labeled above and must not be treated as production data." title="Recent / sample parts">
+      <section className="sample-strip" aria-label="Sample records">
+        <h2>Recently updated in this catalog window</h2>
         {sampleParts.length > 0 ? (
           <div className="sample-part-grid">
             {sampleParts.map((record) => {
@@ -207,12 +191,12 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                   <span className="ui-mono">{record.part.mpn}</span>
                   <strong>{record.manufacturer.name}</strong>
                   <span>
-                    {record.part.category} / {record.package.packageName}
+                    {record.part.category} · {record.package.packageName}
                   </span>
                   <div className="sample-part-card__badges">
                     <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
-                    <StatusBadge label={assetTruth.label} tone={assetTruth.tone} />
-                    <StatusBadge label={recoveryStatus.label} tone={recoveryStatus.tone} />
+                    <StatusBadge label={assetTruth.label} tone={mapViewTone(assetTruth.tone)} />
+                    <StatusBadge label={recoveryStatus.label} tone={mapViewTone(recoveryStatus.tone)} />
                   </div>
                 </Link>
               );
@@ -221,7 +205,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         ) : (
           <EmptyState body="No sample records are available from the current catalog source." title="No sample parts" />
         )}
-      </SectionPanel>
+      </section>
 
       <div className="search-workspace">
         <aside className="filter-rail" aria-label="Search filters">
@@ -272,18 +256,18 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               </select>
             </label>
             <label>
-              CAD / export evidence
+              CAD files for export
               <select defaultValue={cadAvailability} name="cad">
-                <option value="any">Any CAD state</option>
-                <option value="available">Verified file-backed CAD</option>
+                <option value="any">Any</option>
+                <option value="available">Has verified file-backed CAD</option>
                 <option value="unavailable">Missing verified CAD</option>
               </select>
             </label>
             <label>
               Sort
               <select defaultValue={sort} name="sort">
-                <option value="mpn_asc">MPN A-Z</option>
-                <option value="mpn_desc">MPN Z-A</option>
+                <option value="mpn_asc">MPN A–Z</option>
+                <option value="mpn_desc">MPN Z–A</option>
                 <option value="updated_desc">Recently updated</option>
                 <option value="trust_desc">Trust score</option>
               </select>
@@ -295,10 +279,10 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <section className="results-panel" aria-label="Search results">
           <div className="results-panel__header">
             <div>
-              <p className="app-kicker">Search results</p>
-              <h2>{pagination.totalRecords} matched records</h2>
+              <p className="app-kicker">Results</p>
+              <h2>{pagination.totalRecords} matches</h2>
               <p className="results-panel__range">
-                Showing {resultRange.start}-{resultRange.end} on page {pagination.page} of {pagination.totalPages}
+                Rows {resultRange.start}–{resultRange.end} · page {pagination.page} of {pagination.totalPages}
               </p>
             </div>
             <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
@@ -319,16 +303,21 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                         {record.part.mpn}
                       </Link>
                       <p>
-                        {record.manufacturer.name} / {record.part.category}
+                        {record.manufacturer.name} · {record.part.category}
                       </p>
                     </div>
                     <div className="result-row__package">
                       <span>Package</span>
-                      <strong>{record.package.packageName}</strong>
+                      <strong className="ui-mono">{record.package.packageName}</strong>
                     </div>
                     <div className="result-row__signals">
                       <div>
-                        <span>Asset truth</span>
+                        <span>Export bundle</span>
+                        <strong>{exportReadiness.label}</strong>
+                        <small>Altium / SolidWorks bundles follow this gate, not single-file luck.</small>
+                      </div>
+                      <div>
+                        <span>CAD on disk</span>
                         <strong>{assetTruth.label}</strong>
                         <small>{assetTruth.detail}</small>
                       </div>
@@ -339,7 +328,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                       </div>
                     </div>
                     <div className="result-row__badges">
-                      <StatusBadge label={record.part.lifecycleStatus} tone="info" />
+                      <StatusBadge label={formatLifecycleShort(record.part.lifecycleStatus)} tone="neutral" />
                       <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
                     </div>
                     <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
@@ -348,7 +337,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               })}
             </div>
           ) : (
-            <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD availability filter." title="No matching parts" />
+            <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD filter." title="No matching parts" />
           )}
           <SearchPaginationControls filters={filters} pagination={pagination} />
         </section>
@@ -357,9 +346,25 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   );
 }
 
-/**
- * Loads homepage catalog data while converting setup failures into renderable state.
- */
+function mapViewTone(tone: string): BadgeTone {
+  if (tone === "generated") {
+    return "generated";
+  }
+
+  return tone as BadgeTone;
+}
+
+function formatLifecycleShort(status: string): string {
+  const labels: Record<string, string> = {
+    active: "Lifecycle: active",
+    not_recommended: "Lifecycle: not recommended",
+    obsolete: "Lifecycle: obsolete",
+    unknown: "Lifecycle: unknown"
+  };
+
+  return labels[status] ?? status;
+}
+
 async function loadHomepageCatalog(filters: PartSearchFilters): Promise<HomepageCatalogState> {
   const healthPromise = fetchApiHealth();
 
@@ -381,9 +386,6 @@ async function loadHomepageCatalog(filters: PartSearchFilters): Promise<Homepage
   }
 }
 
-/**
- * Renders deterministic page navigation while preserving active search filters.
- */
 function SearchPaginationControls({ filters, pagination }: { filters: PartSearchFilters; pagination: SearchPagination }) {
   if (pagination.totalPages <= 1) {
     return null;
@@ -395,29 +397,26 @@ function SearchPaginationControls({ filters, pagination }: { filters: PartSearch
   return (
     <nav aria-label="Search pagination" className="pagination-bar">
       {previousPage >= 1 ? (
-        <Link className="button-link" href={buildSearchHref(filters, previousPage)}>
-          Previous page
+        <Link className="button-link button-link--quiet" href={buildSearchHref(filters, previousPage)}>
+          Previous
         </Link>
       ) : (
-        <span>Previous page</span>
+        <span>Previous</span>
       )}
       <strong>
         Page {pagination.page} / {pagination.totalPages}
       </strong>
       {nextPage <= pagination.totalPages ? (
-        <Link className="button-link" href={buildSearchHref(filters, nextPage)}>
-          Next page
+        <Link className="button-link button-link--quiet" href={buildSearchHref(filters, nextPage)}>
+          Next
         </Link>
       ) : (
-        <span>Next page</span>
+        <span>Next</span>
       )}
     </nav>
   );
 }
 
-/**
- * Builds a setup state from DB or API failures without throwing during homepage render.
- */
 function buildSetupCatalogState(error: unknown, health: ApiHealth | null): HomepageCatalogState {
   if (isApiClientError(error) && error.code === "DB_NOT_CONFIGURED") {
     return {
@@ -445,45 +444,60 @@ function buildSetupCatalogState(error: unknown, health: ApiHealth | null): Homep
   };
 }
 
-/**
- * Renders an actionable setup state instead of crashing the root page.
- */
 function HomepageSetupState({ catalogState }: { catalogState: Extract<HomepageCatalogState, { status: "setup_required" }> }) {
   return (
-    <main className="search-layout">
-      <section className="setup-panel">
-        <div className="setup-panel__header">
-          <p className="app-kicker">Local setup</p>
-          <h2>Connect Postgres or enable local seed mode.</h2>
-          <div className="status-row">
+    <main>
+      <section aria-label="Search workspace" className="hero-editorial">
+        <div className="hero-editorial__inner">
+          <p className="app-kicker">EE Library</p>
+          <h1>Find parts with honest CAD and export readiness.</h1>
+          <p className="hero-lede">Connect the catalog database or enable explicit local seed mode to search. The UI will not invent DB-backed results.</p>
+          <div className="catalog-strip" role="status">
+            <span className="catalog-strip__label">Status</span>
             <StatusBadge label={catalogState.code} tone="review" />
             <StatusBadge label={`Database ${catalogState.health?.dependencies.database ?? "unknown"}`} tone={catalogState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
+          <p className="mode-warning">{catalogState.message}</p>
+          <form className="search-bar" aria-disabled="true">
+            <label htmlFor="q-disabled">Search by MPN or keyword</label>
+            <div className="search-bar__controls">
+              <input disabled id="q-disabled" name="q" placeholder="Available after catalog is connected" />
+              <button disabled type="button">
+                Search catalog
+              </button>
+            </div>
+          </form>
+          <p className="search-disabled-note">Search stays visible so the layout matches a connected catalog. It remains disabled until data is reachable.</p>
+          <details className="import-guide" id="import-by-mpn">
+            <summary>How to import a part by MPN (worker)</summary>
+            <pre>{`npm run ingest -w @ee-library/worker -- jlcparts <MPN_OR_LCSC_ID>
+npm run imports:providers`}</pre>
+          </details>
         </div>
-        <p>{catalogState.message}</p>
-        <p>No catalog records are shown here because EE Library will not silently pretend DB-backed data is available.</p>
+      </section>
+
+      <div className="setup-panel">
+        <h2>Connect Postgres or enable local seed mode</h2>
+        <p>No catalog records are shown here because EE Library does not silently substitute production data.</p>
         <div className="setup-steps">
           <div>
-            <strong>Use the canonical database</strong>
-            <code>$env:DATABASE_URL="postgres://ee_library:ee_library@127.0.0.1:5432/ee_library"</code>
+            <strong>Canonical database</strong>
+            <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
             <code>npm run ingest:local</code>
             <code>npm run dev</code>
           </div>
           <div>
-            <strong>Use explicit local seed mode</strong>
-            <code>$env:EE_LIBRARY_ALLOW_SEED_FALLBACK="true"</code>
+            <strong>Explicit local seed</strong>
+            <code>$env:EE_LIBRARY_ALLOW_SEED_FALLBACK=&quot;true&quot;</code>
             <code>npm run dev</code>
-            <span>Seed mode is local example data only, not DB-backed catalog truth.</span>
+            <span>Seed mode is local examples only, not Postgres-backed truth.</span>
           </div>
         </div>
-      </section>
+      </div>
     </main>
   );
 }
 
-/**
- * Builds compact homepage counters from the active result set.
- */
 function buildCatalogStats(records: PartSearchRecord[], totalMatches: number) {
   return {
     totalMatches,
@@ -494,31 +508,23 @@ function buildCatalogStats(records: PartSearchRecord[], totalMatches: number) {
   };
 }
 
-/**
- * Selects deterministic sample parts using update time and MPN tie-breaks.
- */
 function selectSampleParts(records: PartSearchRecord[]): PartSearchRecord[] {
   return [...records].sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt) || left.part.mpn.localeCompare(right.part.mpn)).slice(0, 4);
 }
 
-/**
- * Summarizes provider/source health without introducing a separate provider-specific UI layer.
- */
-function buildProviderSummary(records: PartSearchRecord[], source: CatalogDataSource, health: ApiHealth | null): { description: string; detail: string; label: string; tone: BadgeTone } {
+function buildProviderSummary(records: PartSearchRecord[], source: CatalogDataSource, health: ApiHealth | null): { detail: string; label: string; tone: BadgeTone } {
   if (source === "seed_fallback") {
     return {
-      description: "Local fallback is explicit and visible.",
-      detail: "Records are deterministic seed examples. Import freshness and provider failures are not production DB health.",
-      label: "local seed mode",
+      detail: "Deterministic seed examples. Provider import health is not representative of production.",
+      label: "Local seed",
       tone: "review"
     };
   }
 
   if (!health) {
     return {
-      description: "API health could not be loaded.",
-      detail: "Catalog data loaded, but the health endpoint was not reachable for dependency status.",
-      label: "health unknown",
+      detail: "Catalog rows loaded, but the health endpoint was not reachable.",
+      label: "Health unknown",
       tone: "review"
     };
   }
@@ -529,30 +535,20 @@ function buildProviderSummary(records: PartSearchRecord[], source: CatalogDataSo
   const latestImport = sources.map((sourceRecord) => sourceRecord.sourceLastImportedAt).filter((value): value is string => Boolean(value)).sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
 
   return {
-    description: "Provider source records attached to the current catalog result set.",
-    detail: `${providerCount} providers represented, ${failedImports} failed imports attached${latestImport ? `, latest import ${formatDateTime(latestImport)}` : ""}.`,
-    label: health.dependencies.database === "connected" ? "DB-backed catalog" : `database ${health.dependencies.database}`,
+    detail: `${providerCount} provider identities on this page · ${failedImports} failed imports · ${latestImport ? `last import ${formatDateTime(latestImport)}` : "no import timestamps on page"}`,
+    label: health.dependencies.database === "connected" ? "DB-backed" : `DB ${health.dependencies.database}`,
     tone: health.dependencies.database === "connected" && failedImports === 0 ? "verified" : "review"
   };
 }
 
-/**
- * Labels the active catalog mode without hiding local seed fallback.
- */
 function catalogModeLabel(source: CatalogDataSource): string {
   return source === "seed_fallback" ? "Local seed mode" : "DB-backed catalog";
 }
 
-/**
- * Maps catalog mode into a compact status tone.
- */
 function catalogModeTone(source: CatalogDataSource): BadgeTone {
   return source === "seed_fallback" ? "review" : "verified";
 }
 
-/**
- * Formats ISO timestamps for compact health summaries.
- */
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
@@ -560,9 +556,6 @@ function formatDateTime(value: string): string {
   }).format(new Date(value));
 }
 
-/**
- * Reads one query value from a Next.js search parameter.
- */
 function readSingleParam(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     return value[0];
@@ -571,9 +564,6 @@ function readSingleParam(value: string | string[] | undefined): string | undefin
   return value;
 }
 
-/**
- * Normalizes the CAD availability query parameter into a strict filter value.
- */
 function readCadAvailability(value: string | undefined): CadAvailabilityFilter {
   if (value === "available" || value === "unavailable") {
     return value;
@@ -582,9 +572,6 @@ function readCadAvailability(value: string | undefined): CadAvailabilityFilter {
   return "any";
 }
 
-/**
- * Normalizes search sort values into the provider-neutral sort union.
- */
 function readSearchSort(value: string | undefined): PartSearchSort {
   if (value === "mpn_desc" || value === "updated_desc" || value === "trust_desc") {
     return value;
@@ -593,9 +580,6 @@ function readSearchSort(value: string | undefined): PartSearchSort {
   return "mpn_asc";
 }
 
-/**
- * Reads positive integer query parameters used by pagination.
- */
 function readPositiveInteger(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
@@ -606,9 +590,6 @@ function readPositiveInteger(value: string | undefined): number | undefined {
   return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : undefined;
 }
 
-/**
- * Normalizes lifecycle query parameters into strict domain values.
- */
 function readLifecycleStatus(value: string | undefined): LifecycleStatus | undefined {
   if (value === "active" || value === "not_recommended" || value === "obsolete" || value === "unknown") {
     return value;
@@ -617,9 +598,6 @@ function readLifecycleStatus(value: string | undefined): LifecycleStatus | undef
   return undefined;
 }
 
-/**
- * Formats lifecycle values for the filter rail.
- */
 function formatLifecycleStatus(status: LifecycleStatus): string {
   const labels: Record<LifecycleStatus, string> = {
     active: "Active",
@@ -631,9 +609,6 @@ function formatLifecycleStatus(status: LifecycleStatus): string {
   return labels[status];
 }
 
-/**
- * Maps trust scores to simple badge tones for the shared UI package.
- */
 function scoreTone(score: number): BadgeTone {
   if (score >= 0.8) {
     return "verified";
@@ -646,9 +621,6 @@ function scoreTone(score: number): BadgeTone {
   return "danger";
 }
 
-/**
- * Builds a fallback pagination object for older or mocked API envelopes.
- */
 function buildFallbackPagination(totalRecords: number, filters: PartSearchFilters): SearchPagination {
   return {
     page: filters.page ?? 1,
@@ -659,9 +631,6 @@ function buildFallbackPagination(totalRecords: number, filters: PartSearchFilter
   };
 }
 
-/**
- * Calculates the visible one-based result range for the current page.
- */
 function buildResultRange(pagination: SearchPagination, visibleCount: number): { end: number; start: number } {
   if (pagination.totalRecords === 0 || visibleCount === 0) {
     return { end: 0, start: 0 };
@@ -675,9 +644,6 @@ function buildResultRange(pagination: SearchPagination, visibleCount: number): {
   };
 }
 
-/**
- * Builds a search URL for page navigation without dropping active filters.
- */
 function buildSearchHref(filters: PartSearchFilters, page: number): string {
   const params = new URLSearchParams();
 
@@ -696,9 +662,6 @@ function buildSearchHref(filters: PartSearchFilters, page: number): string {
   return queryString ? `/?${queryString}` : "/";
 }
 
-/**
- * Appends one href parameter only when it carries useful state.
- */
 function appendHrefParam(params: URLSearchParams, key: string, value: string | undefined): void {
   if (value && value.trim().length > 0) {
     params.set(key, value);

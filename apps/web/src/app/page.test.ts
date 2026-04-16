@@ -90,9 +90,9 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     assert.match(html, /Local seed mode/u);
     assert.match(html, /deterministic local examples/u);
     assert.match(html, /not DB-backed catalog data/u);
-    assert.match(html, /Exact MPN lookup/u);
-    assert.match(html, /Verified CAD evidence/u);
-    assert.match(html, /CAD \/ export evidence/u);
+    assert.match(html, /Search by MPN or keyword/u);
+    assert.match(html, /Import by MPN/u);
+    assert.match(html, /CAD files for export/u);
     assert.match(html, /TPS7A02DBVR/u);
     assert.doesNotMatch(html, /Provider-neutral API/u);
   } finally {

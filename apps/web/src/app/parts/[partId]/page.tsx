@@ -5,12 +5,13 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
-import { AssetCard, EmptyState, MetricTable, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
 import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
+import type { ViewTone } from "../../../lib/detail-view-model";
 import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -102,43 +103,83 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     revalidatePath(`/parts/${partId}`);
   }
 
+  const hasGoesWith = hasConnectorIntelligence || record.similarParts.length > 0 || record.companionRecommendations.length > 0;
+
   return (
     <main className="detail-layout">
       <Link className="back-link" href="/">
-        Back to search
+        ← Back to catalog search
       </Link>
 
-      <section className="detail-hero">
-        <div>
-          <p className="app-kicker">{record.manufacturer.name}</p>
-          <h2 className="ui-mono">{record.part.mpn}</h2>
-          <p>
-            {record.part.category} / {record.package.packageName} / {record.part.lifecycleStatus}
-          </p>
-        </div>
-        <div className="detail-hero__status">
-          <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-          <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name} family` : "General component"} tone={record.connectorFamily ? "info" : "neutral"} />
-          <StatusBadge label={`${record.sources.length} source records`} tone={record.sources.length > 0 ? "info" : "neutral"} />
-          <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
-          <TrustMeter label="Trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
-        </div>
-      </section>
+      <section className="detail-section" aria-labelledby="overview-heading">
+        <SectionHeading
+          id="overview-heading"
+          index="01"
+          subtitle="Identity, normalized metrics, package, datasheet metadata, and catalog signals."
+          title="Overview"
+        />
 
-      <section className="detail-priority-grid" aria-label="Part trust summary">
-        <TrustSummaryCard detail={bundleReadiness.reason} label="Export readiness" tone={bundleReadinessTone(bundleReadiness.state)} value={bundleReadiness.label} />
-        <TrustSummaryCard detail={assetTruthSummary.detail} label="Engineering assets" tone={assetTruthSummary.tone} value={assetTruthSummary.label} />
-        <TrustSummaryCard detail={connectorSummary?.detail ?? recoverySummary.detail} label={connectorSummary ? "Connector intelligence" : "Missing-CAD recovery"} tone={connectorSummary?.tone ?? recoverySummary.tone} value={connectorSummary?.label ?? recoverySummary.label} />
-        <TrustSummaryCard detail={reviewWorkflowSummary.detail} label="Review / promotion" tone={reviewWorkflowSummary.tone} value={reviewWorkflowSummary.label} />
-      </section>
+        <section className="detail-hero">
+          <div>
+            <p className="app-kicker">{record.manufacturer.name}</p>
+            <h1 className="ui-mono">{record.part.mpn}</h1>
+            <p className="detail-hero__meta">
+              {record.part.category} · <span className="ui-mono">{record.package.packageName}</span> · lifecycle {record.part.lifecycleStatus}
+            </p>
+            <p className="detail-trust-callout">
+              <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
+            </p>
+            <div className="signal-strip" role="group" aria-label="Engineering signals">
+              <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+              <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
+              <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
+              <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+              <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name}` : "Non-connector"} tone={record.connectorFamily ? "info" : "neutral"} />
+              <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
+            </div>
+          </div>
+          <div className="detail-hero__status">
+            <TrustMeter label="Catalog trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+            <p className="muted-copy" style={{ fontSize: "0.82rem", margin: "10px 0 0" }}>
+              {bundleReadiness.reason}
+            </p>
+          </div>
+        </section>
 
-      <div className="detail-grid">
-        <SectionPanel description="Values are normalized to the unit policy and retain source confidence." title="Normalized specs">
-          {metricRows.length > 0 ? <MetricTable rows={metricRows} /> : <EmptyState body="No normalized metrics have been attached to this part yet." title="No metrics" />}
+        <div className="detail-two-col">
+          <SectionPanel description="Normalized to internal units. Confidence reflects source extraction, not manufacturing guarantee." title="Key metrics">
+            {metricRows.length > 0 ? <MetricTable rows={metricRows} /> : <EmptyState body="No normalized metrics are attached to this part yet." title="No metrics" />}
+          </SectionPanel>
+          <SectionPanel description="Mechanical outline fields; unknowns stay explicit." title="Package">
+            <dl className="dimension-grid">
+              {packageDimensionRows(record.package).map((row) => (
+                <div key={row.label}>
+                  <dt>{row.label}</dt>
+                  <dd className="ui-mono">{row.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </SectionPanel>
+        </div>
+
+        <SectionPanel description="Revision metadata is separate from whether a PDF is stored in object storage." title="Datasheet">
+          <div className="datasheet-panel">
+            <div>
+              <p className="ui-mono">{record.datasheetRevision?.revisionLabel ?? "No revision"}</p>
+              <p>{record.datasheetRevision?.revisionDate ?? "Revision date unknown"}</p>
+              <p>{record.datasheetRevision?.pageCount ? `${record.datasheetRevision.pageCount} pages` : "Page count unknown"}</p>
+            </div>
+            <div className="datasheet-panel__badges">
+              <StatusBadge label={formatDatasheetParseConfidence(record.datasheetRevision?.parseConfidence)} tone={record.datasheetRevision ? scoreTone(record.datasheetRevision.parseConfidence) : "neutral"} />
+              <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
+              <StatusBadge label={latestSource ? `Ingestion ${latestSource.providerId}` : "No source row"} tone={latestSource ? "info" : "neutral"} />
+            </div>
+          </div>
         </SectionPanel>
 
-        <SectionPanel description="Raw source records are preserved for audit and later conflict review." title="Provenance">
-          <div className="source-list">
+        <details className="audit-disclosure">
+          <summary>Source rows and import audit</summary>
+          <div className="source-list" style={{ marginTop: 8 }}>
             {record.sources.length > 0 ? (
               record.sources.map((source) => (
                 <article key={source.id}>
@@ -174,101 +215,158 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                       </div>
                     ) : null}
                     <div>
-                      <dt>Source</dt>
-                      <dd>{source.sourceUrl ? <a href={source.sourceUrl}>{source.sourceUrl}</a> : "No source URL"}</dd>
+                      <dt>Source URL</dt>
+                      <dd>{source.sourceUrl ? <a href={source.sourceUrl}>{source.sourceUrl}</a> : "None"}</dd>
                     </div>
                   </dl>
                 </article>
               ))
             ) : (
-              <EmptyState body="No source records are attached to this fallback record." title="No provenance" />
+              <EmptyState body="No source records are attached to this part." title="No source rows" />
             )}
           </div>
-        </SectionPanel>
+        </details>
+      </section>
 
-        <SectionPanel description="Dimensions are normalized in millimeters and unknown fields stay explicit." title="Package dimensions">
-          <dl className="dimension-grid">
-            {packageDimensionRows(record.package).map((row) => (
-              <div key={row.label}>
-                <dt>{row.label}</dt>
-                <dd className="ui-mono">{row.value}</dd>
-              </div>
-            ))}
-          </dl>
-        </SectionPanel>
-
-        {hasConnectorIntelligence ? (
+      <section className="detail-section" aria-labelledby="goes-with-heading">
+        <SectionHeading
+          id="goes-with-heading"
+          index="02"
+          subtitle="Mates, accessories, cables, alternates, and typical circuit companions—each with its own confidence context."
+          title="What goes with it"
+        />
+        {hasGoesWith ? (
           <>
-            <SectionPanel description="One recommendation is prioritized with confidence and notes so connector decisions stay fast." title="Best Mate">
-              {bestMate ? <RelatedPartLine relation={bestMate} related={findRelatedPart(bestMate.matePartId, relatedPartSummaries)} /> : <p>No best-mate recommendation is currently available.</p>}
-            </SectionPanel>
+            {hasConnectorIntelligence ? (
+              <div className="detail-two-col">
+                <SectionPanel description="Single prioritized recommendation with confidence." title="Best mate">
+                  {bestMate ? <RelatedPartLine relation={bestMate} related={findRelatedPart(bestMate.matePartId, relatedPartSummaries)} /> : <p className="muted-copy">No best-mate mapping is stored for this part.</p>}
+                </SectionPanel>
+                <SectionPanel description="Practical set: mate, required hardware, tooling, and cable options." title="Buildable mating set">
+                  <ul className="connector-list">
+                    <li>
+                      <strong>Best mate:</strong> {bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "Not available"}
+                    </li>
+                    <li>
+                      <strong>Required accessories:</strong> {renderRelatedList(record.buildableMatingSet.requiredAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}
+                    </li>
+                    <li>
+                      <strong>Tooling:</strong> {renderRelatedList(record.buildableMatingSet.toolingRequirements.map((item) => item.accessoryPartId), relatedPartSummaries)}
+                    </li>
+                    <li>
+                      <strong>Compatible cables:</strong> {renderRelatedList(record.buildableMatingSet.cableOptions.map((item) => item.cablePartId), relatedPartSummaries)}
+                    </li>
+                  </ul>
+                </SectionPanel>
+              </div>
+            ) : null}
+            <div className="detail-two-col">
+              {record.similarParts.length > 0 ? (
+                <SectionPanel description="Alternates for substitution decisions—not automatic drop-ins." title="Similar parts">
+                  <p className="related-inline">{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p>
+                </SectionPanel>
+              ) : (
+                <SectionPanel description="No alternate list is stored for this part." title="Similar parts">
+                  <p className="muted-copy">None listed.</p>
+                </SectionPanel>
+              )}
+              {record.companionRecommendations.length > 0 ? (
+                <SectionPanel description="Parts often used alongside this one in real designs." title="Typical companions">
+                  <p className="related-inline">{renderRelatedList(record.companionRecommendations.map((relation) => relation.companionPartId), relatedPartSummaries)}</p>
+                </SectionPanel>
+              ) : (
+                <SectionPanel description="No companion recommendations are stored." title="Typical companions">
+                  <p className="muted-copy">None listed.</p>
+                </SectionPanel>
+              )}
+            </div>
+          </>
+        ) : (
+          <EmptyState body="No connector intelligence, similar parts, or companion recommendations are stored for this record." title="No relationship data" />
+        )}
+      </section>
 
-            <SectionPanel description="Minimum practical mating set: mate, required accessories, tooling, and compatible cable options." title="Buildable Mating Set">
-              <ul className="info-list">
-                <li>
-                  <strong>Best mate:</strong> {bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "Not available"}
-                </li>
-                <li>
-                  <strong>Required accessories:</strong> {renderRelatedList(record.buildableMatingSet.requiredAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}
-                </li>
-                <li>
-                  <strong>Tooling requirements:</strong> {renderRelatedList(record.buildableMatingSet.toolingRequirements.map((item) => item.accessoryPartId), relatedPartSummaries)}
-                </li>
-                <li>
-                  <strong>Compatible cable options:</strong> {renderRelatedList(record.buildableMatingSet.cableOptions.map((item) => item.cablePartId), relatedPartSummaries)}
-                </li>
-              </ul>
-            </SectionPanel>
+      <section className="detail-section technical-panel" aria-labelledby="files-heading">
+        <SectionHeading
+          id="files-heading"
+          index="03"
+          subtitle="Best-ranked asset per class. Availability, provenance, review, validation, and export status stay separate."
+          title="Files and models"
+        />
+        {assetGroups.length > 0 ? (
+          <div className="asset-grid">
+            {assetGroups.map((group) => (
+              <EngineeringAssetSummary group={group} key={group.assetType} promotionAction={submitAssetPromotionAction} promotionSummaries={assetPromotionSummaries} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} validationSummaries={assetValidationSummaries} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState body="No engineering asset rows are attached to this part yet." title="No assets" />
+        )}
+
+        {record.generationWorkflows.length > 0 ? (
+          <>
+            <h3 className="ui-section-heading__title" style={{ marginTop: 18 }}>
+              Generation workflow status
+            </h3>
+            <p className="muted-copy" style={{ fontSize: "0.88rem", marginBottom: 12 }}>
+              Tracks async work separately from stored official or verified file assets.
+            </p>
+            <ul className="info-list">
+              {record.generationWorkflows.map((workflow) => {
+                const reviewStatus = findReviewStatus(workflowReviewStatuses, "generation_workflow", workflow.id);
+
+                return (
+                  <li key={workflow.id}>
+                    <div className="datasheet-panel">
+                      <div>
+                        <p>{formatGenerationWorkflowLabel(workflow, record.assets)}</p>
+                        <p className="muted-copy">Review: {formatReviewStateLabel(reviewStatus.state)}</p>
+                      </div>
+                      <div className="datasheet-panel__badges">
+                        <StatusBadge label={formatReviewStateLabel(reviewStatus.state)} tone={mapViewToneToBadge(reviewStateTone(reviewStatus.state))} />
+                        <ReviewActionPanel reviewAction={submitReviewAction} reviewStatus={reviewStatus} targetId={workflow.id} targetType="generation_workflow" />
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           </>
         ) : null}
+      </section>
 
-        <SectionPanel description="Datasheet metadata remains separate from file availability." title="Datasheet">
-          <div className="datasheet-panel">
-            <div>
-              <p className="ui-mono">{record.datasheetRevision?.revisionLabel ?? "No revision"}</p>
-              <p>{record.datasheetRevision?.revisionDate ?? "Revision date unknown"}</p>
-              <p>{record.datasheetRevision?.pageCount ? `${record.datasheetRevision.pageCount} pages` : "Page count unknown"}</p>
-            </div>
-            <div className="datasheet-panel__badges">
-              <StatusBadge label={formatDatasheetParseConfidence(record.datasheetRevision?.parseConfidence)} tone={record.datasheetRevision ? scoreTone(record.datasheetRevision.parseConfidence) : "neutral"} />
-              <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
-              <StatusBadge label={latestSource ? `Source ${latestSource.providerId}` : "No source"} tone={latestSource ? "info" : "neutral"} />
-            </div>
-          </div>
-        </SectionPanel>
-
-        <SectionPanel description="Best available asset per class, ranked by readiness, provenance, validation/export status, and recency." title="Engineering Assets">
-          {assetGroups.length > 0 ? (
-            <div className="asset-grid">
-              {assetGroups.map((group) => (
-                <EngineeringAssetSummary group={group} key={group.assetType} promotionAction={submitAssetPromotionAction} promotionSummaries={assetPromotionSummaries} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} validationSummaries={assetValidationSummaries} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState body="No asset records are attached to this part yet." title="No assets" />
-          )}
-        </SectionPanel>
+      <section className="detail-section" aria-labelledby="next-heading">
+        <SectionHeading
+          id="next-heading"
+          index="04"
+          subtitle="Exports, recovery requests, review actions, and explicit export promotion—each with exact blockers when disabled."
+          title="Next actions"
+        />
 
         {shouldRenderGenerationOptions(generationOptions) ? (
-          <SectionPanel description="Requests are available only when normalized source-readiness checks pass; generated assets still require review before export." title="Missing Assets / Fallback Actions">
+          <SectionPanel description="Each control creates a tracked generation request when structured source-readiness checks pass. Generated outputs remain drafts until reviewed; approval is not export verification." title="Request draft generation">
             <ul className="info-list">
               {generationOptions.map((option) => (
-                <li key={option.targetAssetType}>
+                <li key={`req-${option.targetAssetType}`}>
                   <div className="datasheet-panel">
                     <div>
                       <strong>{option.label}</strong>
                       <p>{option.reason}</p>
-                      <p>Source check: {option.sourceReadiness.reasons.join(" ")}</p>
-                      <p>Extraction support: {formatExtractionSupport(option.sourceReadiness)}</p>
+                      <p className="muted-copy" style={{ fontSize: "0.82rem" }}>
+                        Source check: {option.sourceReadiness.reasons.join(" ")}
+                      </p>
+                      <p className="muted-copy" style={{ fontSize: "0.82rem" }}>
+                        Structured signals: {formatExtractionSupport(option.sourceReadiness)}
+                      </p>
                     </div>
                     <div className="datasheet-panel__badges">
                       <StatusBadge label={option.workflowStatusLabel} tone={generationWorkflowTone(option.workflowStatus)} />
-                      <StatusBadge label={option.sourceReadiness.ready ? "extracted support found" : "source incomplete"} tone={option.sourceReadiness.ready ? "info" : "review"} />
+                      <StatusBadge label={option.sourceReadiness.ready ? "Signals sufficient" : "Signals incomplete"} tone={option.sourceReadiness.ready ? "info" : "review"} />
                       <form action={requestGenerationAction}>
                         <input name="targetAssetType" type="hidden" value={option.targetAssetType} />
                         <button className="export-action" disabled={!option.canRequest} type="submit">
                           <span>{option.canRequest ? option.actionLabel : option.workflowStatusLabel}</span>
-                          <small>{option.sourceReadiness.ready ? "Creates a tracked request" : "Source material is incomplete"}</small>
+                          <small>{option.sourceReadiness.ready ? "Creates a tracked request in the catalog" : "Blocked until source signals are sufficient"}</small>
                         </button>
                       </form>
                     </div>
@@ -279,82 +377,32 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </SectionPanel>
         ) : null}
 
-        {record.similarParts.length > 0 ? (
-          <SectionPanel description="Similar parts are alternatives for the same design problem, not guaranteed drop-in replacements." title="Similar Parts">
-            <p>{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p>
-          </SectionPanel>
-        ) : null}
-
-        {record.companionRecommendations.length > 0 ? (
-          <SectionPanel description="Companion parts are typical pairings with their own confidence context." title="Typical Companion Parts">
-            <p>{renderRelatedList(record.companionRecommendations.map((relation) => relation.companionPartId), relatedPartSummaries)}</p>
-          </SectionPanel>
-        ) : null}
-
-        {record.generationWorkflows.length > 0 ? (
-          <SectionPanel description="Generation workflow state is shown separately from official or verified asset availability." title="Generation Workflow">
-            <ul className="info-list">
-              {record.generationWorkflows.map((workflow) => {
-                const reviewStatus = findReviewStatus(workflowReviewStatuses, "generation_workflow", workflow.id);
-
-                return (
-                  <li key={workflow.id}>
-                    <div className="datasheet-panel">
-                      <div>
-                        <p>{formatGenerationWorkflowLabel(workflow, record.assets)}</p>
-                        <p>Review state: {formatReviewStateLabel(reviewStatus.state)}.</p>
-                      </div>
-                      <div className="datasheet-panel__badges">
-                        <StatusBadge label={formatReviewStateLabel(reviewStatus.state)} tone={reviewStateTone(reviewStatus.state)} />
-                        <ReviewActionPanel reviewAction={submitReviewAction} reviewStatus={reviewStatus} targetId={workflow.id} targetType="generation_workflow" />
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </SectionPanel>
-        ) : null}
-
-        <SectionPanel description="Only file-backed assets verified for export can enable bundle actions." title="Export readiness">
-          <div className="datasheet-panel">
-            <div>
-              <p className="ui-mono">{bundleReadiness.label}</p>
-              <p>{bundleReadiness.reason}</p>
+        <div className="technical-panel">
+          <SectionPanel description="Only file-backed assets that passed review, validation evidence, and explicit promotion can authorize export bundles." title="Export bundles">
+            <div className="datasheet-panel">
+              <div>
+                <p className="ui-mono">{bundleReadiness.label}</p>
+                <p className="muted-copy">{bundleReadiness.reason}</p>
+              </div>
+              <div className="datasheet-panel__badges">
+                <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+                <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
+                <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
+              </div>
             </div>
-            <div className="datasheet-panel__badges">
-              <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-              <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD assets`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
-              <StatusBadge label={`${bundleReadiness.referencedAssetCount} referenced assets`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
+            <div className="export-list">
+              {exportActions.map((action) => (
+                <button className="export-action" disabled={!action.available} key={action.id} title={action.reason} type="button">
+                  <span>{action.label}</span>
+                  <small>{action.reason}</small>
+                </button>
+              ))}
             </div>
-          </div>
-          <div className="export-list">
-            {exportActions.map((action) => (
-              <button className="export-action" disabled={!action.available} key={action.id} title={action.reason} type="button">
-                <span>{action.label}</span>
-                <small>{action.reason}</small>
-              </button>
-            ))}
-          </div>
-        </SectionPanel>
-      </div>
+          </SectionPanel>
+        </div>
+
+      </section>
     </main>
-  );
-}
-
-/**
- * Renders one top-level truth cue for fast detail-page scanning.
- */
-function TrustSummaryCard({ detail, label, tone, value }: { detail: string; label: string; tone: BadgeTone; value: string }) {
-  return (
-    <article className="trust-summary-card">
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
-      <StatusBadge label={value} tone={tone} />
-      <p>{detail}</p>
-    </article>
   );
 }
 
@@ -372,7 +420,7 @@ function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], 
   if (promotionReadyCount > 0) {
     return {
       detail: "Validation evidence is present. Verified-for-export still requires the explicit promotion action.",
-      label: `${promotionReadyCount} promotion ${promotionReadyCount === 1 ? "candidate" : "candidates"}`,
+      label: `${promotionReadyCount} ready to promote`,
       tone: "info"
     };
   }
@@ -380,7 +428,7 @@ function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], 
   if (pendingCount > 0) {
     return {
       detail: "Generated or newly sourced outputs are waiting for review and are not export-ready.",
-      label: `${pendingCount} pending review`,
+      label: `${pendingCount} in review`,
       tone: "review"
     };
   }
@@ -388,7 +436,7 @@ function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], 
   if (changesRequestedCount > 0) {
     return {
       detail: "At least one reviewed output needs changes before approval or promotion can continue.",
-      label: "changes requested",
+      label: "Changes requested",
       tone: "review"
     };
   }
@@ -396,7 +444,7 @@ function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], 
   if (rejectedCount > 0) {
     return {
       detail: "Rejected outputs stay outside trust and export readiness until replaced or reworked.",
-      label: "rejected output",
+      label: "Rejected output",
       tone: "danger"
     };
   }
@@ -411,7 +459,7 @@ function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], 
 
   return {
     detail: "No asset or generation workflow is currently waiting for review.",
-    label: "no active review",
+    label: "No open review",
     tone: "neutral"
   };
 }
@@ -477,18 +525,21 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
         previewLabel={previewLabel(bestAsset.previewStatus)}
         previewTone={previewTone(bestAsset.previewStatus)}
         reviewLabel={formatAssetTrustStageLabel(bestAsset, reviewStatus.state)}
-        reviewTone={assetTrustStageTone(bestAsset, reviewStatus.state)}
+        reviewTone={mapViewToneToBadge(assetTrustStageTone(bestAsset, reviewStatus.state))}
         sourceLabel={formatAssetSourceLabel(bestAsset, group.assets.length)}
         title={assetTypeLabel(group.assetType)}
         updatedLabel={`Updated ${formatDateTime(bestAsset.lastUpdatedAt)}`}
         validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetExportStatus(bestAsset.exportStatus)}`}
         validationTone={validationTone(bestAsset.validationStatus)}
       />
-      <div className="asset-review-card__evidence">
-        <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
-        <p>Promotion audit: {formatAssetPromotionHistory(promotionSummary)}</p>
-        <p>Promotion blockers: {formatAssetPromotionBlockers(promotionSummary)}</p>
-      </div>
+      <details className="audit-disclosure">
+        <summary>Validation evidence and promotion history</summary>
+        <div className="asset-review-card__evidence">
+          <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
+          <p>Promotion audit: {formatAssetPromotionHistory(promotionSummary)}</p>
+          <p>Promotion blockers: {formatAssetPromotionBlockers(promotionSummary)}</p>
+        </div>
+      </details>
       <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
       <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
     </div>
@@ -554,7 +605,7 @@ function ReviewActionPanel({ reviewAction, reviewStatus, targetId, targetType }:
     <form action={reviewAction} className="review-action-panel">
       <input name="targetId" type="hidden" value={targetId} />
       <input name="targetType" type="hidden" value={targetType} />
-      <span>Local/dev review actions</span>
+      <span>Local review (dev)</span>
       <button name="outcome" type="submit" value="approved">
         Approve
       </button>
@@ -666,10 +717,10 @@ function validationLabel(status: ValidationStatus): string {
  */
 function provenanceLabel(provenance: AssetProvenance): string {
   return {
-    generated: "Generated provenance",
-    manual_internal: "Manual internal provenance",
-    official: "Official provenance",
-    trusted_external: "Trusted external provenance"
+    generated: "Generated",
+    manual_internal: "Manual internal",
+    official: "Official",
+    trusted_external: "Trusted vendor"
   }[provenance];
 }
 
@@ -725,15 +776,19 @@ function generationWorkflowTone(state: GenerationWorkflowState): BadgeTone {
     approved: "info",
     available_to_request: "info",
     failed: "danger",
-    generated: "review",
+    generated: "generated",
     processing: "review",
     queued: "review",
     requested: "info",
-    review_required: "review",
+    review_required: "generated",
     unavailable: "neutral"
   };
 
   return tones[state];
+}
+
+function mapViewToneToBadge(tone: ViewTone): BadgeTone {
+  return tone as BadgeTone;
 }
 
 /**
