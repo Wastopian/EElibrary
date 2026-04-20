@@ -4,12 +4,30 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
-import { filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readCatalogRecordsFromDatabase, readPartDetailRecordsFromDatabase, readPartSearchRecordsFromDatabase } from "./catalog-store";
-import { resolveCatalogRecords, resolveCatalogSearchRecords } from "./catalog-resolver";
+import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
+import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase } from "./catalog-store";
+import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse } from "./detail-response";
+import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
+import { runProviderPartImport } from "./provider-import-runner";
+import { isAuthError, requireAdmin } from "./auth";
 import type { CatalogQueryTiming } from "./catalog-store";
-import type { ApiEnvelope, AssetPromotionInput, CadAvailabilityFilter, CatalogDataSource, GenerationRequestCreateInput, GenerationTargetAssetType, PartSearchFilters, PartSearchRecord, PartSearchSort, ReviewActionInput, ReviewOutcome, ReviewTargetType, SearchPagination } from "@ee-library/shared/types";
+import type {
+  ApiEnvelope,
+  AssetPromotionInput,
+  CadAvailabilityFilter,
+  CatalogDataSource,
+  GenerationRequestCreateInput,
+  GenerationTargetAssetType,
+  PartSearchFilters,
+  PartSearchRecord,
+  PartSearchSort,
+  ProviderImportCreateResponse,
+  ReviewActionInput,
+  ReviewOutcome,
+  ReviewTargetType,
+  SearchPagination
+} from "@ee-library/shared/types";
 
 /** port is the local HTTP port for the API process. */
 const port = Number(process.env.API_PORT ?? 4000);
@@ -56,23 +74,38 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(url.pathname);
   const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
 
+  if (request.method === "POST" && url.pathname === "/imports/provider") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProviderImportCreate(request, response);
+    return;
+  }
+
   if (request.method === "POST" && generationRequestMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleGenerationRequestCreate(request, response, generationRequestMatch[1]);
     return;
   }
 
   if (request.method === "POST" && reviewActionMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleReviewActionCreate(request, response, reviewActionMatch[1]);
     return;
   }
 
   if (request.method === "POST" && promotionActionMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleAssetPromotionCreate(request, response, promotionActionMatch[1]);
     return;
   }
 
   if (request.method !== "GET") {
-    sendJson(response, 405, { error: "Only GET, generation-request POST, review POST, and asset-promotion POST routes are enabled for the catalog API" });
+    sendJson(response, 405, {
+      error: "Only GET, provider-import POST, generation-request POST, review POST, and asset-promotion POST routes are enabled for the catalog API"
+    });
     return;
   }
 
@@ -110,11 +143,12 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   if (url.pathname === "/parts/facets") {
+    const filters = readSearchFilters(url);
     const catalog = await timeRouteOperation(
       response,
       "catalog-resolve-facets",
-      () => resolveCatalogRecords(() => readCatalogRecordsFromDatabase({ onQueryTiming: buildQueryTimingSink(response) }), loadSeedCatalogRecords),
-      (result) => (result.ok ? `${result.records.length} records from ${result.source}` : result.body.error.code)
+      () => resolveCatalogSearchFacets(() => readPartSearchFacetsFromDatabase(filters, { onQueryTiming: buildQueryTimingSink(response) }), () => loadSeedSearchFacets(filters)),
+      (result) => (result.ok ? `${result.facets.manufacturers.length} manufacturers from ${result.source}` : result.body.error.code)
     );
 
     if (!catalog.ok) {
@@ -122,8 +156,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
       return;
     }
 
-    const facets = timeSyncRouteOperation(response, "search-facets", () => getSearchFacetsFromRecords(catalog.records), (result) => `${result.manufacturers.length} manufacturers`);
-
+    const facets = timeSyncRouteOperation(response, "search-facets", () => catalog.facets, (result) => `${result.manufacturers.length} manufacturers`);
     sendCatalogJson(response, facets, catalog.source, catalog.warnings);
     return;
   }
@@ -159,6 +192,73 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   sendJson(response, 404, { error: "Route not found" });
+}
+
+/**
+ * Handles operator-facing single-part provider imports through the shared worker import path.
+ */
+async function handleProviderImportCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<Record<string, unknown>>(request);
+
+  if (!body) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_BODY",
+        message: "Request body must be valid JSON."
+      }
+    });
+    return;
+  }
+
+  const parsed = parseProviderImportRequest(body);
+
+  if (!parsed.ok) {
+    sendJson(response, parsed.statusCode, {
+      error: {
+        code: parsed.code,
+        message: parsed.message
+      }
+    });
+    return;
+  }
+
+  try {
+    const summary = await timeRouteOperation(
+      response,
+      "provider-import-run",
+      () => runProviderPartImport(parsed.providerId, parsed.workerRequest),
+      (value) => value.importStatus
+    );
+
+    if (summary.importStatus !== "imported") {
+      sendJson(response, 422, {
+        error: {
+          code: "PROVIDER_IMPORT_INCOMPLETE",
+          message: "Import did not complete."
+        }
+      });
+      return;
+    }
+
+    const payload: ProviderImportCreateResponse = {
+      importStatus: summary.importStatus,
+      outcome: summary.outcome,
+      partId: summary.partId,
+      previousImportStatus: summary.previousImportStatus,
+      providerId: summary.providerId,
+      providerPartKey: summary.providerPartKey,
+      requestedLookup: parsed.requestedLookup
+    };
+
+    sendCatalogJson(response, payload, "database");
+  } catch (error) {
+    sendJson(response, 422, {
+      error: {
+        code: "PROVIDER_IMPORT_FAILED",
+        message: formatProviderImportFailureMessage(error)
+      }
+    });
+  }
 }
 
 /**
@@ -556,6 +656,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && /^\/parts\/[^/]+\/generation-requests$/u.test(pathname)) return "api-generation-request";
   if (method === "POST" && /^\/parts\/[^/]+\/reviews$/u.test(pathname)) return "api-review-action";
   if (method === "POST" && /^\/parts\/[^/]+\/asset-promotions$/u.test(pathname)) return "api-promotion-action";
+  if (method === "POST" && pathname === "/imports/provider") return "api-provider-import";
   if (method === "GET" && pathname === "/health") return "api-health";
 
   return "api-route";
@@ -636,6 +737,15 @@ async function loadSeedCatalogRecords(): Promise<PartSearchRecord[]> {
  */
 async function loadSeedSearchRecords(filters: PartSearchFilters): Promise<{ pagination: SearchPagination; records: PartSearchRecord[] }> {
   return filterSortAndPaginatePartRecords(await loadSeedCatalogRecords(), filters);
+}
+
+/**
+ * Dynamically loads and filters seed facets only when explicit local fallback is enabled.
+ */
+async function loadSeedSearchFacets(filters: PartSearchFilters): Promise<ReturnType<typeof getSearchFacetsFromRecords>> {
+  const filteredRecords = filterPartRecords(await loadSeedCatalogRecords(), filters);
+
+  return getSearchFacetsFromRecords(filteredRecords);
 }
 
 if (process.env.NODE_ENV !== "test") {

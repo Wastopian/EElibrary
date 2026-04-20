@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./provider-part-import": "./src/provider-part-import.ts"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts status",

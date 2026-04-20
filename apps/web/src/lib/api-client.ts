@@ -2,7 +2,23 @@
  * File header: Provides the web app's provider-neutral API access layer.
  */
 
-import type { ApiEnvelope, ApiErrorEnvelope, AssetPromotionInput, AssetPromotionResponse, GenerationRequestCreateInput, GenerationRequestCreateResponse, GenerationTargetAssetType, PartDetailResponse, PartSearchFilters, PartSearchRecord, ReviewActionInput, ReviewActionResponse, SearchFacets } from "@ee-library/shared/types";
+import type {
+  ApiEnvelope,
+  ApiErrorEnvelope,
+  AssetPromotionInput,
+  AssetPromotionResponse,
+  GenerationRequestCreateInput,
+  GenerationRequestCreateResponse,
+  GenerationTargetAssetType,
+  PartDetailResponse,
+  PartSearchFilters,
+  PartSearchRecord,
+  ProviderImportCreateInput,
+  ProviderImportCreateResponse,
+  ReviewActionInput,
+  ReviewActionResponse,
+  SearchFacets
+} from "@ee-library/shared/types";
 
 /** ApiHealth describes the lightweight operational status response from the API. */
 export interface ApiHealth {
@@ -58,8 +74,18 @@ export async function fetchSearchFacets(): Promise<SearchFacets> {
 /**
  * Fetches search facets and preserves catalog source metadata.
  */
-export async function fetchSearchFacetsEnvelope(): Promise<ApiEnvelope<SearchFacets>> {
-  return fetchApi<ApiEnvelope<SearchFacets>>("/parts/facets");
+export async function fetchSearchFacetsEnvelope(filters: PartSearchFilters = {}): Promise<ApiEnvelope<SearchFacets>> {
+  const searchParams = new URLSearchParams();
+
+  appendSearchParam(searchParams, "q", filters.query);
+  appendSearchParam(searchParams, "manufacturerId", filters.manufacturerId);
+  appendSearchParam(searchParams, "category", filters.category);
+  appendSearchParam(searchParams, "packageId", filters.packageId);
+  appendSearchParam(searchParams, "lifecycleStatus", filters.lifecycleStatus);
+  appendSearchParam(searchParams, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  const query = searchParams.toString();
+
+  return fetchApi<ApiEnvelope<SearchFacets>>(`/parts/facets${query ? `?${query}` : ""}`);
 }
 
 /**
@@ -125,6 +151,26 @@ export async function fetchPartDetail(partId: string): Promise<PartDetailRespons
 }
 
 /**
+ * Runs one provider catalog import through the API using the shared worker import path.
+ */
+export async function requestProviderImport(input: ProviderImportCreateInput): Promise<ProviderImportCreateResponse> {
+  const response = await fetch(buildApiUrl("/imports/provider"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderImportCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
  * Creates a DB-backed generation request through the API without simulating completion.
  */
 export async function createGenerationRequest(partId: string, targetAssetType: GenerationTargetAssetType): Promise<GenerationRequestCreateResponse> {
@@ -132,9 +178,7 @@ export async function createGenerationRequest(partId: string, targetAssetType: G
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/generation-requests`), {
     body: JSON.stringify(body),
     cache: "no-store",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     method: "POST"
   });
 
@@ -154,9 +198,7 @@ export async function createReviewAction(partId: string, input: ReviewActionInpu
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/reviews`), {
     body: JSON.stringify(input),
     cache: "no-store",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     method: "POST"
   });
 
@@ -177,9 +219,7 @@ export async function createAssetPromotion(partId: string, assetId: string): Pro
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/asset-promotions`), {
     body: JSON.stringify(body),
     cache: "no-store",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     method: "POST"
   });
 
@@ -190,6 +230,25 @@ export async function createAssetPromotion(partId: string, assetId: string): Pro
   const envelope = (await response.json()) as ApiEnvelope<AssetPromotionResponse>;
 
   return envelope.data;
+}
+
+/**
+ * Fetches a short-lived HS256 token from the Next.js /api/token route for API POST calls.
+ * Works from both server components (absolute URL) and client components (relative URL).
+ */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const base =
+      typeof globalThis.window === "undefined"
+        ? (process.env["NEXTAUTH_URL"] ?? "http://localhost:3000")
+        : "";
+    const res = await fetch(`${base}/api/token`, { cache: "no-store" });
+    if (!res.ok) return {};
+    const { token } = (await res.json()) as { token: string };
+    return { Authorization: `Bearer ${token}` };
+  } catch {
+    return {};
+  }
 }
 
 /**

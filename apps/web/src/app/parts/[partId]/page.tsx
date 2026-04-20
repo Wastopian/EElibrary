@@ -3,13 +3,14 @@
  */
 
 import Link from "next/link";
+import React from "react";
 import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
-import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { ViewTone } from "../../../lib/detail-view-model";
 import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
@@ -40,6 +41,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const assetTruthSummary = getAssetTruthSummary(record);
   const connectorSummary = getConnectorWorkflowSummary(record);
   const recoverySummary = getRecoveryWorkflowSummary(record);
+  const quickReadinessSummary = getQuickReadinessSummary(record);
   const reviewWorkflowSummary = buildReviewWorkflowSummary(assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
   const latestSource = record.sources[0];
   const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
@@ -103,7 +105,9 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     revalidatePath(`/parts/${partId}`);
   }
 
-  const hasGoesWith = hasConnectorIntelligence || record.similarParts.length > 0 || record.companionRecommendations.length > 0;
+  const hasSimilarParts = record.similarParts.length > 0;
+  const hasCompanionParts = record.companionRecommendations.length > 0;
+  const hasGoesWith = hasConnectorIntelligence || hasSimilarParts || hasCompanionParts;
 
   return (
     <main className="detail-layout">
@@ -145,6 +149,20 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </p>
           </div>
         </section>
+
+        <nav aria-label="Readiness record sections" className="detail-tabbar">
+          <a href="#overview-heading">Overview</a>
+          <a href="#goes-with-heading">Mates and accessories</a>
+          <a href="#files-heading">Engineering assets</a>
+          <a href="#next-heading">Approval and export</a>
+        </nav>
+
+        <DetailReadinessSummary
+          assetTruthSummary={assetTruthSummary}
+          connectorOrRecoverySummary={connectorSummary ?? recoverySummary}
+          quickReadinessSummary={quickReadinessSummary}
+          reviewWorkflowSummary={reviewWorkflowSummary}
+        />
 
         <div className="detail-two-col">
           <SectionPanel description="Normalized to internal units. Confidence reflects source extraction, not manufacturing guarantee." title="Key metrics">
@@ -260,33 +278,34 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                 </SectionPanel>
               </div>
             ) : null}
-            <div className="detail-two-col">
-              {record.similarParts.length > 0 ? (
-                <SectionPanel description="Alternates for substitution decisions—not automatic drop-ins." title="Similar parts">
-                  <p className="related-inline">{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p>
-                </SectionPanel>
-              ) : (
-                <SectionPanel description="No alternate list is stored for this part." title="Similar parts">
-                  <p className="muted-copy">None listed.</p>
-                </SectionPanel>
-              )}
-              {record.companionRecommendations.length > 0 ? (
-                <SectionPanel description="Parts often used alongside this one in real designs." title="Typical companions">
-                  <p className="related-inline">{renderRelatedList(record.companionRecommendations.map((relation) => relation.companionPartId), relatedPartSummaries)}</p>
-                </SectionPanel>
-              ) : (
-                <SectionPanel description="No companion recommendations are stored." title="Typical companions">
-                  <p className="muted-copy">None listed.</p>
-                </SectionPanel>
-              )}
-            </div>
+            {hasSimilarParts || hasCompanionParts ? (
+              <div className="detail-two-col">
+                {hasSimilarParts ? (
+                  <SectionPanel description="Alternates for substitution decisions—not automatic drop-ins." title="Similar parts">
+                    <p className="related-inline">{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p>
+                  </SectionPanel>
+                ) : null}
+                {hasCompanionParts ? (
+                  <SectionPanel description="Parts often used alongside this one in real designs." title="Typical companions">
+                    <p className="related-inline">{renderRelatedList(record.companionRecommendations.map((relation) => relation.companionPartId), relatedPartSummaries)}</p>
+                  </SectionPanel>
+                ) : null}
+                {!hasSimilarParts || !hasCompanionParts ? (
+                  <SectionPanel description="Only one relationship list is currently available for this part." title="Pairing coverage">
+                    <p className="muted-copy">
+                      {!hasSimilarParts ? "No similar-part alternates are stored yet." : "No typical companion recommendations are stored yet."}
+                    </p>
+                  </SectionPanel>
+                ) : null}
+              </div>
+            ) : null}
           </>
         ) : (
           <EmptyState body="No connector intelligence, similar parts, or companion recommendations are stored for this record." title="No relationship data" />
         )}
       </section>
 
-      <section className="detail-section technical-panel" aria-labelledby="files-heading">
+      <section className="detail-section detail-section--technical" aria-labelledby="files-heading">
         <SectionHeading
           id="files-heading"
           index="03"
@@ -377,32 +396,89 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </SectionPanel>
         ) : null}
 
-        <div className="technical-panel">
-          <SectionPanel description="Only file-backed assets that passed review, validation evidence, and explicit promotion can authorize export bundles." title="Export bundles">
-            <div className="datasheet-panel">
-              <div>
-                <p className="ui-mono">{bundleReadiness.label}</p>
-                <p className="muted-copy">{bundleReadiness.reason}</p>
-              </div>
-              <div className="datasheet-panel__badges">
-                <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-                <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
-                <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
-              </div>
+        <SectionPanel description="Only file-backed assets that passed review, validation evidence, and explicit promotion can authorize export bundles." title="Export bundles" tone="technical">
+          <div className="datasheet-panel">
+            <div>
+              <p className="ui-mono">{bundleReadiness.label}</p>
+              <p className="muted-copy">{bundleReadiness.reason}</p>
             </div>
-            <div className="export-list">
-              {exportActions.map((action) => (
-                <button className="export-action" disabled={!action.available} key={action.id} title={action.reason} type="button">
-                  <span>{action.label}</span>
-                  <small>{action.reason}</small>
-                </button>
-              ))}
+            <div className="datasheet-panel__badges">
+              <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+              <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
+              <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
             </div>
-          </SectionPanel>
-        </div>
+          </div>
+          <div className="export-list">
+            {exportActions.map((action) => (
+              <button className="export-action" disabled={!action.available} key={action.id} title={action.reason} type="button">
+                <span>{action.label}</span>
+                <small>{action.reason}</small>
+              </button>
+            ))}
+          </div>
+        </SectionPanel>
 
       </section>
     </main>
+  );
+}
+
+/**
+ * Renders the explanation-first readiness record summary using existing view-model signals.
+ */
+function DetailReadinessSummary({
+  assetTruthSummary,
+  connectorOrRecoverySummary,
+  quickReadinessSummary,
+  reviewWorkflowSummary
+}: {
+  assetTruthSummary: ReturnType<typeof getAssetTruthSummary>;
+  connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>;
+  quickReadinessSummary: ReturnType<typeof getQuickReadinessSummary>;
+  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
+}) {
+  return (
+    <section aria-label="Readiness summary" className={`detail-readiness-summary detail-readiness-summary--${quickReadinessSummary.tone}`}>
+      <div className="detail-readiness-summary__lead">
+        <div>
+          <p className="app-kicker">Readiness record</p>
+          <h2>{quickReadinessSummary.headline}</h2>
+          <p>{quickReadinessSummary.detail}</p>
+        </div>
+        <div className="detail-readiness-summary__badges">
+          <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
+          <StatusBadge label={connectorOrRecoverySummary.label} tone={mapViewToneToBadge(connectorOrRecoverySummary.tone)} />
+          <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+        </div>
+      </div>
+
+      <div className="detail-readiness-summary__grid">
+        <div>
+          <span>Blockers and next actions</span>
+          {quickReadinessSummary.actions.length > 0 ? (
+            <ul>
+              {quickReadinessSummary.actions.map((action) => (
+                <li key={action.label}>
+                  <strong>{action.priority}</strong>
+                  {action.label}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No quick blockers were derived from the current catalog record.</p>
+          )}
+        </div>
+        <div>
+          <span>Trust boundary</span>
+          <p>{reviewWorkflowSummary.detail}</p>
+          <p>Approved assets and generated outputs remain distinct from verified-for-export assets.</p>
+        </div>
+        <div>
+          <span>Asset truth</span>
+          <p>{assetTruthSummary.detail}</p>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -5,8 +5,9 @@
 import Link from "next/link";
 import React from "react";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { ImportByMpnPanel } from "../components/ImportByMpnPanel";
 import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../lib/api-client";
-import { getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
+import { getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CadAvailabilityFilter, CatalogDataSource, LifecycleStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
 import type { ApiHealth } from "../lib/api-client";
@@ -41,6 +42,13 @@ type HomepageCatalogState =
       message: string;
       health: ApiHealth | null;
     };
+
+/** QuickLookupState makes no-match and ambiguity explicit before rendering a readiness answer. */
+type QuickLookupState =
+  | { status: "idle" }
+  | { status: "no_match"; query: string }
+  | { status: "ambiguous"; query: string; records: PartSearchRecord[]; totalRecords: number }
+  | { status: "matched"; record: PartSearchRecord };
 
 export const dynamic = "force-dynamic";
 
@@ -84,17 +92,18 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const sampleParts = selectSampleParts(results);
   const providerSummary = buildProviderSummary(results, source, health);
   const resultRange = buildResultRange(pagination, results.length);
+  const quickLookupState = buildQuickLookupState(query, results, pagination);
 
   return (
     <main>
-      <section aria-label="Search workspace" className="hero-editorial">
+      <section aria-label="Quick part readiness check" className="quick-check-workspace">
         <div className="hero-editorial__inner">
           <p className="app-kicker">EE Library</p>
-          <h1>Find parts with honest CAD and export readiness.</h1>
+          <h1>Quick part readiness check</h1>
           <p className="hero-lede">Normalized specs, connector build sets, and file-backed engineering assets—without treating references, drafts, or approvals as production-ready exports.</p>
 
-          <form className="search-bar" action="/" method="get">
-            <label htmlFor="q">Search by MPN or keyword</label>
+          <form className="quick-check-form" action="/" method="get">
+            <label htmlFor="q">MPN or keyword</label>
             <input name="manufacturerId" type="hidden" value={manufacturerId} />
             <input name="category" type="hidden" value={category} />
             <input name="packageId" type="hidden" value={packageId} />
@@ -103,8 +112,12 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             <input name="sort" type="hidden" value={sort} />
             <div className="search-bar__controls">
               <input defaultValue={query} id="q" name="q" placeholder="TPS7A02, QFN-16, connector series…" />
-              <button type="submit">Search catalog</button>
+              <button type="submit">Check Part</button>
             </div>
+            <label className="quick-check-unavailable">
+              <span>Datasheet URL</span>
+              <input disabled placeholder="Unavailable until the import API accepts datasheet URLs" />
+            </label>
           </form>
 
           <div className="catalog-strip" role="status">
@@ -118,6 +131,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p>
           ) : null}
 
+          <QuickLookupPanel state={quickLookupState} />
+
           <div className="quick-actions-row">
             <Link className="button-link button-link--quiet" href="/#import-by-mpn">
               Import by MPN
@@ -126,23 +141,16 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               Browse connectors
             </Link>
             <Link className="button-link button-link--quiet" href="/?cad=unavailable">
-              Review generated drafts
+              Review missing or unverified CAD
             </Link>
           </div>
 
-          <details className="import-guide" id="import-by-mpn">
-            <summary>How to import a part by MPN (worker)</summary>
-            <p className="muted-copy" style={{ marginTop: 12 }}>
-              Imports run outside the browser through the worker. Use a configured <span className="ui-mono">DATABASE_URL</span>, then:
-            </p>
-            <pre>{`npm run ingest -w @ee-library/worker -- jlcparts <MPN_OR_LCSC_ID>
-npm run imports:providers`}</pre>
-          </details>
+          <ImportByMpnPanel anchorId="import-by-mpn" />
         </div>
       </section>
 
       <div className="home-secondary">
-        <div>
+        <div className="home-secondary__metrics">
           <div className="health-compact" aria-label="Snapshot of this page">
             <div>
               <span>Matches (total)</span>
@@ -165,16 +173,16 @@ npm run imports:providers`}</pre>
               <strong>{catalogStats.generationWorkflowCount}</strong>
             </div>
             <div>
-              <span>Sources</span>
-              <strong>
-                <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
-              </strong>
+              <span>Catalog mode</span>
+              <strong>{catalogModeLabel(source)}</strong>
             </div>
           </div>
-          <p className="muted-copy" style={{ fontSize: "0.88rem", marginTop: 12 }}>
-            {providerSummary.detail}
-          </p>
         </div>
+        <aside className="home-secondary__provider" aria-label="Provider and ingestion summary">
+          <p className="app-kicker">Catalog health</p>
+          <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
+          <p className="muted-copy">{providerSummary.detail}</p>
+        </aside>
       </div>
 
       <section className="sample-strip" aria-label="Sample records">
@@ -217,7 +225,7 @@ npm run imports:providers`}</pre>
                 <option value="">All manufacturers</option>
                 {facets.manufacturers.map((manufacturer) => (
                   <option key={manufacturer.id} value={manufacturer.id}>
-                    {manufacturer.name}
+                    {formatFacetOptionLabel(manufacturer.name, facets.counts?.manufacturers[manufacturer.id])}
                   </option>
                 ))}
               </select>
@@ -228,7 +236,7 @@ npm run imports:providers`}</pre>
                 <option value="">All categories</option>
                 {facets.categories.map((partCategory) => (
                   <option key={partCategory} value={partCategory}>
-                    {partCategory}
+                    {formatFacetOptionLabel(partCategory, facets.counts?.categories[partCategory])}
                   </option>
                 ))}
               </select>
@@ -239,7 +247,7 @@ npm run imports:providers`}</pre>
                 <option value="">All packages</option>
                 {facets.packages.map((partPackage) => (
                   <option key={partPackage.id} value={partPackage.id}>
-                    {partPackage.packageName}
+                    {formatFacetOptionLabel(partPackage.packageName, facets.counts?.packages[partPackage.id])}
                   </option>
                 ))}
               </select>
@@ -250,7 +258,7 @@ npm run imports:providers`}</pre>
                 <option value="">All lifecycle states</option>
                 {facets.lifecycleStatuses.map((status) => (
                   <option key={status} value={status}>
-                    {formatLifecycleStatus(status)}
+                    {formatFacetOptionLabel(formatLifecycleStatus(status), facets.counts?.lifecycleStatuses[status])}
                   </option>
                 ))}
               </select>
@@ -258,9 +266,9 @@ npm run imports:providers`}</pre>
             <label>
               CAD files for export
               <select defaultValue={cadAvailability} name="cad">
-                <option value="any">Any</option>
-                <option value="available">Has verified file-backed CAD</option>
-                <option value="unavailable">Missing verified CAD</option>
+                <option value="any">{formatFacetOptionLabel("Any", facets.counts?.cadAvailability.any)}</option>
+                <option value="available">{formatFacetOptionLabel("Has verified file-backed CAD", facets.counts?.cadAvailability.available)}</option>
+                <option value="unavailable">{formatFacetOptionLabel("Missing verified CAD", facets.counts?.cadAvailability.unavailable)}</option>
               </select>
             </label>
             <label>
@@ -346,12 +354,178 @@ npm run imports:providers`}</pre>
   );
 }
 
+/**
+ * Renders the explicit quick lookup state before any detailed readiness answer.
+ */
+function QuickLookupPanel({ state }: { state: QuickLookupState }) {
+  if (state.status === "idle") {
+    return <p className="quick-check-hint">Try a raw MPN, manufacturer-filtered lookup, or use provider import when a part is not in the catalog yet.</p>;
+  }
+
+  if (state.status === "no_match") {
+    return (
+      <div className="quick-check-empty" role="status">
+        <strong>Part not found</strong>
+        <p>
+          No catalog records matched <span className="ui-mono">{state.query}</span>. The UI will not create a readiness answer without backend data.
+        </p>
+        <a className="button-link button-link--quiet" href="#import-by-mpn">
+          Try provider import
+        </a>
+      </div>
+    );
+  }
+
+  if (state.status === "ambiguous") {
+    return <QuickAmbiguousResult records={state.records} totalRecords={state.totalRecords} query={state.query} />;
+  }
+
+  return <QuickReadinessResult record={state.record} />;
+}
+
+/**
+ * Renders an ambiguity state with real candidate records instead of choosing silently.
+ */
+function QuickAmbiguousResult({ query, records, totalRecords }: { query: string; records: PartSearchRecord[]; totalRecords: number }) {
+  return (
+    <section aria-label={`Ambiguous readiness matches for ${query}`} className="quick-check-empty quick-check-empty--ambiguous" role="status">
+      <div>
+        <strong>Ambiguous match</strong>
+        <p>
+          {totalRecords} catalog records matched <span className="ui-mono">{query}</span>. Open the correct part before trusting readiness or export state.
+        </p>
+      </div>
+      <div className="quick-candidate-list">
+        {records.slice(0, 5).map((record) => (
+          <Link href={`/parts/${record.part.id}`} key={record.part.id}>
+            <span className="ui-mono">{record.part.mpn}</span>
+            <span>
+              {record.manufacturer.name} / {record.part.category} / {record.package.packageName}
+            </span>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Renders the explanation-first quick readiness result from one real search record.
+ */
+function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
+  const summary = getQuickReadinessSummary(record);
+  const dataCoverage = getQuickReadinessDataCoverage(record);
+  const exportReadiness = getSearchExportReadiness(record);
+  const assetTruth = getAssetTruthSummary(record);
+  const connectorHint = getConnectorWorkflowSummary(record);
+  const recoveryStatus = getRecoveryWorkflowSummary(record);
+
+  return (
+    <section aria-label={`Readiness result for ${record.part.mpn}`} className={`quick-readiness-result quick-readiness-result--${summary.tone}`}>
+      <div className="quick-readiness-result__explanation">
+        <div className="quick-readiness-result__bar" aria-hidden />
+        <div>
+          <div className="quick-readiness-result__headline">
+            <h2>{summary.headline}</h2>
+            <span>{summary.subhead}</span>
+          </div>
+          <p>{summary.detail}</p>
+        </div>
+        <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+      </div>
+
+      <div className="quick-readiness-result__identity">
+        <span className="ui-mono">{record.part.mpn}</span>
+        <span>{record.manufacturer.name}</span>
+        <span>
+          {record.part.category} / {record.package.packageName}
+        </span>
+        <StatusBadge label={formatLifecycleShort(record.part.lifecycleStatus)} tone="neutral" />
+        <StatusBadge label={dataCoverage.label} tone={mapViewTone(dataCoverage.tone)} />
+        <Link className="button-link" href={`/parts/${record.part.id}`}>
+          Open Full Record
+        </Link>
+      </div>
+
+      <div className="quick-readiness-grid">
+        <section className="quick-readiness-card">
+          <div className="quick-readiness-card__header">
+            <span>Readiness Checks</span>
+            <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
+          </div>
+          {summary.checks.map((check) => (
+            <div className="quick-check-row" key={check.label}>
+              <StatusBadge label={check.label} tone={mapViewTone(check.tone)} />
+              <p>{check.detail}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="quick-readiness-card">
+          <div className="quick-readiness-card__header">
+            <span>Next Actions</span>
+            <span>{summary.actions.length} derived</span>
+          </div>
+          {summary.actions.length > 0 ? (
+            summary.actions.map((action) => (
+              <div className="quick-action-row" key={action.label}>
+                <span className={`quick-action-row__priority quick-action-row__priority--${action.priority}`}>{action.priority}</span>
+                <p>{action.label}</p>
+              </div>
+            ))
+          ) : (
+            <p className="muted-copy">No quick actions were derived from the current catalog record.</p>
+          )}
+        </section>
+
+        <section className="quick-readiness-card">
+          <div className="quick-readiness-card__header">
+            <span>{connectorHint ? "Connector Intelligence" : "Missing-CAD Recovery"}</span>
+            <StatusBadge label={connectorHint?.label ?? recoveryStatus.label} tone={mapViewTone(connectorHint?.tone ?? recoveryStatus.tone)} />
+          </div>
+          <p>{connectorHint?.detail ?? recoveryStatus.detail}</p>
+          <div className="quick-readiness-card__footer">
+            <StatusBadge label={assetTruth.label} tone={mapViewTone(assetTruth.tone)} />
+            <p>{dataCoverage.detail}</p>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function mapViewTone(tone: string): BadgeTone {
   if (tone === "generated") {
     return "generated";
   }
 
   return tone as BadgeTone;
+}
+
+/**
+ * Builds the quick lookup state from a paged search response without silently selecting ambiguous results.
+ */
+function buildQuickLookupState(query: string | undefined, records: PartSearchRecord[], pagination: SearchPagination): QuickLookupState {
+  if (!query || query.trim().length === 0) {
+    return { status: "idle" };
+  }
+
+  if (records.length === 0 || pagination.totalRecords === 0) {
+    return { query, status: "no_match" };
+  }
+
+  if (pagination.totalRecords > 1) {
+    return {
+      query,
+      records,
+      status: "ambiguous",
+      totalRecords: pagination.totalRecords
+    };
+  }
+
+  const record = records[0];
+
+  return record ? { record, status: "matched" } : { query, status: "no_match" };
 }
 
 function formatLifecycleShort(status: string): string {
@@ -369,7 +543,7 @@ async function loadHomepageCatalog(filters: PartSearchFilters): Promise<Homepage
   const healthPromise = fetchApiHealth();
 
   try {
-    const [health, facetsEnvelope, resultsEnvelope] = await Promise.all([healthPromise, fetchSearchFacetsEnvelope(), fetchPartSearchEnvelope(filters)]);
+    const [health, facetsEnvelope, resultsEnvelope] = await Promise.all([healthPromise, fetchSearchFacetsEnvelope(filters), fetchPartSearchEnvelope(filters)]);
     const source = resultsEnvelope.source ?? facetsEnvelope.source ?? "database";
 
     return {
@@ -447,11 +621,11 @@ function buildSetupCatalogState(error: unknown, health: ApiHealth | null): Homep
 function HomepageSetupState({ catalogState }: { catalogState: Extract<HomepageCatalogState, { status: "setup_required" }> }) {
   return (
     <main>
-      <section aria-label="Search workspace" className="hero-editorial">
+      <section aria-label="Quick part readiness check unavailable" className="quick-check-workspace">
         <div className="hero-editorial__inner">
           <p className="app-kicker">EE Library</p>
-          <h1>Find parts with honest CAD and export readiness.</h1>
-          <p className="hero-lede">Connect the catalog database or enable explicit local seed mode to search. The UI will not invent DB-backed results.</p>
+          <h1>Quick part readiness check</h1>
+          <p className="hero-lede">Backend unavailable. Connect the catalog database or enable explicit local seed mode to search. The UI will not invent DB-backed results.</p>
           <div className="catalog-strip" role="status">
             <span className="catalog-strip__label">Status</span>
             <StatusBadge label={catalogState.code} tone="review" />
@@ -607,6 +781,13 @@ function formatLifecycleStatus(status: LifecycleStatus): string {
   };
 
   return labels[status];
+}
+
+/**
+ * Formats one filter option with a DB-backed count when the API supplied it.
+ */
+function formatFacetOptionLabel(label: string, count: number | undefined): string {
+  return typeof count === "number" ? `${label} (${count})` : label;
 }
 
 function scoreTone(score: number): BadgeTone {

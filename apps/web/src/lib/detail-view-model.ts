@@ -27,6 +27,42 @@ export interface WorkflowSignalLabel {
   tone: ViewTone;
 }
 
+/** QuickReadinessAction is one concrete next step for quick-check triage. */
+export interface QuickReadinessAction {
+  /** Short action label grounded in existing catalog state. */
+  label: string;
+  /** Priority level for scan-speed ordering. */
+  priority: "high" | "medium" | "low";
+}
+
+/** QuickReadinessSummary adapts a catalog record into V3-style explainable triage copy. */
+export interface QuickReadinessSummary {
+  /** Short headline that describes whether the part can move forward. */
+  headline: string;
+  /** One-line readiness explanation derived from existing summaries. */
+  subhead: string;
+  /** Longer explanation that keeps export and review boundaries explicit. */
+  detail: string;
+  /** Deterministic next actions based on visible blockers. */
+  actions: QuickReadinessAction[];
+  /** Key checks shown in the quick result card. */
+  checks: WorkflowSignalLabel[];
+  /** Status tone for the headline. */
+  tone: ViewTone;
+}
+
+/** QuickReadinessDataCoverage explains whether the compact result has enough source data. */
+export interface QuickReadinessDataCoverage {
+  /** Short label for the quick-check result. */
+  label: string;
+  /** Explanation of missing or present readiness inputs. */
+  detail: string;
+  /** Tone for compact status badges. */
+  tone: ViewTone;
+  /** True when the quick summary is missing important record families. */
+  partial: boolean;
+}
+
 /**
  * Returns true only when connector-specific sections have meaningful connector data.
  */
@@ -335,6 +371,56 @@ export function getConnectorWorkflowSummary(record: PartSearchRecord): WorkflowS
 }
 
 /**
+ * Builds the explanation-first quick-check summary from existing provider-neutral signals.
+ */
+export function getQuickReadinessSummary(record: PartSearchRecord): QuickReadinessSummary {
+  const exportReadiness = getSearchExportReadiness(record);
+  const assetTruth = getAssetTruthSummary(record);
+  const recovery = getRecoveryWorkflowSummary(record);
+  const connector = getConnectorWorkflowSummary(record);
+  const checks = [exportReadinessToSignal(exportReadiness), assetTruth, connector ?? recovery, lifecycleSignal(record)];
+  const actions = buildQuickReadinessActions(exportReadiness, assetTruth, recovery, connector);
+  const tone = exportReadiness.tone === "verified" && assetTruth.tone === "verified" ? "verified" : actions.some((action) => action.priority === "high") ? "review" : exportReadiness.tone;
+
+  return {
+    actions,
+    checks,
+    detail: buildQuickReadinessDetail(exportReadiness, assetTruth, connector ?? recovery),
+    headline: tone === "verified" ? "Ready for Export Review" : actions.length > 0 ? "Review Needed" : "Catalog Record Found",
+    subhead: actions.length > 0 ? `${actions.length} ${pluralize("action", actions.length)} before design use or export.` : "No immediate quick-check actions were derived from this catalog record.",
+    tone
+  };
+}
+
+/**
+ * Summarizes whether quick readiness has complete-enough backend data to be interpreted confidently.
+ */
+export function getQuickReadinessDataCoverage(record: PartSearchRecord): QuickReadinessDataCoverage {
+  const missingInputs: string[] = [];
+
+  if (record.sources.length === 0) missingInputs.push("source provenance");
+  if (record.metrics.length === 0) missingInputs.push("normalized metrics");
+  if (record.assets.length === 0) missingInputs.push("asset records");
+  if (!record.datasheetRevision) missingInputs.push("datasheet revision metadata");
+
+  if (missingInputs.length === 0) {
+    return {
+      detail: "Source provenance, normalized metrics, asset records, and datasheet metadata are present.",
+      label: "readiness data present",
+      partial: false,
+      tone: "verified"
+    };
+  }
+
+  return {
+    detail: `Partial readiness data: missing ${missingInputs.join(", ")}.`,
+    label: "partial readiness data",
+    partial: true,
+    tone: "review"
+  };
+}
+
+/**
  * Maps bundle readiness into search-card badge tone.
  */
 function bundleReadinessTone(state: BundleReadinessState): ViewTone {
@@ -346,6 +432,93 @@ function bundleReadinessTone(state: BundleReadinessState): ViewTone {
   };
 
   return tones[state];
+}
+
+/**
+ * Converts export readiness into the same quick-check row shape as other summaries.
+ */
+function exportReadinessToSignal(exportReadiness: ExportReadinessLabel): WorkflowSignalLabel {
+  return {
+    detail: exportReadiness.label === "bundle ready" ? "At least one export bundle has every required verified file-backed CAD asset." : "Export actions stay disabled until required CAD assets are file-backed and verified for export.",
+    label: exportReadiness.label,
+    tone: exportReadiness.tone
+  };
+}
+
+/**
+ * Builds a lifecycle scan signal without changing lifecycle semantics.
+ */
+function lifecycleSignal(record: PartSearchRecord): WorkflowSignalLabel {
+  const lifecycleLabels: Record<PartSearchRecord["part"]["lifecycleStatus"], string> = {
+    active: "lifecycle active",
+    not_recommended: "not recommended",
+    obsolete: "obsolete",
+    unknown: "lifecycle unknown"
+  };
+  const lifecycleTones: Record<PartSearchRecord["part"]["lifecycleStatus"], ViewTone> = {
+    active: "verified",
+    not_recommended: "review",
+    obsolete: "danger",
+    unknown: "neutral"
+  };
+
+  return {
+    detail: `Lifecycle state is ${record.part.lifecycleStatus}.`,
+    label: lifecycleLabels[record.part.lifecycleStatus],
+    tone: lifecycleTones[record.part.lifecycleStatus]
+  };
+}
+
+/**
+ * Builds concise quick-check actions without inventing backend workflow state.
+ */
+function buildQuickReadinessActions(exportReadiness: ExportReadinessLabel, assetTruth: WorkflowSignalLabel, recovery: WorkflowSignalLabel, connector: WorkflowSignalLabel | null): QuickReadinessAction[] {
+  const actions: QuickReadinessAction[] = [];
+
+  if (exportReadiness.tone !== "verified") {
+    actions.push({ label: "Inspect export blockers before using CAD in a design.", priority: "high" });
+  }
+
+  if (assetTruth.tone === "generated") {
+    actions.push({ label: "Review generated CAD drafts before approval or promotion.", priority: "high" });
+  } else if (assetTruth.tone === "review") {
+    actions.push({ label: "Verify file-backed CAD assets before export.", priority: "high" });
+  } else if (assetTruth.tone === "neutral") {
+    actions.push({ label: "Recover missing CAD only when source evidence is sufficient.", priority: "medium" });
+  }
+
+  if (recovery.tone === "info") {
+    actions.push({ label: "Request missing-CAD recovery from the part detail page.", priority: "medium" });
+  }
+
+  if (connector?.tone === "review") {
+    actions.push({ label: "Resolve connector mate mapping before layout decisions.", priority: "medium" });
+  }
+
+  return dedupeQuickActions(actions);
+}
+
+/**
+ * Keeps repeated action labels from crowding the quick-check result.
+ */
+function dedupeQuickActions(actions: QuickReadinessAction[]): QuickReadinessAction[] {
+  const seen = new Set<string>();
+
+  return actions.filter((action) => {
+    if (seen.has(action.label)) {
+      return false;
+    }
+
+    seen.add(action.label);
+    return true;
+  });
+}
+
+/**
+ * Combines existing signal explanations into one readable quick-check sentence.
+ */
+function buildQuickReadinessDetail(exportReadiness: ExportReadinessLabel, assetTruth: WorkflowSignalLabel, workflow: WorkflowSignalLabel): string {
+  return `Export bundle: ${exportReadiness.label}. CAD truth: ${assetTruth.detail} Workflow signal: ${workflow.detail}`;
 }
 
 /**

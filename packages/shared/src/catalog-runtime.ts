@@ -11,6 +11,7 @@ import type {
   AssetType,
   CadAvailabilityFilter,
   ExportAvailability,
+  LifecycleStatus,
   PartMetric,
   PartSearchFilters,
   PartSearchRecord,
@@ -32,11 +33,44 @@ export const MAX_SEARCH_PAGE_SIZE = 100;
  * Builds provider-neutral search facets from joined records.
  */
 export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchFacets {
+  const manufacturerCounts: Record<string, number> = {};
+  const categoryCounts: Record<string, number> = {};
+  const packageCounts: Record<string, number> = {};
+  const lifecycleCounts: Record<LifecycleStatus, number> = {
+    active: 0,
+    not_recommended: 0,
+    obsolete: 0,
+    unknown: 0
+  };
+  let cadAvailableCount = 0;
+
+  for (const record of records) {
+    manufacturerCounts[record.manufacturer.id] = (manufacturerCounts[record.manufacturer.id] ?? 0) + 1;
+    categoryCounts[record.part.category] = (categoryCounts[record.part.category] ?? 0) + 1;
+    packageCounts[record.package.id] = (packageCounts[record.package.id] ?? 0) + 1;
+    lifecycleCounts[record.part.lifecycleStatus] = (lifecycleCounts[record.part.lifecycleStatus] ?? 0) + 1;
+
+    if (matchesCadAvailability(record.assets, "available")) {
+      cadAvailableCount += 1;
+    }
+  }
+
   return {
     categories: Array.from(new Set(records.map((record) => record.part.category))).sort(),
-    lifecycleStatuses: ["active", "not_recommended", "obsolete", "unknown"],
+    lifecycleStatuses: (["active", "not_recommended", "obsolete", "unknown"] as const).filter((status) => lifecycleCounts[status] > 0),
     manufacturers: uniqueBy(records.map((record) => record.manufacturer), (manufacturer) => manufacturer.id).sort((left, right) => left.name.localeCompare(right.name)),
-    packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id).sort((left, right) => left.packageName.localeCompare(right.packageName))
+    packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id).sort((left, right) => left.packageName.localeCompare(right.packageName)),
+    counts: {
+      cadAvailability: {
+        any: records.length,
+        available: cadAvailableCount,
+        unavailable: Math.max(0, records.length - cadAvailableCount)
+      },
+      categories: categoryCounts,
+      lifecycleStatuses: lifecycleCounts,
+      manufacturers: manufacturerCounts,
+      packages: packageCounts
+    }
   };
 }
 

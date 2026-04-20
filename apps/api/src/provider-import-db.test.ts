@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { buildPartDetailResponse } from "./detail-response";
-import { readPartDetailRecordsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type { Pool, PoolClient } from "pg";
 
@@ -109,6 +109,60 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
     assert.ok(timings.some((timing) => timing.name === "search_count" && timing.status === "ok"));
     assert.ok(timings.some((timing) => timing.name === "search_part_ids" && timing.status === "ok"));
     assert.equal(timings.some((timing) => timing.name === "metrics"), false);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies SQL-backed search facets are grouped in-database and stay consistent with active filters.
+ */
+test("DB-backed search facets are correct, filter-consistent, and timed", async () => {
+  const pool = createProviderImportPool();
+  const timings: CatalogQueryTiming[] = [];
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await seedSearchRows(pool);
+
+    const allFacets = await readPartSearchFacetsFromDatabase({}, { onQueryTiming: (timing) => timings.push(timing) });
+    const alphaFacets = await readPartSearchFacetsFromDatabase({ manufacturerId: "mfr-search-alpha" });
+    const unavailableCadFacets = await readPartSearchFacetsFromDatabase({ cadAvailability: "unavailable" });
+
+    assert.equal(allFacets.status, "available");
+    assert.equal(alphaFacets.status, "available");
+    assert.equal(unavailableCadFacets.status, "available");
+
+    if (allFacets.status !== "available" || alphaFacets.status !== "available" || unavailableCadFacets.status !== "available") {
+      throw new Error("expected DB-backed facet reads");
+    }
+
+    assert.deepEqual(allFacets.facets.manufacturers.map((manufacturer) => manufacturer.id), ["mfr-search-alpha", "mfr-search-beta", "mfr-jlcparts-guangdong-fenghua-advanced-tech"]);
+    assert.deepEqual(allFacets.facets.categories, ["Connector", "Power", "Resistors / Chip Resistor - Surface Mount"]);
+    assert.equal(allFacets.facets.counts?.manufacturers["mfr-search-alpha"], 2);
+    assert.equal(allFacets.facets.counts?.manufacturers["mfr-jlcparts-guangdong-fenghua-advanced-tech"], 1);
+    assert.equal(allFacets.facets.counts?.lifecycleStatuses.obsolete, 1);
+    assert.equal(allFacets.facets.counts?.cadAvailability.available, 1);
+    assert.equal(allFacets.facets.counts?.cadAvailability.unavailable, 3);
+
+    assert.deepEqual(alphaFacets.facets.manufacturers.map((manufacturer) => manufacturer.id), ["mfr-search-alpha"]);
+    assert.deepEqual(alphaFacets.facets.categories, ["Connector"]);
+    assert.equal(alphaFacets.facets.counts?.cadAvailability.any, 2);
+    assert.equal(alphaFacets.facets.counts?.cadAvailability.available, 1);
+
+    assert.equal(unavailableCadFacets.facets.counts?.cadAvailability.any, 3);
+    assert.equal(unavailableCadFacets.facets.counts?.cadAvailability.available, 0);
+    assert.equal(unavailableCadFacets.facets.counts?.cadAvailability.unavailable, 3);
+    assert.equal(unavailableCadFacets.facets.packages.some((partPackage) => partPackage.id === "pkg-jlcparts-0402"), true);
+
+    assert.ok(timings.some((timing) => timing.name === "search_facet_manufacturers" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_categories" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_packages" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_lifecycle" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_total" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_cad_available" && timing.status === "ok"));
+    assert.equal(timings.some((timing) => timing.name === "search_assets"), false);
   } finally {
     setCatalogStorePoolForTests(null);
     await pool.end();

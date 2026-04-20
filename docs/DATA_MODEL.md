@@ -2,17 +2,20 @@
 
 EE Library is not just a part catalog.
 
-It is a **normalized engineering data system** built to answer these questions clearly:
+It is an **engineering part onboarding and readiness data system** built to answer these questions clearly:
 
 - What is the correct part?
+- Is the part identity verified or ambiguous?
 - What mates with it?
 - What other parts are required to build with it?
 - Which engineering assets actually exist?
 - How trustworthy are those assets?
 - Can missing assets be recovered from source material?
+- Are there near-match or family-confusion risks?
+- Is this part approved for design use?
 - Is this part truly ready for export into CAD workflows?
 
-This data model is designed around **truth, provenance, compatibility, and recovery** rather than naive part scraping.
+This data model is designed around **truth, provenance, compatibility, recovery, and readiness** rather than naive part scraping.
 
 ---
 
@@ -20,10 +23,14 @@ This data model is designed around **truth, provenance, compatibility, and recov
 
 - The database stores a **canonical part record**, not raw source chaos.
 - Source-derived facts must be **traceable**.
+- Provider imports must remain **explicitly attributable** and **freshness-aware**.
 - Connector relationships are **structured records**, not text notes.
 - Asset existence, trust, review, and export readiness must be **explicit**.
 - Generated assets never pretend to be official.
 - Missing assets should support **typed recovery workflows** when source material is sufficient.
+- Part readiness is a **first-class concept**, not an implied side effect of import success.
+- Part approval for engineering use is **separate** from asset review or source ingestion.
+- Import failures must be captured honestly without implying that a canonical part was created.
 
 ---
 
@@ -37,6 +44,25 @@ Fields:
 - `name`
 - `aliases`
 - `website`
+- `created_at`
+- `updated_at`
+
+### Provider
+Represents an external or internal source of part data or assets.
+
+Fields:
+- `id`
+- `name`
+- `provider_type` (`distributor`, `manufacturer`, `internal_catalog`, `external_asset_source`)
+- `base_url`
+- `trust_rank`
+- `is_active`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- normalizes provider identity across imports, sourcing views, and asset provenance
+- allows provider-neutral UI and workflow logic
 
 ### Part
 Represents the canonical engineering part record.
@@ -55,8 +81,12 @@ Fields:
 - `created_at`
 - `updated_at`
 
+Purpose:
+- is the canonical part identity used across readiness, assets, sourcing, and compatibility workflows
+- does not assume the part is automatically ready for engineering use
+
 ### Package
-Represents the canonical package/mechanical identity for a part.
+Represents the canonical package or mechanical identity for a part.
 
 Fields:
 - `id`
@@ -68,6 +98,8 @@ Fields:
 - `body_height_mm`
 - `mounting_style`
 - `notes`
+- `created_at`
+- `updated_at`
 
 ---
 
@@ -78,15 +110,18 @@ Represents a normalized source snapshot used to derive facts for a part.
 
 Fields:
 - `id`
-- `part_id`
+- `part_id` (nullable)
 - `provider_id`
 - `provider_part_key`
+- `provider_mpn`
 - `source_url`
+- `source_kind` (`provider_catalog`, `manufacturer_page`, `external_asset_source`, `internal_catalog`)
 - `fetched_at`
 - `normalized_at`
 - `source_last_seen_at`
 - `source_last_imported_at`
-- `import_status` (`imported`, `failed`)
+- `import_status` (`pending`, `imported`, `failed`, `skipped`)
+- `import_error_code`
 - `import_error_details`
 - `raw_payload`
 - `last_updated_at`
@@ -95,6 +130,47 @@ Purpose:
 - provides provenance for metrics, relationships, and assets
 - allows conflict handling and source freshness tracking
 - records provider import failures without implying a canonical part was created
+- preserves provider-specific context while keeping the core part record normalized
+
+### SupplyOffering
+Represents a provider-specific commercial or sourcing view of a part.
+
+Fields:
+- `id`
+- `part_id`
+- `provider_id`
+- `source_record_id`
+- `provider_part_key`
+- `provider_sku`
+- `inventory_status`
+- `inventory_quantity`
+- `moq`
+- `lead_time_days`
+- `packaging`
+- `currency_code`
+- `preferred_rank`
+- `last_seen_at`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- captures provider-specific sourcing data without polluting the canonical part record
+- supports preferred-vendor and local-catalog workflows
+- helps distinguish engineering truth from commercial availability
+
+### PriceBreak
+Represents one provider price tier for a supply offering.
+
+Fields:
+- `id`
+- `supply_offering_id`
+- `min_quantity`
+- `unit_price`
+- `currency_code`
+- `captured_at`
+
+Purpose:
+- supports lightweight sourcing visibility while remaining provider-specific
 
 ### PartMetric
 Represents a normalized technical metric for a part.
@@ -109,6 +185,8 @@ Fields:
 - `max_value`
 - `confidence_score`
 - `source_record_id`
+- `created_at`
+- `updated_at`
 
 Examples:
 - voltage input max
@@ -117,6 +195,9 @@ Examples:
 - operating temperature
 - insertion cycles
 - contact resistance
+
+Purpose:
+- stores normalized engineering facts with explicit provenance and confidence
 
 ---
 
@@ -145,6 +226,10 @@ Fields:
 - `source_record_id`
 - `created_at`
 - `updated_at`
+
+Purpose:
+- represents both local and referenced engineering assets
+- keeps asset truth and usability explicit
 
 ### Asset provenance
 Allowed values:
@@ -196,9 +281,11 @@ Fields:
 - `file_asset_id`
 - `parse_confidence`
 - `source_record_id`
+- `created_at`
+- `updated_at`
 
 Purpose:
-- gives generation/review workflows a traceable datasheet source
+- gives generation and review workflows a traceable datasheet source
 
 ### SourceExtractionSignal
 Represents one explicit source-readiness signal extracted or mapped for CAD recovery.
@@ -233,6 +320,8 @@ Fields:
 - `name`
 - `series`
 - `description`
+- `created_at`
+- `updated_at`
 
 ### MateRelation
 Represents connector mating compatibility between two parts.
@@ -242,12 +331,17 @@ Fields:
 - `part_id`
 - `mate_part_id`
 - `relationship_type` (`best_mate`, `alternate_mate`)
+- `compatibility_status` (`verified`, `probable`, `uncertain`, `rejected`)
 - `confidence_score`
+- `evidence_type`
 - `source_record_id`
 - `notes`
+- `created_at`
+- `updated_at`
 
 Purpose:
 - powers “Best Mate” and alternate mate recommendations
+- distinguishes high-confidence compatibility from weaker or unresolved suggestions
 
 ### AccessoryRequirement
 Represents accessories or companion hardware needed to build with a connector.
@@ -257,9 +351,14 @@ Fields:
 - `part_id`
 - `accessory_part_id`
 - `relationship_type` (`requires_accessory`, `optional_accessory`, `tooling_requirement`)
+- `required_for_context`
+- `quantity_rule`
+- `compatibility_status` (`verified`, `probable`, `uncertain`, `rejected`)
 - `confidence_score`
 - `source_record_id`
 - `notes`
+- `created_at`
+- `updated_at`
 
 Examples:
 - contacts
@@ -269,6 +368,9 @@ Examples:
 - strain relief
 - crimp tools
 
+Purpose:
+- captures required and optional companion parts for real buildability
+
 ### CableCompatibility
 Represents compatible cable options for a connector.
 
@@ -277,16 +379,23 @@ Fields:
 - `part_id`
 - `cable_part_id`
 - `relationship_type` (`supports_cable`)
+- `wire_gauge_min`
+- `wire_gauge_max`
+- `shielding_requirement`
+- `termination_style`
+- `compatibility_status` (`verified`, `probable`, `uncertain`, `rejected`)
 - `confidence_score`
 - `source_record_id`
 - `notes`
+- `created_at`
+- `updated_at`
 
 Purpose:
 - powers buildable mating sets and cable-side recommendations
 
 ---
 
-## Similar-part and companion-part entities
+## Similar-part, companion-part, and risk entities
 
 ### SimilarPartRelation
 Represents alternate or near-equivalent parts.
@@ -297,12 +406,14 @@ Fields:
 - `similar_part_id`
 - `confidence_score`
 - `reason`
+- `created_at`
+- `updated_at`
 
 Purpose:
 - used for substitution and alternate selection
 
 ### CompanionRecommendation
-Represents common parts used alongside a selected part in a real circuit.
+Represents common parts used alongside a selected part in a real circuit or subsystem.
 
 Fields:
 - `id`
@@ -310,6 +421,8 @@ Fields:
 - `companion_part_id`
 - `confidence_score`
 - `usage_context`
+- `created_at`
+- `updated_at`
 
 Examples:
 - LDO input/output capacitors
@@ -319,6 +432,91 @@ Examples:
 
 Purpose:
 - keeps “similar parts” separate from “parts commonly used together”
+
+### PartRiskFlag
+Represents a known risk, warning, or near-match ambiguity for a part.
+
+Fields:
+- `id`
+- `part_id`
+- `warning_type` (`near_match_variant`, `family_confusion`, `pinout_risk`, `gender_mismatch`, `mounting_mismatch`, `plating_difference`, `accessory_dependency`, `lifecycle_risk`, `source_conflict`)
+- `severity` (`low`, `medium`, `high`, `critical`)
+- `related_part_id` (nullable)
+- `source_record_id` (nullable)
+- `confidence_score`
+- `message`
+- `status` (`active`, `dismissed`, `resolved`)
+- `created_at`
+- `updated_at`
+
+Purpose:
+- makes variant confusion and engineering risk visible
+- supports readiness blockers and engineer-facing warnings
+
+---
+
+## Part readiness and operational workflow entities
+
+### PartReadiness
+Represents the current readiness summary for a part as a whole.
+
+Fields:
+- `id`
+- `part_id`
+- `identity_status` (`verified`, `ambiguous`, `conflicted`, `unverified`)
+- `connector_readiness_status` (`complete`, `partial`, `missing`, `not_applicable`)
+- `cad_readiness_status` (`ready`, `partial`, `references_only`, `missing`)
+- `sourcing_readiness_status` (`active`, `risky`, `obsolete`, `unknown`)
+- `approval_status` (`draft`, `pending_review`, `approved_for_design`, `restricted`, `rejected`)
+- `overall_readiness_status` (`engineer_ready`, `needs_review`, `blocked`)
+- `readiness_score`
+- `blocker_count`
+- `blocker_summary`
+- `last_evaluated_at`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- provides the engineer-facing answer to “Can I use this part yet?”
+- keeps part-level readiness separate from raw import success
+- supports homepage readiness checks, detail views, and admin queues
+
+### PartIssue
+Represents one open or resolved issue that affects part readiness.
+
+Fields:
+- `id`
+- `part_id`
+- `issue_type` (`missing_mate`, `missing_accessory`, `missing_footprint`, `missing_symbol`, `missing_3d`, `low_confidence_identity`, `duplicate_candidate`, `conflicting_source_data`, `approval_required`, `obsolete_risk`)
+- `severity` (`low`, `medium`, `high`, `critical`)
+- `status` (`open`, `in_review`, `resolved`, `ignored`)
+- `assigned_to`
+- `resolution_notes`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- powers admin review queues and operational triage
+- makes blockers visible and assignable instead of burying them in transient UI logic
+
+### PartApprovalRecord
+Represents a part-level approval decision for engineering use.
+
+Fields:
+- `id`
+- `part_id`
+- `approval_status` (`draft`, `pending_review`, `approved_for_design`, `restricted`, `rejected`)
+- `approved_scope` (`design_use`, `prototype_only`, `internal_only`)
+- `decision_reason`
+- `reviewer`
+- `review_notes`
+- `reviewed_at`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- separates “part exists” from “part is approved for engineering use”
+- prevents asset-level approvals from standing in for full part onboarding approval
 
 ---
 
@@ -368,16 +566,18 @@ Fields:
 - `confidence_score`
 - `output_asset_id`
 - `notes`
+- `created_at`
+- `updated_at`
 
 Purpose:
 - tracks an actual generation run separately from the higher-level request
 
 ---
 
-## Review entities
+## Review and validation entities
 
 ### ReviewRecord
-Represents a review decision on a generated or sourced asset/workflow.
+Represents a review decision on a generated or sourced asset or workflow.
 
 Fields:
 - `id`
@@ -388,6 +588,8 @@ Fields:
 - `reviewer_name`
 - `review_notes`
 - `reviewed_at`
+- `created_at`
+- `updated_at`
 
 Purpose:
 - creates a clear trust boundary between:
@@ -434,6 +636,42 @@ Purpose:
 
 ---
 
+## Internal engineering memory entities
+
+### PartUsageRecord
+Represents a known internal usage of a part.
+
+Fields:
+- `id`
+- `part_id`
+- `project_name`
+- `usage_context`
+- `usage_status` (`proposed`, `used`, `validated`, `deprecated`)
+- `notes`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- captures institutional knowledge about where a part has already been used
+- supports engineer trust and internal decision-making
+
+### PartNote
+Represents an internal note associated with a part.
+
+Fields:
+- `id`
+- `part_id`
+- `note_type` (`engineering`, `manufacturing`, `procurement`, `library`)
+- `author`
+- `body`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- stores internal corrections, cautions, manufacturing notes, and team knowledge that public part sites do not capture well
+
+---
+
 ## Derived platform concepts
 
 These do not always need to be stored as primary entities, but the system must resolve them consistently.
@@ -472,7 +710,21 @@ Examples:
 - mechanical drawing available for 3D generation
 
 Purpose:
-- powers “Missing Assets / Fallback Actions”
+- powers missing-asset recovery actions
+
+### PartReadinessSummary
+A derived or materialized summary resolved from:
+- source truth
+- asset truth
+- compatibility records
+- risk flags
+- sourcing data
+- approval state
+- open issues
+
+Purpose:
+- powers quick readiness checks, part detail summaries, and admin queue views
+- provides a stable engineer-facing readiness answer even when the raw source graph is complex
 
 ---
 
@@ -483,10 +735,13 @@ Purpose:
 2. Parse into provider adapter contract
 3. Normalize fields and units
 4. Register source record
-5. Register assets and provenance
-6. Register connector and recommendation relationships
-7. Run validation/review workflow
-8. Publish searchable canonical record
+5. Resolve or create canonical manufacturer and part identity
+6. Register supply offerings and provider freshness
+7. Register assets and provenance
+8. Register connector and recommendation relationships
+9. Derive or refresh readiness issues and warnings
+10. Run validation and approval workflow
+11. Publish or update searchable canonical record
 
 ### Generation recovery flow
 1. Detect missing asset
@@ -507,6 +762,8 @@ Purpose:
 - buildable mating set recommendations must include required accessories
 - uncertain compatibility remains labeled as uncertain
 - “best mate” should prefer one high-confidence recommendation, not noisy long lists
+- cable compatibility should remain explicit about wire and termination assumptions
+- connector family similarity must not silently substitute for actual verified mating compatibility
 
 ---
 
@@ -518,6 +775,18 @@ Purpose:
 - reviewed assets are not automatically verified for export
 - approved generated drafts remain non-exportable until an explicit promotion step succeeds
 - generated assets must always remain visibly marked as generated unless superseded by approved internal review logic
+
+---
+
+## Part readiness policy
+
+- successful import does not imply engineering readiness
+- part approval is separate from source ingestion
+- open high-severity issues block readiness
+- unresolved identity conflicts block approval
+- connector parts are not considered fully ready if required mates or accessories remain unresolved
+- parts with only referenced CAD remain visible, but not fully export-ready
+- readiness must be explainable through explicit blockers, not opaque scoring alone
 
 ---
 
@@ -533,4 +802,4 @@ Normalize internally to:
 - `Hz`
 - `deg C`
 
-Store original source units only in raw payload/source context, not in canonical engineering metrics.
+Store original source units only in raw payload or source context, not in canonical engineering metrics.

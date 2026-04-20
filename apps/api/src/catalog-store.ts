@@ -33,6 +33,7 @@ import type {
   ReviewActionInput,
   ReviewActionResponse,
   ReviewRecord,
+  SearchFacets,
   SearchPagination,
   SimilarPartRelation,
   SourceExtractionSignal,
@@ -73,6 +74,9 @@ export type CatalogReadResult = { status: "available"; records: PartSearchRecord
 
 /** CatalogSearchReadResult adds pagination metadata for SQL-backed search reads. */
 export type CatalogSearchReadResult = { status: "available"; records: PartSearchRecord[]; pagination: SearchPagination } | { status: "not_configured" };
+
+/** CatalogSearchFacetsReadResult returns SQL-backed search facets without full catalog projection. */
+export type CatalogSearchFacetsReadResult = { status: "available"; facets: SearchFacets } | { status: "not_configured" };
 
 /** GenerationRequestCreateResult reports creation or explicit requestability failure. */
 export type GenerationRequestCreateResult =
@@ -371,6 +375,49 @@ interface SearchSqlFilter {
   params: unknown[];
 }
 
+/** DatabaseSearchFacetManufacturerRow is one grouped manufacturer facet row. */
+interface DatabaseSearchFacetManufacturerRow {
+  id: string;
+  name: string;
+  aliases: string[] | null;
+  website: string | null;
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetCategoryRow is one grouped category facet row. */
+interface DatabaseSearchFacetCategoryRow {
+  category: string;
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetPackageRow is one grouped package facet row. */
+interface DatabaseSearchFacetPackageRow {
+  id: string;
+  package_name: string;
+  pin_count: number;
+  pitch_mm: string | null;
+  body_length_mm: string | null;
+  body_width_mm: string | null;
+  body_height_mm: string | null;
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetLifecycleRow is one grouped lifecycle facet row. */
+interface DatabaseSearchFacetLifecycleRow {
+  lifecycle_status: "active" | "not_recommended" | "obsolete" | "unknown";
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetCountRow is a single numeric count as text for pg-safe aggregation. */
+interface DatabaseSearchFacetCountRow {
+  total_count: string;
+}
+
+/** DatabaseCadAvailableFacetRow counts distinct parts with verified file-backed CAD. */
+interface DatabaseCadAvailableFacetRow {
+  available_count: string;
+}
+
 /** pool is initialized lazily so tests and seed fallback do not require DATABASE_URL. */
 let pool: Pool | null = null;
 
@@ -422,6 +469,26 @@ export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilte
   return {
     pagination,
     records: await readPartSearchSummaryRecords(databasePool, partIds, options),
+    status: "available"
+  };
+}
+
+/**
+ * Returns SQL-backed facets for the currently active search filters.
+ */
+export async function readPartSearchFacetsFromDatabase(filters: PartSearchFilters = {}, options: CatalogReadOptions = {}): Promise<CatalogSearchFacetsReadResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const cadAvailability = filters.cadAvailability ?? "any";
+  const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
+  const facets = await readSearchFacets(databasePool, searchFilter, options);
+
+  return {
+    facets,
     status: "available"
   };
 }
@@ -866,6 +933,68 @@ async function readSearchPartIds(databasePool: Pool, searchFilter: SearchSqlFilt
     const result = await timedCatalogQuery<{ id: string }>(databasePool, "search_part_ids", buildSearchPartIdsSql(searchFilter, sort), [...searchFilter.params, pageSize, offset], options);
 
     return result.rows.map((row) => row.id);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads grouped facet dimensions from SQL so filters stay consistent with DB-backed search.
+ */
+async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilter, options: CatalogReadOptions): Promise<SearchFacets> {
+  try {
+    const [manufacturerRows, categoryRows, packageRows, lifecycleRows, totalRowResult, cadAvailableResult] = await Promise.all([
+      timedCatalogQuery<DatabaseSearchFacetManufacturerRow>(databasePool, "search_facet_manufacturers", buildSearchManufacturerFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetCategoryRow>(databasePool, "search_facet_categories", buildSearchCategoryFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetPackageRow>(databasePool, "search_facet_packages", buildSearchPackageFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetLifecycleRow>(databasePool, "search_facet_lifecycle", buildSearchLifecycleFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetCountRow>(databasePool, "search_facet_total", buildSearchCountSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseCadAvailableFacetRow>(databasePool, "search_facet_cad_available", buildSearchCadAvailableCountSql(searchFilter.whereSql), searchFilter.params, options)
+    ]);
+    const lifecycleCounts: Record<"active" | "not_recommended" | "obsolete" | "unknown", number> = {
+      active: 0,
+      not_recommended: 0,
+      obsolete: 0,
+      unknown: 0
+    };
+
+    for (const row of lifecycleRows.rows) {
+      lifecycleCounts[row.lifecycle_status] = Number(row.facet_count);
+    }
+
+    const totalCount = Number(totalRowResult.rows[0]?.total_count ?? 0);
+    const availableCount = Number(cadAvailableResult.rows[0]?.available_count ?? 0);
+
+    return {
+      categories: categoryRows.rows.map((row) => row.category),
+      counts: {
+        cadAvailability: {
+          any: totalCount,
+          available: availableCount,
+          unavailable: Math.max(0, totalCount - availableCount)
+        },
+        categories: Object.fromEntries(categoryRows.rows.map((row) => [row.category, Number(row.facet_count)])),
+        lifecycleStatuses: lifecycleCounts,
+        manufacturers: Object.fromEntries(manufacturerRows.rows.map((row) => [row.id, Number(row.facet_count)])),
+        packages: Object.fromEntries(packageRows.rows.map((row) => [row.id, Number(row.facet_count)]))
+      },
+      lifecycleStatuses: (["active", "not_recommended", "obsolete", "unknown"] as const).filter((status) => lifecycleCounts[status] > 0),
+      manufacturers: manufacturerRows.rows.map((row) => ({
+        aliases: row.aliases ?? [],
+        id: row.id,
+        name: row.name,
+        website: row.website
+      })),
+      packages: packageRows.rows.map((row) => ({
+        bodyHeightMm: row.body_height_mm ? Number(row.body_height_mm) : null,
+        bodyLengthMm: row.body_length_mm ? Number(row.body_length_mm) : null,
+        bodyWidthMm: row.body_width_mm ? Number(row.body_width_mm) : null,
+        id: row.id,
+        packageName: row.package_name,
+        pinCount: Number(row.pin_count),
+        pitchMm: row.pitch_mm ? Number(row.pitch_mm) : null
+      }))
+    };
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -1611,6 +1740,93 @@ function buildSearchCountSql(whereSql: string): string {
   return `
     SELECT count(*)::text AS total_count
     ${SEARCH_PART_FROM_SQL}
+    ${whereSql}
+  `;
+}
+
+/**
+ * Builds the grouped manufacturer facet query for the active SQL search filter.
+ */
+function buildSearchManufacturerFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      m.id,
+      m.name,
+      m.aliases,
+      m.website,
+      count(*)::text AS facet_count
+    ${SEARCH_PART_FROM_SQL}
+    ${whereSql}
+    GROUP BY m.id, m.name, m.aliases, m.website
+    ORDER BY lower(m.name) ASC
+  `;
+}
+
+/**
+ * Builds the grouped category facet query for the active SQL search filter.
+ */
+function buildSearchCategoryFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      p.category,
+      count(*)::text AS facet_count
+    ${SEARCH_PART_FROM_SQL}
+    ${whereSql}
+    GROUP BY p.category
+    ORDER BY lower(p.category) ASC
+  `;
+}
+
+/**
+ * Builds the grouped package facet query for the active SQL search filter.
+ */
+function buildSearchPackageFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      pk.id,
+      pk.package_name,
+      pk.pin_count,
+      pk.pitch_mm,
+      pk.body_length_mm,
+      pk.body_width_mm,
+      pk.body_height_mm,
+      count(*)::text AS facet_count
+    ${SEARCH_PART_FROM_SQL}
+    ${whereSql}
+    GROUP BY pk.id, pk.package_name, pk.pin_count, pk.pitch_mm, pk.body_length_mm, pk.body_width_mm, pk.body_height_mm
+    ORDER BY lower(pk.package_name) ASC
+  `;
+}
+
+/**
+ * Builds the grouped lifecycle facet query for the active SQL search filter.
+ */
+function buildSearchLifecycleFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      p.lifecycle_status,
+      count(*)::text AS facet_count
+    ${SEARCH_PART_FROM_SQL}
+    ${whereSql}
+    GROUP BY p.lifecycle_status
+    ORDER BY p.lifecycle_status ASC
+  `;
+}
+
+/**
+ * Counts distinct parts that satisfy the same verified CAD predicate used by search filters.
+ */
+function buildSearchCadAvailableCountSql(whereSql: string): string {
+  return `
+    SELECT count(DISTINCT p.id)::text AS available_count
+    ${SEARCH_PART_FROM_SQL}
+    JOIN assets cad ON cad.part_id = p.id
+      AND cad.asset_type IN ('footprint', 'symbol', 'three_d_model')
+      AND cad.availability_status = 'validated'
+      AND cad.export_status = 'verified_for_export'
+      AND cad.storage_key IS NOT NULL
+      AND cad.file_hash IS NOT NULL
+      AND cad.validation_status = 'verified'
     ${whereSql}
   `;
 }

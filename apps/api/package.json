@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ee-library/shared": "*",
+    "@ee-library/worker": "*",
     "pg": "^8.20.0"
   }
 }

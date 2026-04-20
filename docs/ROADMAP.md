@@ -1,14 +1,17 @@
 # Roadmap
 
-This roadmap is organized around the product capabilities that make EE Library valuable, not just around generic infrastructure milestones.
+This roadmap is organized around the product capabilities that make EE Library valuable as an **engineering part onboarding and readiness platform**, not just as a catalog or CAD file utility.
 
 The core direction of the platform is:
 
+- part onboarding and readiness
 - connector intelligence
 - engineering asset truth
 - missing-CAD recovery
-- buildable engineering workflows
+- approval and trust workflows
 - strict export honesty
+
+The long-term goal is to help users move from a raw manufacturer part number to an **engineer-ready internal part record** with clear trust, compatibility, CAD readiness, and approval state.
 
 ---
 
@@ -39,6 +42,9 @@ Delivered:
 Outcome:
 - a usable engineering catalog prototype backed by a normalized model
 
+Note:
+- this phase established core catalog truth, but not full engineer-readiness workflows yet
+
 ---
 
 ## Phase 2: Connector Intelligence and Trust Hardening
@@ -60,7 +66,7 @@ Outcome:
 
 ---
 
-## Phase 3A: Engineering Asset Pipeline Foundation
+## Phase 3A: Engineering Asset Truth Foundation
 Make engineering assets first-class and resolve what is truly available.
 
 Delivered:
@@ -86,15 +92,15 @@ Delivered:
 - generation workflow states
 - DB-backed generation request persistence
 - UI for requestability, readiness reasons, and workflow state
-- honest unavailable/requestable/review-required cases
+- honest unavailable, requestable, and review-required cases
 
 Outcome:
 - the platform can now show when missing CAD can be recovered and track the request path honestly
 
 ---
 
-## Phase 4A: Review and Approval Workflow
-Add the trust gate that separates generated/sourced assets from export-trusted assets.
+## Phase 4A: Review and Approval Workflow for Assets
+Add the trust gate that separates generated or sourced assets from export-trusted assets.
 
 Delivered:
 - review queue
@@ -106,6 +112,9 @@ Delivered:
 
 Outcome:
 - generated or newly sourced assets become trustworthy only through explicit review
+
+Note:
+- this phase establishes asset-level trust, but not yet full part-level approval for engineering use
 
 ---
 
@@ -120,7 +129,7 @@ Delivered:
 - no runtime scraping dependency
 
 Outcome:
-- the platform begins operating on real external part data instead of only local/seed fixtures
+- the platform begins operating on real external part data instead of only local or seed fixtures
 
 Still planned:
 - multi-provider ingestion
@@ -150,7 +159,7 @@ Still planned:
 
 ---
 
-## Phase 5A: Datasheet Extraction Groundwork
+## Phase 5A: Structured Extraction Groundwork
 Make missing-CAD recovery depend on structured extraction evidence instead of coarse source flags.
 
 Delivered:
@@ -170,7 +179,7 @@ Still planned:
 
 ---
 
-## Phase 5B: Datasheet Extraction and Asset Generation Engine
+## Phase 5B: Draft Asset Generation Engine
 Build the recovery engine that turns source material into draft engineering assets.
 
 Delivered:
@@ -224,33 +233,134 @@ Outcome:
 
 ---
 
-## Phase 6: Engineering Decision and Workflow Tools
-Expand the platform from part intelligence into broader engineering workflow support.
+## Phase 6A: Part Readiness Model and User Experience
+Shift the product from “catalog plus assets” into a real engineer-readiness workflow.
+
+Planned:
+- part-level readiness summary model
+- identity status resolution such as verified, ambiguous, conflicted, or unverified
+- overall readiness state such as engineer_ready, needs_review, or blocked
+- explicit blocker summaries
+- readiness-oriented homepage or quick intake flow
+- readiness-oriented part detail layout
+- readiness filters in search and browse workflows
+
+Outcome:
+- the product answers “Can I use this part yet?” instead of only “What data do we have?”
+
+---
+
+## Phase 6B: Part Approval and Operational Issue Queue
+Add part-level approval and issue-driven triage for real engineering onboarding.
+
+Planned:
+- part approval states such as draft, pending_review, approved_for_design, restricted, and rejected
+- approval records with reviewer, rationale, and scope of use
+- part issue model for unresolved readiness blockers
+- admin queue for:
+  - failed intake
+  - low-confidence identity
+  - missing mates
+  - missing accessories
+  - missing footprint
+  - missing symbol
+  - missing 3D model
+  - conflicting source data
+  - duplicate candidates
+  - pending approval
+  - lifecycle risk / obsolete parts
+- issue assignment, review, and resolution flow
+
+Outcome:
+- the platform becomes operationally useful for part librarians, admins, and engineering review workflows
+
+---
+
+## Phase 6C: Connector Intelligence Expansion
+Deepen the most differentiated area of the product.
+
+Planned:
+- stronger compatibility confidence modeling
+- near-match and family-confusion warnings
+- richer accessory dependency modeling
+- cable constraints such as gauge, shielding, and termination assumptions
+- improved buildable mating set reasoning
+- clearer connector-specific warnings in detail and readiness views
+
+Outcome:
+- the platform becomes more useful for the messy real-world connector decisions that common part sites do not solve well
+
+---
+
+## Phase 7: Internal Engineering Knowledge and Reuse
+Capture internal truth that public sites cannot provide.
+
+Planned:
+- part notes
+- internal usage history
+- project usage context
+- approved-parts vault
+- project-aware part recommendations
+- richer provenance and trust overlays from internal review
+- institutional memory for part corrections, cautions, and usage notes
+
+Outcome:
+- the platform compounds value over time instead of only reformatting public data
+
+---
+
+## Phase 8: Engineering Decision and Workflow Tools
+Expand the platform from part readiness into broader engineering workflow support.
 
 Planned:
 - side-by-side compare
 - alternate part ranking
-- package/revision risk warnings
+- package and revision risk warnings
+- lifecycle and sourcing risk overlays
 - BOM ingestion
-- project-aware recommendations
-- approved-parts vault
 - companion-part guidance improvements
 - engineering calculators
 - reference circuit patterns
+- package and footprint validation helpers
+- compatibility explanation tools
 
 Outcome:
-- the platform becomes a broader engineering workspace rather than just a part intelligence tool
+- the platform becomes a broader engineering workspace rather than just a part readiness system
+
+---
+
+## Phase 9: Ingestion Scale and Automation
+Increase ingestion breadth without losing truth and review boundaries.
+
+Planned:
+- multi-provider ingestion
+- provider reconciliation UI
+- richer source conflict resolution
+- broader source freshness dashboards
+- freshness tracking and sync scheduling
+- extraction job execution pipeline
+- automated asset generation pipeline with review gates
+- bulk ingestion scheduling
+
+Outcome:
+- the platform scales provider coverage while preserving provenance, trust, and readiness logic
 
 ---
 
 ## Long-term direction
+
 The long-term goal is not to become another generic component search site.
 
 The long-term goal is to become the engineering platform that helps users answer:
 
 - What is the right part?
+- Is the identity trustworthy?
 - What mates with it?
-- What else do I need?
+- What else do I need to build with it?
 - Which assets are trustworthy?
+- What risks or blockers remain?
+- Is this part approved for design use?
 - What can I export now?
 - What can I recover if the files do not exist?
+
+That is the standard.

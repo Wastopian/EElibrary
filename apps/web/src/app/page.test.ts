@@ -41,6 +41,7 @@ test("homepage renders actionable setup state when DB is not configured and seed
     const html = await renderHomepage();
 
     assert.match(html, /Connect Postgres or enable local seed mode/u);
+    assert.match(html, /Backend unavailable/u);
     assert.match(html, /EE_LIBRARY_ALLOW_SEED_FALLBACK/u);
     assert.match(html, /No catalog records are shown here/u);
     assert.doesNotMatch(html, /matched records/u);
@@ -90,8 +91,10 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     assert.match(html, /Local seed mode/u);
     assert.match(html, /deterministic local examples/u);
     assert.match(html, /not DB-backed catalog data/u);
-    assert.match(html, /Search by MPN or keyword/u);
+    assert.match(html, /Quick part readiness check/u);
+    assert.match(html, /MPN or keyword/u);
     assert.match(html, /Import by MPN/u);
+    assert.match(html, /same import path as the worker CLI/u);
     assert.match(html, /CAD files for export/u);
     assert.match(html, /TPS7A02DBVR/u);
     assert.doesNotMatch(html, /Provider-neutral API/u);
@@ -101,10 +104,213 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
 });
 
 /**
+ * Verifies a query renders an explanation-first quick readiness result from catalog data.
+ */
+test("homepage renders quick readiness result from matched catalog record", async () => {
+  const records = getAllPartRecords();
+  const facets = getSearchFacetsFromRecords(records);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({
+        data: facets,
+        source: "database"
+      });
+    }
+
+    return jsonResponse({
+      data: records.filter((record) => record.part.mpn === "TPS7A02DBVR"),
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 1
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: "TPS7A02DBVR" });
+
+    assert.match(html, /Review Needed/u);
+    assert.match(html, /Export bundle: partial bundle/u);
+    assert.match(html, /Open Full Record/u);
+    assert.match(html, /generated CAD/i);
+    assert.doesNotMatch(html, /approved part/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies an ambiguous quick readiness query lists candidates instead of choosing silently.
+ */
+test("homepage renders ambiguous quick readiness state from multiple matches", async () => {
+  const records = getAllPartRecords().slice(0, 2);
+  const facets = getSearchFacetsFromRecords(records);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: records,
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 2
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: "connector" });
+
+    assert.match(html, /Ambiguous match/u);
+    assert.match(html, /2 catalog records matched/u);
+    assert.match(html, /Open the correct part/u);
+    assert.doesNotMatch(html, /Readiness Checks/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies partial readiness data is explicit when backend records lack key families.
+ */
+test("homepage renders partial readiness data state from incomplete record", async () => {
+  const [baseRecord] = getAllPartRecords();
+
+  assert.ok(baseRecord, "expected seed record");
+
+  const partialRecord = {
+    ...structuredClone(baseRecord),
+    assets: [],
+    datasheetRevision: null,
+    metrics: [],
+    sources: []
+  };
+  const facets = getSearchFacetsFromRecords([partialRecord]);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: [partialRecord],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 1
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: partialRecord.part.mpn });
+
+    assert.match(html, /partial readiness data/u);
+    assert.match(html, /missing source provenance, normalized metrics, asset records, datasheet revision metadata/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies no-match state remains explicit and does not fabricate readiness.
+ */
+test("homepage renders no-match quick readiness state without fabricated data", async () => {
+  const records = getAllPartRecords();
+  const facets = getSearchFacetsFromRecords(records);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: [],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 0
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: "NO-SUCH-PART" });
+
+    assert.match(html, /Part not found/u);
+    assert.match(html, /will not create a readiness answer without backend data/u);
+    assert.doesNotMatch(html, /Readiness Checks/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Renders the server component with empty search params.
  */
-async function renderHomepage(): Promise<string> {
-  return renderToStaticMarkup(await SearchPage({ searchParams: Promise.resolve({}) }));
+async function renderHomepage(searchParams: Record<string, string> = {}): Promise<string> {
+  return renderToStaticMarkup(await SearchPage({ searchParams: Promise.resolve(searchParams) }));
 }
 
 /**

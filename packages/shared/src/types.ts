@@ -564,12 +564,48 @@ export interface AssetPromotionResponse {
   promotionAudit: AssetPromotionAuditRecord;
 }
 
+/** ProviderImportCreateInput is the operator-facing body for one provider catalog import. */
+export interface ProviderImportCreateInput {
+  /** Registered provider adapter id, such as jlcparts or local-catalog. */
+  providerId: string;
+  /** Manufacturer part number; used when providerPartId is not provided. */
+  mpn?: string | null;
+  /** Provider-specific part identifier (for example an LCSC code) when it differs from MPN. */
+  providerPartId?: string | null;
+  /** Optional manufacturer hint for providers that support disambiguation. */
+  manufacturerName?: string | null;
+}
+
+/** ProviderImportOutcome labels whether the import created a new source row or refreshed an existing one. */
+export type ProviderImportOutcome = "new_import" | "refreshed_existing";
+
+/** ProviderImportCreateResponse summarizes one successful provider import without implying CAD readiness. */
+export interface ProviderImportCreateResponse {
+  partId: string;
+  providerId: string;
+  providerPartKey: string;
+  importStatus: SourceImportStatus;
+  requestedLookup: string;
+  /** Whether a prior source row existed for this provider + part key. */
+  outcome: ProviderImportOutcome;
+  /** Prior source row import status, or null when no prior row existed. */
+  previousImportStatus: SourceImportStatus | null;
+}
+
 /** SearchFacets contains the provider-neutral filter data for the search surface. */
 export interface SearchFacets {
   manufacturers: Manufacturer[];
   categories: string[];
   packages: Package[];
   lifecycleStatuses: LifecycleStatus[];
+  /** Optional per-facet counts for DB-backed and seed-fallback consistency checks. */
+  counts?: {
+    manufacturers: Record<string, number>;
+    categories: Record<string, number>;
+    packages: Record<string, number>;
+    lifecycleStatuses: Record<LifecycleStatus, number>;
+    cadAvailability: Record<CadAvailabilityFilter, number>;
+  };
 }
 
 /** ExportAvailability describes one export action and why it is enabled or disabled. */

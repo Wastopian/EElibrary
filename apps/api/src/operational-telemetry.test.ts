@@ -24,6 +24,7 @@ test("API route instrumentation adds timing headers without changing search and 
   try {
     const { handleRequest } = await import("./index");
     const searchResult = await invokeApiGet("/parts?q=TPS", handleRequest);
+    const facetsResult = await invokeApiGet("/parts/facets?q=TPS", handleRequest);
     const detailResult = await invokeApiGet("/parts/part-tps7a02dbvr", handleRequest);
 
     assert.equal(searchResult.statusCode, 200);
@@ -34,6 +35,14 @@ test("API route instrumentation adds timing headers without changing search and 
     assert.equal(searchResult.body.pagination.page, 1);
     assert.equal(searchResult.body.pagination.sort, "mpn_asc");
     assert.equal(searchResult.body.data.some((record: { part: { mpn: string } }) => record.part.mpn === "TPS7A02DBVR"), true);
+
+    assert.equal(facetsResult.statusCode, 200);
+    assert.equal(facetsResult.body.source, "seed_fallback");
+    assert.equal(facetsResult.headers["X-EE-Operation"], "api-search-facets");
+    assert.match(facetsResult.headers["Server-Timing"] ?? "", /api-search-facets;dur=/u);
+    assert.match(facetsResult.headers["Server-Timing"] ?? "", /catalog-resolve-facets;dur=/u);
+    assert.match(facetsResult.headers["Server-Timing"] ?? "", /search-facets;dur=/u);
+    assert.ok(Array.isArray(facetsResult.body.data.manufacturers));
 
     assert.equal(detailResult.statusCode, 200);
     assert.equal(detailResult.body.source, "seed_fallback");

@@ -29,6 +29,9 @@
       ],
       "@ee-library/ui": [
         "packages/ui/src/index.ts"
+      ],
+      "@ee-library/db": [
+        "packages/db/src/index.ts"
       ]
     },
     "resolveJsonModule": true,

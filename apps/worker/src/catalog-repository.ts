@@ -537,6 +537,19 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
 }
 
 /**
+ * Reads the current import status for a pending provider + part key, or null when no row exists.
+ */
+export async function readSourceRecordImportStatus(providerId: string, providerPartKey: string): Promise<SourceImportStatus | null> {
+  const id = buildSourceRecordId(providerId, providerPartKey);
+  const result = await getDatabasePool().query<{ import_status: SourceImportStatus }>(
+    `SELECT import_status FROM source_records WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+
+  return result.rows[0]?.import_status ?? null;
+}
+
+/**
  * Checks that Postgres is reachable for ingestion.
  */
 export async function assertDatabaseReady(): Promise<void> {

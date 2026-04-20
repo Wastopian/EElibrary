@@ -29,7 +29,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <a href="/">Catalog</a>
               <span>Compare</span>
               <span>Tools</span>
-              <span>Admin</span>
+              <a href="/admin">Admin</a>
             </nav>
           </header>
           {children}

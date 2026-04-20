@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getPartDetail } from "@ee-library/shared/search";
-import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getRecoveryWorkflowSummary, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
 import type { Asset, AssetValidationRecord } from "@ee-library/shared/types";
 
@@ -205,6 +205,23 @@ test("search export readiness labels distinguish bundles from single verified CA
   assert.equal(getSearchExportReadiness(footprintOnlyRecord).label, "partial bundle");
   assert.equal(getSearchExportReadiness(getSeedRecord("part-tps7a02dbvr")).label, "partial bundle");
   assert.equal(getSearchExportReadiness(getSeedRecord("part-stm32g031k8t6")).label, "references only");
+});
+
+/**
+ * Verifies quick-check copy is derived from existing export, asset, and workflow signals.
+ */
+test("quick readiness summary explains blockers without inventing approval state", () => {
+  const connectorRecord = getSeedRecord("part-te-215079-8");
+  const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const connectorSummary = getQuickReadinessSummary(connectorRecord);
+  const regulatorSummary = getQuickReadinessSummary(regulatorRecord);
+
+  assert.equal(connectorSummary.headline, "Ready for Export Review");
+  assert.match(connectorSummary.detail, /Export bundle: bundle ready/u);
+  assert.doesNotMatch(connectorSummary.detail, /approved part/u);
+  assert.equal(regulatorSummary.headline, "Review Needed");
+  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("export blockers")));
+  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("Review generated CAD drafts")));
 });
 
 /**

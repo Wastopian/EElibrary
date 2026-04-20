@@ -21,6 +21,8 @@ export interface SectionPanelProps {
   title: string;
   /** Optional short description or provenance hint. */
   description?: string;
+  /** Optional visual tone for default or technical surfaces. */
+  tone?: "default" | "technical";
   /** Panel body content. */
   children: ReactNode;
 }
@@ -128,9 +130,9 @@ export function SectionHeading({ id, index, subtitle, title }: SectionHeadingPro
 /**
  * Renders a reusable panel with optional context copy.
  */
-export function SectionPanel({ children, description, title }: SectionPanelProps) {
+export function SectionPanel({ children, description, title, tone = "default" }: SectionPanelProps) {
   return (
-    <section className="ui-panel">
+    <section className={`ui-panel ui-panel--${tone}`}>
       <div className="ui-panel__header">
         <h2>{title}</h2>
         {description ? <p>{description}</p> : null}

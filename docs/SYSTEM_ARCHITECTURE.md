@@ -1,14 +1,17 @@
 # System Architecture
 
-EE Library is a provider-neutral engineering platform, not a distributor clone and not a passive CAD file mirror.
+EE Library is a provider-neutral **engineering part onboarding and readiness platform**, not a distributor clone and not a passive CAD file mirror.
 
-The architecture is designed around five core goals:
+The architecture is designed around six core goals:
 
 1. maintain a canonical engineering record for each part
 2. model connector compatibility and buildable relationships explicitly
 3. track engineering asset truth, readiness, and trust boundaries
 4. support missing-CAD recovery through typed workflows
-5. allow export only when assets are truly ready and appropriately reviewed
+5. determine and expose **part readiness** for engineering use
+6. allow export only when assets are truly ready and appropriately reviewed
+
+The system is built to help users move from a raw manufacturer part number to an **engineer-ready internal part record** with explicit trust, compatibility, CAD readiness, risk visibility, and approval state.
 
 ---
 
@@ -18,12 +21,12 @@ The architecture is designed around five core goals:
 The application must not depend on live external sites at request time.
 
 External sources are ingested into a normalized internal model.
-The web app and API read from the canonical database, not directly from distributor pages or CAD provider pages.
+The web app and API read from the canonical database, not directly from distributor pages, manufacturer pages, or CAD provider pages.
 
 ### 2. Provider neutrality is mandatory
 The system must use a provider adapter layer from the beginning.
 
-No UI, shared runtime logic, or core API contract should be tightly coupled to one distributor, one CAD source, or one scraping strategy.
+No UI, shared runtime logic, or core API contract should be tightly coupled to one distributor, one CAD source, one internal catalog, or one scraping strategy.
 
 ### 3. Trust boundaries must be explicit
 The architecture must preserve the distinction between:
@@ -32,16 +35,29 @@ The architecture must preserve the distinction between:
 - normalized data
 - generated data
 - reviewed data
+- approved-for-design data
 - verified-for-export data
 
-Generated outputs must never silently cross into trusted/exportable status.
+Generated outputs must never silently cross into trusted or exportable status.
+Asset approval must not silently stand in for part approval.
 
-### 4. Request-time behavior must stay deterministic
-Search, detail views, connector intelligence, and asset status must be served from internal state.
+### 4. Part readiness is a first-class system concern
+The architecture must support answering:
 
-Long-running work such as ingestion, extraction, generation, validation, and bundling must happen asynchronously through worker pipelines.
+- is the part identity verified
+- are connector dependencies resolved
+- are CAD assets ready
+- are there blockers or risk flags
+- is the part approved for design use
 
-### 5. Runtime paths must remain seed-free
+This must be represented consistently across data model, worker pipelines, API projections, and UI surfaces.
+
+### 5. Request-time behavior must stay deterministic
+Search, readiness summaries, detail views, connector intelligence, risk flags, issue queues, and asset status must be served from internal state.
+
+Long-running work such as ingestion, extraction, generation, validation, approval updates, and export bundling must happen asynchronously through worker pipelines.
+
+### 6. Runtime paths must remain seed-free
 Seed data may exist for controlled local development, but runtime shared logic, API reads, and worker paths must not depend on seed imports except through explicit local fallback modes.
 
 ---
@@ -56,13 +72,13 @@ Seed data may exist for controlled local development, but runtime shared logic, 
 
 ### Backend
 - dedicated API service
-- separate worker service for ingestion, extraction, normalization, generation, validation, and export packaging
+- separate worker service for ingestion, extraction, normalization, generation, validation, approval updates, and export packaging
 
 ### Data and infrastructure
-- PostgreSQL for canonical normalized entities
+- PostgreSQL for canonical normalized entities and workflow state
 - JSONB for raw provider payloads and source snapshots where appropriate
 - S3-compatible object storage for datasheets, CAD files, previews, generated assets, and export bundles
-- Redis-backed queue for ingestion, generation, validation, review, and export jobs
+- Redis-backed queue for ingestion, generation, validation, review, approval, issue, and export jobs
 
 ---
 
@@ -73,64 +89,79 @@ Seed data may exist for controlled local development, but runtime shared logic, 
 The web layer is the engineering workspace presented to the user.
 
 Responsibilities:
+- quick part readiness check
 - search and discovery
-- component detail workspace
+- part detail / readiness workspace
 - connector intelligence presentation
 - engineering asset presentation
 - missing-asset fallback actions
-- review and workflow state presentation
+- risk flag and blocker presentation
+- approval and workflow state presentation
+- admin / review queue tools
 - compare and future engineering tools
 
 The web layer must remain:
 - provider-neutral
 - trust-aware
 - explicit about uncertainty
-- incapable of implying file existence or export readiness beyond what the API proves
+- incapable of implying file existence, readiness, approval, or exportability beyond what the API proves
 
 ### Key surfaces
+- Quick Part Readiness Check
 - Search
-- Component detail
+- Part Detail / Readiness Record
 - Recommended Buildable Set
 - Engineering Assets
 - Missing Assets / Fallback Actions
 - Similar Parts
 - Typical Companion Parts
-- Compare
-- Admin / review tools
+- Risk Flags / Warnings
+- Approval Summary
+- Audit / Provenance Summary
+- Admin / review queue tools
 
 ---
 
 ## 2. API layer
 
-The API is the contract boundary between the UI and the engineering platform state.
+The API is the contract boundary between the UI and the platform state.
 
 Responsibilities:
+- quick part intake and readiness resolution
 - part search
-- component detail resolution
+- part detail resolution
 - connector relationship projection
 - buildable mating set projection
 - grouped asset summaries
 - bundle readiness summaries
+- readiness summary exposure
+- issue queue exposure
 - generation request creation
 - workflow status exposure
 - review status exposure
+- approval status exposure
 - export request handling
-- admin/review actions
+- admin and review actions
 
 The API must:
 - return typed, deterministic responses
-- distinguish between unavailable, incomplete, and ready states
+- distinguish between unavailable, incomplete, blocked, and ready states
+- distinguish asset truth from part approval truth
 - never silently mask DB or schema failures with fake success behavior
 - expose derived projections without leaking provider-specific logic
 
 ### Important derived API concepts
+- PartReadinessSummary
 - BuildableMatingSet
 - EngineeringAssetSummary
 - AssetBundleReadiness
 - SourceReadiness
 - GenerationRequestability
 - ReviewStatus
+- ApprovalStatus
 - ExportReadiness
+- OpenIssueSummary
+- RiskFlagSummary
 
 ---
 
@@ -150,6 +181,10 @@ Responsibilities:
 - generation request processing
 - validation runs
 - review preparation
+- readiness recomputation
+- issue detection and refresh
+- risk flag derivation
+- approval workflow support
 - export bundle creation
 
 The worker layer is the correct home for:
@@ -157,6 +192,8 @@ The worker layer is the correct home for:
 - heuristics
 - extraction logic
 - normalization pipelines
+- readiness evaluation
+- issue generation
 - generation orchestration
 
 The worker layer must not push provider-specific assumptions into the API or UI.
@@ -169,14 +206,20 @@ The canonical data layer stores the platform’s normalized engineering truth.
 
 Core responsibilities:
 - canonical part identity
+- provider and source records
+- supply offerings and provider freshness
 - source-backed engineering metrics
 - connector families and compatibility relations
 - asset metadata and availability state
 - generation requests and workflows
 - review records
+- approval records
+- issue state
+- risk flags
+- internal notes and usage history
 - export trust state
 
-This layer is what allows the platform to answer engineering questions consistently even when source systems are incomplete, conflicting, or temporarily unavailable.
+This layer is what allows the platform to answer engineering questions consistently even when source systems are incomplete, conflicting, ambiguous, or temporarily unavailable.
 
 ---
 
@@ -203,6 +246,7 @@ The system must track whether an asset is:
 - downloaded
 - validated
 - reviewed
+- approved for design use only as part of the larger part context
 - verified for export
 
 ---
@@ -214,9 +258,12 @@ Background jobs and workflow orchestration must be explicit.
 Primary workflow families:
 - ingestion jobs
 - normalization jobs
+- readiness recomputation jobs
+- issue refresh jobs
 - generation request jobs
 - validation jobs
 - review-preparation jobs
+- approval update jobs
 - export bundle jobs
 
 This layer exists to keep user-facing requests fast and deterministic while allowing the system to do heavier engineering work in the background.
@@ -224,6 +271,42 @@ This layer exists to keep user-facing requests fast and deterministic while allo
 ---
 
 ## Core subsystems
+
+## Part Readiness Subsystem
+
+This subsystem is the architectural center of the product.
+
+Responsibilities:
+- resolve part identity confidence
+- combine source truth, asset truth, compatibility state, approval state, and risk state
+- derive overall readiness for engineering use
+- surface explicit blockers
+- support quick readiness checks and part detail summaries
+- support readiness-based filtering and queueing
+
+Inputs include:
+- source records
+- normalized metrics
+- connector relationships
+- asset status
+- review and validation evidence
+- approval records
+- risk flags
+- open issues
+
+Outputs include:
+- overall readiness state
+- blocker count and blocker summary
+- readiness score or confidence
+- engineer-facing readiness explanation
+
+Rules:
+- successful import does not imply readiness
+- asset availability does not imply approval for design use
+- blocked readiness must be explainable through explicit reasons
+- readiness logic must be deterministic and reproducible from canonical state
+
+---
 
 ## Connector Intelligence Subsystem
 
@@ -236,12 +319,14 @@ Responsibilities:
 - model cable compatibility
 - expose a provider-neutral Buildable Mating Set
 - preserve confidence and provenance for all relationship records
+- support compatibility warnings such as uncertainty or family ambiguity
 
 Rules:
 - relationships must be structured records, not loose notes
 - uncertain compatibility remains labeled as uncertain
 - required accessories must be included in buildable-set outputs
 - provider-specific heuristics stay in worker adapters, not the UI
+- connector family similarity must not silently substitute for verified mating compatibility
 
 ---
 
@@ -299,24 +384,63 @@ Rules:
 
 ---
 
-## Review and Approval Subsystem
+## Review, Validation, and Approval Subsystem
 
-This subsystem creates the trust gate between “generated or sourced” and “safe to use for export.”
+This subsystem creates the trust boundary between “known to the system” and “safe to rely on.”
 
 Responsibilities:
-- track review records
+- track asset review records
 - support approve / reject / changes requested workflows
 - separate reviewed from verified_for_export
 - store validation evidence before export promotion
 - audit successful and denied export-promotion attempts
-- expose review state to API and UI
+- track part-level approval for engineering use
 - preserve reviewer notes and auditability
+- expose review, validation, and approval state to API and UI
 
 Rules:
 - generated does not imply approved
-- approved does not automatically imply verified_for_export; a separate promotion step must satisfy export rules
-- promotion to verified_for_export requires qualifying validation evidence
-- export readiness must be explicit and earned
+- approved asset does not automatically imply verified_for_export
+- verified_for_export requires qualifying validation evidence
+- part approval is separate from asset review
+- readiness and approval must remain explainable and auditable
+
+---
+
+## Risk and Issue Management Subsystem
+
+This subsystem makes blockers and engineering hazards operationally visible.
+
+Responsibilities:
+- store risk flags such as near-match variants, family confusion, mounting mismatch, pinout risk, lifecycle risk, or source conflict
+- maintain open issue records for missing CAD, missing mates, low-confidence identity, duplicate candidates, pending approval, and obsolete-risk cases
+- feed admin review queues
+- support assignment, review, and resolution
+- feed readiness blocking logic
+
+Rules:
+- warnings must not be buried in freeform notes
+- high-severity unresolved issues must be capable of blocking readiness
+- risk flags must preserve provenance and confidence where possible
+- UI should consume normalized issue and risk projections rather than inventing them ad hoc
+
+---
+
+## Internal Engineering Memory Subsystem
+
+This subsystem captures knowledge that public part sites do not provide.
+
+Responsibilities:
+- store part notes
+- store project usage history
+- capture internal corrections, cautions, and usage context
+- support approved-parts vault workflows later
+- provide internal trust overlays beyond public source data
+
+Rules:
+- internal notes do not overwrite source truth
+- internal memory should be additive, attributable, and reviewable
+- internal usage context should inform trust, but not silently override explicit approval state
 
 ---
 
@@ -340,6 +464,7 @@ Rules:
 - referenced-only assets do not count as downloadable exports
 - partially complete bundles must be labeled as partial
 - export actions must reflect actual asset readiness, not optimistic intent
+- export readiness must not imply part approval for all engineering contexts unless the approval scope supports that claim
 
 ---
 
@@ -350,14 +475,18 @@ The ingestion pipeline should follow this general pattern:
 1. fetch source payload from provider adapter
 2. store raw source snapshot
 3. normalize into canonical contract
-4. register or update source record
-5. record source freshness, import status, and any import failure details
-6. register or update extracted source-readiness signals
-7. register or update part metrics
-8. register or update asset metadata
-9. register or update connector and recommendation relationships
-10. run validation and readiness updates
-11. publish searchable canonical state
+4. resolve or create provider and source record
+5. resolve or create canonical manufacturer and part identity
+6. record source freshness, import status, and any import failure details
+7. register or update supply offerings
+8. register or update extracted source-readiness signals
+9. register or update part metrics
+10. register or update asset metadata
+11. register or update connector and recommendation relationships
+12. derive or refresh risk flags and readiness issues
+13. recompute part readiness summary
+14. run validation, review, and approval update logic
+15. publish searchable canonical state
 
 This architecture allows the system to absorb data from multiple providers without letting any one provider dictate the internal model.
 
@@ -367,24 +496,42 @@ This architecture allows the system to absorb data from multiple providers witho
 
 Typical user request flow:
 
+### Quick part readiness check
+1. user submits MPN and optional context
+2. web calls API
+3. API resolves canonical match or ambiguity state
+4. API returns:
+   - identity status
+   - part summary
+   - readiness summary
+   - key blockers and warnings
+   - mate/accessory readiness
+   - asset readiness
+   - next actions
+5. web renders a readiness-first result
+
 ### Search
 1. user submits query
 2. web calls API
-3. API reads canonical DB/search projection
-4. API returns normalized part summaries, asset readiness, and filters
+3. API reads canonical DB or search projection
+4. API returns normalized part summaries, readiness filters, and asset/readiness projections
 5. web renders provider-neutral engineering search results
 
-### Component detail
+### Part detail / readiness record
 1. user opens a part
 2. web calls API
 3. API resolves:
    - canonical part data
    - normalized metrics
+   - readiness summary
    - connector intelligence
    - grouped engineering assets
    - bundle readiness
    - generation requestability
-   - review/export state
+   - review / approval / export state
+   - risk flags
+   - open issues
+   - provenance and audit summary
 4. web renders the engineering workspace
 
 ### Generation request
@@ -395,6 +542,13 @@ Typical user request flow:
 5. API and UI expose workflow state
 6. outputs enter review-aware asset flow
 
+### Part approval action
+1. reviewer submits approval decision
+2. API validates current state and scope
+3. API persists approval record
+4. worker refreshes readiness and issue state if needed
+5. API and UI expose updated readiness and approval projections
+
 ---
 
 ## Storage strategy
@@ -402,20 +556,28 @@ Typical user request flow:
 ### PostgreSQL
 Use PostgreSQL for:
 - canonical part records
+- manufacturer and provider records
 - source records
+- supply offerings and price breaks
 - normalized metrics
 - connector relations
 - asset metadata
 - generation requests and workflows
 - source extraction signals
-- review records
+- review and validation records
+- approval records
+- risk flags
+- issue records
+- internal usage and notes
 - export state
+- readiness summaries or materialized projections where useful
 
 ### JSONB
 Use JSONB for:
 - raw provider payload snapshots
-- parser/intermediate artifacts
+- parser and intermediate artifacts
 - source-specific details that should not pollute the canonical model
+- explainable readiness evidence fragments where appropriate
 
 ### Object storage
 Use object storage for:
@@ -429,7 +591,7 @@ Use object storage for:
 ## Architectural rules
 
 ### Rule 1
-Do not wire the platform directly to a single distributor or CAD source.
+Do not wire the platform directly to a single distributor, manufacturer, or CAD source.
 
 ### Rule 2
 Do not perform live scraping in user-facing request paths.
@@ -438,13 +600,19 @@ Do not perform live scraping in user-facing request paths.
 Do not let UI components interpret provider-specific quirks.
 
 ### Rule 4
-Do not collapse provenance, review, and export trust into one vague status.
+Do not collapse provenance, review, approval, readiness, and export trust into one vague status.
 
 ### Rule 5
 Do not imply “exportable” unless the underlying asset bundle is truly ready.
 
 ### Rule 6
+Do not imply “approved for design” unless a part-level approval record or derived policy supports that claim.
+
+### Rule 7
 Do not let seed data mask DB-backed failures except in explicit local fallback mode.
+
+### Rule 8
+Do not hide readiness blockers inside opaque scores or background-only logic.
 
 ---
 
@@ -455,10 +623,13 @@ The long-term goal is not just to store part files.
 The long-term goal is to build a platform that can reliably answer:
 
 - what the correct part is
+- whether the identity is trustworthy
 - what mates with it
 - what else is required
 - which assets are trustworthy
 - what can be recovered when files are missing
+- what risks or blockers remain
+- whether the part is approved for design use
 - what is truly ready to move into engineering design tools
 
 That is the architectural standard.
