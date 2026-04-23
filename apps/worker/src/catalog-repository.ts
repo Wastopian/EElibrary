@@ -3,6 +3,8 @@
  */
 
 import { Pool, type PoolClient } from "pg";
+import { buildBuildableMatingSet, getConnectorRelationEffectiveConfidence } from "@ee-library/shared/connector-intelligence";
+import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import type {
   AccessoryRequirement,
   Asset,
@@ -11,18 +13,23 @@ import type {
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
+  ConnectorFamilyConflict,
   DatasheetRevision,
+  GenerationRequest,
   GenerationWorkflow,
   Manufacturer,
   MateRelation,
   Package,
   Part,
+  PartDuplicateCandidate,
+  PartIssue,
   PartMetric,
   ProviderImportDiagnostic,
   ReviewRecord,
   SimilarPartRelation,
   SourceExtractionSignal,
   SourceImportStatus,
+  SourceReconciliationRecord,
   SourceRecord
 } from "@ee-library/shared/types";
 import type { NormalizedProviderPart } from "./provider-adapters";
@@ -191,7 +198,7 @@ export async function recordProviderImportFailure(input: ProviderImportFailureIn
  * Persists a failed import source record using an existing transaction-capable client.
  */
 export async function persistProviderImportFailureRows(client: PoolClient, input: ProviderImportFailureInput): Promise<void> {
-  await persistSourceRecord(client, {
+  const attachedPartId = await persistSourceRecord(client, {
     fetchedAt: input.failedAt,
     id: buildSourceRecordId(input.providerId, input.providerPartKey),
     importErrorDetails: formatImportError(input.error),
@@ -209,6 +216,10 @@ export async function persistProviderImportFailureRows(client: PoolClient, input
     sourceLastSeenAt: input.failedAt,
     sourceUrl: input.sourceUrl ?? null
   });
+
+  if (attachedPartId) {
+    await refreshStoredPartProjectionRows(client, attachedPartId);
+  }
 }
 
 /**
@@ -473,6 +484,8 @@ async function listPromotionDiagnostics(limit: number): Promise<PromotionDiagnos
  * Persists normalized rows using an existing transaction-capable client.
  */
 export async function persistNormalizedPartRows(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
+  const previousPartIdentity = await readStoredPartIdentity(client, normalizedPart.part.id);
+
   await persistManufacturer(client, normalizedPart.manufacturer);
   await persistPackage(client, normalizedPart.package);
 
@@ -534,6 +547,8 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
   for (const promotionAudit of normalizedPart.promotionAudits) {
     await persistAssetPromotionAudit(client, promotionAudit);
   }
+
+  await persistPartProjectionRows(client, normalizedPart, previousPartIdentity);
 }
 
 /**
@@ -685,10 +700,31 @@ async function persistPart(client: PoolClient, part: Part): Promise<void> {
 }
 
 /**
+ * Reads the previously stored part identity fields so duplicate refresh can clean up stale matches.
+ */
+async function readStoredPartIdentity(
+  client: PoolClient,
+  partId: string
+): Promise<{ mpn: string; packageId: string } | null> {
+  const result = await client.query<{ mpn: string; package_id: string }>(
+    `
+      SELECT mpn, package_id
+      FROM parts
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [partId]
+  );
+  const row = result.rows[0];
+
+  return row ? { mpn: row.mpn, packageId: row.package_id } : null;
+}
+
+/**
  * Upserts one raw provider source record.
  */
-async function persistSourceRecord(client: PoolClient, sourceRecord: SourceRecord): Promise<void> {
-  await client.query(
+async function persistSourceRecord(client: PoolClient, sourceRecord: SourceRecord): Promise<string | null> {
+  const result = await client.query<{ part_id: string | null }>(
     `
       INSERT INTO source_records (
         id,
@@ -719,6 +755,7 @@ async function persistSourceRecord(client: PoolClient, sourceRecord: SourceRecor
         import_status = EXCLUDED.import_status,
         import_error_details = EXCLUDED.import_error_details,
         last_updated_at = EXCLUDED.last_updated_at
+      RETURNING part_id
     `,
     [
       sourceRecord.id,
@@ -736,6 +773,8 @@ async function persistSourceRecord(client: PoolClient, sourceRecord: SourceRecor
       sourceRecord.lastUpdatedAt
     ]
   );
+
+  return result.rows[0]?.part_id ?? null;
 }
 
 /**
@@ -968,20 +1007,37 @@ async function persistMateRelation(client: PoolClient, relation: MateRelation): 
         part_id,
         mate_part_id,
         relationship_type,
+        compatibility_status,
+        evidence_kind,
         confidence_score,
         source_revision_id,
+        source_record_id,
         notes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         mate_part_id = EXCLUDED.mate_part_id,
         relationship_type = EXCLUDED.relationship_type,
+        compatibility_status = EXCLUDED.compatibility_status,
+        evidence_kind = EXCLUDED.evidence_kind,
         confidence_score = EXCLUDED.confidence_score,
         source_revision_id = EXCLUDED.source_revision_id,
+        source_record_id = EXCLUDED.source_record_id,
         notes = EXCLUDED.notes
     `,
-    [relation.id, relation.partId, relation.matePartId, relation.relationshipType, relation.confidenceScore, relation.sourceRevisionId, relation.notes]
+    [
+      relation.id,
+      relation.partId,
+      relation.matePartId,
+      relation.relationshipType,
+      relation.compatibilityStatus,
+      relation.evidenceKind,
+      relation.confidenceScore,
+      relation.sourceRevisionId,
+      relation.sourceRecordId,
+      relation.notes
+    ]
   );
 }
 
@@ -996,20 +1052,37 @@ async function persistAccessoryRequirement(client: PoolClient, requirement: Acce
         part_id,
         accessory_part_id,
         relationship_type,
+        compatibility_status,
+        evidence_kind,
         confidence_score,
         source_revision_id,
+        source_record_id,
         notes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         accessory_part_id = EXCLUDED.accessory_part_id,
         relationship_type = EXCLUDED.relationship_type,
+        compatibility_status = EXCLUDED.compatibility_status,
+        evidence_kind = EXCLUDED.evidence_kind,
         confidence_score = EXCLUDED.confidence_score,
         source_revision_id = EXCLUDED.source_revision_id,
+        source_record_id = EXCLUDED.source_record_id,
         notes = EXCLUDED.notes
     `,
-    [requirement.id, requirement.partId, requirement.accessoryPartId, requirement.relationshipType, requirement.confidenceScore, requirement.sourceRevisionId, requirement.notes]
+    [
+      requirement.id,
+      requirement.partId,
+      requirement.accessoryPartId,
+      requirement.relationshipType,
+      requirement.compatibilityStatus,
+      requirement.evidenceKind,
+      requirement.confidenceScore,
+      requirement.sourceRevisionId,
+      requirement.sourceRecordId,
+      requirement.notes
+    ]
   );
 }
 
@@ -1024,20 +1097,46 @@ async function persistCableCompatibility(client: PoolClient, compatibility: Cabl
         part_id,
         cable_part_id,
         relationship_type,
+        wire_gauge_min,
+        wire_gauge_max,
+        shielding_requirement,
+        termination_style,
+        compatibility_status,
         confidence_score,
         source_revision_id,
+        source_record_id,
         notes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         cable_part_id = EXCLUDED.cable_part_id,
         relationship_type = EXCLUDED.relationship_type,
+        wire_gauge_min = EXCLUDED.wire_gauge_min,
+        wire_gauge_max = EXCLUDED.wire_gauge_max,
+        shielding_requirement = EXCLUDED.shielding_requirement,
+        termination_style = EXCLUDED.termination_style,
+        compatibility_status = EXCLUDED.compatibility_status,
         confidence_score = EXCLUDED.confidence_score,
         source_revision_id = EXCLUDED.source_revision_id,
+        source_record_id = EXCLUDED.source_record_id,
         notes = EXCLUDED.notes
     `,
-    [compatibility.id, compatibility.partId, compatibility.cablePartId, compatibility.relationshipType, compatibility.confidenceScore, compatibility.sourceRevisionId, compatibility.notes]
+    [
+      compatibility.id,
+      compatibility.partId,
+      compatibility.cablePartId,
+      compatibility.relationshipType,
+      compatibility.wireGaugeMin,
+      compatibility.wireGaugeMax,
+      compatibility.shieldingRequirement,
+      compatibility.terminationStyle,
+      compatibility.compatibilityStatus,
+      compatibility.confidenceScore,
+      compatibility.sourceRevisionId,
+      compatibility.sourceRecordId,
+      compatibility.notes
+    ]
   );
 }
 
@@ -1279,4 +1378,1174 @@ function toIsoTimestamp(value: Date | string): string {
  */
 function slugify(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "unknown";
+}
+
+/**
+ * Formats one mate relation label for concise persisted conflict summaries.
+ */
+function formatMateRelationLabel(relationshipType: MateRelation["relationshipType"]): string {
+  return relationshipType === "best_mate" ? "Best mate" : "Alternate mate";
+}
+
+/**
+ * Formats connector evidence kinds for concise persisted conflict details.
+ */
+function formatConnectorEvidenceLabel(evidenceKind: MateRelation["evidenceKind"]): string {
+  switch (evidenceKind) {
+    case "provider_direct":
+      return "direct provider-backed";
+    case "datasheet_reference":
+      return "datasheet-backed";
+    case "family_inference":
+      return "family-inferred";
+    case "manual_review":
+      return "review-confirmed";
+    case "catalog_fixture":
+      return "fixture-backed";
+  }
+}
+
+/**
+ * Persists the backend-derived part readiness projection after canonical rows are up to date.
+ */
+async function persistPartProjectionRows(
+  client: PoolClient,
+  normalizedPart: NormalizedProviderPart,
+  previousPartIdentity: { mpn: string; packageId: string } | null
+): Promise<void> {
+  const affectedPartIds = await readAffectedProjectionPartIds(client, normalizedPart.part, previousPartIdentity);
+
+  if (affectedPartIds.length === 0) {
+    const buildableMatingSet = buildBuildableMatingSet(
+      normalizedPart.mateRelations,
+      normalizedPart.accessoryRequirements,
+      normalizedPart.cableCompatibilities,
+      normalizedPart.connectorFamilyConflicts
+    );
+    const projection = derivePartProjection({
+      accessoryRequirements: normalizedPart.accessoryRequirements,
+      assets: normalizedPart.assets,
+      buildableMatingSet,
+      datasheetRevision: normalizedPart.datasheetRevisions[0] ?? null,
+      duplicateCandidates: [],
+      extractionSignals: normalizedPart.extractionSignals,
+      generationRequests: [],
+      generationWorkflows: normalizedPart.generationWorkflows,
+      mateRelations: normalizedPart.mateRelations,
+      metrics: normalizedPart.metrics,
+      part: normalizedPart.part,
+      promotionAudits: normalizedPart.promotionAudits,
+      reviewRecords: normalizedPart.reviewRecords,
+      sourceReconciliation: null,
+      sources: [normalizedPart.sourceRecord],
+      validationRecords: normalizedPart.validationRecords
+    });
+
+    await writePartProjectionRows(client, normalizedPart.part.id, projection);
+    return;
+  }
+
+  for (const partId of affectedPartIds) {
+    await refreshStoredPartProjectionRows(client, partId);
+  }
+}
+
+/**
+ * Rebuilds stored part-level readiness rows from the canonical tables for one existing part.
+ */
+async function refreshStoredPartProjectionRows(client: PoolClient, partId: string): Promise<void> {
+  await refreshStoredConnectorFamilyConflictRows(client, partId);
+
+  const projectionSource = await readStoredProjectionSource(client, partId);
+
+  if (!projectionSource) {
+    return;
+  }
+
+  const buildableMatingSet = buildBuildableMatingSet(
+    projectionSource.mateRelations,
+    projectionSource.accessoryRequirements,
+    projectionSource.cableCompatibilities,
+    projectionSource.connectorFamilyConflicts
+  );
+  const projection = derivePartProjection({
+    ...projectionSource,
+    buildableMatingSet
+  });
+
+  await writePartProjectionRows(client, partId, projection);
+}
+
+/**
+ * Recomputes persisted connector-family conflict rows from stored alternate-mate evidence.
+ */
+async function refreshStoredConnectorFamilyConflictRows(client: PoolClient, partId: string): Promise<void> {
+  const result = await client.query<{
+    candidateConnectorFamilyId: string | null;
+    candidateLastUpdatedAt: Date | string | null;
+    candidateManufacturerName: string | null;
+    candidateMpn: string | null;
+    candidatePartId: string | null;
+    currentConnectorFamilyId: string | null;
+    currentLastUpdatedAt: Date | string;
+    relationCompatibilityStatus: MateRelation["compatibilityStatus"] | null;
+    relationConfidenceScore: number | string | null;
+    relationEvidenceKind: MateRelation["evidenceKind"] | null;
+    relationId: string | null;
+    relationSourceRecordId: string | null;
+    relationType: MateRelation["relationshipType"] | null;
+  }>(
+    `
+      SELECT
+        source_part.connector_family_id AS "currentConnectorFamilyId",
+        source_part.last_updated_at AS "currentLastUpdatedAt",
+        relation.id AS "relationId",
+        relation.mate_part_id AS "candidatePartId",
+        relation.relationship_type AS "relationType",
+        relation.compatibility_status AS "relationCompatibilityStatus",
+        relation.evidence_kind AS "relationEvidenceKind",
+        relation.confidence_score AS "relationConfidenceScore",
+        relation.source_record_id AS "relationSourceRecordId",
+        candidate.connector_family_id AS "candidateConnectorFamilyId",
+        candidate.mpn AS "candidateMpn",
+        candidate.last_updated_at AS "candidateLastUpdatedAt",
+        candidate_manufacturer.name AS "candidateManufacturerName"
+      FROM parts source_part
+      LEFT JOIN mate_relations relation ON relation.part_id = source_part.id
+      LEFT JOIN parts candidate ON candidate.id = relation.mate_part_id
+      LEFT JOIN manufacturers candidate_manufacturer ON candidate_manufacturer.id = candidate.manufacturer_id
+      WHERE source_part.id = $1
+      ORDER BY relation.confidence_score DESC NULLS LAST, relation.id ASC
+    `,
+    [partId]
+  );
+
+  if (result.rows.length === 0) {
+    return;
+  }
+
+  await client.query(`DELETE FROM connector_family_conflicts WHERE part_id = $1`, [partId]);
+
+  const dominantMateFamilyId = result.rows
+    .filter(
+      (row): row is typeof row & {
+        candidateConnectorFamilyId: string;
+        relationCompatibilityStatus: MateRelation["compatibilityStatus"];
+        relationEvidenceKind: MateRelation["evidenceKind"];
+        relationConfidenceScore: number | string;
+      } =>
+        Boolean(row.candidateConnectorFamilyId) &&
+        Boolean(row.relationCompatibilityStatus) &&
+        Boolean(row.relationEvidenceKind) &&
+        row.relationCompatibilityStatus !== "rejected"
+    )
+    .sort(
+      (left, right) =>
+        getConnectorRelationEffectiveConfidence({
+          compatibilityStatus: right.relationCompatibilityStatus,
+          confidenceScore: parseNumericValue(right.relationConfidenceScore),
+          evidenceKind: right.relationEvidenceKind
+        }) -
+          getConnectorRelationEffectiveConfidence({
+            compatibilityStatus: left.relationCompatibilityStatus,
+            confidenceScore: parseNumericValue(left.relationConfidenceScore),
+            evidenceKind: left.relationEvidenceKind
+          }) || String(left.relationId).localeCompare(String(right.relationId))
+    )[0]?.candidateConnectorFamilyId ?? null;
+
+  for (const row of result.rows) {
+    if (
+      !row.relationId ||
+      !row.relationType ||
+      !row.relationCompatibilityStatus ||
+      !row.relationEvidenceKind ||
+      !row.candidatePartId
+    ) {
+      continue;
+    }
+
+    const confidenceScore = getConnectorRelationEffectiveConfidence({
+      compatibilityStatus: row.relationCompatibilityStatus,
+      confidenceScore: parseNumericValue(row.relationConfidenceScore ?? 0),
+      evidenceKind: row.relationEvidenceKind
+    });
+    const minimumConfidence = row.relationEvidenceKind === "family_inference" ? 0.82 : 0.68;
+
+    if (row.relationCompatibilityStatus === "rejected" || confidenceScore < minimumConfidence) {
+      continue;
+    }
+
+    const conflictsWithCurrentFamily = Boolean(
+      row.candidateConnectorFamilyId && row.currentConnectorFamilyId && row.candidateConnectorFamilyId !== row.currentConnectorFamilyId
+    );
+    const conflictsWithDominantMateFamily = Boolean(
+      row.candidateConnectorFamilyId && dominantMateFamilyId && row.candidateConnectorFamilyId !== dominantMateFamilyId
+    );
+    const conflictType =
+      conflictsWithCurrentFamily || conflictsWithDominantMateFamily
+        ? "family_confusion"
+        : row.relationType === "alternate_mate"
+          ? "near_match_variant"
+          : null;
+
+    if (!conflictType) {
+      continue;
+    }
+
+    const candidateLabel = row.candidateMpn
+      ? `${row.candidateMpn}${row.candidateManufacturerName ? ` (${row.candidateManufacturerName})` : ""}`
+      : row.candidatePartId;
+    const summary =
+      conflictType === "family_confusion"
+        ? `${formatMateRelationLabel(row.relationType)} evidence crosses connector-family boundaries.`
+        : "Near-match connector variant still needs review.";
+    const detail =
+      conflictType === "family_confusion"
+        ? `${candidateLabel} is stored as a ${Math.round(confidenceScore * 100)}% ${formatMateRelationLabel(row.relationType).toLowerCase()} backed by ${formatConnectorEvidenceLabel(row.relationEvidenceKind)} evidence, but its connector family differs from the current or dominant mate family.`
+        : `${candidateLabel} remains a ${Math.round(confidenceScore * 100)}% alternate mate candidate backed by ${formatConnectorEvidenceLabel(row.relationEvidenceKind)} evidence, so shell, keying, and variant differences still need review.`;
+    const lastUpdatedAt = latestTimestamp([
+      toIsoTimestamp(row.currentLastUpdatedAt),
+      ...(row.candidateLastUpdatedAt ? [toIsoTimestamp(row.candidateLastUpdatedAt)] : [])
+    ]);
+
+    await client.query(
+      `
+        INSERT INTO connector_family_conflicts (
+          id,
+          part_id,
+          candidate_part_id,
+          candidate_connector_family_id,
+          conflict_type,
+          confidence_score,
+          summary,
+          detail,
+          source_record_id,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (part_id, candidate_part_id, conflict_type) DO UPDATE SET
+          id = EXCLUDED.id,
+          candidate_connector_family_id = EXCLUDED.candidate_connector_family_id,
+          confidence_score = EXCLUDED.confidence_score,
+          summary = EXCLUDED.summary,
+          detail = EXCLUDED.detail,
+          source_record_id = EXCLUDED.source_record_id,
+          last_updated_at = EXCLUDED.last_updated_at
+      `,
+      [
+        `connector-conflict-${partId}-${slugify(row.candidatePartId)}-${conflictType}`,
+        partId,
+        row.candidatePartId,
+        row.candidateConnectorFamilyId,
+        conflictType,
+        confidenceScore,
+        summary,
+        detail,
+        row.relationSourceRecordId,
+        lastUpdatedAt
+      ]
+    );
+  }
+}
+
+/**
+ * Reads every part id whose duplicate-candidate projection could change after one canonical part write.
+ */
+async function readAffectedProjectionPartIds(
+  client: PoolClient,
+  part: Part,
+  previousPartIdentity: { mpn: string; packageId: string } | null
+): Promise<string[]> {
+  const result = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM parts
+      WHERE id = $1
+        OR (lower(mpn) = lower($2) AND package_id = $3)
+        OR ($4::text IS NOT NULL AND $5::text IS NOT NULL AND lower(mpn) = lower($4) AND package_id = $5)
+      ORDER BY id ASC
+    `,
+    [part.id, part.mpn, part.packageId, previousPartIdentity?.mpn ?? null, previousPartIdentity?.packageId ?? null]
+  );
+
+  return Array.from(new Set(result.rows.map((row) => row.id)));
+}
+
+/**
+ * Reads the canonical rows needed to derive part-level readiness from the current database state.
+ */
+async function readStoredProjectionSource(client: PoolClient, partId: string): Promise<{
+  accessoryRequirements: AccessoryRequirement[];
+  assets: Asset[];
+  cableCompatibilities: CableCompatibility[];
+  connectorFamilyConflicts: ConnectorFamilyConflict[];
+  datasheetRevision: DatasheetRevision | null;
+  duplicateCandidates: PartDuplicateCandidate[];
+  extractionSignals: SourceExtractionSignal[];
+  generationRequests: GenerationRequest[];
+  generationWorkflows: GenerationWorkflow[];
+  mateRelations: MateRelation[];
+  metrics: PartMetric[];
+  part: Part;
+  promotionAudits: AssetPromotionAuditRecord[];
+  reviewRecords: ReviewRecord[];
+  sourceReconciliation: SourceReconciliationRecord | null;
+  sources: SourceRecord[];
+  validationRecords: AssetValidationRecord[];
+} | null> {
+  const [
+    partResult,
+    assetResult,
+    datasheetResult,
+    sourceResult,
+    metricResult,
+    extractionSignalResult,
+    mateResult,
+    accessoryResult,
+    cableResult,
+    connectorFamilyConflictResult,
+    workflowResult,
+    requestResult,
+    reviewResult,
+    validationResult,
+    promotionAuditResult,
+    duplicateCandidateResult,
+    sourceReconciliationResult
+  ] = await Promise.all([
+    client.query<{
+      id: string;
+      mpn: string;
+      manufacturerId: string;
+      category: string;
+      lifecycleStatus: Part["lifecycleStatus"];
+      packageId: string;
+      connectorFamilyId: string | null;
+      trustScore: number | string;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          mpn,
+          manufacturer_id AS "manufacturerId",
+          category,
+          lifecycle_status AS "lifecycleStatus",
+          package_id AS "packageId",
+          connector_family_id AS "connectorFamilyId",
+          trust_score AS "trustScore",
+          last_updated_at AS "lastUpdatedAt"
+        FROM parts
+        WHERE id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      assetType: Asset["assetType"];
+      fileFormat: Asset["fileFormat"];
+      storageKey: string | null;
+      fileHash: string | null;
+      providerId: string | null;
+      licenseMode: Asset["licenseMode"];
+      provenance: Asset["provenance"];
+      availabilityStatus: Asset["availabilityStatus"];
+      reviewStatus: Asset["reviewStatus"];
+      exportStatus: Asset["exportStatus"];
+      assetState: Asset["assetState"];
+      assetStatus: Asset["assetStatus"];
+      generationMethod: string | null;
+      generationSourceAssetId: string | null;
+      validationStatus: Asset["validationStatus"];
+      previewStatus: Asset["previewStatus"];
+      sourceUrl: string | null;
+      sourceRecordId: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          asset_type AS "assetType",
+          file_format AS "fileFormat",
+          storage_key AS "storageKey",
+          file_hash AS "fileHash",
+          provider_id AS "providerId",
+          license_mode AS "licenseMode",
+          provenance,
+          availability_status AS "availabilityStatus",
+          review_status AS "reviewStatus",
+          export_status AS "exportStatus",
+          asset_state AS "assetState",
+          asset_status AS "assetStatus",
+          generation_method AS "generationMethod",
+          generation_source_asset_id AS "generationSourceAssetId",
+          validation_status AS "validationStatus",
+          preview_status AS "previewStatus",
+          source_url AS "sourceUrl",
+          source_record_id AS "sourceRecordId",
+          last_updated_at AS "lastUpdatedAt"
+        FROM assets
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      revisionLabel: string;
+      revisionDate: Date | string | null;
+      pageCount: number | null;
+      fileAssetId: string | null;
+      parseConfidence: number | string;
+      pinTableStatus: DatasheetRevision["pinTableStatus"];
+      sourceRecordId: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          revision_label AS "revisionLabel",
+          revision_date AS "revisionDate",
+          page_count AS "pageCount",
+          file_asset_id AS "fileAssetId",
+          parse_confidence AS "parseConfidence",
+          pin_table_status AS "pinTableStatus",
+          source_record_id AS "sourceRecordId",
+          last_updated_at AS "lastUpdatedAt"
+        FROM datasheet_revisions
+        WHERE part_id = $1
+        ORDER BY revision_date DESC NULLS LAST, last_updated_at DESC
+        LIMIT 1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      providerId: string;
+      providerPartKey: string;
+      partId: string | null;
+      sourceUrl: string | null;
+      fetchedAt: Date | string;
+      rawPayload: unknown;
+      normalizedAt: Date | string | null;
+      sourceLastSeenAt: Date | string;
+      sourceLastImportedAt: Date | string | null;
+      importStatus: SourceImportStatus;
+      importErrorDetails: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          provider_id AS "providerId",
+          provider_part_key AS "providerPartKey",
+          part_id AS "partId",
+          source_url AS "sourceUrl",
+          fetched_at AS "fetchedAt",
+          raw_payload AS "rawPayload",
+          normalized_at AS "normalizedAt",
+          source_last_seen_at AS "sourceLastSeenAt",
+          source_last_imported_at AS "sourceLastImportedAt",
+          import_status AS "importStatus",
+          import_error_details AS "importErrorDetails",
+          last_updated_at AS "lastUpdatedAt"
+        FROM source_records
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      metricKey: string;
+      metricValue: number | string | null;
+      unit: PartMetric["unit"];
+      minValue: number | string | null;
+      maxValue: number | string | null;
+      confidenceScore: number | string;
+      sourceRevisionId: string;
+      sourceRecordId: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          metric_key AS "metricKey",
+          metric_value AS "metricValue",
+          unit,
+          min_value AS "minValue",
+          max_value AS "maxValue",
+          confidence_score AS "confidenceScore",
+          source_revision_id AS "sourceRevisionId",
+          source_record_id AS "sourceRecordId",
+          last_updated_at AS "lastUpdatedAt"
+        FROM part_metrics
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      sourceRecordId: string | null;
+      datasheetRevisionId: string | null;
+      assetId: string | null;
+      signalType: SourceExtractionSignal["signalType"];
+      extractionStatus: SourceExtractionSignal["extractionStatus"];
+      confidenceScore: number | string;
+      extractionSource: SourceExtractionSignal["extractionSource"];
+      notes: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          source_record_id AS "sourceRecordId",
+          datasheet_revision_id AS "datasheetRevisionId",
+          asset_id AS "assetId",
+          signal_type AS "signalType",
+          extraction_status AS "extractionStatus",
+          confidence_score AS "confidenceScore",
+          extraction_source AS "extractionSource",
+          notes,
+          last_updated_at AS "lastUpdatedAt"
+        FROM source_extraction_signals
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      matePartId: string;
+      relationshipType: MateRelation["relationshipType"];
+      compatibilityStatus: MateRelation["compatibilityStatus"] | null;
+      evidenceKind: MateRelation["evidenceKind"] | null;
+      confidenceScore: number | string;
+      sourceRevisionId: string;
+      sourceRecordId: string | null;
+      notes: string | null;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          mate_part_id AS "matePartId",
+          relationship_type AS "relationshipType",
+          compatibility_status AS "compatibilityStatus",
+          evidence_kind AS "evidenceKind",
+          confidence_score AS "confidenceScore",
+          source_revision_id AS "sourceRevisionId",
+          source_record_id AS "sourceRecordId",
+          notes
+        FROM mate_relations
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      accessoryPartId: string;
+      relationshipType: AccessoryRequirement["relationshipType"];
+      compatibilityStatus: AccessoryRequirement["compatibilityStatus"] | null;
+      evidenceKind: AccessoryRequirement["evidenceKind"] | null;
+      confidenceScore: number | string;
+      sourceRevisionId: string;
+      sourceRecordId: string | null;
+      notes: string | null;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          accessory_part_id AS "accessoryPartId",
+          relationship_type AS "relationshipType",
+          compatibility_status AS "compatibilityStatus",
+          evidence_kind AS "evidenceKind",
+          confidence_score AS "confidenceScore",
+          source_revision_id AS "sourceRevisionId",
+          source_record_id AS "sourceRecordId",
+          notes
+        FROM accessory_requirements
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      cablePartId: string;
+      relationshipType: CableCompatibility["relationshipType"];
+      wireGaugeMin: number | null;
+      wireGaugeMax: number | null;
+      shieldingRequirement: CableCompatibility["shieldingRequirement"];
+      terminationStyle: CableCompatibility["terminationStyle"];
+      compatibilityStatus: CableCompatibility["compatibilityStatus"];
+      confidenceScore: number | string;
+      sourceRevisionId: string;
+      sourceRecordId: string | null;
+      notes: string | null;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          cable_part_id AS "cablePartId",
+          relationship_type AS "relationshipType",
+          wire_gauge_min AS "wireGaugeMin",
+          wire_gauge_max AS "wireGaugeMax",
+          shielding_requirement AS "shieldingRequirement",
+          termination_style AS "terminationStyle",
+          compatibility_status AS "compatibilityStatus",
+          confidence_score AS "confidenceScore",
+          source_revision_id AS "sourceRevisionId",
+          source_record_id AS "sourceRecordId",
+          notes
+        FROM cable_compatibilities
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      candidatePartId: string;
+      candidateConnectorFamilyId: string | null;
+      conflictType: ConnectorFamilyConflict["conflictType"];
+      confidenceScore: number | string;
+      summary: string;
+      detail: string;
+      sourceRecordId: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          candidate_part_id AS "candidatePartId",
+          candidate_connector_family_id AS "candidateConnectorFamilyId",
+          conflict_type AS "conflictType",
+          confidence_score AS "confidenceScore",
+          summary,
+          detail,
+          source_record_id AS "sourceRecordId",
+          last_updated_at AS "lastUpdatedAt"
+        FROM connector_family_conflicts
+        WHERE part_id = $1
+        ORDER BY confidence_score DESC, id ASC
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      targetAssetType: GenerationWorkflow["targetAssetType"];
+      sourceDatasheetRevisionId: string | null;
+      sourceAssetId: string | null;
+      generationStatus: GenerationWorkflow["generationStatus"];
+      confidenceScore: number | string;
+      outputAssetId: string | null;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          target_asset_type AS "targetAssetType",
+          source_datasheet_revision_id AS "sourceDatasheetRevisionId",
+          source_asset_id AS "sourceAssetId",
+          generation_status AS "generationStatus",
+          confidence_score AS "confidenceScore",
+          output_asset_id AS "outputAssetId"
+        FROM generation_workflows
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      targetAssetType: GenerationRequest["targetAssetType"];
+      sourceDatasheetRevisionId: string | null;
+      sourceAssetId: string | null;
+      requestStatus: GenerationRequest["requestStatus"];
+      requestedAt: Date | string;
+      requestedBy: string;
+      workflowId: string | null;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          target_asset_type AS "targetAssetType",
+          source_datasheet_revision_id AS "sourceDatasheetRevisionId",
+          source_asset_id AS "sourceAssetId",
+          request_status AS "requestStatus",
+          requested_at AS "requestedAt",
+          requested_by AS "requestedBy",
+          workflow_id AS "workflowId",
+          last_updated_at AS "lastUpdatedAt"
+        FROM generation_requests
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      targetType: ReviewRecord["targetType"];
+      assetId: string | null;
+      generationWorkflowId: string | null;
+      outcome: ReviewRecord["outcome"];
+      reviewer: string;
+      notes: string | null;
+      reviewedAt: Date | string;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          target_type AS "targetType",
+          asset_id AS "assetId",
+          generation_workflow_id AS "generationWorkflowId",
+          outcome,
+          reviewer,
+          notes,
+          reviewed_at AS "reviewedAt",
+          last_updated_at AS "lastUpdatedAt"
+        FROM review_records
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      assetId: string;
+      validationStatus: AssetValidationRecord["validationStatus"];
+      validationType: AssetValidationRecord["validationType"];
+      validationNotes: string | null;
+      validatedAt: Date | string;
+      validator: string;
+      lastUpdatedAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          asset_id AS "assetId",
+          validation_status AS "validationStatus",
+          validation_type AS "validationType",
+          validation_notes AS "validationNotes",
+          validated_at AS "validatedAt",
+          validator,
+          last_updated_at AS "lastUpdatedAt"
+        FROM asset_validation_records
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      partId: string;
+      assetId: string;
+      priorExportStatus: AssetPromotionAuditRecord["priorExportStatus"];
+      newExportStatus: AssetPromotionAuditRecord["newExportStatus"];
+      promotionOutcome: AssetPromotionAuditRecord["promotionOutcome"];
+      blockerReasons: string[];
+      validationRecordId: string | null;
+      actor: string;
+      createdAt: Date | string;
+    }>(
+      `
+        SELECT
+          id,
+          part_id AS "partId",
+          asset_id AS "assetId",
+          prior_export_status AS "priorExportStatus",
+          new_export_status AS "newExportStatus",
+          promotion_outcome AS "promotionOutcome",
+          blocker_reasons AS "blockerReasons",
+          validation_record_id AS "validationRecordId",
+          actor,
+          created_at AS "createdAt"
+        FROM asset_promotion_audits
+        WHERE part_id = $1
+      `,
+      [partId]
+    ),
+    client.query<{
+      id: string;
+      part_id: string;
+      duplicate_part_id: string;
+      duplicate_part_mpn: string;
+      duplicate_manufacturer_name: string;
+      detection_source: string;
+      confidence_score: number | string;
+      summary: string;
+      detail: string;
+      last_updated_at: Date | string;
+    }>(
+      `
+        SELECT
+          (
+            'duplicate-' ||
+            CASE WHEN p.id <= candidate.id THEN p.id ELSE candidate.id END ||
+            '-' ||
+            CASE WHEN p.id <= candidate.id THEN candidate.id ELSE p.id END
+          ) AS id,
+          p.id AS part_id,
+          candidate.id AS duplicate_part_id,
+          candidate.mpn AS duplicate_part_mpn,
+          duplicate_manufacturer.name AS duplicate_manufacturer_name,
+          'mpn_package_match' AS detection_source,
+          (CASE WHEN p.manufacturer_id = candidate.manufacturer_id THEN 0.98 ELSE 0.82 END) AS confidence_score,
+          (CASE
+            WHEN p.manufacturer_id = candidate.manufacturer_id THEN 'Same manufacturer, MPN, and package match an existing record.'
+            ELSE 'Same MPN and package match another catalog record across manufacturers.'
+          END) AS summary,
+          (CASE
+            WHEN p.manufacturer_id = candidate.manufacturer_id THEN 'This part shares manufacturer, MPN, and package with another record, so duplicate review is required before trusting both records as canonical.'
+            ELSE 'This part shares MPN and package with another catalog record under a different manufacturer normalization, so duplicate review is required.'
+          END) AS detail,
+          CASE
+            WHEN p.last_updated_at >= candidate.last_updated_at THEN p.last_updated_at
+            ELSE candidate.last_updated_at
+          END AS last_updated_at
+        FROM parts p
+        JOIN parts candidate
+          ON candidate.id <> p.id
+          AND lower(candidate.mpn) = lower(p.mpn)
+          AND candidate.package_id = p.package_id
+        JOIN manufacturers duplicate_manufacturer ON duplicate_manufacturer.id = candidate.manufacturer_id
+        WHERE p.id = $1
+        ORDER BY confidence_score DESC, duplicate_part_mpn ASC, duplicate_part_id ASC
+      `,
+      [partId]
+    ),
+    client.query<{
+      part_id: string;
+      preferred_source_record_id: string | null;
+      resolution_status: SourceReconciliationRecord["resolutionStatus"];
+      notes: string | null;
+      updated_by: string | null;
+      updated_at: Date | string;
+    }>(
+      `
+        SELECT
+          part_id,
+          preferred_source_record_id,
+          resolution_status,
+          notes,
+          updated_by,
+          updated_at
+        FROM part_source_reconciliations
+        WHERE part_id = $1
+        LIMIT 1
+      `,
+      [partId]
+    )
+  ]);
+  const partRow = partResult.rows[0];
+
+  if (!partRow) {
+    return null;
+  }
+
+  return {
+    accessoryRequirements: accessoryResult.rows.map((row) => ({
+      ...row,
+      compatibilityStatus: row.compatibilityStatus ?? "probable",
+      confidenceScore: parseNumericValue(row.confidenceScore),
+      evidenceKind: row.evidenceKind ?? "catalog_fixture",
+      sourceRecordId: row.sourceRecordId ?? null
+    })),
+    assets: assetResult.rows.map((row) => ({
+      ...row,
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt)
+    })),
+    cableCompatibilities: cableResult.rows.map((row) => ({
+      ...row,
+      compatibilityStatus: row.compatibilityStatus ?? "uncertain",
+      confidenceScore: parseNumericValue(row.confidenceScore),
+      shieldingRequirement: row.shieldingRequirement ?? "unknown",
+      sourceRecordId: row.sourceRecordId ?? null,
+      terminationStyle: row.terminationStyle ?? "unknown",
+      wireGaugeMax: row.wireGaugeMax ?? null,
+      wireGaugeMin: row.wireGaugeMin ?? null
+    })),
+    connectorFamilyConflicts: connectorFamilyConflictResult.rows.map((row) => ({
+      ...row,
+      confidenceScore: parseNumericValue(row.confidenceScore),
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt)
+    })),
+    datasheetRevision: datasheetResult.rows[0]
+      ? {
+          ...datasheetResult.rows[0],
+          lastUpdatedAt: toIsoTimestamp(datasheetResult.rows[0].lastUpdatedAt),
+          parseConfidence: parseNumericValue(datasheetResult.rows[0].parseConfidence),
+          revisionDate: datasheetResult.rows[0].revisionDate ? toIsoTimestamp(datasheetResult.rows[0].revisionDate).slice(0, 10) : null
+        }
+      : null,
+    duplicateCandidates: duplicateCandidateResult.rows.map((row) => ({
+      confidenceScore: parseNumericValue(row.confidence_score),
+      detail: row.detail,
+      detectionSource: row.detection_source,
+      duplicateManufacturerName: row.duplicate_manufacturer_name,
+      duplicatePartId: row.duplicate_part_id,
+      duplicatePartMpn: row.duplicate_part_mpn,
+      id: row.id,
+      lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+      partId: row.part_id,
+      summary: row.summary
+    })),
+    extractionSignals: extractionSignalResult.rows.map((row) => ({
+      ...row,
+      confidenceScore: parseNumericValue(row.confidenceScore),
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt)
+    })),
+    generationRequests: requestResult.rows.map((row) => ({
+      ...row,
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt),
+      requestedAt: toIsoTimestamp(row.requestedAt)
+    })),
+    generationWorkflows: workflowResult.rows.map((row) => ({
+      ...row,
+      confidenceScore: parseNumericValue(row.confidenceScore)
+    })),
+    mateRelations: mateResult.rows.map((row) => ({
+      ...row,
+      compatibilityStatus: row.compatibilityStatus ?? "probable",
+      confidenceScore: parseNumericValue(row.confidenceScore),
+      evidenceKind: row.evidenceKind ?? "catalog_fixture",
+      sourceRecordId: row.sourceRecordId ?? null
+    })),
+    metrics: metricResult.rows.map((row) => ({
+      ...row,
+      confidenceScore: parseNumericValue(row.confidenceScore),
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt),
+      maxValue: parseNullableNumericValue(row.maxValue),
+      metricValue: parseNullableNumericValue(row.metricValue),
+      minValue: parseNullableNumericValue(row.minValue)
+    })),
+    part: {
+      ...partRow,
+      lastUpdatedAt: toIsoTimestamp(partRow.lastUpdatedAt),
+      trustScore: parseNumericValue(partRow.trustScore)
+    },
+    promotionAudits: promotionAuditResult.rows.map((row) => ({
+      ...row,
+      blockerReasons: row.blockerReasons ?? [],
+      createdAt: toIsoTimestamp(row.createdAt)
+    })),
+    reviewRecords: reviewResult.rows.map((row) => ({
+      ...row,
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt),
+      reviewedAt: toIsoTimestamp(row.reviewedAt)
+    })),
+    sources: sourceResult.rows.map((row) => ({
+      ...row,
+      fetchedAt: toIsoTimestamp(row.fetchedAt),
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt),
+      normalizedAt: row.normalizedAt ? toIsoTimestamp(row.normalizedAt) : null,
+      sourceLastImportedAt: row.sourceLastImportedAt ? toIsoTimestamp(row.sourceLastImportedAt) : null,
+      sourceLastSeenAt: toIsoTimestamp(row.sourceLastSeenAt)
+    })),
+    sourceReconciliation: sourceReconciliationResult.rows[0]
+      ? {
+          notes: sourceReconciliationResult.rows[0].notes,
+          partId: sourceReconciliationResult.rows[0].part_id,
+          preferredSourceRecordId: sourceReconciliationResult.rows[0].preferred_source_record_id,
+          resolutionStatus: sourceReconciliationResult.rows[0].resolution_status,
+          updatedAt: toIsoTimestamp(sourceReconciliationResult.rows[0].updated_at),
+          updatedBy: sourceReconciliationResult.rows[0].updated_by
+        }
+      : null,
+    validationRecords: validationResult.rows.map((row) => ({
+      ...row,
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt),
+      validatedAt: toIsoTimestamp(row.validatedAt)
+    }))
+  };
+}
+
+/**
+ * Writes one derived projection into the persisted readiness, approval, issue, and risk tables.
+ */
+async function writePartProjectionRows(
+  client: PoolClient,
+  partId: string,
+  projection: ReturnType<typeof derivePartProjection>
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO part_readiness_summaries (
+        part_id,
+        readiness_status,
+        identity_status,
+        connector_class,
+        blocker_count,
+        blocker_summary,
+        recommended_actions,
+        detail,
+        last_evaluated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (part_id) DO UPDATE SET
+        readiness_status = EXCLUDED.readiness_status,
+        identity_status = EXCLUDED.identity_status,
+        connector_class = EXCLUDED.connector_class,
+        blocker_count = EXCLUDED.blocker_count,
+        blocker_summary = EXCLUDED.blocker_summary,
+        recommended_actions = EXCLUDED.recommended_actions,
+        detail = EXCLUDED.detail,
+        last_evaluated_at = EXCLUDED.last_evaluated_at
+    `,
+    [
+      projection.readinessSummary.partId,
+      projection.readinessSummary.status,
+      projection.readinessSummary.identityStatus,
+      projection.readinessSummary.connectorClass,
+      projection.readinessSummary.blockerCount,
+      projection.readinessSummary.blockerSummary,
+      projection.readinessSummary.recommendedActions,
+      projection.readinessSummary.detail,
+      projection.readinessSummary.lastEvaluatedAt
+    ]
+  );
+  await client.query(
+    `
+      INSERT INTO part_approvals (
+        part_id,
+        approval_status,
+        summary,
+        detail,
+        evidence,
+        decided_by,
+        decided_at,
+        last_updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (part_id) DO UPDATE SET
+        approval_status = EXCLUDED.approval_status,
+        summary = EXCLUDED.summary,
+        detail = EXCLUDED.detail,
+        evidence = EXCLUDED.evidence,
+        decided_by = EXCLUDED.decided_by,
+        decided_at = EXCLUDED.decided_at,
+        last_updated_at = EXCLUDED.last_updated_at
+    `,
+    [
+      projection.approval.partId,
+      projection.approval.status,
+      projection.approval.summary,
+      projection.approval.detail,
+      projection.approval.evidence,
+      projection.approval.decidedBy,
+      projection.approval.decidedAt,
+      projection.approval.lastUpdatedAt
+    ]
+  );
+  await syncPartIssueRows(client, partId, projection.issues);
+  await client.query(`DELETE FROM part_risk_flags WHERE part_id = $1`, [partId]);
+
+  for (const riskFlag of projection.riskFlags) {
+    await client.query(
+      `
+        INSERT INTO part_risk_flags (
+          id,
+          part_id,
+          risk_code,
+          label,
+          detail,
+          tone,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [riskFlag.id, riskFlag.partId, riskFlag.code, riskFlag.label, riskFlag.detail, riskFlag.tone, riskFlag.lastUpdatedAt]
+    );
+  }
+}
+
+/**
+ * Upserts derived issues while preserving manual admin workflow state across worker refreshes.
+ */
+async function syncPartIssueRows(client: PoolClient, partId: string, issues: PartIssue[]): Promise<void> {
+  if (issues.length === 0) {
+    await client.query(`DELETE FROM part_issues WHERE part_id = $1`, [partId]);
+    return;
+  }
+
+  await client.query(`DELETE FROM part_issues WHERE part_id = $1 AND NOT (issue_code = ANY($2::text[]))`, [partId, issues.map((issue) => issue.code)]);
+
+  for (const issue of issues) {
+    await client.query(
+      `
+        INSERT INTO part_issues (
+          id,
+          part_id,
+          issue_code,
+          severity,
+          status,
+          assigned_to,
+          resolution_notes,
+          resolved_at,
+          summary,
+          detail,
+          source,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (part_id, issue_code) DO UPDATE SET
+          id = EXCLUDED.id,
+          severity = EXCLUDED.severity,
+          summary = EXCLUDED.summary,
+          detail = EXCLUDED.detail,
+          source = EXCLUDED.source,
+          last_updated_at = EXCLUDED.last_updated_at
+      `,
+      [
+        issue.id,
+        issue.partId,
+        issue.code,
+        issue.severity,
+        issue.status,
+        issue.assignedTo,
+        issue.resolutionNotes,
+        issue.resolvedAt,
+        issue.summary,
+        issue.detail,
+        issue.source,
+        issue.lastUpdatedAt
+      ]
+    );
+  }
+}
+
+/**
+ * Parses numeric database values into JavaScript numbers without hiding invalid data.
+ */
+function parseNumericValue(value: number | string): number {
+  return typeof value === "number" ? value : Number(value);
+}
+
+/**
+ * Parses nullable numeric database values into JavaScript numbers.
+ */
+function parseNullableNumericValue(value: number | string | null): number | null {
+  return value === null ? null : parseNumericValue(value);
+}
+
+/**
+ * Returns the newest ISO timestamp from one or more ISO-like timestamp strings.
+ */
+function latestTimestamp(timestamps: string[]): string {
+  return [...timestamps].sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? new Date(0).toISOString();
 }

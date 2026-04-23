@@ -31,15 +31,22 @@ export function parseProviderImportRequest(body: unknown): ParsedProviderImportR
 
   const mpn = typeof record.mpn === "string" ? record.mpn.trim() : "";
   const providerPartId = typeof record.providerPartId === "string" ? record.providerPartId.trim() : "";
-  const lookup = providerPartId || mpn;
+  const providerUrl = typeof record.providerUrl === "string" ? record.providerUrl.trim() : "";
+  const datasheetUrl = typeof record.datasheetUrl === "string" ? record.datasheetUrl.trim() : "";
+  const derivedProviderLookup = providerUrl ? extractLookupFromProviderUrl(providerId, providerUrl) : null;
+  const lookup = providerPartId || derivedProviderLookup || mpn;
 
   if (!lookup) {
     return { code: "MISSING_LOOKUP", message: "Enter an MPN or a provider part id.", ok: false, statusCode: 400 };
   }
 
   const manufacturerName = typeof record.manufacturerName === "string" ? record.manufacturerName.trim() : "";
-  const workerRequest: ProviderPartRequest =
-    manufacturerName.length > 0 ? { manufacturerName, mpn: lookup } : { mpn: lookup };
+  const workerRequest: ProviderPartRequest = {
+    ...(datasheetUrl.length > 0 ? { datasheetUrl } : {}),
+    ...(manufacturerName.length > 0 ? { manufacturerName } : {}),
+    mpn: lookup,
+    ...(providerUrl.length > 0 ? { providerUrl } : {})
+  };
 
   return { ok: true, providerId, requestedLookup: lookup, workerRequest };
 }
@@ -69,4 +76,25 @@ export function formatProviderImportFailureMessage(error: unknown): string {
   }
 
   return "Import did not complete.";
+}
+
+/**
+ * Extracts a provider lookup key from a known provider product URL when possible.
+ */
+function extractLookupFromProviderUrl(providerId: string, providerUrl: string): string | null {
+  if (providerId === "jlcparts") {
+    const lcscMatch = providerUrl.match(/(?:_|\/)(C\d+)(?:\.html?)?$/iu);
+
+    if (lcscMatch?.[1]) {
+      return lcscMatch[1];
+    }
+  }
+
+  try {
+    const url = new URL(providerUrl);
+    const pathSegments = url.pathname.split("/").filter((segment) => segment.length > 0);
+    return pathSegments[pathSegments.length - 1] ?? null;
+  } catch {
+    return null;
+  }
 }

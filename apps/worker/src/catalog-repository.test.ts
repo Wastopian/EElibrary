@@ -51,6 +51,10 @@ test("persistNormalizedPartRows persists connector relationships and generation 
   assert.match(sql, /INSERT INTO review_records/u);
   assert.match(sql, /INSERT INTO asset_validation_records/u);
   assert.match(sql, /INSERT INTO asset_promotion_audits/u);
+  assert.match(sql, /INSERT INTO part_readiness_summaries/u);
+  assert.match(sql, /INSERT INTO part_approvals/u);
+  assert.match(sql, /INSERT INTO part_issues/u);
+  assert.match(sql, /INSERT INTO part_risk_flags/u);
   assert.ok(tableCallIndex(calls, "connector_families") < tableCallIndex(calls, "parts"));
   assert.ok(tableCallIndex(calls, "generation_workflows") < tableCallIndex(calls, "review_records"));
   assert.ok(tableCallIndex(calls, "review_records") < tableCallIndex(calls, "asset_validation_records"));
@@ -121,6 +125,124 @@ test("persistProviderImportFailureRows stores failed import diagnostics", async 
   assert.equal(sourceCall.values?.[9], null);
   assert.equal(sourceCall.values?.[10], "failed");
   assert.match(String(sourceCall.values?.[11]), /provider returned 500/u);
+});
+
+/**
+ * Verifies non-active lifecycle parts persist lifecycle issue and risk projections for DB-backed reads.
+ */
+test("persistNormalizedPartRows stores lifecycle risk projection rows for non-active parts", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6, "not_recommended"));
+
+    const issueRows = await client.query<{ detail: string; issue_code: string; severity: string }>(
+      "SELECT issue_code, severity, detail FROM part_issues WHERE part_id = 'part-repeat-c1' ORDER BY issue_code ASC"
+    );
+    const riskRows = await client.query<{ detail: string; risk_code: string; tone: string }>(
+      "SELECT risk_code, tone, detail FROM part_risk_flags WHERE part_id = 'part-repeat-c1' ORDER BY risk_code ASC"
+    );
+
+    assert.equal(issueRows.rows.some((row) => row.issue_code === "lifecycle_risk"), true);
+    assert.equal(issueRows.rows.find((row) => row.issue_code === "lifecycle_risk")?.severity, "warning");
+    assert.match(issueRows.rows.find((row) => row.issue_code === "lifecycle_risk")?.detail ?? "", /not active/u);
+    assert.equal(riskRows.rows.some((row) => row.risk_code === "lifecycle_not_active"), true);
+    assert.equal(riskRows.rows.find((row) => row.risk_code === "lifecycle_not_active")?.tone, "review");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies failed imports refresh source-conflict projections when the source row already belongs to a canonical part.
+ */
+test("persistProviderImportFailureRows refreshes source conflict projection rows for attached parts", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.7));
+    await persistProviderImportFailureRows(client, {
+      error: new Error("provider timeout"),
+      failedAt: "2026-04-12T04:00:00.000Z",
+      providerId: "repeat-provider",
+      providerPartKey: "C1"
+    });
+
+    const sourceRow = await client.query<{ import_status: string; part_id: string | null }>(
+      "SELECT part_id, import_status FROM source_records WHERE id = 'source-repeat-provider-c1'"
+    );
+    const issueRows = await client.query<{ detail: string; issue_code: string }>(
+      "SELECT issue_code, detail FROM part_issues WHERE part_id = 'part-repeat-c1' ORDER BY issue_code ASC"
+    );
+    const riskRows = await client.query<{ detail: string; risk_code: string }>(
+      "SELECT risk_code, detail FROM part_risk_flags WHERE part_id = 'part-repeat-c1' ORDER BY risk_code ASC"
+    );
+
+    assert.equal(sourceRow.rows[0]?.part_id, "part-repeat-c1");
+    assert.equal(sourceRow.rows[0]?.import_status, "failed");
+    assert.equal(issueRows.rows.some((row) => row.issue_code === "source_conflict"), true);
+    assert.match(issueRows.rows.find((row) => row.issue_code === "source_conflict")?.detail ?? "", /provenance should be reviewed/u);
+    assert.equal(riskRows.rows.some((row) => row.risk_code === "source_conflict"), true);
+    assert.match(riskRows.rows.find((row) => row.risk_code === "source_conflict")?.detail ?? "", /provider import failed/u);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies alternate mates in a different persisted connector family produce DB-backed family-conflict rows.
+ */
+test("persistNormalizedPartRows derives connector family conflict rows from stored alternate mates", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildConnectorConflictSupportPart("part-best-mate", "BEST-100", "cf-header", "Header Family", "best-provider", "BEST"));
+    await persistNormalizedPartRows(client, buildConnectorConflictSupportPart("part-alt-mate", "ALT-200", "cf-wire-to-board", "Wire-to-Board Family", "alt-provider", "ALT"));
+    await persistNormalizedPartRows(client, buildConnectorConflictSourcePart());
+
+    const conflictRows = await client.query<{ candidate_part_id: string; conflict_type: string; detail: string; summary: string }>(
+      "SELECT candidate_part_id, conflict_type, summary, detail FROM connector_family_conflicts WHERE part_id = 'part-source-connector' ORDER BY candidate_part_id ASC"
+    );
+
+    assert.equal(conflictRows.rows.length, 1);
+    assert.equal(conflictRows.rows[0]?.candidate_part_id, "part-alt-mate");
+    assert.equal(conflictRows.rows[0]?.conflict_type, "family_confusion");
+    assert.match(conflictRows.rows[0]?.summary ?? "", /connector-family/u);
+    assert.match(conflictRows.rows[0]?.detail ?? "", /differs from the current or dominant mate family/u);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies source-backed best-mate evidence can create a persisted family-conflict row on its own.
+ */
+test("persistNormalizedPartRows derives connector family conflict rows from best mate evidence", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildConnectorConflictSupportPart("part-best-mismatch", "BEST-MISMATCH", "cf-wire-to-board", "Wire-to-Board Family", "best-mismatch-provider", "BEST-MISMATCH"));
+    await persistNormalizedPartRows(client, buildBestMateConflictSourcePart());
+
+    const conflictRows = await client.query<{ candidate_part_id: string; conflict_type: string; summary: string }>(
+      "SELECT candidate_part_id, conflict_type, summary FROM connector_family_conflicts WHERE part_id = 'part-best-conflict-source' ORDER BY candidate_part_id ASC"
+    );
+
+    assert.equal(conflictRows.rows.length, 1);
+    assert.equal(conflictRows.rows[0]?.candidate_part_id, "part-best-mismatch");
+    assert.equal(conflictRows.rows[0]?.conflict_type, "family_confusion");
+    assert.match(conflictRows.rows[0]?.summary ?? "", /Best mate evidence crosses connector-family boundaries/u);
+  } finally {
+    client.release();
+    await pool.end();
+  }
 });
 
 /**
@@ -195,11 +317,14 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
     accessoryRequirements: [
       {
         accessoryPartId: "part-accessory",
+        compatibilityStatus: "verified",
         confidenceScore: 0.8,
+        evidenceKind: "manual_review",
         id: "acc-test",
         notes: "Required accessory",
         partId: "part-test",
         relationshipType: "requires_accessory",
+        sourceRecordId: "source-test",
         sourceRevisionId: "dsr-test"
       }
     ],
@@ -228,12 +353,18 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
     cableCompatibilities: [
       {
         cablePartId: "part-cable",
+        compatibilityStatus: "probable",
         confidenceScore: 0.7,
         id: "cable-test",
         notes: "Cable option",
         partId: "part-test",
         relationshipType: "supports_cable",
-        sourceRevisionId: "dsr-test"
+        shieldingRequirement: "unknown",
+        sourceRecordId: "source-test",
+        sourceRevisionId: "dsr-test",
+        terminationStyle: "unknown",
+        wireGaugeMax: null,
+        wireGaugeMin: null
       }
     ],
     companionRecommendations: [
@@ -251,6 +382,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
       name: "Test Family",
       series: "Test Series"
     },
+    connectorFamilyConflicts: [],
     datasheetRevisions: [
       {
         fileAssetId: "asset-test-step",
@@ -341,12 +473,15 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
     },
     mateRelations: [
       {
+        compatibilityStatus: "verified",
         confidenceScore: 0.9,
+        evidenceKind: "manual_review",
         id: "mate-test",
         matePartId: "part-mate",
         notes: "Best mate",
         partId: "part-test",
         relationshipType: "best_mate",
+        sourceRecordId: "source-test",
         sourceRevisionId: "dsr-test"
       }
     ],
@@ -401,13 +536,18 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
 /**
  * Builds a small provider import payload with no optional relationship rows.
  */
-function buildMinimalImportPart(lastUpdatedAt: string, trustScore: number): NormalizedProviderPart {
+function buildMinimalImportPart(
+  lastUpdatedAt: string,
+  trustScore: number,
+  lifecycleStatus: NormalizedProviderPart["part"]["lifecycleStatus"] = "active"
+): NormalizedProviderPart {
   return {
     accessoryRequirements: [],
     assets: [],
     cableCompatibilities: [],
     companionRecommendations: [],
     connectorFamily: null,
+    connectorFamilyConflicts: [],
     datasheetRevisions: [],
     generationWorkflows: [],
     extractionSignals: [],
@@ -434,7 +574,7 @@ function buildMinimalImportPart(lastUpdatedAt: string, trustScore: number): Norm
       connectorFamilyId: null,
       id: "part-repeat-c1",
       lastUpdatedAt,
-      lifecycleStatus: "active",
+      lifecycleStatus,
       manufacturerId: "mfr-repeat",
       mpn: "REPEAT-1",
       packageId: "pkg-repeat-0402",
@@ -462,6 +602,284 @@ function buildMinimalImportPart(lastUpdatedAt: string, trustScore: number): Norm
 }
 
 /**
+ * Builds a minimal connector part that provides stored connector-family identity for conflict derivation tests.
+ */
+function buildConnectorConflictSupportPart(
+  partId: string,
+  mpn: string,
+  connectorFamilyId: string,
+  connectorFamilyName: string,
+  providerId: string,
+  providerPartKey: string
+): NormalizedProviderPart {
+  return {
+    accessoryRequirements: [],
+    assets: [],
+    cableCompatibilities: [],
+    companionRecommendations: [],
+    connectorFamily: {
+      description: `${connectorFamilyName} description`,
+      id: connectorFamilyId,
+      name: connectorFamilyName,
+      series: `${connectorFamilyName} series`
+    },
+    connectorFamilyConflicts: [],
+    datasheetRevisions: [],
+    extractionSignals: [],
+    generationWorkflows: [],
+    manufacturer: {
+      aliases: [],
+      id: "mfr-connector-conflict",
+      name: "Connector Conflict Manufacturer",
+      website: null
+    },
+    mateRelations: [],
+    metrics: [],
+    package: {
+      bodyHeightMm: null,
+      bodyLengthMm: null,
+      bodyWidthMm: null,
+      id: "pkg-connector-conflict",
+      packageName: "TEST-CONNECTOR",
+      pinCount: 2,
+      pitchMm: 2.54
+    },
+    part: {
+      category: "Connector",
+      connectorFamilyId,
+      id: partId,
+      lastUpdatedAt: "2026-04-16T00:00:00.000Z",
+      lifecycleStatus: "active",
+      manufacturerId: "mfr-connector-conflict",
+      mpn,
+      packageId: "pkg-connector-conflict",
+      trustScore: 0.8
+    },
+    promotionAudits: [],
+    reviewRecords: [],
+    similarPartRelations: [],
+    sourceRecord: {
+      fetchedAt: "2026-04-16T00:00:00.000Z",
+      id: `source-${providerId}-${providerPartKey.toLowerCase()}`,
+      importErrorDetails: null,
+      importStatus: "imported",
+      lastUpdatedAt: "2026-04-16T00:00:00.000Z",
+      normalizedAt: "2026-04-16T00:00:00.000Z",
+      partId,
+      providerId,
+      providerPartKey,
+      rawPayload: { providerPartKey },
+      sourceLastImportedAt: "2026-04-16T00:00:00.000Z",
+      sourceLastSeenAt: "2026-04-16T00:00:00.000Z",
+      sourceUrl: `https://example.test/${providerPartKey.toLowerCase()}`
+    },
+    validationRecords: []
+  };
+}
+
+/**
+ * Builds one connector source part with a best mate and a cross-family alternate mate.
+ */
+function buildConnectorConflictSourcePart(): NormalizedProviderPart {
+  return {
+    accessoryRequirements: [],
+    assets: [],
+    cableCompatibilities: [],
+    companionRecommendations: [],
+    connectorFamily: {
+      description: "Board header family description",
+      id: "cf-header",
+      name: "Header Family",
+      series: "Header Series"
+    },
+    connectorFamilyConflicts: [],
+    datasheetRevisions: [
+      {
+        fileAssetId: null,
+        id: "dsr-source-connector",
+        lastUpdatedAt: "2026-04-16T00:05:00.000Z",
+        pageCount: null,
+        parseConfidence: 0.9,
+        pinTableStatus: "not_available",
+        partId: "part-source-connector",
+        revisionDate: "2026-04-16",
+        revisionLabel: "Connector Rev A",
+        sourceRecordId: "source-source-provider-src"
+      }
+    ],
+    extractionSignals: [],
+    generationWorkflows: [],
+    manufacturer: {
+      aliases: [],
+      id: "mfr-connector-conflict",
+      name: "Connector Conflict Manufacturer",
+      website: null
+    },
+    mateRelations: [
+      {
+        compatibilityStatus: "verified",
+        confidenceScore: 0.94,
+        evidenceKind: "provider_direct",
+        id: "mate-source-best",
+        matePartId: "part-best-mate",
+        notes: "Primary keyed mate.",
+        partId: "part-source-connector",
+        relationshipType: "best_mate",
+        sourceRecordId: "source-source-provider-src",
+        sourceRevisionId: "dsr-source-connector"
+      },
+      {
+        compatibilityStatus: "probable",
+        confidenceScore: 0.88,
+        evidenceKind: "provider_direct",
+        id: "mate-source-alt",
+        matePartId: "part-alt-mate",
+        notes: "Close mechanical candidate with different family shell.",
+        partId: "part-source-connector",
+        relationshipType: "alternate_mate",
+        sourceRecordId: "source-source-provider-src",
+        sourceRevisionId: "dsr-source-connector"
+      }
+    ],
+    metrics: [],
+    package: {
+      bodyHeightMm: null,
+      bodyLengthMm: null,
+      bodyWidthMm: null,
+      id: "pkg-connector-conflict",
+      packageName: "TEST-CONNECTOR",
+      pinCount: 2,
+      pitchMm: 2.54
+    },
+    part: {
+      category: "Connector",
+      connectorFamilyId: "cf-header",
+      id: "part-source-connector",
+      lastUpdatedAt: "2026-04-16T00:05:00.000Z",
+      lifecycleStatus: "active",
+      manufacturerId: "mfr-connector-conflict",
+      mpn: "SRC-300",
+      packageId: "pkg-connector-conflict",
+      trustScore: 0.86
+    },
+    promotionAudits: [],
+    reviewRecords: [],
+    similarPartRelations: [],
+    sourceRecord: {
+      fetchedAt: "2026-04-16T00:05:00.000Z",
+      id: "source-source-provider-src",
+      importErrorDetails: null,
+      importStatus: "imported",
+      lastUpdatedAt: "2026-04-16T00:05:00.000Z",
+      normalizedAt: "2026-04-16T00:05:00.000Z",
+      partId: "part-source-connector",
+      providerId: "source-provider",
+      providerPartKey: "SRC",
+      rawPayload: { providerPartKey: "SRC" },
+      sourceLastImportedAt: "2026-04-16T00:05:00.000Z",
+      sourceLastSeenAt: "2026-04-16T00:05:00.000Z",
+      sourceUrl: "https://example.test/src"
+    },
+    validationRecords: []
+  };
+}
+
+/**
+ * Builds one connector source part whose best mate alone crosses connector-family boundaries.
+ */
+function buildBestMateConflictSourcePart(): NormalizedProviderPart {
+  return {
+    accessoryRequirements: [],
+    assets: [],
+    cableCompatibilities: [],
+    companionRecommendations: [],
+    connectorFamily: {
+      description: "Header family description",
+      id: "cf-header",
+      name: "Header Family",
+      series: "Header Series"
+    },
+    connectorFamilyConflicts: [],
+    datasheetRevisions: [
+      {
+        fileAssetId: null,
+        id: "dsr-best-conflict-source",
+        lastUpdatedAt: "2026-04-16T00:10:00.000Z",
+        pageCount: null,
+        parseConfidence: 0.9,
+        pinTableStatus: "not_available",
+        partId: "part-best-conflict-source",
+        revisionDate: "2026-04-16",
+        revisionLabel: "Connector Rev B",
+        sourceRecordId: "source-best-conflict-src"
+      }
+    ],
+    extractionSignals: [],
+    generationWorkflows: [],
+    manufacturer: {
+      aliases: [],
+      id: "mfr-connector-conflict",
+      name: "Connector Conflict Manufacturer",
+      website: null
+    },
+    mateRelations: [
+      {
+        compatibilityStatus: "verified",
+        confidenceScore: 0.91,
+        evidenceKind: "provider_direct",
+        id: "mate-best-conflict",
+        matePartId: "part-best-mismatch",
+        notes: "Provider-backed mate candidate that points to a different connector family.",
+        partId: "part-best-conflict-source",
+        relationshipType: "best_mate",
+        sourceRecordId: "source-best-conflict-src",
+        sourceRevisionId: "dsr-best-conflict-source"
+      }
+    ],
+    metrics: [],
+    package: {
+      bodyHeightMm: null,
+      bodyLengthMm: null,
+      bodyWidthMm: null,
+      id: "pkg-connector-conflict",
+      packageName: "TEST-CONNECTOR",
+      pinCount: 2,
+      pitchMm: 2.54
+    },
+    part: {
+      category: "Connector",
+      connectorFamilyId: "cf-header",
+      id: "part-best-conflict-source",
+      lastUpdatedAt: "2026-04-16T00:10:00.000Z",
+      lifecycleStatus: "active",
+      manufacturerId: "mfr-connector-conflict",
+      mpn: "SRC-BEST-CONFLICT",
+      packageId: "pkg-connector-conflict",
+      trustScore: 0.84
+    },
+    promotionAudits: [],
+    reviewRecords: [],
+    similarPartRelations: [],
+    sourceRecord: {
+      fetchedAt: "2026-04-16T00:10:00.000Z",
+      id: "source-best-conflict-src",
+      importErrorDetails: null,
+      importStatus: "imported",
+      lastUpdatedAt: "2026-04-16T00:10:00.000Z",
+      normalizedAt: "2026-04-16T00:10:00.000Z",
+      partId: "part-best-conflict-source",
+      providerId: "best-conflict-provider",
+      providerPartKey: "SRC-BEST-CONFLICT",
+      rawPayload: { providerPartKey: "SRC-BEST-CONFLICT" },
+      sourceLastImportedAt: "2026-04-16T00:10:00.000Z",
+      sourceLastSeenAt: "2026-04-16T00:10:00.000Z",
+      sourceUrl: "https://example.test/src-best-conflict"
+    },
+    validationRecords: []
+  };
+}
+
+/**
  * Creates a minimal in-memory schema for provider import idempotency tests.
  */
 function createMinimalImportPool(): TestPool {
@@ -470,9 +888,27 @@ function createMinimalImportPool(): TestPool {
   db.public.none(`
     CREATE TABLE manufacturers (id TEXT PRIMARY KEY, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT PRIMARY KEY, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
+    CREATE TABLE connector_families (id TEXT PRIMARY KEY, name TEXT, series TEXT, description TEXT);
     CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_extraction_signals (id TEXT PRIMARY KEY, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE mate_relations (id TEXT PRIMARY KEY, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
+    CREATE TABLE accessory_requirements (id TEXT PRIMARY KEY, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
+    CREATE TABLE cable_compatibilities (id TEXT PRIMARY KEY, part_id TEXT, cable_part_id TEXT, relationship_type TEXT, wire_gauge_min INTEGER, wire_gauge_max INTEGER, shielding_requirement TEXT, termination_style TEXT, compatibility_status TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
+    CREATE TABLE connector_family_conflicts (id TEXT PRIMARY KEY, part_id TEXT, candidate_part_id TEXT, candidate_connector_family_id TEXT, conflict_type TEXT, confidence_score NUMERIC, summary TEXT, detail TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, candidate_part_id, conflict_type));
+    CREATE TABLE generation_workflows (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, generation_status TEXT, confidence_score NUMERIC, output_asset_id TEXT);
+    CREATE TABLE generation_requests (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, request_status TEXT, requested_at TIMESTAMPTZ, requested_by TEXT, workflow_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE review_records (id TEXT PRIMARY KEY, part_id TEXT, target_type TEXT, asset_id TEXT, generation_workflow_id TEXT, outcome TEXT, reviewer TEXT, notes TEXT, reviewed_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE asset_validation_records (id TEXT PRIMARY KEY, part_id TEXT, asset_id TEXT, validation_status TEXT, validation_type TEXT, validation_notes TEXT, validated_at TIMESTAMPTZ, validator TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE asset_promotion_audits (id TEXT PRIMARY KEY, part_id TEXT, asset_id TEXT, prior_export_status TEXT, new_export_status TEXT, promotion_outcome TEXT, blocker_reasons TEXT[], validation_record_id TEXT, actor TEXT, created_at TIMESTAMPTZ);
+    CREATE TABLE part_readiness_summaries (part_id TEXT PRIMARY KEY, readiness_status TEXT, identity_status TEXT, connector_class TEXT, blocker_count INTEGER, blocker_summary TEXT[], recommended_actions TEXT[], detail TEXT, last_evaluated_at TIMESTAMPTZ);
+    CREATE TABLE part_approvals (part_id TEXT PRIMARY KEY, approval_status TEXT, summary TEXT, detail TEXT, evidence TEXT[], decided_by TEXT, decided_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_issues (id TEXT PRIMARY KEY, part_id TEXT, issue_code TEXT, severity TEXT, status TEXT, assigned_to TEXT, resolution_notes TEXT, resolved_at TIMESTAMPTZ, summary TEXT, detail TEXT, source TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, issue_code));
+    CREATE TABLE part_source_reconciliations (part_id TEXT PRIMARY KEY, preferred_source_record_id TEXT, resolution_status TEXT, notes TEXT, updated_by TEXT, updated_at TIMESTAMPTZ);
+    CREATE TABLE part_risk_flags (id TEXT PRIMARY KEY, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();

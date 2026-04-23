@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   check,
   index,
@@ -11,6 +12,11 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+
+/** literalCheck wraps a raw SQL predicate for Drizzle check constraints. */
+function literalCheck(condition: string) {
+  return sql.raw(condition);
+}
 
 export const manufacturers = pgTable("manufacturers", {
   id: text("id").primaryKey(),
@@ -91,7 +97,7 @@ export const sourceRecords = pgTable(
     index("idx_source_records_provider_part").on(t.providerId, t.providerPartKey),
     index("idx_source_records_import_status").on(t.importStatus, t.lastUpdatedAt),
     index("idx_source_records_last_imported_at").on(t.sourceLastImportedAt),
-    check("source_records_import_status_check", `import_status IN ('imported', 'failed')`),
+    check("source_records_import_status_check", literalCheck(`import_status IN ('imported', 'failed')`)),
   ]
 );
 
@@ -136,27 +142,27 @@ export const assets = pgTable(
     ),
     check(
       "assets_asset_state_check",
-      `asset_state IN ('missing', 'referenced', 'downloaded', 'validated', 'failed')`
+      literalCheck(`asset_state IN ('missing', 'referenced', 'downloaded', 'validated', 'failed')`)
     ),
     check(
       "assets_provenance_check",
-      `provenance IN ('official', 'trusted_external', 'generated', 'manual_internal')`
+      literalCheck(`provenance IN ('official', 'trusted_external', 'generated', 'manual_internal')`)
     ),
     check(
       "assets_availability_status_check",
-      `availability_status IN ('missing', 'referenced', 'downloaded', 'validated', 'failed')`
+      literalCheck(`availability_status IN ('missing', 'referenced', 'downloaded', 'validated', 'failed')`)
     ),
     check(
       "assets_review_status_check",
-      `review_status IN ('not_reviewed', 'review_required', 'approved', 'rejected', 'changes_requested')`
+      literalCheck(`review_status IN ('not_reviewed', 'review_required', 'approved', 'rejected', 'changes_requested')`)
     ),
     check(
       "assets_export_status_check",
-      `export_status IN ('not_exportable', 'partially_exportable', 'verified_for_export')`
+      literalCheck(`export_status IN ('not_exportable', 'partially_exportable', 'verified_for_export')`)
     ),
     check(
       "assets_asset_status_check",
-      `asset_status IN ('missing', 'referenced', 'downloaded', 'validated', 'failed', 'reviewed', 'verified_for_export')`
+      literalCheck(`asset_status IN ('missing', 'referenced', 'downloaded', 'validated', 'failed', 'reviewed', 'verified_for_export')`)
     ),
   ]
 );
@@ -183,7 +189,7 @@ export const datasheetRevisions = pgTable(
     index("idx_datasheet_revisions_part_id").on(t.partId),
     check(
       "datasheet_revisions_pin_table_status_check",
-      `pin_table_status IN ('not_available', 'available', 'needs_review')`
+      literalCheck(`pin_table_status IN ('not_available', 'available', 'needs_review')`)
     ),
   ]
 );
@@ -226,17 +232,28 @@ export const mateRelations = pgTable(
       .notNull()
       .references(() => parts.id),
     relationshipType: text("relationship_type").notNull(),
+    compatibilityStatus: text("compatibility_status").notNull().default("probable"),
+    evidenceKind: text("evidence_kind").notNull().default("catalog_fixture"),
     confidenceScore: numeric("confidence_score").notNull(),
     sourceRevisionId: text("source_revision_id")
       .notNull()
       .references(() => datasheetRevisions.id),
+    sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
     notes: text("notes"),
   },
   (t) => [
     index("idx_mate_relations_part_id").on(t.partId),
     check(
       "mate_relations_relationship_type_check",
-      `relationship_type IN ('best_mate', 'alternate_mate')`
+      literalCheck(`relationship_type IN ('best_mate', 'alternate_mate')`)
+    ),
+    check(
+      "mate_relations_compatibility_status_check",
+      literalCheck(`compatibility_status IN ('verified', 'probable', 'uncertain', 'rejected')`)
+    ),
+    check(
+      "mate_relations_evidence_kind_check",
+      literalCheck(`evidence_kind IN ('provider_direct', 'datasheet_reference', 'family_inference', 'manual_review', 'catalog_fixture')`)
     ),
   ]
 );
@@ -252,17 +269,28 @@ export const accessoryRequirements = pgTable(
       .notNull()
       .references(() => parts.id),
     relationshipType: text("relationship_type").notNull(),
+    compatibilityStatus: text("compatibility_status").notNull().default("probable"),
+    evidenceKind: text("evidence_kind").notNull().default("catalog_fixture"),
     confidenceScore: numeric("confidence_score").notNull(),
     sourceRevisionId: text("source_revision_id")
       .notNull()
       .references(() => datasheetRevisions.id),
+    sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
     notes: text("notes"),
   },
   (t) => [
     index("idx_accessory_requirements_part_id").on(t.partId),
     check(
       "accessory_requirements_relationship_type_check",
-      `relationship_type IN ('requires_accessory', 'optional_accessory', 'tooling_requirement')`
+      literalCheck(`relationship_type IN ('requires_accessory', 'optional_accessory', 'tooling_requirement')`)
+    ),
+    check(
+      "accessory_requirements_compatibility_status_check",
+      literalCheck(`compatibility_status IN ('verified', 'probable', 'uncertain', 'rejected')`)
+    ),
+    check(
+      "accessory_requirements_evidence_kind_check",
+      literalCheck(`evidence_kind IN ('provider_direct', 'datasheet_reference', 'family_inference', 'manual_review', 'catalog_fixture')`)
     ),
   ]
 );
@@ -278,13 +306,65 @@ export const cableCompatibilities = pgTable(
       .notNull()
       .references(() => parts.id),
     relationshipType: text("relationship_type").notNull().default("supports_cable"),
+    wireGaugeMin: integer("wire_gauge_min"),
+    wireGaugeMax: integer("wire_gauge_max"),
+    shieldingRequirement: text("shielding_requirement").notNull().default("unknown"),
+    terminationStyle: text("termination_style").notNull().default("unknown"),
+    compatibilityStatus: text("compatibility_status").notNull().default("probable"),
     confidenceScore: numeric("confidence_score").notNull(),
     sourceRevisionId: text("source_revision_id")
       .notNull()
       .references(() => datasheetRevisions.id),
+    sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
     notes: text("notes"),
   },
-  (t) => [index("idx_cable_compatibilities_part_id").on(t.partId)]
+  (t) => [
+    index("idx_cable_compatibilities_part_id").on(t.partId),
+    index("idx_cable_compatibilities_status").on(t.compatibilityStatus, t.partId),
+    check(
+      "cable_compatibilities_shielding_requirement_check",
+      literalCheck(`shielding_requirement IN ('shielded', 'unshielded', 'either', 'unknown')`)
+    ),
+    check(
+      "cable_compatibilities_termination_style_check",
+      literalCheck(`termination_style IN ('idc', 'crimp', 'solder', 'unknown')`)
+    ),
+    check(
+      "cable_compatibilities_compatibility_status_check",
+      literalCheck(`compatibility_status IN ('verified', 'probable', 'uncertain', 'rejected')`)
+    ),
+    check(
+      "cable_compatibilities_wire_gauge_order_check",
+      literalCheck(`wire_gauge_min IS NULL OR wire_gauge_max IS NULL OR wire_gauge_min <= wire_gauge_max`)
+    ),
+  ]
+);
+
+export const connectorFamilyConflicts = pgTable(
+  "connector_family_conflicts",
+  {
+    id: text("id").primaryKey(),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    candidatePartId: text("candidate_part_id").notNull(),
+    candidateConnectorFamilyId: text("candidate_connector_family_id").references(() => connectorFamilies.id),
+    conflictType: text("conflict_type").notNull(),
+    confidenceScore: numeric("confidence_score").notNull(),
+    summary: text("summary").notNull(),
+    detail: text("detail").notNull(),
+    sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.partId, t.candidatePartId, t.conflictType),
+    index("idx_connector_family_conflicts_part_id").on(t.partId, t.conflictType, t.lastUpdatedAt),
+    index("idx_connector_family_conflicts_candidate_part_id").on(t.candidatePartId, t.lastUpdatedAt),
+    check(
+      "connector_family_conflicts_conflict_type_check",
+      literalCheck(`conflict_type IN ('near_match_variant', 'family_confusion')`)
+    ),
+  ]
 );
 
 export const similarPartRelations = pgTable(
@@ -344,11 +424,11 @@ export const generationWorkflows = pgTable(
     index("idx_generation_workflows_status_part").on(t.generationStatus, t.partId),
     check(
       "generation_workflows_target_asset_type_check",
-      `target_asset_type IN ('footprint', 'symbol', 'three_d_model')`
+      literalCheck(`target_asset_type IN ('footprint', 'symbol', 'three_d_model')`)
     ),
     check(
       "generation_workflows_generation_status_check",
-      `generation_status IN ('unavailable', 'available_to_request', 'requested', 'queued', 'processing', 'generated', 'review_required', 'approved', 'failed')`
+      literalCheck(`generation_status IN ('unavailable', 'available_to_request', 'requested', 'queued', 'processing', 'generated', 'review_required', 'approved', 'failed')`)
     ),
   ]
 );
@@ -387,11 +467,11 @@ export const generationRequests = pgTable(
     ),
     check(
       "generation_requests_target_asset_type_check",
-      `target_asset_type IN ('footprint', 'symbol', 'three_d_model')`
+      literalCheck(`target_asset_type IN ('footprint', 'symbol', 'three_d_model')`)
     ),
     check(
       "generation_requests_request_status_check",
-      `request_status IN ('requested', 'queued', 'processing', 'generated', 'review_required', 'approved', 'failed')`
+      literalCheck(`request_status IN ('requested', 'queued', 'processing', 'generated', 'review_required', 'approved', 'failed')`)
     ),
   ]
 );
@@ -425,11 +505,11 @@ export const reviewRecords = pgTable(
     ),
     check(
       "review_records_target_type_check",
-      `target_type IN ('asset', 'generation_workflow')`
+      literalCheck(`target_type IN ('asset', 'generation_workflow')`)
     ),
     check(
       "review_records_outcome_check",
-      `outcome IN ('approved', 'rejected', 'changes_requested')`
+      literalCheck(`outcome IN ('approved', 'rejected', 'changes_requested')`)
     ),
   ]
 );
@@ -469,15 +549,15 @@ export const sourceExtractionSignals = pgTable(
     ),
     check(
       "source_extraction_signals_signal_type_check",
-      `signal_type IN ('package_mechanical_dimensions', 'pin_table', 'mechanical_drawing')`
+      literalCheck(`signal_type IN ('package_mechanical_dimensions', 'pin_table', 'mechanical_drawing')`)
     ),
     check(
       "source_extraction_signals_extraction_status_check",
-      `extraction_status IN ('available', 'needs_review', 'not_available')`
+      literalCheck(`extraction_status IN ('available', 'needs_review', 'not_available')`)
     ),
     check(
       "source_extraction_signals_extraction_source_check",
-      `extraction_source IN ('provider_structured_metadata', 'datasheet_metadata', 'asset_reference', 'manual_internal')`
+      literalCheck(`extraction_source IN ('provider_structured_metadata', 'datasheet_metadata', 'asset_reference', 'manual_internal')`)
     ),
   ]
 );
@@ -512,11 +592,11 @@ export const assetValidationRecords = pgTable(
     index("idx_asset_validation_records_validated_at").on(t.validatedAt, t.id),
     check(
       "asset_validation_records_validation_status_check",
-      `validation_status IN ('verified', 'needs_review', 'not_validated', 'failed')`
+      literalCheck(`validation_status IN ('verified', 'needs_review', 'not_validated', 'failed')`)
     ),
     check(
       "asset_validation_records_validation_type_check",
-      `validation_type IN ('file_integrity', 'footprint_geometry', 'symbol_pin_mapping', 'three_d_geometry', 'manual_engineering_review')`
+      literalCheck(`validation_type IN ('file_integrity', 'footprint_geometry', 'symbol_pin_mapping', 'three_d_geometry', 'manual_engineering_review')`)
     ),
   ]
 );
@@ -551,16 +631,151 @@ export const assetPromotionAudits = pgTable(
     ),
     check(
       "asset_promotion_audits_prior_export_status_check",
-      `prior_export_status IN ('not_exportable', 'partially_exportable', 'verified_for_export')`
+      literalCheck(`prior_export_status IN ('not_exportable', 'partially_exportable', 'verified_for_export')`)
     ),
     check(
       "asset_promotion_audits_new_export_status_check",
-      `new_export_status IN ('not_exportable', 'partially_exportable', 'verified_for_export')`
+      literalCheck(`new_export_status IN ('not_exportable', 'partially_exportable', 'verified_for_export')`)
     ),
     check(
       "asset_promotion_audits_promotion_outcome_check",
-      `promotion_outcome IN ('promoted', 'denied')`
+      literalCheck(`promotion_outcome IN ('promoted', 'denied')`)
     ),
+  ]
+);
+
+export const partReadinessSummaries = pgTable(
+  "part_readiness_summaries",
+  {
+    partId: text("part_id")
+      .primaryKey()
+      .references(() => parts.id),
+    readinessStatus: text("readiness_status").notNull(),
+    identityStatus: text("identity_status").notNull(),
+    connectorClass: text("connector_class").notNull(),
+    blockerCount: integer("blocker_count").notNull().default(0),
+    blockerSummary: text("blocker_summary").array().notNull().default([]),
+    recommendedActions: text("recommended_actions").array().notNull().default([]),
+    detail: text("detail").notNull(),
+    lastEvaluatedAt: timestamp("last_evaluated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("idx_part_readiness_summaries_status").on(t.readinessStatus, t.lastEvaluatedAt),
+    index("idx_part_readiness_summaries_connector_class").on(t.connectorClass, t.lastEvaluatedAt),
+    check(
+      "part_readiness_summaries_status_check",
+      literalCheck(`readiness_status IN ('ready_for_export_review', 'needs_attention', 'blocked', 'unknown')`)
+    ),
+    check(
+      "part_readiness_summaries_identity_status_check",
+      literalCheck(`identity_status IN ('confirmed', 'low_confidence', 'unknown')`)
+    ),
+    check(
+      "part_readiness_summaries_connector_class_check",
+      literalCheck(`connector_class IN ('connector', 'accessory', 'tooling', 'cable', 'non_connector')`)
+    ),
+    check("part_readiness_summaries_blocker_count_check", literalCheck(`blocker_count >= 0`)),
+  ]
+);
+
+export const partApprovals = pgTable(
+  "part_approvals",
+  {
+    partId: text("part_id")
+      .primaryKey()
+      .references(() => parts.id),
+    approvalStatus: text("approval_status").notNull(),
+    summary: text("summary").notNull(),
+    detail: text("detail").notNull(),
+    evidence: text("evidence").array().notNull().default([]),
+    decidedBy: text("decided_by"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_part_approvals_status").on(t.approvalStatus, t.lastUpdatedAt),
+    check(
+      "part_approvals_status_check",
+      literalCheck(`approval_status IN ('approved', 'pending_review', 'not_requested', 'not_applicable')`)
+    ),
+  ]
+);
+
+export const partIssues = pgTable(
+  "part_issues",
+  {
+    id: text("id").primaryKey(),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    issueCode: text("issue_code").notNull(),
+    severity: text("severity").notNull(),
+    status: text("status").notNull().default("open"),
+    assignedTo: text("assigned_to"),
+    resolutionNotes: text("resolution_notes"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    summary: text("summary").notNull(),
+    detail: text("detail").notNull(),
+    source: text("source").notNull(),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.partId, t.issueCode),
+    index("idx_part_issues_part_id").on(t.partId, t.severity, t.lastUpdatedAt),
+    index("idx_part_issues_code").on(t.issueCode, t.lastUpdatedAt),
+    index("idx_part_issues_status").on(t.status, t.lastUpdatedAt),
+    check(
+      "part_issues_code_check",
+      literalCheck(`issue_code IN ('low_confidence_identity', 'pending_approval', 'missing_verified_cad', 'missing_datasheet', 'missing_connector_mate', 'missing_connector_accessories', 'connector_low_confidence', 'lifecycle_risk', 'source_conflict', 'duplicate_candidate')`)
+    ),
+    check("part_issues_severity_check", literalCheck(`severity IN ('error', 'warning')`)),
+    check("part_issues_status_check", literalCheck(`status IN ('open', 'in_review', 'resolved', 'ignored')`)),
+  ]
+);
+
+export const partSourceReconciliations = pgTable(
+  "part_source_reconciliations",
+  {
+    partId: text("part_id")
+      .primaryKey()
+      .references(() => parts.id),
+    preferredSourceRecordId: text("preferred_source_record_id").references(() => sourceRecords.id),
+    resolutionStatus: text("resolution_status").notNull().default("unreviewed"),
+    notes: text("notes"),
+    updatedBy: text("updated_by"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_part_source_reconciliations_status").on(t.resolutionStatus, t.updatedAt),
+    check(
+      "part_source_reconciliations_status_check",
+      literalCheck(`resolution_status IN ('unreviewed', 'canonical_source_selected', 'mixed_sources_accepted')`)
+    ),
+  ]
+);
+
+export const partRiskFlags = pgTable(
+  "part_risk_flags",
+  {
+    id: text("id").primaryKey(),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    riskCode: text("risk_code").notNull(),
+    label: text("label").notNull(),
+    detail: text("detail").notNull(),
+    tone: text("tone").notNull(),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.partId, t.riskCode),
+    index("idx_part_risk_flags_part_id").on(t.partId, t.tone, t.lastUpdatedAt),
+    index("idx_part_risk_flags_code").on(t.riskCode, t.lastUpdatedAt),
+    check(
+      "part_risk_flags_code_check",
+      literalCheck(`risk_code IN ('lifecycle_not_active', 'generated_assets_present', 'source_conflict', 'connector_low_confidence', 'partial_readiness_data')`)
+    ),
+    check("part_risk_flags_tone_check", literalCheck(`tone IN ('review', 'danger')`)),
   ]
 );
 
@@ -575,6 +790,6 @@ export const users = pgTable(
   },
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
-    check("users_role_check", `role IN ('admin', 'user')`),
+    check("users_role_check", literalCheck(`role IN ('admin', 'user')`)),
   ]
 );

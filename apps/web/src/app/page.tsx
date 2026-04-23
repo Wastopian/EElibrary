@@ -1,27 +1,35 @@
-/**
+﻿/**
  * File header: Implements the provider-neutral search page through the API boundary.
  */
 
 import Link from "next/link";
 import React from "react";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { CatalogResultsPresentation } from "../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../components/ImportByMpnPanel";
+import { WorkspaceJumpNav } from "../components/WorkspaceJumpNav";
 import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../lib/api-client";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CadAvailabilityFilter, CatalogDataSource, LifecycleStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
+import type { CadAvailabilityFilter, CatalogDataSource, ConnectorClass, LifecycleStatus, PartApprovalStatus, PartReadinessStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
 import type { ApiHealth } from "../lib/api-client";
 
 /** PageSearchParams mirrors the GET filters used by the search form. */
 type PageSearchParams = {
+  approvalStatus?: string | string[];
   cad?: string | string[];
   category?: string | string[];
+  connectorClass?: string | string[];
+  datasheetUrl?: string | string[];
   manufacturerId?: string | string[];
   packageId?: string | string[];
   lifecycleStatus?: string | string[];
   page?: string | string[];
   pageSize?: string | string[];
+  providerPartId?: string | string[];
+  providerUrl?: string | string[];
   q?: string | string[];
+  readinessStatus?: string | string[];
   sort?: string | string[];
 };
 
@@ -62,23 +70,35 @@ interface SearchPageProps {
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const resolvedSearchParams = await searchParams;
   const query = readSingleParam(resolvedSearchParams?.q);
+  const providerPartId = readSingleParam(resolvedSearchParams?.providerPartId);
+  const providerUrl = readSingleParam(resolvedSearchParams?.providerUrl);
+  const datasheetUrl = readSingleParam(resolvedSearchParams?.datasheetUrl);
   const manufacturerId = readSingleParam(resolvedSearchParams?.manufacturerId);
   const category = readSingleParam(resolvedSearchParams?.category);
   const packageId = readSingleParam(resolvedSearchParams?.packageId);
   const lifecycleStatus = readLifecycleStatus(readSingleParam(resolvedSearchParams?.lifecycleStatus));
   const cadAvailability = readCadAvailability(readSingleParam(resolvedSearchParams?.cad));
+  const readinessStatus = readReadinessStatus(readSingleParam(resolvedSearchParams?.readinessStatus));
+  const approvalStatus = readApprovalStatus(readSingleParam(resolvedSearchParams?.approvalStatus));
+  const connectorClass = readConnectorClass(readSingleParam(resolvedSearchParams?.connectorClass));
   const page = readPositiveInteger(readSingleParam(resolvedSearchParams?.page));
   const pageSize = readPositiveInteger(readSingleParam(resolvedSearchParams?.pageSize));
   const sort = readSearchSort(readSingleParam(resolvedSearchParams?.sort));
   const filters: PartSearchFilters = {
+    approvalStatus,
     cadAvailability,
     category,
+    connectorClass,
+    datasheetUrl,
     lifecycleStatus,
     manufacturerId,
     packageId,
     page,
     pageSize,
+    providerPartId,
+    providerUrl,
     query,
+    readinessStatus,
     sort
   };
   const catalogState = await loadHomepageCatalog(filters);
@@ -92,120 +112,169 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const sampleParts = selectSampleParts(results);
   const providerSummary = buildProviderSummary(results, source, health);
   const resultRange = buildResultRange(pagination, results.length);
-  const quickLookupState = buildQuickLookupState(query, results, pagination);
+  const quickLookupState = buildQuickLookupState(buildLookupValue(query, providerPartId, providerUrl, datasheetUrl), results, pagination);
+  const catalogResultRows = buildCatalogResultRows(results);
+  const activeFilterPills = buildActiveFilterPills({
+    approvalStatus,
+    cadAvailability,
+    category,
+    connectorClass,
+    datasheetUrl,
+    facets,
+    lifecycleStatus,
+    manufacturerId,
+    packageId,
+    providerPartId,
+    providerUrl,
+    query,
+    readinessStatus,
+    sort
+  });
 
   return (
     <main>
-      <section aria-label="Quick part readiness check" className="quick-check-workspace">
-        <div className="hero-editorial__inner">
-          <p className="app-kicker">EE Library</p>
-          <h1>Quick part readiness check</h1>
-          <p className="hero-lede">Normalized specs, connector build sets, and file-backed engineering assets—without treating references, drafts, or approvals as production-ready exports.</p>
+      <WorkspaceJumpNav
+        ariaLabel="Homepage workspace sections"
+        items={[
+          { href: "#quick-check", label: "Quick check" },
+          { href: "#import-by-mpn", label: "Import by MPN" },
+          { href: "#recent-records", label: "Recent records" },
+          { href: "#catalog-results", label: "Catalog results" },
+          { href: "/admin", label: "Admin queue" }
+        ]}
+      />
 
-          <form className="quick-check-form" action="/" method="get">
-            <label htmlFor="q">MPN or keyword</label>
-            <input name="manufacturerId" type="hidden" value={manufacturerId} />
-            <input name="category" type="hidden" value={category} />
-            <input name="packageId" type="hidden" value={packageId} />
-            <input name="lifecycleStatus" type="hidden" value={lifecycleStatus} />
-            <input name="cad" type="hidden" value={cadAvailability} />
-            <input name="sort" type="hidden" value={sort} />
-            <div className="search-bar__controls">
-              <input defaultValue={query} id="q" name="q" placeholder="TPS7A02, QFN-16, connector series…" />
-              <button type="submit">Check Part</button>
+      <section aria-label="Quick part readiness check" className="quick-check-workspace" id="quick-check">
+        <div className="quick-check-workspace__layout">
+          <div className="hero-editorial__inner quick-check-workspace__main">
+            <p className="app-kicker">EE Library</p>
+            <h1>Quick part readiness check</h1>
+            <p className="hero-lede">Normalized specs, connector build sets, and file-backed engineering assets without treating references, drafts, or approvals as production-ready exports.</p>
+
+            <form className="quick-check-form" action="/" method="get">
+              <input name="packageId" type="hidden" value={packageId} />
+              <input name="lifecycleStatus" type="hidden" value={lifecycleStatus} />
+              <input name="cad" type="hidden" value={cadAvailability} />
+              <input name="readinessStatus" type="hidden" value={readinessStatus} />
+              <input name="approvalStatus" type="hidden" value={approvalStatus} />
+              <input name="connectorClass" type="hidden" value={connectorClass} />
+              <input name="sort" type="hidden" value={sort} />
+              <label className="quick-check-form__field" htmlFor="q">
+                <span>MPN or keyword</span>
+                <input defaultValue={query} id="q" name="q" placeholder="TPS7A02, QFN-16, connector series..." />
+              </label>
+              <label className="quick-check-form__field quick-check-form__field--context" htmlFor="manufacturer-filter">
+                <span>Manufacturer context</span>
+                <select defaultValue={manufacturerId} id="manufacturer-filter" name="manufacturerId">
+                  <option value="">All manufacturers</option>
+                  {facets.manufacturers.slice(0, 16).map((manufacturer) => (
+                    <option key={manufacturer.id} value={manufacturer.id}>
+                      {manufacturer.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="quick-check-form__field quick-check-form__field--context" htmlFor="category-filter">
+                <span>Category filter</span>
+                <select defaultValue={category} id="category-filter" name="category">
+                  <option value="">All categories</option>
+                  {facets.categories.slice(0, 8).map((partCategory) => (
+                    <option key={partCategory} value={partCategory}>
+                      {partCategory}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="quick-check-form__field quick-check-form__field--provider-ref" htmlFor="provider-part-reference">
+                <span>Provider part reference</span>
+                <input defaultValue={providerPartId} id="provider-part-reference" name="providerPartId" placeholder="LCSC code or provider part id" />
+              </label>
+              <label className="quick-check-form__field quick-check-form__field--provider-url" htmlFor="provider-url">
+                <span>Provider URL</span>
+                <input defaultValue={providerUrl} id="provider-url" name="providerUrl" placeholder="Provider product URL" />
+              </label>
+              <label className="quick-check-form__field quick-check-form__field--datasheet">
+                <span>Datasheet URL</span>
+                <input defaultValue={datasheetUrl} name="datasheetUrl" placeholder="Datasheet URL for existing records" />
+              </label>
+              <div className="quick-check-form__actions">
+                <button type="submit">Check Part</button>
+                {query || providerPartId || providerUrl || datasheetUrl ? (
+                  <Link className="button-link button-link--quiet quick-check-form__clear" href="/">
+                    Clear
+                  </Link>
+                ) : null}
+              </div>
+              <p className="quick-check-form__note">
+                Search can now use provider part references, provider URLs, and datasheet URLs alongside normal catalog identity filters.
+              </p>
+            </form>
+
+            <p className="quick-check-hint">
+              Try <Link href="/?q=0430250200">0430250200</Link> / <Link href="/?q=STM32F411CEU6">STM32F411CEU6</Link> / <Link href="/?q=TPS7A02DBVR">TPS7A02DBVR</Link>
+            </p>
+
+            <div className="catalog-strip" role="status">
+              <span className="catalog-strip__label">Catalog</span>
+              <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
+              <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
+              <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
             </div>
-            <label className="quick-check-unavailable">
-              <span>Datasheet URL</span>
-              <input disabled placeholder="Unavailable until the import API accepts datasheet URLs" />
-            </label>
-          </form>
+            {warnings.length > 0 ? <p className="mode-warning">{warnings.join(" ")}</p> : null}
+            {source === "seed_fallback" ? (
+              <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p>
+            ) : null}
 
-          <div className="catalog-strip" role="status">
-            <span className="catalog-strip__label">Catalog</span>
-            <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
-            <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
-            <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
+            <QuickLookupPanel state={quickLookupState} />
+
+            <div className="quick-actions-row">
+              <Link className="button-link button-link--quiet" href="/#import-by-mpn">
+                Import by MPN
+              </Link>
+              <Link className="button-link button-link--quiet" href="/?category=Connector">
+                Browse connectors
+              </Link>
+              <Link className="button-link button-link--quiet" href="/?cad=unavailable">
+                Review missing or unverified CAD
+              </Link>
+            </div>
+
+            <ImportByMpnPanel anchorId="import-by-mpn" />
           </div>
-          {warnings.length > 0 ? <p className="mode-warning">{warnings.join(" ")}</p> : null}
-          {source === "seed_fallback" ? (
-            <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p>
-          ) : null}
-
-          <QuickLookupPanel state={quickLookupState} />
-
-          <div className="quick-actions-row">
-            <Link className="button-link button-link--quiet" href="/#import-by-mpn">
-              Import by MPN
-            </Link>
-            <Link className="button-link button-link--quiet" href="/?category=Connector">
-              Browse connectors
-            </Link>
-            <Link className="button-link button-link--quiet" href="/?cad=unavailable">
-              Review missing or unverified CAD
-            </Link>
-          </div>
-
-          <ImportByMpnPanel anchorId="import-by-mpn" />
+          <HomepageWorkspaceRail catalogStats={catalogStats} providerSummary={providerSummary} source={source} />
         </div>
       </section>
 
-      <div className="home-secondary">
-        <div className="home-secondary__metrics">
-          <div className="health-compact" aria-label="Snapshot of this page">
-            <div>
-              <span>Matches (total)</span>
-              <strong>{catalogStats.totalMatches}</strong>
-            </div>
-            <div>
-              <span>On this page</span>
-              <strong>{catalogStats.visibleRecords}</strong>
-            </div>
-            <div>
-              <span>Verified CAD (page)</span>
-              <strong>{catalogStats.verifiedCadRecords}</strong>
-            </div>
-            <div>
-              <span>Connectors (page)</span>
-              <strong>{catalogStats.connectorRecords}</strong>
-            </div>
-            <div>
-              <span>Generation jobs (page)</span>
-              <strong>{catalogStats.generationWorkflowCount}</strong>
-            </div>
-            <div>
-              <span>Catalog mode</span>
-              <strong>{catalogModeLabel(source)}</strong>
-            </div>
+      <section className="sample-strip" aria-label="Sample records" id="recent-records">
+        <div className="sample-strip__header">
+          <div>
+            <p className="app-kicker">Catalog window</p>
+            <h2>Recently updated readiness records</h2>
+            <p>Use these as fast entry points when you are browsing the catalog instead of starting from a new intake.</p>
           </div>
         </div>
-        <aside className="home-secondary__provider" aria-label="Provider and ingestion summary">
-          <p className="app-kicker">Catalog health</p>
-          <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
-          <p className="muted-copy">{providerSummary.detail}</p>
-        </aside>
-      </div>
-
-      <section className="sample-strip" aria-label="Sample records">
-        <h2>Recently updated in this catalog window</h2>
         {sampleParts.length > 0 ? (
           <div className="sample-part-grid">
             {sampleParts.map((record) => {
               const exportReadiness = getSearchExportReadiness(record);
               const assetTruth = getAssetTruthSummary(record);
               const recoveryStatus = getRecoveryWorkflowSummary(record);
+              const quickSummary = getQuickReadinessSummary(record);
 
               return (
                 <Link className="sample-part-card" href={`/parts/${record.part.id}`} key={record.part.id}>
                   <span className="ui-mono">{record.part.mpn}</span>
                   <strong>{record.manufacturer.name}</strong>
                   <span>
-                    {record.part.category} · {record.package.packageName}
+                    {record.part.category} / {record.package.packageName}
                   </span>
+                  <p>{quickSummary.subhead}</p>
                   <div className="sample-part-card__badges">
                     <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
                     <StatusBadge label={assetTruth.label} tone={mapViewTone(assetTruth.tone)} />
                     <StatusBadge label={recoveryStatus.label} tone={mapViewTone(recoveryStatus.tone)} />
                   </div>
+                  <span className="sample-part-card__action">Open readiness record</span>
                 </Link>
               );
             })}
@@ -218,7 +287,15 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       <div className="search-workspace">
         <aside className="filter-rail" aria-label="Search filters">
           <form action="/" method="get">
+            <div className="filter-rail__intro">
+              <p className="app-kicker">Search</p>
+              <strong>Filter the readiness catalog</strong>
+              <p>Use engineering filters to narrow which parts deserve a closer inspection.</p>
+            </div>
             <input name="q" type="hidden" value={query} />
+            <input name="providerPartId" type="hidden" value={providerPartId} />
+            <input name="providerUrl" type="hidden" value={providerUrl} />
+            <input name="datasheetUrl" type="hidden" value={datasheetUrl} />
             <label>
               Manufacturer
               <select defaultValue={manufacturerId} name="manufacturerId">
@@ -272,78 +349,85 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               </select>
             </label>
             <label>
+              Readiness
+              <select defaultValue={readinessStatus} name="readinessStatus">
+                <option value="">All readiness states</option>
+                {facets.readinessStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {formatFacetOptionLabel(formatReadinessStatus(status), facets.counts?.readinessStatuses[status])}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Approval
+              <select defaultValue={approvalStatus} name="approvalStatus">
+                <option value="">All approval states</option>
+                {facets.approvalStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {formatFacetOptionLabel(formatApprovalStatus(status), facets.counts?.approvalStatuses[status])}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {facets.connectorClasses.length > 0 ? (
+              <label>
+                Connector class
+                <select defaultValue={connectorClass} name="connectorClass">
+                  <option value="">All connector classes</option>
+                  {facets.connectorClasses.map((status) => (
+                    <option key={status} value={status}>
+                      {formatFacetOptionLabel(formatConnectorClass(status), facets.counts?.connectorClasses[status])}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <label>
               Sort
               <select defaultValue={sort} name="sort">
-                <option value="mpn_asc">MPN A–Z</option>
-                <option value="mpn_desc">MPN Z–A</option>
+                <option value="mpn_asc">MPN A-Z</option>
+                <option value="mpn_desc">MPN Z-A</option>
                 <option value="updated_desc">Recently updated</option>
                 <option value="trust_desc">Trust score</option>
               </select>
             </label>
-            <button type="submit">Apply filters</button>
+            <div className="filter-rail__actions">
+              <button type="submit">Apply filters</button>
+              {activeFilterPills.length > 0 ? (
+                <Link className="filter-rail__clear" href="/">
+                  Clear all
+                </Link>
+              ) : null}
+            </div>
           </form>
         </aside>
 
-        <section className="results-panel" aria-label="Search results">
+        <section className="results-panel" aria-label="Search results" id="catalog-results">
           <div className="results-panel__header">
             <div>
               <p className="app-kicker">Results</p>
               <h2>{pagination.totalRecords} matches</h2>
               <p className="results-panel__range">
-                Rows {resultRange.start}–{resultRange.end} · page {pagination.page} of {pagination.totalPages}
+                Rows {resultRange.start}-{resultRange.end} / page {pagination.page} of {pagination.totalPages}
               </p>
+              <p className="results-panel__lede">Each row summarizes identity, top blocker, asset truth, and export gate before you open the full readiness record.</p>
             </div>
             <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
           </div>
+          {activeFilterPills.length > 0 ? (
+            <div className="results-filter-summary" aria-label="Active filters">
+              <span>Current filters</span>
+              <div className="results-filter-summary__pills">
+                {activeFilterPills.map((pill) => (
+                  <StatusBadge key={pill} label={pill} tone="neutral" />
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {results.length > 0 ? (
-            <div className="results-list">
-              {results.map((record) => {
-                const exportReadiness = getSearchExportReadiness(record);
-                const assetTruth = getAssetTruthSummary(record);
-                const connectorHint = getConnectorWorkflowSummary(record);
-                const recoveryStatus = getRecoveryWorkflowSummary(record);
-
-                return (
-                  <article className="result-row" key={record.part.id}>
-                    <div className="result-row__identity">
-                      <Link className="result-row__mpn" href={`/parts/${record.part.id}`}>
-                        {record.part.mpn}
-                      </Link>
-                      <p>
-                        {record.manufacturer.name} · {record.part.category}
-                      </p>
-                    </div>
-                    <div className="result-row__package">
-                      <span>Package</span>
-                      <strong className="ui-mono">{record.package.packageName}</strong>
-                    </div>
-                    <div className="result-row__signals">
-                      <div>
-                        <span>Export bundle</span>
-                        <strong>{exportReadiness.label}</strong>
-                        <small>Altium / SolidWorks bundles follow this gate, not single-file luck.</small>
-                      </div>
-                      <div>
-                        <span>CAD on disk</span>
-                        <strong>{assetTruth.label}</strong>
-                        <small>{assetTruth.detail}</small>
-                      </div>
-                      <div>
-                        <span>{connectorHint ? "Connector" : "Recovery"}</span>
-                        <strong>{connectorHint?.label ?? recoveryStatus.label}</strong>
-                        <small>{connectorHint?.detail ?? recoveryStatus.detail}</small>
-                      </div>
-                    </div>
-                    <div className="result-row__badges">
-                      <StatusBadge label={formatLifecycleShort(record.part.lifecycleStatus)} tone="neutral" />
-                      <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
-                    </div>
-                    <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
-                  </article>
-                );
-              })}
-            </div>
+            <CatalogResultsPresentation rows={catalogResultRows} />
           ) : (
             <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD filter." title="No matching parts" />
           )}
@@ -355,11 +439,76 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 }
 
 /**
+ * Renders the compact homepage rail so engineers can see catalog scope and trust boundaries before scrolling.
+ */
+function HomepageWorkspaceRail({
+  catalogStats,
+  providerSummary,
+  source
+}: {
+  catalogStats: ReturnType<typeof buildCatalogStats>;
+  providerSummary: { detail: string; label: string; tone: BadgeTone };
+  source: CatalogDataSource;
+}) {
+  return (
+    <aside aria-label="Homepage workspace context" className="quick-check-rail">
+      <section className="quick-check-rail__card">
+        <p className="app-kicker">Catalog snapshot</p>
+        <div className="quick-check-rail__badges">
+          <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
+          <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
+        </div>
+        <div className="quick-check-rail__metrics">
+          <div>
+            <span>Matches</span>
+            <strong>{catalogStats.totalMatches}</strong>
+          </div>
+          <div>
+            <span>Verified CAD</span>
+            <strong>{catalogStats.verifiedCadRecords}</strong>
+          </div>
+          <div>
+            <span>Connectors</span>
+            <strong>{catalogStats.connectorRecords}</strong>
+          </div>
+          <div>
+            <span>Generation workflows</span>
+            <strong>{catalogStats.generationWorkflowCount}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="quick-check-rail__card">
+        <p className="app-kicker">Catalog health</p>
+        <strong>{providerSummary.label}</strong>
+        <p>{providerSummary.detail}</p>
+      </section>
+
+      <section className="quick-check-rail__card">
+        <p className="app-kicker">Engineer workflow</p>
+        <strong>Use quick check for triage, detail for decisions, and admin for follow-up.</strong>
+        <p>Export remains gated by verified file-backed CAD, and connector ambiguity stays visible instead of getting polished away.</p>
+        <div className="quick-check-rail__links">
+          <Link href="/?approvalStatus=pending_review">Pending approval</Link>
+          <Link href="/?cad=unavailable">Missing CAD</Link>
+          <Link href="/admin">Open admin queue</Link>
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+/**
  * Renders the explicit quick lookup state before any detailed readiness answer.
  */
 function QuickLookupPanel({ state }: { state: QuickLookupState }) {
   if (state.status === "idle") {
-    return <p className="quick-check-hint">Try a raw MPN, manufacturer-filtered lookup, or use provider import when a part is not in the catalog yet.</p>;
+    return (
+      <div className="quick-check-empty quick-check-empty--idle" role="status">
+        <strong>Search the readiness record</strong>
+        <p>Enter a part number to see confirmed identity, visible blockers, and whether export still lacks file-backed assets.</p>
+      </div>
+    );
   }
 
   if (state.status === "no_match") {
@@ -419,6 +568,10 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
   const assetTruth = getAssetTruthSummary(record);
   const connectorHint = getConnectorWorkflowSummary(record);
   const recoveryStatus = getRecoveryWorkflowSummary(record);
+  const warningRows = buildQuickResultWarnings(record, summary, dataCoverage, exportReadiness, assetTruth, connectorHint ?? recoveryStatus);
+  const readinessCounts = summarizeQuickChecks(summary.checks);
+  const identityLabel = record.sources.length > 0 ? "Identity confirmed" : "Single catalog match";
+  const sourceRowLabel = `${record.sources.length} source row${record.sources.length === 1 ? "" : "s"}`;
 
   return (
     <section aria-label={`Readiness result for ${record.part.mpn}`} className={`quick-readiness-result quick-readiness-result--${summary.tone}`}>
@@ -431,7 +584,10 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
           </div>
           <p>{summary.detail}</p>
         </div>
-        <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+        <div className="quick-readiness-result__trust">
+          <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+          <p>{readinessCounts.passCount} pass / {readinessCounts.attentionCount} attention</p>
+        </div>
       </div>
 
       <div className="quick-readiness-result__identity">
@@ -440,6 +596,8 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
         <span>
           {record.part.category} / {record.package.packageName}
         </span>
+        <StatusBadge label={identityLabel} tone="verified" />
+        <StatusBadge label={sourceRowLabel} tone="neutral" />
         <StatusBadge label={formatLifecycleShort(record.part.lifecycleStatus)} tone="neutral" />
         <StatusBadge label={dataCoverage.label} tone={mapViewTone(dataCoverage.tone)} />
         <Link className="button-link" href={`/parts/${record.part.id}`}>
@@ -451,7 +609,9 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
         <section className="quick-readiness-card">
           <div className="quick-readiness-card__header">
             <span>Readiness Checks</span>
-            <StatusBadge label={exportReadiness.label} tone={exportReadiness.tone} />
+            <span>
+              {readinessCounts.passCount} pass / {readinessCounts.attentionCount} attention
+            </span>
           </div>
           {summary.checks.map((check) => (
             <div className="quick-check-row" key={check.label}>
@@ -478,20 +638,176 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
           )}
         </section>
 
-        <section className="quick-readiness-card">
-          <div className="quick-readiness-card__header">
-            <span>{connectorHint ? "Connector Intelligence" : "Missing-CAD Recovery"}</span>
-            <StatusBadge label={connectorHint?.label ?? recoveryStatus.label} tone={mapViewTone(connectorHint?.tone ?? recoveryStatus.tone)} />
-          </div>
-          <p>{connectorHint?.detail ?? recoveryStatus.detail}</p>
-          <div className="quick-readiness-card__footer">
-            <StatusBadge label={assetTruth.label} tone={mapViewTone(assetTruth.tone)} />
-            <p>{dataCoverage.detail}</p>
-          </div>
+        {connectorHint ? (
+          <QuickConnectorPreviewCard assetTruth={assetTruth} dataCoverage={dataCoverage} record={record} />
+        ) : (
+          <section className="quick-readiness-card">
+            <div className="quick-readiness-card__header">
+              <span>Missing-CAD Recovery</span>
+              <StatusBadge label={recoveryStatus.label} tone={mapViewTone(recoveryStatus.tone)} />
+            </div>
+            <p>{recoveryStatus.detail}</p>
+            <div className="quick-readiness-card__footer">
+              <StatusBadge label={assetTruth.label} tone={mapViewTone(assetTruth.tone)} />
+              <p>{dataCoverage.detail}</p>
+            </div>
+          </section>
+        )}
+      </div>
+
+      {warningRows.length > 0 ? (
+        <section aria-label="Quick readiness warnings" className="quick-warning-strip">
+          {warningRows.map((warning) => (
+            <div className="quick-warning-strip__row" key={warning.label}>
+              <span className={`quick-warning-strip__icon quick-warning-strip__icon--${warning.tone}`}>{warning.tone === "info" ? "i" : "!"}</span>
+              <div>
+                <strong>{warning.label}</strong>
+                <p>{warning.detail}</p>
+              </div>
+            </div>
+          ))}
         </section>
+      ) : null}
+
+      <div className="quick-actions-row quick-actions-row--result">
+        <Link className="button-link" href={`/parts/${record.part.id}`}>
+          Open Full Record
+        </Link>
+        <Link className="button-link button-link--quiet" href="/admin">
+          View in Queue
+        </Link>
+        <Link className="button-link button-link--quiet" href="/">
+          Check Another Part
+        </Link>
       </div>
     </section>
   );
+}
+
+/**
+ * Renders a compact connector mate preview when connector intelligence exists for the result record.
+ */
+function QuickConnectorPreviewCard({
+  assetTruth,
+  dataCoverage,
+  record
+}: {
+  assetTruth: ReturnType<typeof getAssetTruthSummary>;
+  dataCoverage: ReturnType<typeof getQuickReadinessDataCoverage>;
+  record: PartSearchRecord;
+}) {
+  const bestMate = record.buildableMatingSet.bestMate;
+  const alternateMates = record.buildableMatingSet.alternateMates;
+  const requiredAccessories = record.buildableMatingSet.requiredAccessories;
+  const cableOptions = record.buildableMatingSet.cableOptions;
+  const cableAssumptions = record.buildableMatingSet.cableAssumptions;
+
+  return (
+    <section className="quick-readiness-card">
+      <div className="quick-readiness-card__header">
+        <span>Mating Parts</span>
+        <span>
+          {(bestMate ? 1 : 0) + alternateMates.length + requiredAccessories.length} mapped
+        </span>
+      </div>
+      <div className="quick-mates-preview">
+        <div className="quick-mates-preview__item">
+          <strong>Best mate</strong>
+          <span className="ui-mono">{bestMate ? bestMate.matePartId : "No best mate stored"}</span>
+          <p>{bestMate ? `${Math.round(bestMate.confidenceScore * 100)}% confidence` : "Connector metadata exists, but no prioritized mate is stored yet."}</p>
+        </div>
+        <div className="quick-mates-preview__item">
+          <strong>Alternate mates</strong>
+          <span>{alternateMates.length > 0 ? alternateMates.length : "None mapped"}</span>
+          <p>{alternateMates.length > 0 ? alternateMates.map((item) => item.matePartId).join(", ") : "No alternate mate rows are attached yet."}</p>
+        </div>
+        <div className="quick-mates-preview__item">
+          <strong>Required accessories</strong>
+          <span>{requiredAccessories.length > 0 ? requiredAccessories.length : "None mapped"}</span>
+          <p>{requiredAccessories.length > 0 ? requiredAccessories.map((item) => item.accessoryPartId).join(", ") : "No accessory rows are attached yet."}</p>
+        </div>
+        <div className="quick-mates-preview__item">
+          <strong>Cable options</strong>
+          <span>{cableOptions.length > 0 ? cableOptions.length : "None mapped"}</span>
+          <p>
+            {cableOptions.length > 0
+              ? `${cableOptions.map((item) => item.cablePartId).join(", ")}${cableAssumptions.length > 0 ? ` (${cableAssumptions.length} note-derived assumptions)` : ""}`
+              : "No cable compatibility rows are attached yet."}
+          </p>
+        </div>
+      </div>
+      <div className="quick-readiness-card__footer">
+        <StatusBadge label={assetTruth.label} tone={mapViewTone(assetTruth.tone)} />
+        <p>{dataCoverage.detail}</p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Summarizes pass-vs-attention counts without inventing any new readiness scoring.
+ */
+function summarizeQuickChecks(checks: ReturnType<typeof getQuickReadinessSummary>["checks"]) {
+  const passCount = checks.filter((check) => check.tone === "verified" || check.tone === "info").length;
+  const attentionCount = checks.length - passCount;
+
+  return { attentionCount, passCount };
+}
+
+/**
+ * Builds concise risk and trust-boundary rows from real quick-check signals only.
+ */
+function buildQuickResultWarnings(
+  record: PartSearchRecord,
+  summary: ReturnType<typeof getQuickReadinessSummary>,
+  dataCoverage: ReturnType<typeof getQuickReadinessDataCoverage>,
+  exportReadiness: ReturnType<typeof getSearchExportReadiness>,
+  assetTruth: ReturnType<typeof getAssetTruthSummary>,
+  workflowSignal: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>
+) {
+  const warnings: Array<{ detail: string; label: string; tone: "info" | "warn" }> = [];
+
+  if (assetTruth.tone === "generated") {
+    warnings.push({
+      detail: "Generated assets remain visibly generated until review, evidence, and explicit promotion are complete.",
+      label: "Generated CAD still needs review",
+      tone: "warn"
+    });
+  }
+
+  if (exportReadiness.tone !== "verified") {
+    warnings.push({
+      detail: "Export actions stay gated by file-backed verified assets, not by catalog presence or review alone.",
+      label: "Export truth stays separate",
+      tone: "warn"
+    });
+  }
+
+  if (dataCoverage.partial) {
+    warnings.push({
+      detail: dataCoverage.detail,
+      label: "Partial readiness data",
+      tone: "info"
+    });
+  }
+
+  if (record.part.lifecycleStatus !== "active") {
+    warnings.push({
+      detail: `Lifecycle is ${record.part.lifecycleStatus}. Review this part carefully before design use.`,
+      label: "Lifecycle caution",
+      tone: "warn"
+    });
+  }
+
+  if (workflowSignal.tone === "review" && summary.actions.length > 0) {
+    warnings.push({
+      detail: workflowSignal.detail,
+      label: "Workflow gap remains",
+      tone: "info"
+    });
+  }
+
+  return warnings;
 }
 
 function mapViewTone(tone: string): BadgeTone {
@@ -709,7 +1025,7 @@ function buildProviderSummary(records: PartSearchRecord[], source: CatalogDataSo
   const latestImport = sources.map((sourceRecord) => sourceRecord.sourceLastImportedAt).filter((value): value is string => Boolean(value)).sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
 
   return {
-    detail: `${providerCount} provider identities on this page · ${failedImports} failed imports · ${latestImport ? `last import ${formatDateTime(latestImport)}` : "no import timestamps on page"}`,
+    detail: `${providerCount} provider identities on this page / ${failedImports} failed imports / ${latestImport ? `last import ${formatDateTime(latestImport)}` : "no import timestamps on page"}`,
     label: health.dependencies.database === "connected" ? "DB-backed" : `DB ${health.dependencies.database}`,
     tone: health.dependencies.database === "connected" && failedImports === 0 ? "verified" : "review"
   };
@@ -772,6 +1088,30 @@ function readLifecycleStatus(value: string | undefined): LifecycleStatus | undef
   return undefined;
 }
 
+function readReadinessStatus(value: string | undefined): PartReadinessStatus | undefined {
+  if (value === "ready_for_export_review" || value === "needs_attention" || value === "blocked" || value === "unknown") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function readApprovalStatus(value: string | undefined): PartApprovalStatus | undefined {
+  if (value === "approved" || value === "pending_review" || value === "not_requested" || value === "not_applicable") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function readConnectorClass(value: string | undefined): ConnectorClass | undefined {
+  if (value === "connector" || value === "accessory" || value === "tooling" || value === "cable" || value === "non_connector") {
+    return value;
+  }
+
+  return undefined;
+}
+
 function formatLifecycleStatus(status: LifecycleStatus): string {
   const labels: Record<LifecycleStatus, string> = {
     active: "Active",
@@ -781,6 +1121,34 @@ function formatLifecycleStatus(status: LifecycleStatus): string {
   };
 
   return labels[status];
+}
+
+function formatReadinessStatus(status: PartReadinessStatus): string {
+  return {
+    blocked: "Blocked",
+    needs_attention: "Needs attention",
+    ready_for_export_review: "Ready for export review",
+    unknown: "Unknown"
+  }[status];
+}
+
+function formatApprovalStatus(status: PartApprovalStatus): string {
+  return {
+    approved: "Approved",
+    not_applicable: "Not applicable",
+    not_requested: "Not requested",
+    pending_review: "Pending review"
+  }[status];
+}
+
+function formatConnectorClass(status: ConnectorClass): string {
+  return {
+    accessory: "Accessory",
+    cable: "Cable",
+    connector: "Connector",
+    non_connector: "Non-connector",
+    tooling: "Tooling"
+  }[status];
 }
 
 /**
@@ -800,6 +1168,17 @@ function scoreTone(score: number): BadgeTone {
   }
 
   return "danger";
+}
+
+function approvalTone(status: PartApprovalStatus): BadgeTone {
+  const tones: Record<PartApprovalStatus, BadgeTone> = {
+    approved: "verified",
+    not_applicable: "neutral",
+    not_requested: "review",
+    pending_review: "info"
+  };
+
+  return tones[status];
 }
 
 function buildFallbackPagination(totalRecords: number, filters: PartSearchFilters): SearchPagination {
@@ -829,10 +1208,16 @@ function buildSearchHref(filters: PartSearchFilters, page: number): string {
   const params = new URLSearchParams();
 
   appendHrefParam(params, "q", filters.query);
+  appendHrefParam(params, "providerPartId", filters.providerPartId);
+  appendHrefParam(params, "providerUrl", filters.providerUrl);
+  appendHrefParam(params, "datasheetUrl", filters.datasheetUrl);
   appendHrefParam(params, "manufacturerId", filters.manufacturerId);
   appendHrefParam(params, "category", filters.category);
   appendHrefParam(params, "packageId", filters.packageId);
   appendHrefParam(params, "lifecycleStatus", filters.lifecycleStatus);
+  appendHrefParam(params, "readinessStatus", filters.readinessStatus);
+  appendHrefParam(params, "approvalStatus", filters.approvalStatus);
+  appendHrefParam(params, "connectorClass", filters.connectorClass);
   appendHrefParam(params, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
   appendHrefParam(params, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
   appendHrefParam(params, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
@@ -843,8 +1228,169 @@ function buildSearchHref(filters: PartSearchFilters, page: number): string {
   return queryString ? `/?${queryString}` : "/";
 }
 
+/**
+ * Builds presentation rows for the list/table catalog results view without leaking backend shapes.
+ */
+function buildCatalogResultRows(records: PartSearchRecord[]) {
+  return records.map((record) => {
+    const exportReadiness = getSearchExportReadiness(record);
+    const assetTruth = getAssetTruthSummary(record);
+    const connectorHint = getConnectorWorkflowSummary(record);
+    const recoveryStatus = getRecoveryWorkflowSummary(record);
+    const topBlocker = record.readinessSummary.blockerSummary[0] ?? record.readinessSummary.recommendedActions[0] ?? "No immediate blocker derived from this record.";
+    const riskLabel = record.riskFlags[0]?.label ? "Risk flag" : "Top blocker";
+
+    return {
+      approvalDetail: record.approval.detail,
+      approvalLabel: record.approval.summary,
+      approvalTone: approvalTone(record.approval.status),
+      assetTruthDetail: assetTruth.detail,
+      assetTruthLabel: assetTruth.label,
+      category: record.part.category,
+      connectorSignalDetail: connectorHint?.detail ?? recoveryStatus.detail,
+      connectorSignalLabel: connectorHint?.label ?? recoveryStatus.label,
+      connectorSignalTitle: connectorHint ? "Connector intelligence" : "Recovery",
+      connectorTitle: record.connectorFamily?.name ?? "General component",
+      exportLabel: exportReadiness.label,
+      exportTone: exportReadiness.tone,
+      href: `/parts/${record.part.id}`,
+      id: record.part.id,
+      lifecycleLabel: formatLifecycleShort(record.part.lifecycleStatus),
+      manufacturerName: record.manufacturer.name,
+      mpn: record.part.mpn,
+      packageName: record.package.packageName,
+      readinessDetail: record.readinessSummary.detail,
+      readinessHeadline: record.readinessSummary.label,
+      readinessSubhead:
+        record.readinessSummary.blockerCount > 0
+          ? `${record.readinessSummary.blockerCount} ${record.readinessSummary.blockerCount === 1 ? "blocker" : "blockers"} recorded.`
+          : record.approval.summary,
+      riskLabel,
+      topBlocker,
+      trustScore: record.part.trustScore,
+      trustTone: scoreTone(record.part.trustScore)
+    };
+  });
+}
+
+/**
+ * Builds concise active-filter labels so engineers can see the current query context at a glance.
+ */
+function buildActiveFilterPills({
+  approvalStatus,
+  cadAvailability,
+  category,
+  connectorClass,
+  datasheetUrl,
+  facets,
+  lifecycleStatus,
+  manufacturerId,
+  packageId,
+  providerPartId,
+  providerUrl,
+  query,
+  readinessStatus,
+  sort
+}: {
+  approvalStatus: PartApprovalStatus | undefined;
+  cadAvailability: CadAvailabilityFilter;
+  category: string | undefined;
+  connectorClass: ConnectorClass | undefined;
+  datasheetUrl: string | undefined;
+  facets: SearchFacets;
+  lifecycleStatus: LifecycleStatus | undefined;
+  manufacturerId: string | undefined;
+  packageId: string | undefined;
+  providerPartId: string | undefined;
+  providerUrl: string | undefined;
+  query: string | undefined;
+  readinessStatus: PartReadinessStatus | undefined;
+  sort: PartSearchSort;
+}) {
+  const pills: string[] = [];
+  const manufacturerName = manufacturerId ? facets.manufacturers.find((manufacturer) => manufacturer.id === manufacturerId)?.name : undefined;
+  const packageName = packageId ? facets.packages.find((partPackage) => partPackage.id === packageId)?.packageName : undefined;
+
+  if (query && query.trim().length > 0) {
+    pills.push(`Query: ${query}`);
+  }
+
+  if (providerPartId && providerPartId.trim().length > 0) {
+    pills.push(`Provider ref: ${providerPartId}`);
+  }
+
+  if (providerUrl && providerUrl.trim().length > 0) {
+    pills.push("Provider URL lookup");
+  }
+
+  if (datasheetUrl && datasheetUrl.trim().length > 0) {
+    pills.push("Datasheet URL lookup");
+  }
+
+  if (manufacturerName) {
+    pills.push(`Manufacturer: ${manufacturerName}`);
+  }
+
+  if (category) {
+    pills.push(`Category: ${category}`);
+  }
+
+  if (packageName) {
+    pills.push(`Package: ${packageName}`);
+  }
+
+  if (lifecycleStatus) {
+    pills.push(`Lifecycle: ${formatLifecycleStatus(lifecycleStatus)}`);
+  }
+
+  if (readinessStatus) {
+    pills.push(`Readiness: ${formatReadinessStatus(readinessStatus)}`);
+  }
+
+  if (approvalStatus) {
+    pills.push(`Approval: ${formatApprovalStatus(approvalStatus)}`);
+  }
+
+  if (connectorClass) {
+    pills.push(`Connector class: ${formatConnectorClass(connectorClass)}`);
+  }
+
+  if (cadAvailability === "available") {
+    pills.push("CAD: verified file-backed only");
+  }
+
+  if (cadAvailability === "unavailable") {
+    pills.push("CAD: missing verified assets");
+  }
+
+  if (sort !== "mpn_asc") {
+    pills.push(`Sort: ${formatSortLabel(sort)}`);
+  }
+
+  return pills;
+}
+
+/**
+ * Maps the search sort to a short filter-summary label.
+ */
+function formatSortLabel(sort: PartSearchSort): string {
+  return {
+    mpn_asc: "MPN A-Z",
+    mpn_desc: "MPN Z-A",
+    trust_desc: "Trust score",
+    updated_desc: "Recently updated"
+  }[sort];
+}
+
 function appendHrefParam(params: URLSearchParams, key: string, value: string | undefined): void {
   if (value && value.trim().length > 0) {
     params.set(key, value);
   }
+}
+
+/**
+ * Builds one visible lookup label from the quick-check identity fields.
+ */
+function buildLookupValue(query: string | undefined, providerPartId: string | undefined, providerUrl: string | undefined, datasheetUrl: string | undefined): string | undefined {
+  return query || providerPartId || providerUrl || datasheetUrl;
 }

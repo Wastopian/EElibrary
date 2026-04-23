@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
+import { DetailSectionNav } from "./DetailSectionNav";
 import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
 import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
@@ -21,6 +22,16 @@ export const dynamic = "force-dynamic";
 interface DetailPageProps {
   params: Promise<{ partId: string }>;
 }
+
+/** PartDetailPageRecord extracts the detail record shape directly from the API client return type. */
+type PartDetailPageRecord = NonNullable<Awaited<ReturnType<typeof fetchPartDetail>>>["record"];
+
+/** DetailRiskFlag keeps derived risk messaging explicit and severity-based. */
+type DetailRiskFlag = {
+  detail: string;
+  title: string;
+  tone: "danger" | "review";
+};
 
 /**
  * Renders a component detail page with provenance, connector intelligence, asset state, and export readiness.
@@ -50,6 +61,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     tone: scoreTone(metric.confidenceScore),
     value: formatMetricValue(metric)
   }));
+  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions);
 
   /**
    * Requests generation through the API while leaving completion and export approval explicit.
@@ -107,12 +119,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
   const hasSimilarParts = record.similarParts.length > 0;
   const hasCompanionParts = record.companionRecommendations.length > 0;
-  const hasGoesWith = hasConnectorIntelligence || hasSimilarParts || hasCompanionParts;
 
   return (
     <main className="detail-layout">
       <Link className="back-link" href="/">
-        ← Back to catalog search
+        &larr; Back to catalog search
       </Link>
 
       <section className="detail-section" aria-labelledby="overview-heading">
@@ -127,42 +138,62 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           <div>
             <p className="app-kicker">{record.manufacturer.name}</p>
             <h1 className="ui-mono">{record.part.mpn}</h1>
-            <p className="detail-hero__meta">
-              {record.part.category} · <span className="ui-mono">{record.package.packageName}</span> · lifecycle {record.part.lifecycleStatus}
-            </p>
+            <div className="detail-hero__meta-strip" aria-label="Part identity summary">
+              <span>{record.part.category}</span>
+              <span className="ui-mono">{record.package.packageName}</span>
+              <span>Lifecycle {record.part.lifecycleStatus}</span>
+              <span>{record.connectorFamily ? record.connectorFamily.name : "General component"}</span>
+            </div>
             <p className="detail-trust-callout">
               <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
             </p>
             <div className="signal-strip" role="group" aria-label="Engineering signals">
+              <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
+              <StatusBadge label={record.approval.summary} tone={approvalStatusTone(record.approval.status)} />
               <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
               <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
               <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
-              <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
               <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name}` : "Non-connector"} tone={record.connectorFamily ? "info" : "neutral"} />
               <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
             </div>
           </div>
           <div className="detail-hero__status">
             <TrustMeter label="Catalog trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
-            <p className="muted-copy" style={{ fontSize: "0.82rem", margin: "10px 0 0" }}>
-              {bundleReadiness.reason}
-            </p>
+            <DetailHeroWorkbench approval={record.approval} bundleReadiness={bundleReadiness} connectorOrRecoverySummary={connectorSummary ?? recoverySummary} reviewWorkflowSummary={reviewWorkflowSummary} />
           </div>
         </section>
 
-        <nav aria-label="Readiness record sections" className="detail-tabbar">
-          <a href="#overview-heading">Overview</a>
-          <a href="#goes-with-heading">Mates and accessories</a>
-          <a href="#files-heading">Engineering assets</a>
-          <a href="#next-heading">Approval and export</a>
-        </nav>
+        <DetailHeroFacts
+          assetCount={record.assets.length}
+          bestMateMapped={Boolean(bestMate)}
+          bundleReadiness={bundleReadiness}
+          generationWorkflowCount={record.generationWorkflows.length}
+          hasConnectorIntelligence={hasConnectorIntelligence}
+          sourceCount={record.sources.length}
+        />
+
+        <DetailSectionNav tabs={detailTabs} />
 
         <DetailReadinessSummary
+          approval={record.approval}
           assetTruthSummary={assetTruthSummary}
           connectorOrRecoverySummary={connectorSummary ?? recoverySummary}
           quickReadinessSummary={quickReadinessSummary}
+          readinessSummary={record.readinessSummary}
           reviewWorkflowSummary={reviewWorkflowSummary}
         />
+
+        <div className="detail-overview-grid">
+          <DetailContextPanel
+            bestMate={bestMate ?? undefined}
+            datasheetAsset={datasheetAsset}
+            hasConnectorIntelligence={hasConnectorIntelligence}
+            latestSource={latestSource}
+            record={record}
+            relatedPartSummaries={relatedPartSummaries}
+          />
+          <DetailActionRail approval={record.approval} bundleReadiness={bundleReadiness} issues={record.issues} riskFlags={record.riskFlags} reviewWorkflowSummary={reviewWorkflowSummary} />
+        </div>
 
         <div className="detail-two-col">
           <SectionPanel description="Normalized to internal units. Confidence reflects source extraction, not manufacturing guarantee." title="Key metrics">
@@ -246,69 +277,147 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </details>
       </section>
 
-      <section className="detail-section" aria-labelledby="goes-with-heading">
+      <section className="detail-section" aria-labelledby="mates-heading">
         <SectionHeading
-          id="goes-with-heading"
+          id="mates-heading"
           index="02"
-          subtitle="Mates, accessories, cables, alternates, and typical circuit companions—each with its own confidence context."
-          title="What goes with it"
+          subtitle="Connector build sets, mates, accessories, tooling, and cable relationships stay close to readiness."
+          title="Mates and accessories"
         />
-        {hasGoesWith ? (
+        {hasConnectorIntelligence ? (
           <>
-            {hasConnectorIntelligence ? (
-              <div className="detail-two-col">
-                <SectionPanel description="Single prioritized recommendation with confidence." title="Best mate">
-                  {bestMate ? <RelatedPartLine relation={bestMate} related={findRelatedPart(bestMate.matePartId, relatedPartSummaries)} /> : <p className="muted-copy">No best-mate mapping is stored for this part.</p>}
-                </SectionPanel>
-                <SectionPanel description="Practical set: mate, required hardware, tooling, and cable options." title="Buildable mating set">
-                  <ul className="connector-list">
-                    <li>
-                      <strong>Best mate:</strong> {bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "Not available"}
-                    </li>
-                    <li>
-                      <strong>Required accessories:</strong> {renderRelatedList(record.buildableMatingSet.requiredAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}
-                    </li>
-                    <li>
-                      <strong>Tooling:</strong> {renderRelatedList(record.buildableMatingSet.toolingRequirements.map((item) => item.accessoryPartId), relatedPartSummaries)}
-                    </li>
-                    <li>
-                      <strong>Compatible cables:</strong> {renderRelatedList(record.buildableMatingSet.cableOptions.map((item) => item.cablePartId), relatedPartSummaries)}
-                    </li>
-                  </ul>
-                </SectionPanel>
-              </div>
-            ) : null}
-            {hasSimilarParts || hasCompanionParts ? (
-              <div className="detail-two-col">
-                {hasSimilarParts ? (
-                  <SectionPanel description="Alternates for substitution decisions—not automatic drop-ins." title="Similar parts">
-                    <p className="related-inline">{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p>
-                  </SectionPanel>
+            <div className="detail-two-col">
+              <SectionPanel description="Single prioritized recommendation plus any close alternate mates that still need review." title="Best mate">
+                {bestMate ? (
+                  <>
+                    <RelatedPartLine relation={bestMate} related={findRelatedPart(bestMate.matePartId, relatedPartSummaries)} />
+                    {record.buildableMatingSet.alternateMates.length > 0 ? (
+                      <>
+                        <p className="muted-copy" style={{ marginTop: 12 }}>Alternate mates that stay visible for family and keying review:</p>
+                        <div className="related-inline">
+                          {record.buildableMatingSet.alternateMates.map((relation) => (
+                            <RelatedPartLine key={relation.id} relation={relation} related={findRelatedPart(relation.matePartId, relatedPartSummaries)} />
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="muted-copy">No best-mate mapping is stored for this part.</p>
+                )}
+              </SectionPanel>
+              <SectionPanel description="Practical set: mate, required hardware, tooling, cable options, and note-derived assumptions." title="Buildable mating set">
+                <ul className="connector-list">
+                  <li>
+                    <strong>Best mate:</strong> {bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "Not available"}
+                  </li>
+                  <li>
+                    <strong>Alternate mates:</strong> {renderMateRelationList(record.buildableMatingSet.alternateMates, relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Family conflicts:</strong> {renderRelatedList(record.buildableMatingSet.familyConflicts.map((item) => item.candidatePartId), relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Required accessories:</strong> {renderRelatedList(record.buildableMatingSet.requiredAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Optional accessories:</strong> {renderRelatedList(record.buildableMatingSet.optionalAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Tooling:</strong> {renderRelatedList(record.buildableMatingSet.toolingRequirements.map((item) => item.accessoryPartId), relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Compatible cables:</strong> {renderRelatedList(record.buildableMatingSet.cableOptions.map((item) => item.cablePartId), relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Cable assumptions:</strong> {renderCableAssumptionList(record.buildableMatingSet.cableAssumptions, relatedPartSummaries)}
+                  </li>
+                  <li>
+                    <strong>Confidence model:</strong> {buildConnectorConfidenceSummary(record.buildableMatingSet)}
+                  </li>
+                </ul>
+                {record.buildableMatingSet.warningDetails.length > 0 ? (
+                  <>
+                    <p className="muted-copy" style={{ marginTop: 12 }}>Connector review cues stay separate from the base relationship list:</p>
+                    <ul className="connector-list">
+                      {record.buildableMatingSet.warningDetails.map((warning) => (
+                        <li key={warning.code}>
+                          <strong>{warning.summary}</strong> {warning.detail}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 ) : null}
-                {hasCompanionParts ? (
-                  <SectionPanel description="Parts often used alongside this one in real designs." title="Typical companions">
-                    <p className="related-inline">{renderRelatedList(record.companionRecommendations.map((relation) => relation.companionPartId), relatedPartSummaries)}</p>
-                  </SectionPanel>
-                ) : null}
-                {!hasSimilarParts || !hasCompanionParts ? (
-                  <SectionPanel description="Only one relationship list is currently available for this part." title="Pairing coverage">
-                    <p className="muted-copy">
-                      {!hasSimilarParts ? "No similar-part alternates are stored yet." : "No typical companion recommendations are stored yet."}
-                    </p>
-                  </SectionPanel>
-                ) : null}
-              </div>
-            ) : null}
+              </SectionPanel>
+            </div>
           </>
         ) : (
-          <EmptyState body="No connector intelligence, similar parts, or companion recommendations are stored for this record." title="No relationship data" />
+          <EmptyState body="No connector-specific mate, accessory, tooling, or cable relationships are stored for this record." title="No mating data" />
         )}
+      </section>
+
+      <section className="detail-section" aria-labelledby="alternates-heading">
+        <SectionHeading
+          id="alternates-heading"
+          index="03"
+          subtitle="Alternates and companion parts stay separate so substitutions do not blur into typical co-parts."
+          title="Alternates and companions"
+        />
+        {hasSimilarParts || hasCompanionParts ? (
+          <div className="detail-two-col">
+            <SectionPanel description="Alternates for substitution decisions - not automatic drop-ins." title="Similar parts">
+              {hasSimilarParts ? <p className="related-inline">{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p> : <p className="muted-copy">No similar-part alternates are stored yet.</p>}
+            </SectionPanel>
+            <SectionPanel description="Parts often used alongside this one in real designs." title="Typical companions">
+              {hasCompanionParts ? <p className="related-inline">{renderRelatedList(record.companionRecommendations.map((relation) => relation.companionPartId), relatedPartSummaries)}</p> : <p className="muted-copy">No typical companion recommendations are stored yet.</p>}
+            </SectionPanel>
+          </div>
+        ) : (
+          <EmptyState body="No similar-part alternates or typical companion recommendations are stored for this record." title="No alternates or companions" />
+        )}
+      </section>
+
+      <section className="detail-section" aria-labelledby="sourcing-heading">
+        <SectionHeading
+          id="sourcing-heading"
+          index="04"
+          subtitle="Lifecycle, source freshness, and import provenance are available here. Distributor pricing remains unavailable until the backend models it."
+          title="Sourcing and lifecycle"
+        />
+        <div className="detail-two-col">
+          <SectionPanel description="Use lifecycle and latest import evidence to decide whether the part is still a healthy design candidate." title="Lifecycle and source health">
+            <div className="detail-sourcing-grid">
+              <div>
+                <span>Lifecycle</span>
+                <strong>{record.part.lifecycleStatus}</strong>
+                <p>Library readiness does not override lifecycle risk. Treat non-active parts carefully.</p>
+              </div>
+              <div>
+                <span>Latest provider</span>
+                <strong>{latestSource?.providerId ?? "No source row"}</strong>
+                <p>{latestSource?.sourceLastImportedAt ? `Last import ${formatDateTime(latestSource.sourceLastImportedAt)}` : "No successful import is recorded for this part yet."}</p>
+              </div>
+              <div>
+                <span>Source URL</span>
+                <strong>{latestSource?.sourceUrl ? "Stored" : "Unavailable"}</strong>
+                <p>{latestSource?.sourceUrl ?? "The current provider row does not include a source URL."}</p>
+              </div>
+            </div>
+          </SectionPanel>
+          <SectionPanel description="The V3 design includes distributor pricing and stock, but the current backend contract does not expose supplier rows yet." title="Distributor pricing">
+            <div className="detail-unavailable-card" role="status">
+              <StatusBadge label="Unavailable" tone="neutral" />
+              <strong>Supplier pricing and stock are not in the current API contract.</strong>
+              <p>The UI stays explicit here instead of inventing sourcing data. Lifecycle, source import status, and provenance remain the current source of truth.</p>
+            </div>
+          </SectionPanel>
+        </div>
       </section>
 
       <section className="detail-section detail-section--technical" aria-labelledby="files-heading">
         <SectionHeading
           id="files-heading"
-          index="03"
+          index="05"
           subtitle="Best-ranked asset per class. Availability, provenance, review, validation, and export status stay separate."
           title="Files and models"
         />
@@ -354,12 +463,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         ) : null}
       </section>
 
-      <section className="detail-section" aria-labelledby="next-heading">
+      <section className="detail-section" aria-labelledby="approval-heading">
         <SectionHeading
-          id="next-heading"
-          index="04"
-          subtitle="Exports, recovery requests, review actions, and explicit export promotion—each with exact blockers when disabled."
-          title="Next actions"
+          id="approval-heading"
+          index="06"
+          subtitle="Review workflows, generation requests, and explicit export promotion stay separate from part identity and asset provenance."
+          title="Approval and export"
         />
 
         {shouldRenderGenerationOptions(generationOptions) ? (
@@ -427,14 +536,18 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
  * Renders the explanation-first readiness record summary using existing view-model signals.
  */
 function DetailReadinessSummary({
+  approval,
   assetTruthSummary,
   connectorOrRecoverySummary,
   quickReadinessSummary,
+  readinessSummary,
   reviewWorkflowSummary
 }: {
+  approval: PartDetailPageRecord["approval"];
   assetTruthSummary: ReturnType<typeof getAssetTruthSummary>;
   connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>;
   quickReadinessSummary: ReturnType<typeof getQuickReadinessSummary>;
+  readinessSummary: PartDetailPageRecord["readinessSummary"];
   reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
 }) {
   return (
@@ -442,10 +555,13 @@ function DetailReadinessSummary({
       <div className="detail-readiness-summary__lead">
         <div>
           <p className="app-kicker">Readiness record</p>
-          <h2>{quickReadinessSummary.headline}</h2>
-          <p>{quickReadinessSummary.detail}</p>
+          <h2>{readinessSummary.label}</h2>
+          <p className="detail-readiness-summary__subhead">{approval.summary}</p>
+          <p>{readinessSummary.detail}</p>
         </div>
         <div className="detail-readiness-summary__badges">
+          <StatusBadge label={readinessSummary.label} tone={readinessStatusTone(readinessSummary.status)} />
+          <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
           <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
           <StatusBadge label={connectorOrRecoverySummary.label} tone={mapViewToneToBadge(connectorOrRecoverySummary.tone)} />
           <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
@@ -455,31 +571,385 @@ function DetailReadinessSummary({
       <div className="detail-readiness-summary__grid">
         <div>
           <span>Blockers and next actions</span>
-          {quickReadinessSummary.actions.length > 0 ? (
+          {readinessSummary.recommendedActions.length > 0 ? (
             <ul>
-              {quickReadinessSummary.actions.map((action) => (
-                <li key={action.label}>
-                  <strong>{action.priority}</strong>
-                  {action.label}
+              {readinessSummary.recommendedActions.map((action, index) => (
+                <li key={action}>
+                  <strong>{index === 0 && readinessSummary.status === "blocked" ? "high" : index <= 1 ? "medium" : "low"}</strong>
+                  {action}
                 </li>
               ))}
             </ul>
           ) : (
-            <p>No quick blockers were derived from the current catalog record.</p>
+            <p>No readiness actions are currently recorded for this part.</p>
           )}
         </div>
         <div>
-          <span>Trust boundary</span>
-          <p>{reviewWorkflowSummary.detail}</p>
-          <p>Approved assets and generated outputs remain distinct from verified-for-export assets.</p>
+          <span>Approval</span>
+          <p>{approval.detail}</p>
+          <p>Whole-part approval remains separate from generated asset review and explicit export promotion.</p>
         </div>
         <div>
           <span>Asset truth</span>
-          <p>{assetTruthSummary.detail}</p>
+          <p>{quickReadinessSummary.detail}</p>
         </div>
       </div>
     </section>
   );
+}
+
+/**
+ * Renders dense overview facts under the hero so engineers can scan record scope before scrolling.
+ */
+function DetailHeroFacts({
+  assetCount,
+  bestMateMapped,
+  bundleReadiness,
+  generationWorkflowCount,
+  hasConnectorIntelligence,
+  sourceCount
+}: {
+  assetCount: number;
+  bestMateMapped: boolean;
+  bundleReadiness: { label: string };
+  generationWorkflowCount: number;
+  hasConnectorIntelligence: boolean;
+  sourceCount: number;
+}) {
+  return (
+    <section aria-label="Record scope facts" className="detail-hero-facts">
+      <div>
+        <span>Source rows</span>
+        <strong>{sourceCount}</strong>
+        <p>Provider identities currently attached to this record.</p>
+      </div>
+      <div>
+        <span>Asset rows</span>
+        <strong>{assetCount}</strong>
+        <p>Engineering assets across datasheet, symbol, footprint, drawing, and 3D.</p>
+      </div>
+      <div>
+        <span>Bundle gate</span>
+        <strong>{bundleReadiness.label}</strong>
+        <p>Export still follows verified file-backed truth, not review alone.</p>
+      </div>
+      <div>
+        <span>Generation workflows</span>
+        <strong>{generationWorkflowCount}</strong>
+        <p>Tracked requests and generated drafts remain separate from stored assets.</p>
+      </div>
+      <div>
+        <span>{hasConnectorIntelligence ? "Best mate" : "Connector intelligence"}</span>
+        <strong>{hasConnectorIntelligence ? (bestMateMapped ? "Mapped" : "Missing") : "Not applicable"}</strong>
+        <p>{hasConnectorIntelligence ? "Stored mate mapping stays visible before layout decisions." : "This part does not expose connector-specific relationship data."}</p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Renders a compact decision rail beside the part hero so engineers can scan the current state quickly.
+ */
+function DetailHeroWorkbench({
+  approval,
+  bundleReadiness,
+  connectorOrRecoverySummary,
+  reviewWorkflowSummary
+}: {
+  approval: PartDetailPageRecord["approval"];
+  bundleReadiness: { label: string; reason: string; state: BundleReadinessState };
+  connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>;
+  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
+}) {
+  return (
+    <section aria-label="Top-level decision rail" className="detail-workbench-rail">
+      <div className="detail-workbench-rail__card">
+        <span>Bundle gate</span>
+        <strong>{bundleReadiness.label}</strong>
+        <p>{bundleReadiness.reason}</p>
+      </div>
+      <div className="detail-workbench-rail__card">
+        <span>Connector or recovery</span>
+        <strong>{connectorOrRecoverySummary.label}</strong>
+        <p>{connectorOrRecoverySummary.detail}</p>
+      </div>
+      <div className="detail-workbench-rail__card">
+        <span>Approval and review</span>
+        <strong>{approval.summary}</strong>
+        <p>{approval.detail}</p>
+        <div className="detail-workbench-rail__badges">
+          <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+          <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Renders the early engineering context panel so identity, mates, and package truth stay near readiness.
+ */
+function DetailContextPanel({
+  bestMate,
+  datasheetAsset,
+  hasConnectorIntelligence,
+  latestSource,
+  record,
+  relatedPartSummaries
+}: {
+  bestMate: MateRelation | undefined;
+  datasheetAsset: Asset | undefined;
+  hasConnectorIntelligence: boolean;
+  latestSource: PartDetailPageRecord["sources"][number] | undefined;
+  record: PartDetailPageRecord;
+  relatedPartSummaries: RelatedPartSummary[];
+}) {
+  if (hasConnectorIntelligence) {
+    const primaryConnectorWarning = record.buildableMatingSet.warningDetails[0] ?? null;
+
+    return (
+      <section className="detail-context-panel" aria-label="Connector build set">
+        <div className="detail-context-panel__header">
+          <div>
+            <p className="app-kicker">Connector build set</p>
+            <h3>Implementation-friendly mate and accessory context</h3>
+          </div>
+          <StatusBadge
+            label={
+              primaryConnectorWarning
+                ? primaryConnectorWarning.summary
+                : bestMate
+                  ? "Best mate mapped"
+                  : "Mate mapping incomplete"
+            }
+            tone={primaryConnectorWarning ? primaryConnectorWarning.tone : bestMate ? "info" : "review"}
+          />
+        </div>
+        <p className="muted-copy">
+          Buildable set reflects stored relationship mapping. Verify pitch, family, and mechanical fit before layout.
+          {record.buildableMatingSet.confidenceScore !== null ? ` ${buildConnectorConfidenceSummary(record.buildableMatingSet)}` : ""}
+        </p>
+        {record.buildableMatingSet.warningDetails.length > 0 ? (
+          <ul className="connector-list" style={{ marginBottom: 12 }}>
+            {record.buildableMatingSet.warningDetails.map((warning) => (
+              <li key={warning.code}>
+                <strong>{warning.summary}</strong> {warning.detail}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <ul className="detail-context-list">
+          <li>
+            <strong>Best mate</strong>
+            <span>{bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "No best mate stored"}</span>
+          </li>
+          <li>
+            <strong>Alternate mates</strong>
+            <span>{renderMateRelationList(record.buildableMatingSet.alternateMates, relatedPartSummaries)}</span>
+          </li>
+          <li>
+            <strong>Family conflicts</strong>
+            <span>{renderRelatedList(record.buildableMatingSet.familyConflicts.map((item) => item.candidatePartId), relatedPartSummaries)}</span>
+          </li>
+          <li>
+            <strong>Required accessories</strong>
+            <span>{renderRelatedList(record.buildableMatingSet.requiredAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}</span>
+          </li>
+          <li>
+            <strong>Optional accessories</strong>
+            <span>{renderRelatedList(record.buildableMatingSet.optionalAccessories.map((item) => item.accessoryPartId), relatedPartSummaries)}</span>
+          </li>
+          <li>
+            <strong>Tooling</strong>
+            <span>{renderRelatedList(record.buildableMatingSet.toolingRequirements.map((item) => item.accessoryPartId), relatedPartSummaries)}</span>
+          </li>
+          <li>
+            <strong>Compatible cables</strong>
+            <span>{renderRelatedList(record.buildableMatingSet.cableOptions.map((item) => item.cablePartId), relatedPartSummaries)}</span>
+          </li>
+          <li>
+            <strong>Cable assumptions</strong>
+            <span>{renderCableAssumptionList(record.buildableMatingSet.cableAssumptions, relatedPartSummaries)}</span>
+          </li>
+        </ul>
+      </section>
+    );
+  }
+
+  return (
+    <section className="detail-context-panel" aria-label="Engineering context">
+      <div className="detail-context-panel__header">
+        <div>
+          <p className="app-kicker">Engineering context</p>
+          <h3>Identity and source evidence</h3>
+        </div>
+        <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
+      </div>
+      <p className="muted-copy">This panel keeps package, lifecycle, and source evidence visible before scrolling into deeper audit detail.</p>
+      <ul className="detail-context-list">
+        <li>
+          <strong>Package</strong>
+          <span>{record.package.packageName}</span>
+        </li>
+        <li>
+          <strong>Lifecycle</strong>
+          <span>{record.part.lifecycleStatus}</span>
+        </li>
+        <li>
+          <strong>Latest source</strong>
+          <span>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source row stored"}</span>
+        </li>
+        <li>
+          <strong>Datasheet revision</strong>
+          <span>{record.datasheetRevision?.revisionLabel ?? "No revision metadata"}</span>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * Renders the right-rail style summary for blockers, risk flags, and review/export truth.
+ */
+function DetailActionRail({
+  approval,
+  bundleReadiness,
+  issues,
+  riskFlags,
+  reviewWorkflowSummary,
+}: {
+  approval: PartDetailPageRecord["approval"];
+  bundleReadiness: { label: string; reason: string; state: BundleReadinessState };
+  issues: PartDetailPageRecord["issues"];
+  riskFlags: PartDetailPageRecord["riskFlags"];
+  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
+}) {
+  return (
+    <aside className="detail-action-rail" aria-label="Readiness blockers and next actions">
+      <div className="detail-action-rail__card">
+        <span>Top blockers</span>
+        {issues.length > 0 ? (
+          <ul>
+            {issues.map((issue) => (
+              <li key={issue.id}>
+                <strong>{issue.severity}</strong>
+                <p>{issue.summary}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No part-level blockers are currently recorded.</p>
+        )}
+      </div>
+
+      <div className="detail-action-rail__card">
+        <span>Risk flags</span>
+        {riskFlags.length > 0 ? (
+          <ul>
+            {riskFlags.map((flag) => (
+              <li key={flag.id}>
+                <strong className={`detail-risk-flag detail-risk-flag--${flag.tone}`}>{flag.label}</strong>
+                <p>{flag.detail}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No part-level risk flags are currently recorded.</p>
+        )}
+      </div>
+
+      <div className="detail-action-rail__card">
+        <span>Review and export state</span>
+        <div className="detail-action-rail__badges">
+          <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
+          <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+          <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+        </div>
+        <p>{approval.detail}</p>
+        <p>{bundleReadiness.reason}</p>
+        <div className="detail-action-rail__links">
+          <a href="#files-heading">Inspect assets</a>
+          <a href="#approval-heading">Review export blockers</a>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * Creates compact tab badges from real relationship, asset, and export data.
+ */
+function buildDetailTabs(hasConnectorIntelligence: boolean, record: PartDetailPageRecord, assetGroups: AssetClassSummary[], exportActions: { available: boolean }[]) {
+  const connectorCount = hasConnectorIntelligence
+    ? record.buildableMatingSet.requiredAccessories.length + record.buildableMatingSet.optionalAccessories.length + record.buildableMatingSet.toolingRequirements.length + record.buildableMatingSet.cableOptions.length + (record.buildableMatingSet.bestMate ? 1 : 0)
+    : 0;
+  const alternateCount = record.similarParts.length + record.companionRecommendations.length;
+  const cadAttentionCount = assetGroups.filter((group) => group.readiness !== "export_ready" && group.readiness !== "validated_file").length;
+  const blockedExportCount = exportActions.filter((action) => !action.available).length;
+
+  return [
+    { badge: undefined, href: "#overview-heading", label: "Overview" },
+    { badge: connectorCount > 0 ? `${connectorCount}` : undefined, href: "#mates-heading", label: "Mates & accessories" },
+    { badge: alternateCount > 0 ? `${alternateCount}` : undefined, href: "#alternates-heading", label: "Alternates" },
+    { badge: undefined, href: "#sourcing-heading", label: "Sourcing" },
+    { badge: cadAttentionCount > 0 ? `${cadAttentionCount}` : assetGroups.length > 0 ? `${assetGroups.length}` : undefined, href: "#files-heading", label: "CAD assets" },
+    { badge: blockedExportCount > 0 ? `${blockedExportCount}` : undefined, href: "#approval-heading", label: "Approval & export" }
+  ];
+}
+
+/**
+ * Builds explicit risk flags from current lifecycle, asset, connector, and export truth.
+ */
+function buildDetailWarnings(
+  record: PartDetailPageRecord,
+  assetTruthSummary: ReturnType<typeof getAssetTruthSummary>,
+  connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>,
+  bundleReadiness: { reason: string; state: BundleReadinessState },
+  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone }
+): DetailRiskFlag[] {
+  const warnings: DetailRiskFlag[] = [];
+
+  if (record.part.lifecycleStatus === "obsolete" || record.part.lifecycleStatus === "not_recommended") {
+    warnings.push({
+      detail: `Lifecycle is ${record.part.lifecycleStatus}. Use this part only with explicit engineering intent.`,
+      title: "Lifecycle caution",
+      tone: record.part.lifecycleStatus === "obsolete" ? "danger" : "review"
+    });
+  }
+
+  if (assetTruthSummary.tone === "generated") {
+    warnings.push({
+      detail: "Generated assets remain drafts until review, validation evidence, and explicit promotion are complete.",
+      title: "Generated CAD still needs review",
+      tone: "review"
+    });
+  }
+
+  if (connectorOrRecoverySummary.tone === "review") {
+    warnings.push({
+      detail: connectorOrRecoverySummary.detail,
+      title: "Relationship or recovery gap",
+      tone: "review"
+    });
+  }
+
+  if (bundleReadiness.state !== "bundle_ready") {
+    warnings.push({
+      detail: bundleReadiness.reason,
+      title: "Export remains blocked",
+      tone: "review"
+    });
+  }
+
+  if (reviewWorkflowSummary.tone === "danger") {
+    warnings.push({
+      detail: reviewWorkflowSummary.detail,
+      title: "Rejected output present",
+      tone: "danger"
+    });
+  }
+
+  return warnings;
 }
 
 /**
@@ -845,6 +1315,34 @@ function bundleReadinessTone(state: BundleReadinessState): BadgeTone {
 }
 
 /**
+ * Maps backend whole-part readiness into badge tone.
+ */
+function readinessStatusTone(status: PartDetailPageRecord["readinessSummary"]["status"]): BadgeTone {
+  const tones: Record<PartDetailPageRecord["readinessSummary"]["status"], BadgeTone> = {
+    blocked: "danger",
+    needs_attention: "review",
+    ready_for_export_review: "verified",
+    unknown: "neutral"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Maps backend whole-part approval into badge tone.
+ */
+function approvalStatusTone(status: PartDetailPageRecord["approval"]["status"]): BadgeTone {
+  const tones: Record<PartDetailPageRecord["approval"]["status"], BadgeTone> = {
+    approved: "verified",
+    not_applicable: "neutral",
+    not_requested: "review",
+    pending_review: "info"
+  };
+
+  return tones[status];
+}
+
+/**
  * Maps generation workflow state into review-oriented badge tone.
  */
 function generationWorkflowTone(state: GenerationWorkflowState): BadgeTone {
@@ -948,4 +1446,87 @@ function renderPart(partId: string, relatedPartSummaries: RelatedPartSummary[]):
 function renderRelatedList(partIds: string[], relatedPartSummaries: RelatedPartSummary[]): string {
   if (partIds.length === 0) return "None";
   return partIds.map((partId) => renderPart(partId, relatedPartSummaries)).join(", ");
+}
+
+/**
+ * Renders mate relations with confidence so near-match alternatives remain reviewable.
+ */
+function renderMateRelationList(relations: PartDetailPageRecord["buildableMatingSet"]["alternateMates"], relatedPartSummaries: RelatedPartSummary[]): string {
+  if (relations.length === 0) {
+    return "None";
+  }
+
+  return relations
+    .map((relation) => `${renderPart(relation.matePartId, relatedPartSummaries)} (${Math.round(relation.confidenceScore * 100)}%)`)
+    .join(", ");
+}
+
+/**
+ * Renders parsed cable assumptions without implying the assumptions were independently validated.
+ */
+function renderCableAssumptionList(
+  assumptions: PartDetailPageRecord["buildableMatingSet"]["cableAssumptions"],
+  relatedPartSummaries: RelatedPartSummary[]
+): string {
+  if (assumptions.length === 0) {
+    return "None recorded";
+  }
+
+  return assumptions
+    .map((assumption) => `${renderPart(assumption.cablePartId, relatedPartSummaries)}: ${assumption.summary}`)
+    .join(" | ");
+}
+
+/**
+ * Formats the connector confidence breakdown so engineers can inspect the score inputs quickly.
+ */
+function buildConnectorConfidenceSummary(buildableMatingSet: PartDetailPageRecord["buildableMatingSet"]): string {
+  const detailParts: string[] = [];
+  const evidenceParts: string[] = [];
+
+  if (buildableMatingSet.confidenceBreakdown.overallScore !== null) {
+    detailParts.push(`Overall ${Math.round(buildableMatingSet.confidenceBreakdown.overallScore * 100)}%`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.bestMateScore !== null) {
+    detailParts.push(`best mate ${Math.round(buildableMatingSet.confidenceBreakdown.bestMateScore * 100)}%`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.requiredAccessoryScore !== null) {
+    detailParts.push(`required accessories ${Math.round(buildableMatingSet.confidenceBreakdown.requiredAccessoryScore * 100)}%`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.optionalAccessoryScore !== null) {
+    detailParts.push(`optional accessories ${Math.round(buildableMatingSet.confidenceBreakdown.optionalAccessoryScore * 100)}%`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.toolingScore !== null) {
+    detailParts.push(`tooling ${Math.round(buildableMatingSet.confidenceBreakdown.toolingScore * 100)}%`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.cableScore !== null) {
+    detailParts.push(`cables ${Math.round(buildableMatingSet.confidenceBreakdown.cableScore * 100)}%`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.directEvidenceCount > 0) {
+    evidenceParts.push(`${buildableMatingSet.confidenceBreakdown.directEvidenceCount} direct`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.inferredEvidenceCount > 0) {
+    evidenceParts.push(`${buildableMatingSet.confidenceBreakdown.inferredEvidenceCount} inferred`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.verifiedEvidenceCount > 0) {
+    evidenceParts.push(`${buildableMatingSet.confidenceBreakdown.verifiedEvidenceCount} verified`);
+  }
+
+  if (buildableMatingSet.confidenceBreakdown.uncertainEvidenceCount > 0) {
+    evidenceParts.push(`${buildableMatingSet.confidenceBreakdown.uncertainEvidenceCount} uncertain`);
+  }
+
+  if (detailParts.length === 0) {
+    return "No connector confidence evidence is stored.";
+  }
+
+  return `${detailParts.join("; ")} from ${buildableMatingSet.confidenceBreakdown.evidenceCount} mapped relationship signals${evidenceParts.length > 0 ? ` (${evidenceParts.join(", ")})` : ""}.`;
 }

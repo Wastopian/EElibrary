@@ -4,6 +4,7 @@
 
 import { filterPartRecords, getSearchFacetsFromRecords } from "./catalog-runtime";
 import { buildBuildableMatingSet } from "./connector-intelligence";
+import { derivePartProjection } from "./part-readiness";
 import {
   accessoryRequirements,
   assetPromotionAudits,
@@ -11,6 +12,7 @@ import {
   assets,
   cableCompatibilities,
   companionRecommendations,
+  connectorFamilyConflicts,
   connectorFamilies,
   datasheetRevisions,
   generationRequests,
@@ -99,6 +101,7 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
   const partMateRelations = sortRelationsByConfidence(mateRelations.filter((relation) => relation.partId === part.id));
   const partAccessories = sortRelationsByConfidence(accessoryRequirements.filter((requirement) => requirement.partId === part.id));
   const partCables = sortRelationsByConfidence(cableCompatibilities.filter((compatibility) => compatibility.partId === part.id));
+  const partFamilyConflicts = sortRelationsByConfidence(connectorFamilyConflicts.filter((conflict) => conflict.partId === part.id));
   const partMetricsForRecord = sortById(partMetrics.filter((metric) => metric.partId === part.id));
   const partSources = sourceRecords.filter((sourceRecord) => sourceRecord.partId === part.id).sort((left, right) => Date.parse(right.sourceLastSeenAt) - Date.parse(left.sourceLastSeenAt) || left.id.localeCompare(right.id));
   const partExtractionSignals = sourceExtractionSignals.filter((signal) => signal.partId === part.id).sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt) || left.id.localeCompare(right.id));
@@ -109,20 +112,45 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
   const partReviewRecords = reviewRecords.filter((review) => review.partId === part.id).sort((left, right) => Date.parse(right.reviewedAt) - Date.parse(left.reviewedAt) || right.id.localeCompare(left.id));
   const partValidationRecords = assetValidationRecords.filter((validation) => validation.partId === part.id).sort((left, right) => Date.parse(right.validatedAt) - Date.parse(left.validatedAt) || right.id.localeCompare(left.id));
   const partPromotionAudits = assetPromotionAudits.filter((audit) => audit.partId === part.id).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id));
-
-  return {
+  const buildableMatingSet = buildBuildableMatingSet(partMateRelations, partAccessories, partCables, partFamilyConflicts);
+  const projection = derivePartProjection({
     accessoryRequirements: partAccessories,
     assets: partAssets,
-    buildableMatingSet: buildBuildableMatingSet(partMateRelations, partAccessories, partCables),
-    cableCompatibilities: partCables,
-    companionRecommendations: partCompanions,
-    connectorFamily: part.connectorFamilyId ? connectorFamilyById.get(part.connectorFamilyId) ?? null : null,
+    buildableMatingSet,
     datasheetRevision: partDatasheetRevision,
+    duplicateCandidates: [],
     extractionSignals: partExtractionSignals,
     generationRequests: partGenerationRequests,
     generationWorkflows: partWorkflows,
+    mateRelations: partMateRelations,
+    metrics: partMetricsForRecord,
+    part,
     promotionAudits: partPromotionAudits,
     reviewRecords: partReviewRecords,
+    sourceReconciliation: null,
+    sources: partSources,
+    validationRecords: partValidationRecords
+  });
+
+  return {
+    approval: projection.approval,
+    accessoryRequirements: partAccessories,
+    assets: partAssets,
+    buildableMatingSet,
+    cableCompatibilities: partCables,
+    companionRecommendations: partCompanions,
+    connectorFamilyConflicts: partFamilyConflicts,
+    connectorFamily: part.connectorFamilyId ? connectorFamilyById.get(part.connectorFamilyId) ?? null : null,
+    datasheetRevision: partDatasheetRevision,
+    duplicateCandidates: [],
+    extractionSignals: partExtractionSignals,
+    generationRequests: partGenerationRequests,
+    generationWorkflows: partWorkflows,
+    issues: projection.issues,
+    promotionAudits: partPromotionAudits,
+    reviewRecords: partReviewRecords,
+    readinessSummary: projection.readinessSummary,
+    riskFlags: projection.riskFlags,
     lastUpdatedAt: latestTimestamp([
       part.lastUpdatedAt,
       ...partAssets.map((asset) => asset.lastUpdatedAt),
@@ -140,6 +168,7 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     package: packageRecord,
     part,
     similarParts: partSimilarParts,
+    sourceReconciliation: null,
     sources: partSources,
     validationRecords: partValidationRecords
   };

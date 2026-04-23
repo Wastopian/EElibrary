@@ -183,12 +183,39 @@ test("search and detail workflow summaries preserve asset and recovery truth", (
 
   assert.equal(getAssetTruthSummary(connectorRecord).label, "2 verified CAD assets");
   assert.match(getAssetTruthSummary(connectorRecord).detail, /only verified assets count/u);
-  assert.equal(getConnectorWorkflowSummary(connectorRecord)?.label, "mate set mapped");
-  assert.match(getConnectorWorkflowSummary(connectorRecord)?.detail ?? "", /cable/u);
+  assert.equal(getConnectorWorkflowSummary(connectorRecord)?.label, "connector review needed");
+  assert.equal(getConnectorWorkflowSummary(connectorRecord)?.tone, "review");
+  assert.match(getConnectorWorkflowSummary(connectorRecord)?.detail ?? "", /assumption/u);
   assert.equal(getRecoveryWorkflowSummary(regulatorRecord).label, "draft output in review");
   assert.match(getRecoveryWorkflowSummary(regulatorRecord).detail, /remain outside export readiness/u);
   assert.equal(getAssetTruthSummary(microcontrollerRecord).label, "no usable CAD files");
   assert.match(getAssetTruthSummary(microcontrollerRecord).detail, /No file-backed CAD assets/u);
+});
+
+/**
+ * Verifies connector workflow summaries escalate stored connector warnings instead of hiding them in UI-only logic.
+ */
+test("connector workflow summary reflects structured connector warnings", () => {
+  const connectorRecord = getSeedRecord("part-te-215079-8");
+  const warningRecord = {
+    ...connectorRecord,
+    buildableMatingSet: {
+      ...connectorRecord.buildableMatingSet,
+      warningDetails: [
+        {
+          code: "near_match_alternates" as const,
+          detail: "Two alternate mates remain close enough in confidence to require family review.",
+          summary: "High-confidence alternate mates still need family review.",
+          tone: "review" as const
+        }
+      ],
+      warnings: ["High-confidence alternate mates still need family review."]
+    }
+  };
+
+  assert.equal(getConnectorWorkflowSummary(warningRecord)?.label, "connector review needed");
+  assert.equal(getConnectorWorkflowSummary(warningRecord)?.tone, "review");
+  assert.match(getConnectorWorkflowSummary(warningRecord)?.detail ?? "", /family review/u);
 });
 
 /**
@@ -219,9 +246,9 @@ test("quick readiness summary explains blockers without inventing approval state
   assert.equal(connectorSummary.headline, "Ready for Export Review");
   assert.match(connectorSummary.detail, /Export bundle: bundle ready/u);
   assert.doesNotMatch(connectorSummary.detail, /approved part/u);
-  assert.equal(regulatorSummary.headline, "Review Needed");
-  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("export blockers")));
-  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("Review generated CAD drafts")));
+  assert.equal(regulatorSummary.headline, "Blocked");
+  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("file-backed CAD before export")));
+  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("review and approval")));
 });
 
 /**

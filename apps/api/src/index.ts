@@ -5,7 +5,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse } from "./detail-response";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
@@ -17,15 +17,23 @@ import type {
   AssetPromotionInput,
   CadAvailabilityFilter,
   CatalogDataSource,
+  ConnectorClass,
   GenerationRequestCreateInput,
   GenerationTargetAssetType,
+  PartApprovalStatus,
+  PartIssueCode,
+  PartIssueWorkflowUpdateInput,
+  PartIssueWorkflowStatus,
   PartSearchFilters,
   PartSearchRecord,
+  PartReadinessStatus,
   PartSearchSort,
   ProviderImportCreateResponse,
   ReviewActionInput,
   ReviewOutcome,
   ReviewTargetType,
+  SourceReconciliationStatus,
+  SourceReconciliationUpdateInput,
   SearchPagination
 } from "@ee-library/shared/types";
 
@@ -73,6 +81,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(url.pathname);
   const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(url.pathname);
   const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
+  const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
+  const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
 
   if (request.method === "POST" && url.pathname === "/imports/provider") {
     const session = await requireAdmin(request);
@@ -102,9 +112,23 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && issueWorkflowMatch?.[1] && issueWorkflowMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleIssueWorkflowUpdate(request, response, issueWorkflowMatch[1], decodeURIComponent(issueWorkflowMatch[2]));
+    return;
+  }
+
+  if (request.method === "POST" && sourceReconciliationMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleSourceReconciliationUpdate(request, response, sourceReconciliationMatch[1]);
+    return;
+  }
+
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, provider-import POST, generation-request POST, review POST, and asset-promotion POST routes are enabled for the catalog API"
+      error: "Only GET, provider-import POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -428,18 +452,180 @@ async function handleAssetPromotionCreate(request: IncomingMessage, response: Se
 }
 
 /**
+ * Handles operator workflow updates for one persisted part issue.
+ */
+async function handleIssueWorkflowUpdate(request: IncomingMessage, response: ServerResponse, partId: string, issueCode: string): Promise<void> {
+  const body = await readJsonBody<PartIssueWorkflowUpdateInput>(request);
+
+  if (!body || !isPartIssueCode(issueCode) || !isPartIssueWorkflowStatus(body.status)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_ISSUE_WORKFLOW",
+        message: "Issue workflow updates require a supported issue code and status."
+      }
+    });
+    return;
+  }
+
+  if (!isOptionalBodyString(body.assignedTo) || !isOptionalBodyString(body.resolutionNotes)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_ISSUE_WORKFLOW",
+        message: "Issue workflow assignedTo and resolutionNotes must be strings when provided."
+      }
+    });
+    return;
+  }
+
+  try {
+    const workflowUpdateInput: PartIssueWorkflowUpdateInput = { status: body.status };
+    const assignedTo = normalizeOptionalBodyString(body.assignedTo);
+    const resolutionNotes = normalizeOptionalBodyString(body.resolutionNotes);
+
+    if (assignedTo !== undefined) {
+      workflowUpdateInput.assignedTo = assignedTo;
+    }
+
+    if (resolutionNotes !== undefined) {
+      workflowUpdateInput.resolutionNotes = resolutionNotes;
+    }
+
+    const result = await timeRouteOperation(
+      response,
+      "issue-workflow-update",
+      () => updatePartIssueWorkflowInDatabase(partId, issueCode, workflowUpdateInput),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Issue workflow updates require a configured database so operator state can be persisted."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "ISSUE_NOT_FOUND",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles operator updates for mixed-source reconciliation state.
+ */
+async function handleSourceReconciliationUpdate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
+  const body = await readJsonBody<SourceReconciliationUpdateInput>(request);
+
+  if (!body || !isSourceReconciliationStatus(body.resolutionStatus)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_SOURCE_RECONCILIATION",
+        message: "Source reconciliation updates require a supported resolutionStatus."
+      }
+    });
+    return;
+  }
+
+  if (!isOptionalBodyString(body.preferredSourceRecordId) || !isOptionalBodyString(body.notes)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_SOURCE_RECONCILIATION",
+        message: "Source reconciliation preferredSourceRecordId and notes must be strings when provided."
+      }
+    });
+    return;
+  }
+
+  if (body.resolutionStatus === "canonical_source_selected" && !normalizeOptionalBodyString(body.preferredSourceRecordId)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_SOURCE_RECONCILIATION",
+        message: "canonical_source_selected requires a preferredSourceRecordId."
+      }
+    });
+    return;
+  }
+
+  try {
+    const reconciliationUpdateInput: SourceReconciliationUpdateInput = {
+      resolutionStatus: body.resolutionStatus
+    };
+    const notes = normalizeOptionalBodyString(body.notes);
+    const preferredSourceRecordId = normalizeOptionalBodyString(body.preferredSourceRecordId);
+
+    if (notes !== undefined) {
+      reconciliationUpdateInput.notes = notes;
+    }
+
+    if (preferredSourceRecordId !== undefined) {
+      reconciliationUpdateInput.preferredSourceRecordId = preferredSourceRecordId;
+    }
+
+    const result = await timeRouteOperation(
+      response,
+      "source-reconciliation-update",
+      () => updateSourceReconciliationInDatabase(partId, reconciliationUpdateInput),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Source reconciliation updates require a configured database so operator state can be persisted."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "SOURCE_RECONCILIATION_NOT_FOUND",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Converts URL search parameters into strict shared search filters.
  */
 function readSearchFilters(url: URL): PartSearchFilters {
   return {
+    approvalStatus: readApprovalStatus(url.searchParams.get("approvalStatus")),
     cadAvailability: readCadAvailability(url.searchParams.get("cad")),
     category: url.searchParams.get("category") ?? undefined,
+    connectorClass: readConnectorClass(url.searchParams.get("connectorClass")),
+    datasheetUrl: url.searchParams.get("datasheetUrl") ?? undefined,
     lifecycleStatus: readLifecycleStatus(url.searchParams.get("lifecycleStatus")),
     manufacturerId: url.searchParams.get("manufacturerId") ?? undefined,
     packageId: url.searchParams.get("packageId") ?? undefined,
     page: readPositiveInteger(url.searchParams.get("page")),
     pageSize: readPositiveInteger(url.searchParams.get("pageSize")),
+    providerPartId: url.searchParams.get("providerPartId") ?? undefined,
+    providerUrl: url.searchParams.get("providerUrl") ?? undefined,
     query: url.searchParams.get("q") ?? undefined,
+    readinessStatus: readReadinessStatus(url.searchParams.get("readinessStatus")),
     sort: readPartSearchSort(url.searchParams.get("sort"))
   };
 }
@@ -460,6 +646,39 @@ function readCadAvailability(value: string | null): CadAvailabilityFilter {
  */
 function readLifecycleStatus(value: string | null): PartSearchFilters["lifecycleStatus"] {
   if (value === "active" || value === "not_recommended" || value === "obsolete" || value === "unknown") {
+    return value;
+  }
+
+  return undefined;
+}
+
+/**
+ * Reads part readiness filters without accepting unknown strings.
+ */
+function readReadinessStatus(value: string | null): PartReadinessStatus | undefined {
+  if (value === "ready_for_export_review" || value === "needs_attention" || value === "blocked" || value === "unknown") {
+    return value;
+  }
+
+  return undefined;
+}
+
+/**
+ * Reads part approval filters without accepting unknown strings.
+ */
+function readApprovalStatus(value: string | null): PartApprovalStatus | undefined {
+  if (value === "approved" || value === "pending_review" || value === "not_requested" || value === "not_applicable") {
+    return value;
+  }
+
+  return undefined;
+}
+
+/**
+ * Reads connector class filters without accepting unknown strings.
+ */
+function readConnectorClass(value: string | null): ConnectorClass | undefined {
+  if (value === "connector" || value === "accessory" || value === "tooling" || value === "cable" || value === "non_connector") {
     return value;
   }
 
@@ -530,6 +749,58 @@ function isReviewTargetType(value: unknown): value is ReviewTargetType {
  */
 function isReviewOutcome(value: unknown): value is ReviewOutcome {
   return value === "approved" || value === "rejected" || value === "changes_requested";
+}
+
+/**
+ * Checks part issue codes without trusting path segments.
+ */
+function isPartIssueCode(value: unknown): value is PartIssueCode {
+  return value === "low_confidence_identity" ||
+    value === "pending_approval" ||
+    value === "missing_verified_cad" ||
+    value === "missing_datasheet" ||
+    value === "missing_connector_mate" ||
+    value === "missing_connector_accessories" ||
+    value === "connector_low_confidence" ||
+    value === "lifecycle_risk" ||
+    value === "source_conflict" ||
+    value === "duplicate_candidate";
+}
+
+/**
+ * Checks issue workflow state values without trusting request JSON.
+ */
+function isPartIssueWorkflowStatus(value: unknown): value is PartIssueWorkflowStatus {
+  return value === "open" || value === "in_review" || value === "resolved" || value === "ignored";
+}
+
+/**
+ * Checks source reconciliation status values without trusting request JSON.
+ */
+function isSourceReconciliationStatus(value: unknown): value is SourceReconciliationStatus {
+  return value === "unreviewed" || value === "canonical_source_selected" || value === "mixed_sources_accepted";
+}
+
+/**
+ * Checks optional body strings so routes can reject unexpected object or array values.
+ */
+function isOptionalBodyString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+/**
+ * Normalizes optional body strings so empty text does not persist as fake values.
+ */
+function normalizeOptionalBodyString(value: string | null | undefined): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return value.trim().length > 0 ? value.trim() : null;
 }
 
 /**
@@ -656,6 +927,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && /^\/parts\/[^/]+\/generation-requests$/u.test(pathname)) return "api-generation-request";
   if (method === "POST" && /^\/parts\/[^/]+\/reviews$/u.test(pathname)) return "api-review-action";
   if (method === "POST" && /^\/parts\/[^/]+\/asset-promotions$/u.test(pathname)) return "api-promotion-action";
+  if (method === "POST" && /^\/parts\/[^/]+\/issues\/[^/]+\/workflow$/u.test(pathname)) return "api-issue-workflow";
+  if (method === "POST" && /^\/parts\/[^/]+\/source-reconciliation$/u.test(pathname)) return "api-source-reconciliation";
   if (method === "POST" && pathname === "/imports/provider") return "api-provider-import";
   if (method === "GET" && pathname === "/health") return "api-health";
 

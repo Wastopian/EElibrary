@@ -1,5 +1,7 @@
 # Roadmap
 
+This document is forward-looking. For what is already shipped in the repo, use `docs/IMPLEMENTATION_STATUS.md`.
+
 This roadmap is organized around the product capabilities that make EE Library valuable as an **engineering part onboarding and readiness platform**, not just as a catalog or CAD file utility.
 
 The core direction of the platform is:
@@ -268,8 +270,13 @@ Planned:
   - conflicting source data
   - duplicate candidates
   - pending approval
-  - lifecycle risk / obsolete parts
+- lifecycle risk / obsolete parts
 - issue assignment, review, and resolution flow
+
+Now shipped:
+- backend-derived duplicate-candidate issue projection
+- admin duplicate queue visibility when DB-backed evidence exists
+- operator issue workflow state with assignee, resolution notes, resolve, reopen, and in-review actions
 
 Outcome:
 - the platform becomes operationally useful for part librarians, admins, and engineering review workflows
@@ -279,13 +286,21 @@ Outcome:
 ## Phase 6C: Connector Intelligence Expansion
 Deepen the most differentiated area of the product.
 
+Now shipped:
+- structured connector warning model for buildable mating sets
+- alternate-mate visibility in the connector contract and detail UI
+- connector confidence breakdown instead of a single opaque score
+- evidence-weighted mate and accessory confidence that distinguishes provider-backed, datasheet-backed, reviewed, inferred, and rejected mappings
+- note-derived cable assumptions for gauge, shielding, termination style, and usage context
+- DB-backed cable constraints persisted on cable compatibility rows
+- DB-backed connector-family conflict persistence derived from stored best-mate and alternate-mate evidence
+- persisted family-confusion warnings surfaced through API, detail, and admin workflows
+- clearer connector-specific warnings in readiness and detail views
+
 Planned:
-- stronger compatibility confidence modeling
-- near-match and family-confusion warnings
+- broader near-match and family-confusion evidence from more providers
 - richer accessory dependency modeling
-- cable constraints such as gauge, shielding, and termination assumptions
 - improved buildable mating set reasoning
-- clearer connector-specific warnings in detail and readiness views
 
 Outcome:
 - the platform becomes more useful for the messy real-world connector decisions that common part sites do not solve well
@@ -341,6 +356,10 @@ Planned:
 - extraction job execution pipeline
 - automated asset generation pipeline with review gates
 - bulk ingestion scheduling
+
+Now shipped:
+- operator source reconciliation records with preferred-source selection or mixed-source acceptance
+- source-conflict admin actions that refresh part projections from persisted reconciliation state
 
 Outcome:
 - the platform scales provider coverage while preserving provenance, trust, and readiness logic

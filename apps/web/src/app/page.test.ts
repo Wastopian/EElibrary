@@ -93,7 +93,19 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     assert.match(html, /not DB-backed catalog data/u);
     assert.match(html, /Quick part readiness check/u);
     assert.match(html, /MPN or keyword/u);
+    assert.match(html, /Manufacturer context/u);
+    assert.match(html, /Category filter/u);
+    assert.match(html, /Provider part reference/u);
+    assert.match(html, /Provider URL/u);
+    assert.match(html, /Search can now use provider part references, provider URLs, and datasheet URLs/u);
+    assert.match(html, /0430250200/u);
+    assert.match(html, /Filter the readiness catalog/u);
     assert.match(html, /Import by MPN/u);
+    assert.match(html, /Navigate/u);
+    assert.match(html, /Recent records/u);
+    assert.match(html, /Catalog results/u);
+    assert.match(html, /List/u);
+    assert.match(html, /Table/u);
     assert.match(html, /same import path as the worker CLI/u);
     assert.match(html, /CAD files for export/u);
     assert.match(html, /TPS7A02DBVR/u);
@@ -145,11 +157,73 @@ test("homepage renders quick readiness result from matched catalog record", asyn
   try {
     const html = await renderHomepage({ q: "TPS7A02DBVR" });
 
-    assert.match(html, /Review Needed/u);
+    assert.match(html, /Blocked/u);
     assert.match(html, /Export bundle: partial bundle/u);
     assert.match(html, /Open Full Record/u);
+    assert.match(html, /Clear/u);
+    assert.match(html, /View in Queue/u);
+    assert.match(html, /Admin queue/u);
+    assert.match(html, /Current filters/u);
+    assert.match(html, /Query: TPS7A02DBVR/u);
+    assert.match(html, /Identity confirmed/u);
+    assert.match(html, /source row/u);
+    assert.match(html, /Use list mode for explanation-first review or table mode for faster dense scanning/u);
+    assert.match(html, /Export truth stays separate/u);
+    assert.match(html, /Risk flag/u);
     assert.match(html, /generated CAD/i);
     assert.doesNotMatch(html, /approved part/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies connector quick readiness results elevate mating-part context near the top triage result.
+ */
+test("homepage renders connector mating preview from stored buildable set data", async () => {
+  const records = getAllPartRecords();
+  const connectorRecord = records.find((record) => record.part.mpn === "215079-8");
+
+  assert.ok(connectorRecord, "expected connector seed record");
+
+  const facets = getSearchFacetsFromRecords([connectorRecord]);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: [connectorRecord],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 1
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: connectorRecord.part.mpn });
+
+    assert.match(html, /Mating Parts/u);
+    assert.match(html, /Best mate/u);
+    assert.match(html, /Required accessories/u);
+    assert.match(html, /Connector/u);
   } finally {
     restoreFetch();
   }

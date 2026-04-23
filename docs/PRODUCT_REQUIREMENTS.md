@@ -1,5 +1,7 @@
 # Product Requirements
 
+This document captures target product intent. For shipped-vs-planned status, use `docs/IMPLEMENTATION_STATUS.md`.
+
 ## Product thesis
 
 EE Library is an **engineering part onboarding and readiness platform** for electrical and hardware engineers.
@@ -214,7 +216,7 @@ The platform must support:
 - lifecycle filters
 - readiness filters
 - CAD availability filters
-- connector class filters such as plug, receptacle, accessory, and cable
+- connector class filters such as connector, accessory, tooling, cable, and non-connector
 
 The search experience should support engineering triage and part selection, not ecommerce-style browsing.
 

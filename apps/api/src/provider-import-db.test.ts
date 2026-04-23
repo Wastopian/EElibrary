@@ -49,6 +49,11 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     assert.equal(searchRecord.sources[0]?.sourceLastImportedAt, "2026-04-12T06:57:40.000Z");
     assert.equal(searchRecord.extractionSignals.find((signal) => signal.signalType === "package_mechanical_dimensions")?.extractionStatus, "needs_review");
     assert.equal(searchRecord.metrics.length, 0);
+    assert.equal(searchRecord.readinessSummary.status, "blocked");
+    assert.equal(searchRecord.readinessSummary.connectorClass, "non_connector");
+    assert.equal(searchRecord.approval.status, "not_requested");
+    assert.equal(searchRecord.issues.some((issue) => issue.code === "missing_verified_cad"), true);
+    assert.equal(searchRecord.riskFlags.some((flag) => flag.code === "partial_readiness_data"), true);
     assert.equal(detailRecord.metrics.find((metric) => metric.metricKey === "resistance")?.metricValue, 30);
 
     const detailResponse = buildPartDetailResponse(detailRecord, detailResult.records);
@@ -82,6 +87,12 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
     const manufacturerFiltered = await readPartSearchRecordsFromDatabase({ manufacturerId: "mfr-search-alpha", sort: "mpn_asc" });
     const lifecycleFiltered = await readPartSearchRecordsFromDatabase({ lifecycleStatus: "obsolete", sort: "mpn_asc" });
     const cadAvailable = await readPartSearchRecordsFromDatabase({ cadAvailability: "available", sort: "mpn_asc" });
+    const readinessFiltered = await readPartSearchRecordsFromDatabase({ readinessStatus: "ready_for_export_review", sort: "mpn_asc" });
+    const approvalFiltered = await readPartSearchRecordsFromDatabase({ approvalStatus: "approved", sort: "mpn_asc" });
+    const connectorFiltered = await readPartSearchRecordsFromDatabase({ connectorClass: "connector", sort: "mpn_asc" });
+    const providerPartFiltered = await readPartSearchRecordsFromDatabase({ providerPartId: "C1091", sort: "mpn_asc" });
+    const providerUrlFiltered = await readPartSearchRecordsFromDatabase({ providerUrl: "lcsc.com/product-detail/Chip-Resistor", sort: "mpn_asc" });
+    const datasheetUrlFiltered = await readPartSearchRecordsFromDatabase({ datasheetUrl: "lcsc_datasheet_2411121005", sort: "mpn_asc" });
     const trustSorted = await readPartSearchRecordsFromDatabase({ pageSize: 2, sort: "trust_desc" });
 
     assert.equal(firstPage.status, "available");
@@ -89,9 +100,28 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
     assert.equal(manufacturerFiltered.status, "available");
     assert.equal(lifecycleFiltered.status, "available");
     assert.equal(cadAvailable.status, "available");
+    assert.equal(readinessFiltered.status, "available");
+    assert.equal(approvalFiltered.status, "available");
+    assert.equal(connectorFiltered.status, "available");
+    assert.equal(providerPartFiltered.status, "available");
+    assert.equal(providerUrlFiltered.status, "available");
+    assert.equal(datasheetUrlFiltered.status, "available");
     assert.equal(trustSorted.status, "available");
 
-    if (firstPage.status !== "available" || secondPage.status !== "available" || manufacturerFiltered.status !== "available" || lifecycleFiltered.status !== "available" || cadAvailable.status !== "available" || trustSorted.status !== "available") {
+    if (
+      firstPage.status !== "available" ||
+      secondPage.status !== "available" ||
+      manufacturerFiltered.status !== "available" ||
+      lifecycleFiltered.status !== "available" ||
+      cadAvailable.status !== "available" ||
+      readinessFiltered.status !== "available" ||
+      approvalFiltered.status !== "available" ||
+      connectorFiltered.status !== "available" ||
+      providerPartFiltered.status !== "available" ||
+      providerUrlFiltered.status !== "available" ||
+      datasheetUrlFiltered.status !== "available" ||
+      trustSorted.status !== "available"
+    ) {
       throw new Error("expected DB-backed search records");
     }
 
@@ -102,6 +132,12 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
     assert.deepEqual(manufacturerFiltered.records.map((record) => record.part.mpn), ["AAA-100", "CCC-300"]);
     assert.deepEqual(lifecycleFiltered.records.map((record) => record.part.mpn), ["BBB-200"]);
     assert.deepEqual(cadAvailable.records.map((record) => record.part.mpn), ["AAA-100"]);
+    assert.deepEqual(readinessFiltered.records.map((record) => record.part.mpn), ["AAA-100"]);
+    assert.deepEqual(approvalFiltered.records.map((record) => record.part.mpn), ["AAA-100"]);
+    assert.deepEqual(connectorFiltered.records.map((record) => record.part.mpn), ["AAA-100", "CCC-300"]);
+    assert.deepEqual(providerPartFiltered.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
+    assert.deepEqual(providerUrlFiltered.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
+    assert.deepEqual(datasheetUrlFiltered.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
     assert.deepEqual(trustSorted.records.map((record) => record.part.mpn), ["BBB-200", "CCC-300"]);
     assert.equal(firstPage.records[0]?.metrics.length, 0);
     assert.equal(firstPage.records[0]?.similarParts.length, 0);
@@ -145,21 +181,40 @@ test("DB-backed search facets are correct, filter-consistent, and timed", async 
     assert.equal(allFacets.facets.counts?.lifecycleStatuses.obsolete, 1);
     assert.equal(allFacets.facets.counts?.cadAvailability.available, 1);
     assert.equal(allFacets.facets.counts?.cadAvailability.unavailable, 3);
+    assert.deepEqual(allFacets.facets.readinessStatuses, ["ready_for_export_review", "blocked"]);
+    assert.deepEqual(allFacets.facets.approvalStatuses, ["approved", "pending_review", "not_requested"]);
+    assert.deepEqual(allFacets.facets.connectorClasses, ["connector", "non_connector"]);
+    assert.equal(allFacets.facets.counts?.readinessStatuses.ready_for_export_review, 1);
+    assert.equal(allFacets.facets.counts?.readinessStatuses.blocked, 3);
+    assert.equal(allFacets.facets.counts?.approvalStatuses.approved, 1);
+    assert.equal(allFacets.facets.counts?.approvalStatuses.pending_review, 1);
+    assert.equal(allFacets.facets.counts?.approvalStatuses.not_requested, 2);
+    assert.equal(allFacets.facets.counts?.connectorClasses.connector, 2);
+    assert.equal(allFacets.facets.counts?.connectorClasses.non_connector, 2);
 
     assert.deepEqual(alphaFacets.facets.manufacturers.map((manufacturer) => manufacturer.id), ["mfr-search-alpha"]);
     assert.deepEqual(alphaFacets.facets.categories, ["Connector"]);
     assert.equal(alphaFacets.facets.counts?.cadAvailability.any, 2);
     assert.equal(alphaFacets.facets.counts?.cadAvailability.available, 1);
+    assert.deepEqual(alphaFacets.facets.readinessStatuses, ["ready_for_export_review", "blocked"]);
+    assert.deepEqual(alphaFacets.facets.approvalStatuses, ["approved", "pending_review"]);
+    assert.deepEqual(alphaFacets.facets.connectorClasses, ["connector"]);
 
     assert.equal(unavailableCadFacets.facets.counts?.cadAvailability.any, 3);
     assert.equal(unavailableCadFacets.facets.counts?.cadAvailability.available, 0);
     assert.equal(unavailableCadFacets.facets.counts?.cadAvailability.unavailable, 3);
     assert.equal(unavailableCadFacets.facets.packages.some((partPackage) => partPackage.id === "pkg-jlcparts-0402"), true);
+    assert.equal(unavailableCadFacets.facets.counts?.readinessStatuses.blocked, 3);
+    assert.equal(unavailableCadFacets.facets.counts?.approvalStatuses.not_requested, 2);
+    assert.equal(unavailableCadFacets.facets.counts?.approvalStatuses.pending_review, 1);
 
     assert.ok(timings.some((timing) => timing.name === "search_facet_manufacturers" && timing.status === "ok"));
     assert.ok(timings.some((timing) => timing.name === "search_facet_categories" && timing.status === "ok"));
     assert.ok(timings.some((timing) => timing.name === "search_facet_packages" && timing.status === "ok"));
     assert.ok(timings.some((timing) => timing.name === "search_facet_lifecycle" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_readiness" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_approval" && timing.status === "ok"));
+    assert.ok(timings.some((timing) => timing.name === "search_facet_connector_class" && timing.status === "ok"));
     assert.ok(timings.some((timing) => timing.name === "search_facet_total" && timing.status === "ok"));
     assert.ok(timings.some((timing) => timing.name === "search_facet_cad_available" && timing.status === "ok"));
     assert.equal(timings.some((timing) => timing.name === "search_assets"), false);
@@ -263,6 +318,14 @@ function createRelatedSummaryCountingPool() {
     async query(text: string, values?: unknown[]) {
       queryTexts.push(text);
 
+      if (text.includes("duplicate_part_id")) {
+        return { rows: [] };
+      }
+
+      if (text.includes("FROM part_source_reconciliations")) {
+        return { rows: [] };
+      }
+
       if (text.includes("FROM parts")) {
         const scope = Array.isArray(values?.[0]) ? (values?.[0] as string[]) : [];
 
@@ -337,9 +400,10 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE assets (id TEXT, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE mate_relations (id TEXT, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, confidence_score NUMERIC, source_revision_id TEXT, notes TEXT);
-    CREATE TABLE accessory_requirements (id TEXT, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, confidence_score NUMERIC, source_revision_id TEXT, notes TEXT);
-    CREATE TABLE cable_compatibilities (id TEXT, part_id TEXT, cable_part_id TEXT, relationship_type TEXT, confidence_score NUMERIC, source_revision_id TEXT, notes TEXT);
+    CREATE TABLE mate_relations (id TEXT, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
+    CREATE TABLE accessory_requirements (id TEXT, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
+    CREATE TABLE cable_compatibilities (id TEXT, part_id TEXT, cable_part_id TEXT, relationship_type TEXT, wire_gauge_min INTEGER, wire_gauge_max INTEGER, shielding_requirement TEXT, termination_style TEXT, compatibility_status TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
+    CREATE TABLE connector_family_conflicts (id TEXT, part_id TEXT, candidate_part_id TEXT, candidate_connector_family_id TEXT, conflict_type TEXT, confidence_score NUMERIC, summary TEXT, detail TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE similar_part_relations (id TEXT, part_id TEXT, similar_part_id TEXT, confidence_score NUMERIC, reason TEXT);
     CREATE TABLE companion_recommendations (id TEXT, part_id TEXT, companion_part_id TEXT, confidence_score NUMERIC, usage_context TEXT);
     CREATE TABLE generation_workflows (id TEXT, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, generation_status TEXT, confidence_score NUMERIC, output_asset_id TEXT);
@@ -347,6 +411,11 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE review_records (id TEXT, part_id TEXT, target_type TEXT, asset_id TEXT, generation_workflow_id TEXT, outcome TEXT, reviewer TEXT, notes TEXT, reviewed_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
     CREATE TABLE asset_validation_records (id TEXT, part_id TEXT, asset_id TEXT, validation_status TEXT, validation_type TEXT, validation_notes TEXT, validated_at TIMESTAMPTZ, validator TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE asset_promotion_audits (id TEXT, part_id TEXT, asset_id TEXT, prior_export_status TEXT, new_export_status TEXT, promotion_outcome TEXT, blocker_reasons TEXT[], validation_record_id TEXT, actor TEXT, created_at TIMESTAMPTZ);
+    CREATE TABLE part_readiness_summaries (part_id TEXT, readiness_status TEXT, identity_status TEXT, connector_class TEXT, blocker_count INTEGER, blocker_summary TEXT[], recommended_actions TEXT[], detail TEXT, last_evaluated_at TIMESTAMPTZ);
+    CREATE TABLE part_approvals (part_id TEXT, approval_status TEXT, summary TEXT, detail TEXT, evidence TEXT[], decided_by TEXT, decided_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_issues (id TEXT, part_id TEXT, issue_code TEXT, severity TEXT, status TEXT, assigned_to TEXT, resolution_notes TEXT, resolved_at TIMESTAMPTZ, summary TEXT, detail TEXT, source TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_source_reconciliations (part_id TEXT, preferred_source_record_id TEXT, resolution_status TEXT, notes TEXT, updated_by TEXT, updated_at TIMESTAMPTZ);
+    CREATE TABLE part_risk_flags (id TEXT, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
   `;
 }
 
@@ -364,6 +433,10 @@ function buildProviderImportRowsSql(): string {
     INSERT INTO source_extraction_signals VALUES ('sig-jlcparts-c1091-package', 'part-jlcparts-c1091', 'source-jlcparts-c1091', 'dsr-jlcparts-c1091', 'asset-jlcparts-c1091-datasheet', 'package_mechanical_dimensions', 'needs_review', 0.35, 'provider_structured_metadata', 'Only provider package code and pin count were mapped; body and pitch dimensions were not extracted.', '2026-04-12T06:57:40.000Z');
     INSERT INTO source_extraction_signals VALUES ('sig-jlcparts-c1091-pin-table', 'part-jlcparts-c1091', 'source-jlcparts-c1091', 'dsr-jlcparts-c1091', 'asset-jlcparts-c1091-datasheet', 'pin_table', 'not_available', 0, 'provider_structured_metadata', 'No reviewed pin table was extracted from the structured provider metadata.', '2026-04-12T06:57:40.000Z');
     INSERT INTO part_metrics VALUES ('metric-jlcparts-c1091-resistance-1', 'part-jlcparts-c1091', 'resistance', 30, 'ohm', NULL, NULL, 0.72, 'dsr-jlcparts-c1091', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
+    INSERT INTO part_readiness_summaries VALUES ('part-jlcparts-c1091', 'blocked', 'confirmed', 'non_connector', 1, ARRAY['No file-backed CAD evidence is attached for export or downstream design handoff.'], ARRAY['Verify or generate file-backed CAD before export.'], '1 issue remains: No file-backed CAD evidence is attached for export or downstream design handoff.', '2026-04-12T06:57:40.000Z');
+    INSERT INTO part_approvals VALUES ('part-jlcparts-c1091', 'not_requested', 'Approval not requested', 'Approval has not been requested yet, so the part should not be treated as engineer-ready.', ARRAY['No approval decision recorded.'], NULL, NULL, '2026-04-12T06:57:40.000Z');
+    INSERT INTO part_issues VALUES ('issue-jlcparts-c1091-missing-cad', 'part-jlcparts-c1091', 'missing_verified_cad', 'error', 'open', NULL, NULL, NULL, 'No file-backed CAD evidence is attached for export or downstream design handoff.', 'No file-backed CAD evidence is attached for export or downstream design handoff.', 'asset_truth', '2026-04-12T06:57:40.000Z');
+    INSERT INTO part_risk_flags VALUES ('risk-jlcparts-c1091-partial-data', 'part-jlcparts-c1091', 'partial_readiness_data', 'Partial readiness data', 'Readiness evidence is still partial and should be reviewed before relying on this record.', 'review', '2026-04-12T06:57:40.000Z');
   `;
 }
 
@@ -376,6 +449,7 @@ async function seedSearchRows(pool: TestPool): Promise<void> {
   try {
     await insertSearchIdentityRows(client);
     await insertSearchAssetRows(client);
+    await insertSearchProjectionRows(client);
   } finally {
     client.release();
   }
@@ -402,7 +476,32 @@ async function insertSearchIdentityRows(client: PoolClient): Promise<void> {
 async function insertSearchAssetRows(client: PoolClient): Promise<void> {
   await client.query(`
     INSERT INTO assets VALUES ('asset-search-a-footprint', 'part-search-a', 'footprint', 'kicad_mod', 'cad/aaa-100.kicad_mod', 'sha256:aaa-footprint', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-a-symbol', 'part-search-a', 'symbol', 'kicad_sym', 'cad/aaa-100.kicad_sym', 'sha256:aaa-symbol', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-a-step', 'part-search-a', 'three_d_model', 'step', 'cad/aaa-100.step', 'sha256:aaa-step', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
     INSERT INTO assets VALUES ('asset-search-c-symbol-draft', 'part-search-c', 'symbol', 'kicad_sym', 'generated/drafts/ccc-300.kicad_sym', 'sha256:ccc-symbol', NULL, 'redistribution_allowed', 'generated', 'downloaded', 'review_required', 'not_exportable', 'downloaded', 'draft_symbol_from_extraction_signal', NULL, 'needs_review', 'pending', 'downloaded', NULL, NULL, '2026-04-12T00:00:00.000Z');
+  `);
+}
+
+/**
+ * Inserts persisted whole-part readiness projections so SQL-backed filters and facets can exercise the backend contract.
+ */
+async function insertSearchProjectionRows(client: PoolClient): Promise<void> {
+  await client.query(`
+    INSERT INTO part_readiness_summaries VALUES ('part-search-a', 'ready_for_export_review', 'confirmed', 'connector', 0, ARRAY[]::TEXT[], ARRAY[]::TEXT[], 'Identity, approval, and export-capable asset evidence are aligned.', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_readiness_summaries VALUES ('part-search-b', 'blocked', 'unknown', 'non_connector', 2, ARRAY['Identity evidence is missing.', 'Lifecycle is obsolete.'], ARRAY['Confirm part identity and provenance before design use.', 'Review lifecycle risk before continuing design use.'], '2 issues remain: Identity evidence is missing. Lifecycle is obsolete.', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_readiness_summaries VALUES ('part-search-c', 'blocked', 'confirmed', 'connector', 2, ARRAY['Connector relationship confidence is below target.', 'Generated CAD still needs review before export.'], ARRAY['Review connector relationship confidence before procurement or layout decisions.', 'Complete review and approval before treating this part as engineer-ready.'], '2 issues remain: Connector relationship confidence is below target. Generated CAD still needs review before export.', '2026-04-12T00:00:00.000Z');
+
+    INSERT INTO part_approvals VALUES ('part-search-a', 'approved', 'Approved for engineering use', 'Whole-part approval is recorded separately from asset review history and export promotion events.', ARRAY['Verified CAD bundle present.', 'Approval decision recorded.'], 'api-test-reviewer', '2026-04-12T00:00:00.000Z', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_approvals VALUES ('part-search-b', 'not_requested', 'Approval not requested', 'Approval has not been requested yet, so the part should not be treated as engineer-ready.', ARRAY['No approval decision recorded.'], NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_approvals VALUES ('part-search-c', 'pending_review', 'Pending engineering approval', 'Review or generation work is still active, so the part should not be treated as approved yet.', ARRAY['Generated draft asset still needs review.'], NULL, NULL, '2026-04-12T00:00:00.000Z');
+
+    INSERT INTO part_issues VALUES ('issue-search-b-identity', 'part-search-b', 'low_confidence_identity', 'error', 'open', NULL, NULL, NULL, 'Identity evidence is missing.', 'No imported provider source rows are attached, so the record cannot be treated as confirmed.', 'catalog_rule', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_issues VALUES ('issue-search-b-lifecycle', 'part-search-b', 'lifecycle_risk', 'error', 'open', NULL, NULL, NULL, 'Lifecycle is obsolete.', 'Lifecycle status is not active, so this part should be reviewed carefully before design use.', 'catalog_rule', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_issues VALUES ('issue-search-c-confidence', 'part-search-c', 'connector_low_confidence', 'warning', 'open', NULL, NULL, NULL, 'Connector relationship confidence is below target.', 'Buildable set confidence is 72%, so connector compatibility still needs review.', 'connector_intelligence', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_issues VALUES ('issue-search-c-approval', 'part-search-c', 'pending_approval', 'warning', 'open', NULL, NULL, NULL, 'Pending engineering approval', 'Review or generation work is still active, so the part should not be treated as approved yet.', 'approval_state', '2026-04-12T00:00:00.000Z');
+
+    INSERT INTO part_risk_flags VALUES ('risk-search-c-generated', 'part-search-c', 'generated_assets_present', 'Generated CAD present', 'Generated CAD draft remains outside export truth until review and promotion are complete.', 'review', '2026-04-12T00:00:00.000Z');
+    INSERT INTO part_risk_flags VALUES ('risk-search-b-lifecycle', 'part-search-b', 'lifecycle_not_active', 'Lifecycle not active', 'Lifecycle is not active, so downstream use needs extra review.', 'danger', '2026-04-12T00:00:00.000Z');
   `);
 }
 

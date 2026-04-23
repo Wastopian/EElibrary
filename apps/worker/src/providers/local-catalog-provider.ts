@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { normalizeAssetState, normalizeLifecycleStatus, normalizeMetricUnit, normalizeNullableNumber } from "@ee-library/shared/normalization";
 import type { Asset, AssetPromotionAuditRecord, AssetValidationRecord, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
-import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation, SourceExtractionSignal } from "@ee-library/shared/types";
+import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, ConnectorFamilyConflict, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 
 /** LocalCatalogFile describes the adapter fixture envelope. */
@@ -44,6 +44,8 @@ interface LocalCatalogRecord {
   accessoryRequirements?: AccessoryRequirement[];
   /** Optional raw connector cable compatibility relationships. */
   cableCompatibilities?: CableCompatibility[];
+  /** Optional persisted connector-family ambiguity rows for stronger connector warnings. */
+  connectorFamilyConflicts?: ConnectorFamilyConflict[];
   /** Optional raw similar-part relationships. */
   similarPartRelations?: SimilarPartRelation[];
   /** Optional raw companion recommendations. */
@@ -157,6 +159,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     cableCompatibilities: record.cableCompatibilities ?? [],
     companionRecommendations: record.companionRecommendations ?? [],
     connectorFamily: record.connectorFamily ?? null,
+    connectorFamilyConflicts: record.connectorFamilyConflicts ?? [],
     datasheetRevisions: [
       {
         fileAssetId: datasheetAsset?.id ?? null,

@@ -44,7 +44,9 @@ test("POST /imports/provider returns catalog envelope on successful import", asy
   setProviderImportRunnerForTests(async () => ({
     durationMs: 1,
     importStatus: "imported",
+    outcome: "new_import",
     partId: "part-jlcparts-c1091",
+    previousImportStatus: null,
     providerId: "jlcparts",
     providerPartKey: "C1091",
     requestedMpn: "C1091",

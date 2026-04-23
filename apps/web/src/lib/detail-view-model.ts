@@ -354,10 +354,21 @@ export function getConnectorWorkflowSummary(record: PartSearchRecord): WorkflowS
   const accessoryCount = record.buildableMatingSet.requiredAccessories.length;
   const toolingCount = record.buildableMatingSet.toolingRequirements.length;
   const cableCount = record.buildableMatingSet.cableOptions.length;
+  const alternateMateCount = record.buildableMatingSet.alternateMates.length;
+  const cableAssumptionCount = record.buildableMatingSet.cableAssumptions.length;
+  const primaryWarning = record.buildableMatingSet.warningDetails[0] ?? null;
+
+  if (primaryWarning) {
+    return {
+      detail: `${primaryWarning.detail} ${buildConnectorContextDetail(accessoryCount, toolingCount, cableCount, alternateMateCount, cableAssumptionCount)}`.trim(),
+      label: primaryWarning.tone === "danger" ? "connector mapping blocked" : "connector review needed",
+      tone: primaryWarning.tone === "danger" ? "danger" : "review"
+    };
+  }
 
   if (bestMate) {
     return {
-      detail: `${accessoryCount} required ${pluralize("accessory", accessoryCount)}, ${toolingCount} tooling ${pluralize("item", toolingCount)}, ${cableCount} cable ${pluralize("option", cableCount)} mapped.`,
+      detail: buildConnectorContextDetail(accessoryCount, toolingCount, cableCount, alternateMateCount, cableAssumptionCount),
       label: "mate set mapped",
       tone: "info"
     };
@@ -378,16 +389,24 @@ export function getQuickReadinessSummary(record: PartSearchRecord): QuickReadine
   const assetTruth = getAssetTruthSummary(record);
   const recovery = getRecoveryWorkflowSummary(record);
   const connector = getConnectorWorkflowSummary(record);
-  const checks = [exportReadinessToSignal(exportReadiness), assetTruth, connector ?? recovery, lifecycleSignal(record)];
-  const actions = buildQuickReadinessActions(exportReadiness, assetTruth, recovery, connector);
-  const tone = exportReadiness.tone === "verified" && assetTruth.tone === "verified" ? "verified" : actions.some((action) => action.priority === "high") ? "review" : exportReadiness.tone;
+  const approvalSignal: WorkflowSignalLabel = {
+    detail: record.approval.detail,
+    label: record.approval.summary,
+    tone: approvalTone(record.approval.status)
+  };
+  const checks = [readinessSignal(record), approvalSignal, assetTruth, connector ?? recovery, lifecycleSignal(record)];
+  const actions = buildRecommendedActions(record);
+  const tone = readinessTone(record.readinessSummary.status);
 
   return {
     actions,
     checks,
-    detail: buildQuickReadinessDetail(exportReadiness, assetTruth, connector ?? recovery),
-    headline: tone === "verified" ? "Ready for Export Review" : actions.length > 0 ? "Review Needed" : "Catalog Record Found",
-    subhead: actions.length > 0 ? `${actions.length} ${pluralize("action", actions.length)} before design use or export.` : "No immediate quick-check actions were derived from this catalog record.",
+    detail: buildQuickReadinessDetail(record, exportReadiness, assetTruth, connector ?? recovery),
+    headline: record.readinessSummary.label,
+    subhead:
+      record.readinessSummary.blockerCount > 0
+        ? `${record.readinessSummary.blockerCount} ${pluralize("blocker", record.readinessSummary.blockerCount)} before design use or export.`
+        : record.approval.summary,
     tone
   };
 }
@@ -499,6 +518,18 @@ function buildQuickReadinessActions(exportReadiness: ExportReadinessLabel, asset
 }
 
 /**
+ * Maps backend-recommended actions into scan-friendly quick-check actions.
+ */
+function buildRecommendedActions(record: PartSearchRecord): QuickReadinessAction[] {
+  return dedupeQuickActions(
+    record.readinessSummary.recommendedActions.map((label, index) => ({
+      label,
+      priority: index === 0 && record.readinessSummary.status === "blocked" ? "high" : index <= 1 ? "medium" : "low"
+    }))
+  );
+}
+
+/**
  * Keeps repeated action labels from crowding the quick-check result.
  */
 function dedupeQuickActions(actions: QuickReadinessAction[]): QuickReadinessAction[] {
@@ -517,8 +548,13 @@ function dedupeQuickActions(actions: QuickReadinessAction[]): QuickReadinessActi
 /**
  * Combines existing signal explanations into one readable quick-check sentence.
  */
-function buildQuickReadinessDetail(exportReadiness: ExportReadinessLabel, assetTruth: WorkflowSignalLabel, workflow: WorkflowSignalLabel): string {
-  return `Export bundle: ${exportReadiness.label}. CAD truth: ${assetTruth.detail} Workflow signal: ${workflow.detail}`;
+function buildQuickReadinessDetail(
+  record: PartSearchRecord,
+  exportReadiness: ExportReadinessLabel,
+  assetTruth: WorkflowSignalLabel,
+  workflow: WorkflowSignalLabel
+): string {
+  return `Whole-part readiness: ${record.readinessSummary.detail} Approval: ${record.approval.detail} Export bundle: ${exportReadiness.label}. CAD truth: ${assetTruth.detail} Workflow signal: ${workflow.detail}`;
 }
 
 /**
@@ -533,6 +569,72 @@ function isCadAsset(asset: Asset): boolean {
  */
 function pluralize(singular: string, count: number, plural = `${singular}s`): string {
   return count === 1 ? singular : plural;
+}
+
+/**
+ * Builds one compact connector-detail sentence for search cards and quick-check summaries.
+ */
+function buildConnectorContextDetail(
+  accessoryCount: number,
+  toolingCount: number,
+  cableCount: number,
+  alternateMateCount: number,
+  cableAssumptionCount: number
+): string {
+  const detailParts = [
+    `${accessoryCount} required ${pluralize("accessory", accessoryCount)}`,
+    `${toolingCount} tooling ${pluralize("item", toolingCount)}`,
+    `${cableCount} cable ${pluralize("option", cableCount)} mapped`
+  ];
+
+  if (alternateMateCount > 0) {
+    detailParts.push(`${alternateMateCount} alternate ${pluralize("mate", alternateMateCount)} recorded`);
+  }
+
+  if (cableAssumptionCount > 0) {
+    detailParts.push(`${cableAssumptionCount} cable ${pluralize("assumption", cableAssumptionCount)} noted`);
+  }
+
+  return `${detailParts.join(", ")}.`;
+}
+
+/**
+ * Converts backend readiness into a compact quick-check signal.
+ */
+function readinessSignal(record: PartSearchRecord): WorkflowSignalLabel {
+  return {
+    detail: record.readinessSummary.detail,
+    label: record.readinessSummary.label,
+    tone: readinessTone(record.readinessSummary.status)
+  };
+}
+
+/**
+ * Maps backend readiness status into UI tones.
+ */
+function readinessTone(status: PartSearchRecord["readinessSummary"]["status"]): ViewTone {
+  const tones: Record<PartSearchRecord["readinessSummary"]["status"], ViewTone> = {
+    blocked: "danger",
+    needs_attention: "review",
+    ready_for_export_review: "verified",
+    unknown: "neutral"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Maps backend approval status into UI tones.
+ */
+function approvalTone(status: PartSearchRecord["approval"]["status"]): ViewTone {
+  const tones: Record<PartSearchRecord["approval"]["status"], ViewTone> = {
+    approved: "verified",
+    not_applicable: "neutral",
+    not_requested: "review",
+    pending_review: "info"
+  };
+
+  return tones[status];
 }
 
 /**

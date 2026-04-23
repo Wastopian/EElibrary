@@ -11,12 +11,17 @@ import type {
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
   PartDetailResponse,
+  PartIssueCode,
+  PartIssueWorkflowUpdateInput,
+  PartIssueWorkflowUpdateResponse,
   PartSearchFilters,
   PartSearchRecord,
   ProviderImportCreateInput,
   ProviderImportCreateResponse,
   ReviewActionInput,
   ReviewActionResponse,
+  SourceReconciliationUpdateInput,
+  SourceReconciliationUpdateResponse,
   SearchFacets
 } from "@ee-library/shared/types";
 
@@ -83,6 +88,12 @@ export async function fetchSearchFacetsEnvelope(filters: PartSearchFilters = {})
   appendSearchParam(searchParams, "packageId", filters.packageId);
   appendSearchParam(searchParams, "lifecycleStatus", filters.lifecycleStatus);
   appendSearchParam(searchParams, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  appendSearchParam(searchParams, "providerPartId", filters.providerPartId);
+  appendSearchParam(searchParams, "providerUrl", filters.providerUrl);
+  appendSearchParam(searchParams, "datasheetUrl", filters.datasheetUrl);
+  appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
+  appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
+  appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
   const query = searchParams.toString();
 
   return fetchApi<ApiEnvelope<SearchFacets>>(`/parts/facets${query ? `?${query}` : ""}`);
@@ -109,6 +120,12 @@ export async function fetchPartSearchEnvelope(filters: PartSearchFilters): Promi
   appendSearchParam(searchParams, "packageId", filters.packageId);
   appendSearchParam(searchParams, "lifecycleStatus", filters.lifecycleStatus);
   appendSearchParam(searchParams, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  appendSearchParam(searchParams, "providerPartId", filters.providerPartId);
+  appendSearchParam(searchParams, "providerUrl", filters.providerUrl);
+  appendSearchParam(searchParams, "datasheetUrl", filters.datasheetUrl);
+  appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
+  appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
+  appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
   appendSearchParam(searchParams, "page", filters.page && filters.page > 1 ? filters.page.toString() : undefined);
   appendSearchParam(searchParams, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
   appendSearchParam(searchParams, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
@@ -228,6 +245,53 @@ export async function createAssetPromotion(partId: string, assetId: string): Pro
   }
 
   const envelope = (await response.json()) as ApiEnvelope<AssetPromotionResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates operator workflow state for one part issue through the API.
+ */
+export async function updatePartIssueWorkflow(
+  partId: string,
+  issueCode: PartIssueCode,
+  input: PartIssueWorkflowUpdateInput
+): Promise<PartIssueWorkflowUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/issues/${encodeURIComponent(issueCode)}/workflow`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Issue workflow update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartIssueWorkflowUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates source-conflict reconciliation state through the API.
+ */
+export async function updateSourceReconciliation(
+  partId: string,
+  input: SourceReconciliationUpdateInput
+): Promise<SourceReconciliationUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/source-reconciliation`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Source reconciliation update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<SourceReconciliationUpdateResponse>;
 
   return envelope.data;
 }

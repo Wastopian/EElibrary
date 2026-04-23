@@ -4,7 +4,6 @@
 
 "use client";
 
-import { EmptyState } from "@ee-library/ui";
 import { useEffect } from "react";
 
 /** ErrorProps exposes the Next.js recovery callback for route errors. */
@@ -24,11 +23,17 @@ export default function Error({ error, reset }: ErrorProps) {
   }, [error]);
 
   return (
-    <div className="error-shell">
-      <EmptyState body="Something broke while preparing this workspace. Retry the request." title="Workspace error" />
-      <button onClick={reset} type="button">
-        Retry
-      </button>
-    </div>
+    <section className="workspace-state">
+      <div className="workspace-state__card workspace-state__card--danger">
+        <p className="workspace-state__eyebrow">Route state</p>
+        <h1>Workspace error</h1>
+        <p>Something broke while preparing this route. Retry the request to reload the current engineering workspace without hiding the failure behind stale UI.</p>
+        <div className="workspace-state__actions">
+          <button onClick={reset} type="button">
+            Retry
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

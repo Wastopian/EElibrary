@@ -14,6 +14,7 @@ export function buildPartDetailResponse(record: PartSearchRecord, records: PartS
     ...record.mateRelations.map((relation) => relation.matePartId),
     ...record.accessoryRequirements.map((relation) => relation.accessoryPartId),
     ...record.cableCompatibilities.map((relation) => relation.cablePartId),
+    ...record.connectorFamilyConflicts.map((conflict) => conflict.candidatePartId),
     ...record.similarParts.map((relation) => relation.similarPartId),
     ...record.companionRecommendations.map((relation) => relation.companionPartId)
   ]);

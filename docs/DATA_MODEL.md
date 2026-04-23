@@ -1,5 +1,7 @@
 # Data Model
 
+This document describes the canonical target model. For current shipped entities and projections, use `docs/IMPLEMENTATION_STATUS.md`.
+
 EE Library is not just a part catalog.
 
 It is an **engineering part onboarding and readiness data system** built to answer these questions clearly:
@@ -333,7 +335,7 @@ Fields:
 - `relationship_type` (`best_mate`, `alternate_mate`)
 - `compatibility_status` (`verified`, `probable`, `uncertain`, `rejected`)
 - `confidence_score`
-- `evidence_type`
+- `evidence_kind` (`provider_direct`, `datasheet_reference`, `family_inference`, `manual_review`, `catalog_fixture`)
 - `source_record_id`
 - `notes`
 - `created_at`
@@ -342,6 +344,7 @@ Fields:
 Purpose:
 - powers “Best Mate” and alternate mate recommendations
 - distinguishes high-confidence compatibility from weaker or unresolved suggestions
+- supports evidence-weighted confidence so inferred relationships do not look equal to directly sourced ones
 
 ### AccessoryRequirement
 Represents accessories or companion hardware needed to build with a connector.
@@ -355,6 +358,7 @@ Fields:
 - `quantity_rule`
 - `compatibility_status` (`verified`, `probable`, `uncertain`, `rejected`)
 - `confidence_score`
+- `evidence_kind` (`provider_direct`, `datasheet_reference`, `family_inference`, `manual_review`, `catalog_fixture`)
 - `source_record_id`
 - `notes`
 - `created_at`
@@ -370,6 +374,7 @@ Examples:
 
 Purpose:
 - captures required and optional companion parts for real buildability
+- keeps inferred accessory mappings visually and operationally distinct from direct connector evidence
 
 ### CableCompatibility
 Represents compatible cable options for a connector.
@@ -392,6 +397,27 @@ Fields:
 
 Purpose:
 - powers buildable mating sets and cable-side recommendations
+- persists explicit wire-gauge, shielding, termination-style, and support-status evidence so cable warnings do not rely on note parsing alone
+
+### ConnectorFamilyConflict
+Represents a persisted near-match or family-confusion candidate derived from connector evidence.
+
+Fields:
+- `id`
+- `part_id`
+- `candidate_part_id`
+- `candidate_connector_family_id` (nullable)
+- `conflict_type` (`near_match_variant`, `family_confusion`)
+- `confidence_score`
+- `summary`
+- `detail`
+- `source_record_id` (nullable)
+- `last_updated_at`
+
+Purpose:
+- keeps connector-family ambiguity as a first-class persisted record instead of a UI-only warning
+- supports detail/admin review surfaces and related-part summaries for ambiguity follow-up
+- allows stronger family-confusion detection from provider-backed best-mate and alternate-mate evidence, not only UI heuristics
 
 ---
 
@@ -492,12 +518,28 @@ Fields:
 - `status` (`open`, `in_review`, `resolved`, `ignored`)
 - `assigned_to`
 - `resolution_notes`
+- `resolved_at`
 - `created_at`
 - `updated_at`
 
 Purpose:
 - powers admin review queues and operational triage
 - makes blockers visible and assignable instead of burying them in transient UI logic
+
+### SourceReconciliationRecord
+Represents an operator decision about how to handle mixed or conflicting source evidence for one part.
+
+Fields:
+- `part_id`
+- `preferred_source_record_id` (nullable)
+- `resolution_status` (`unreviewed`, `canonical_source_selected`, `mixed_sources_accepted`)
+- `notes`
+- `updated_by`
+- `updated_at`
+
+Purpose:
+- records source-conflict handling without pretending the underlying provider evidence disappeared
+- supports admin reconciliation flows and part-level source conflict context
 
 ### PartApprovalRecord
 Represents a part-level approval decision for engineering use.
@@ -682,9 +724,12 @@ A derived recommendation set for connector implementation.
 Includes:
 - main connector part
 - best mate
+- alternate mates that still need family/keying review
 - required accessories
 - optional accessories
 - compatible cable option
+- note-derived cable assumptions such as gauge, shielding, and termination hints
+- structured warning details and an evidence-weighted confidence breakdown
 
 Purpose:
 - this is one of the main differentiators of the platform

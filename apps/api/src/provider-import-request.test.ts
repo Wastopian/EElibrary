@@ -18,7 +18,7 @@ test("parseProviderImportRequest rejects unknown providers", () => {
 });
 
 test("parseProviderImportRequest requires a lookup value", () => {
-  const missingBoth = parseProviderImportRequest({ mpn: "", providerId: "jlcparts", providerPartId: "" });
+  const missingBoth = parseProviderImportRequest({ datasheetUrl: "https://example.test/datasheet.pdf", mpn: "", providerId: "jlcparts", providerPartId: "" });
   assert.equal(missingBoth.ok, false);
   if (missingBoth.ok) {
     throw new Error("expected failure branch");
@@ -31,6 +31,23 @@ test("parseProviderImportRequest requires a lookup value", () => {
     throw new Error("expected success branch");
   }
   assert.equal(usesPartId.requestedLookup, "C1091");
+});
+
+test("parseProviderImportRequest can derive a lookup from provider URL and preserves intake context", () => {
+  const result = parseProviderImportRequest({
+    datasheetUrl: "https://www.lcsc.com/datasheet/lcsc_datasheet_2411121005_FH--Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.pdf",
+    providerId: "jlcparts",
+    providerUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    throw new Error("expected success branch");
+  }
+
+  assert.equal(result.requestedLookup, "C1091");
+  assert.equal(result.workerRequest.providerUrl?.includes("C1091.html"), true);
+  assert.equal(result.workerRequest.datasheetUrl?.includes("C1091.pdf"), true);
 });
 
 test("formatProviderImportFailureMessage avoids raw DATABASE_URL jargon", () => {

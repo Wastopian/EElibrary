@@ -1,5 +1,7 @@
 # UI / UX Brief
 
+This document describes the target UX direction. For current shipped surfaces and intentional gaps, use `docs/IMPLEMENTATION_STATUS.md`.
+
 ## UI thesis
 
 EE Library should feel like a serious **engineering part readiness workspace**.

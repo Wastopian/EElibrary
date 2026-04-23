@@ -21,6 +21,9 @@
     "noImplicitReturns": true,
     "noUncheckedIndexedAccess": true,
     "paths": {
+      "@/*": [
+        "apps/web/src/*"
+      ],
       "@ee-library/shared": [
         "packages/shared/src/index.ts"
       ],

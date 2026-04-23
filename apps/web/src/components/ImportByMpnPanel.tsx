@@ -25,6 +25,8 @@ export function ImportByMpnPanel({ anchorId }: ImportByMpnPanelProps): React.Rea
   const [providerId, setProviderId] = useState("jlcparts");
   const [mpn, setMpn] = useState("");
   const [providerPartId, setProviderPartId] = useState("");
+  const [providerUrl, setProviderUrl] = useState("");
+  const [datasheetUrl, setDatasheetUrl] = useState("");
   const [manufacturerName, setManufacturerName] = useState("");
   const [status, setStatus] = useState<PanelStatus>({ kind: "idle" });
 
@@ -34,8 +36,9 @@ export function ImportByMpnPanel({ anchorId }: ImportByMpnPanelProps): React.Rea
 
       const trimmedMpn = mpn.trim();
       const trimmedPid = providerPartId.trim();
+      const trimmedProviderUrl = providerUrl.trim();
 
-      if (!trimmedMpn && !trimmedPid) {
+      if (!trimmedMpn && !trimmedPid && !trimmedProviderUrl) {
         setStatus({ kind: "failed", message: importUiCopy.validationNeedLookup });
         return;
       }
@@ -43,10 +46,12 @@ export function ImportByMpnPanel({ anchorId }: ImportByMpnPanelProps): React.Rea
       setStatus({ kind: "submitting" });
 
       const body: ProviderImportCreateInput = {
+        datasheetUrl: datasheetUrl.trim() || null,
         manufacturerName: manufacturerName.trim() || null,
         mpn: trimmedMpn || null,
         providerId,
-        providerPartId: trimmedPid || null
+        providerPartId: trimmedPid || null,
+        providerUrl: trimmedProviderUrl || null
       };
 
       try {
@@ -67,7 +72,7 @@ export function ImportByMpnPanel({ anchorId }: ImportByMpnPanelProps): React.Rea
         setStatus({ kind: "failed", message: importUiCopy.failureLead });
       }
     },
-    [manufacturerName, mpn, providerId, providerPartId]
+    [datasheetUrl, manufacturerName, mpn, providerId, providerPartId, providerUrl]
   );
 
   return (
@@ -93,6 +98,16 @@ export function ImportByMpnPanel({ anchorId }: ImportByMpnPanelProps): React.Rea
         <label className="import-by-mpn-panel__field">
           <span>Provider part id (optional)</span>
           <input autoComplete="off" disabled={status.kind === "submitting"} onChange={(event) => setProviderPartId(event.target.value)} placeholder="e.g. LCSC C code when known" value={providerPartId} />
+        </label>
+
+        <label className="import-by-mpn-panel__field">
+          <span>Provider URL (optional)</span>
+          <input autoComplete="off" disabled={status.kind === "submitting"} onChange={(event) => setProviderUrl(event.target.value)} placeholder="Provider product URL when you have it" value={providerUrl} />
+        </label>
+
+        <label className="import-by-mpn-panel__field">
+          <span>Datasheet URL (optional)</span>
+          <input autoComplete="off" disabled={status.kind === "submitting"} onChange={(event) => setDatasheetUrl(event.target.value)} placeholder="Datasheet URL for traceability" value={datasheetUrl} />
         </label>
 
         <label className="import-by-mpn-panel__field">

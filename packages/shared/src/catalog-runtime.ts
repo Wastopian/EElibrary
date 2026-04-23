@@ -10,10 +10,13 @@ import type {
   AssetStatus,
   AssetType,
   CadAvailabilityFilter,
+  ConnectorClass,
   ExportAvailability,
   LifecycleStatus,
   PartMetric,
+  PartApprovalStatus,
   PartSearchFilters,
+  PartReadinessStatus,
   PartSearchRecord,
   PartSearchSort,
   SearchPagination,
@@ -42,6 +45,25 @@ export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchF
     obsolete: 0,
     unknown: 0
   };
+  const readinessCounts: Record<PartReadinessStatus, number> = {
+    blocked: 0,
+    needs_attention: 0,
+    ready_for_export_review: 0,
+    unknown: 0
+  };
+  const approvalCounts: Record<PartApprovalStatus, number> = {
+    approved: 0,
+    not_applicable: 0,
+    not_requested: 0,
+    pending_review: 0
+  };
+  const connectorClassCounts: Record<ConnectorClass, number> = {
+    accessory: 0,
+    cable: 0,
+    connector: 0,
+    non_connector: 0,
+    tooling: 0
+  };
   let cadAvailableCount = 0;
 
   for (const record of records) {
@@ -49,6 +71,9 @@ export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchF
     categoryCounts[record.part.category] = (categoryCounts[record.part.category] ?? 0) + 1;
     packageCounts[record.package.id] = (packageCounts[record.package.id] ?? 0) + 1;
     lifecycleCounts[record.part.lifecycleStatus] = (lifecycleCounts[record.part.lifecycleStatus] ?? 0) + 1;
+    readinessCounts[record.readinessSummary.status] = (readinessCounts[record.readinessSummary.status] ?? 0) + 1;
+    approvalCounts[record.approval.status] = (approvalCounts[record.approval.status] ?? 0) + 1;
+    connectorClassCounts[record.readinessSummary.connectorClass] = (connectorClassCounts[record.readinessSummary.connectorClass] ?? 0) + 1;
 
     if (matchesCadAvailability(record.assets, "available")) {
       cadAvailableCount += 1;
@@ -56,20 +81,26 @@ export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchF
   }
 
   return {
+    approvalStatuses: (["approved", "pending_review", "not_requested", "not_applicable"] as const).filter((status) => approvalCounts[status] > 0),
     categories: Array.from(new Set(records.map((record) => record.part.category))).sort(),
+    connectorClasses: (["connector", "accessory", "tooling", "cable", "non_connector"] as const).filter((status) => connectorClassCounts[status] > 0),
     lifecycleStatuses: (["active", "not_recommended", "obsolete", "unknown"] as const).filter((status) => lifecycleCounts[status] > 0),
     manufacturers: uniqueBy(records.map((record) => record.manufacturer), (manufacturer) => manufacturer.id).sort((left, right) => left.name.localeCompare(right.name)),
     packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id).sort((left, right) => left.packageName.localeCompare(right.packageName)),
+    readinessStatuses: (["ready_for_export_review", "needs_attention", "blocked", "unknown"] as const).filter((status) => readinessCounts[status] > 0),
     counts: {
+      approvalStatuses: approvalCounts,
       cadAvailability: {
         any: records.length,
         available: cadAvailableCount,
         unavailable: Math.max(0, records.length - cadAvailableCount)
       },
       categories: categoryCounts,
+      connectorClasses: connectorClassCounts,
       lifecycleStatuses: lifecycleCounts,
       manufacturers: manufacturerCounts,
-      packages: packageCounts
+      packages: packageCounts,
+      readinessStatuses: readinessCounts
     }
   };
 }
@@ -87,8 +118,29 @@ export function filterPartRecords(records: PartSearchRecord[], filters: PartSear
     const hasPackageMatch = filters.packageId ? record.part.packageId === filters.packageId : true;
     const hasLifecycleMatch = filters.lifecycleStatus ? record.part.lifecycleStatus === filters.lifecycleStatus : true;
     const hasCadMatch = matchesCadAvailability(record.assets, filters.cadAvailability ?? "any");
+    const hasProviderPartIdMatch = filters.providerPartId ? record.sources.some((source) => source.providerPartKey.toLowerCase() === filters.providerPartId?.trim().toLowerCase()) : true;
+    const hasProviderUrlMatch = filters.providerUrl ? record.sources.some((source) => (source.sourceUrl ?? "").toLowerCase().includes(filters.providerUrl?.trim().toLowerCase() ?? "")) : true;
+    const hasDatasheetUrlMatch = filters.datasheetUrl
+      ? record.assets.some((asset) => asset.assetType === "datasheet" && (asset.sourceUrl ?? "").toLowerCase().includes(filters.datasheetUrl?.trim().toLowerCase() ?? ""))
+      : true;
+    const hasReadinessStatusMatch = filters.readinessStatus ? record.readinessSummary.status === filters.readinessStatus : true;
+    const hasApprovalStatusMatch = filters.approvalStatus ? record.approval.status === filters.approvalStatus : true;
+    const hasConnectorClassMatch = filters.connectorClass ? record.readinessSummary.connectorClass === filters.connectorClass : true;
 
-    return hasQueryMatch && hasManufacturerMatch && hasCategoryMatch && hasPackageMatch && hasLifecycleMatch && hasCadMatch;
+    return (
+      hasQueryMatch &&
+      hasManufacturerMatch &&
+      hasCategoryMatch &&
+      hasPackageMatch &&
+      hasLifecycleMatch &&
+      hasCadMatch &&
+      hasProviderPartIdMatch &&
+      hasProviderUrlMatch &&
+      hasDatasheetUrlMatch &&
+      hasReadinessStatusMatch &&
+      hasApprovalStatusMatch &&
+      hasConnectorClassMatch
+    );
   });
 }
 
@@ -278,6 +330,9 @@ function recordMatchesQuery(record: PartSearchRecord, normalizedQuery: string): 
     record.manufacturer.name,
     record.package.packageName,
     record.connectorFamily?.name ?? "",
+    ...record.sources.map((source) => source.providerPartKey),
+    ...record.sources.map((source) => source.sourceUrl ?? ""),
+    ...record.assets.filter((asset) => asset.assetType === "datasheet").map((asset) => asset.sourceUrl ?? ""),
     ...record.manufacturer.aliases
   ]
     .join(" ")

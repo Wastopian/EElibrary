@@ -1,5 +1,7 @@
 # System Architecture
 
+This document captures the intended system shape. For current shipped behavior, use `docs/IMPLEMENTATION_STATUS.md`.
+
 EE Library is a provider-neutral **engineering part onboarding and readiness platform**, not a distributor clone and not a passive CAD file mirror.
 
 The architecture is designed around six core goals:

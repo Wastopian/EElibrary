@@ -258,6 +258,8 @@ function createFakeReviewPool() {
       };
     },
     async query(text: string) {
+      if (text.includes("duplicate_part_id")) return { rows: [] };
+      if (text.includes("FROM part_source_reconciliations")) return { rows: [] };
       if (text.includes("FROM parts")) return { rows: [buildPartRow()] };
       if (text.includes("FROM part_metrics")) return { rows: [] };
       if (text.includes("FROM assets")) return { rows: [pool.assetRow] };
@@ -274,6 +276,8 @@ function createFakeReviewPool() {
       if (text.includes("FROM review_records")) return { rows: pool.reviewRows };
       if (text.includes("FROM asset_validation_records")) return { rows: pool.validationRows };
       if (text.includes("FROM asset_promotion_audits")) return { rows: pool.promotionAuditRows };
+      if (text.includes("FROM part_issues")) return { rows: [] };
+      if (text.includes("FROM part_risk_flags")) return { rows: [] };
 
       return { rows: [] };
     }

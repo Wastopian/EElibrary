@@ -1,26 +1,31 @@
-import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
-import { eq } from "drizzle-orm";
+/**
+ * File header: Configures NextAuth credentials auth for the local engineering admin workflows.
+ */
+
 import { compareSync } from "bcryptjs";
 import { createDbPool, users } from "@ee-library/db";
-import type { DefaultSession } from "next-auth";
+import { eq } from "drizzle-orm";
+import NextAuth, { type DefaultSession } from "next-auth";
+import Credentials from "next-auth/providers/credentials";
+
+/** AppRole keeps auth state explicit and narrow across callbacks. */
+type AppRole = "admin" | "user";
+
+/** AppJwtClaims describes the extra JWT claims mirrored into the session. */
+type AppJwtClaims = {
+  id?: string;
+  role?: AppRole;
+};
 
 declare module "next-auth" {
   interface User {
-    role: "admin" | "user";
+    role: AppRole;
   }
   interface Session {
     user: {
       id: string;
-      role: "admin" | "user";
+      role: AppRole;
     } & DefaultSession["user"];
-  }
-}
-
-declare module "next-auth/jwt" {
-  interface JWT {
-    id: string;
-    role: "admin" | "user";
   }
 }
 
@@ -29,7 +34,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Credentials({
       credentials: {
         email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
+        password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
         if (
@@ -52,26 +57,35 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        return { id: user.id, email: user.email, role: user.role as "admin" | "user" };
-      },
-    }),
+        return { id: user.id, email: user.email, role: user.role as AppRole };
+      }
+    })
   ],
   session: { strategy: "jwt" },
   callbacks: {
     jwt({ token, user }) {
+      const appToken = token as typeof token & AppJwtClaims;
+
       if (user) {
-        token.id = user.id ?? "";
-        token.role = user.role;
+        appToken.id = user.id ?? "";
+        appToken.role = user.role;
       }
-      return token;
+
+      return appToken;
     },
     session({ session, token }) {
-      session.user.id = token.id;
-      session.user.role = token.role;
+      const appToken = token as AppJwtClaims;
+
+      session.user = {
+        ...(session.user ?? {}),
+        id: appToken.id ?? "",
+        role: appToken.role ?? "user"
+      };
+
       return session;
-    },
+    }
   },
   pages: {
-    signIn: "/sign-in",
-  },
+    signIn: "/sign-in"
+  }
 });

@@ -31,6 +31,12 @@ const sourceExtractionSignalsMigrationSql = readFileSync(new URL("../../../infra
 /** validationPromotionAuditMigrationSql loads the Phase 5D validation and promotion audit migration under test. */
 const validationPromotionAuditMigrationSql = readFileSync(new URL("../../../infra/postgres/010_phase5d_validation_promotion_audit.sql", import.meta.url), "utf8");
 
+/** connectorConflictMigrationSql loads the Phase 6C connector conflict and cable constraint migration under test. */
+const connectorConflictMigrationSql = readFileSync(new URL("../../../infra/postgres/015_phase6c_connector_conflicts_and_cable_constraints.sql", import.meta.url), "utf8");
+
+/** connectorRelationEvidenceMigrationSql loads the Phase 6D connector relation evidence migration under test. */
+const connectorRelationEvidenceMigrationSql = readFileSync(new URL("../../../infra/postgres/016_phase6d_connector_relation_evidence.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -122,8 +128,8 @@ test("connector hardening migration upgrades old schemas safely", () => {
     VALUES ('dsr-a', 'part-a', 'Rev A', '2026-01-01', 1, 'asset-a-step', 0.8);
   `);
 
-  db.public.none(hardeningMigrationSql);
-  db.public.none(assetPipelineMigrationSql);
+  applyMigrationSql(db, hardeningMigrationSql);
+  applyMigrationSql(db, assetPipelineMigrationSql);
   db.public.none(`
     INSERT INTO source_records (id, provider_id, provider_part_key, part_id, source_url, fetched_at, raw_payload, normalized_at, last_updated_at)
     VALUES ('source-smoke-old', 'smoke-provider', 'A', 'part-a', 'https://example.test/a', '2026-04-12T00:00:00.000Z', '{"mpn":"A"}'::jsonb, '2026-04-12T00:00:00.000Z', '2026-04-12T00:00:00.000Z');
@@ -134,12 +140,14 @@ test("connector hardening migration upgrades old schemas safely", () => {
     INSERT INTO generation_workflows (id, part_id, target_asset_type, source_datasheet_revision_id, source_asset_id, generation_status, confidence_score, output_asset_id)
     VALUES ('gen-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'ready', 0.8, 'asset-a-step');
   `);
-  db.public.none(generationRequestMigrationSql);
-  db.public.none(reviewRecordsMigrationSql);
-  db.public.none(assetTruthMigrationSql);
-  db.public.none(providerImportHardeningMigrationSql);
-  db.public.none(sourceExtractionSignalsMigrationSql);
-  db.public.none(validationPromotionAuditMigrationSql);
+  applyMigrationSql(db, generationRequestMigrationSql);
+  applyMigrationSql(db, reviewRecordsMigrationSql);
+  applyMigrationSql(db, assetTruthMigrationSql);
+  applyMigrationSql(db, providerImportHardeningMigrationSql);
+  applyMigrationSql(db, sourceExtractionSignalsMigrationSql);
+  applyMigrationSql(db, validationPromotionAuditMigrationSql);
+  applyMigrationSql(db, connectorConflictMigrationSql);
+  applyMigrationSql(db, connectorRelationEvidenceMigrationSql);
   db.public.none(`
     INSERT INTO generation_requests (id, part_id, target_asset_type, source_datasheet_revision_id, source_asset_id, request_status, requested_at, requested_by, workflow_id)
     VALUES ('genreq-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'requested', '2026-04-13T00:00:00.000Z', 'smoke-test', 'gen-a-step');
@@ -157,6 +165,14 @@ test("connector hardening migration upgrades old schemas safely", () => {
   const datasheet = db.public.one(`SELECT pin_table_status FROM datasheet_revisions WHERE id = 'dsr-a'`);
   const part = db.public.one(`SELECT connector_family_id FROM parts WHERE id = 'part-a'`);
   const relation = db.public.one(`SELECT relationship_type FROM mate_relations WHERE id = 'mate-a-b'`);
+  const relationEvidence = db.public.one(`
+    SELECT
+      COALESCE(compatibility_status, 'probable') AS compatibility_status,
+      COALESCE(evidence_kind, 'catalog_fixture') AS evidence_kind,
+      source_record_id
+    FROM mate_relations
+    WHERE id = 'mate-a-b'
+  `);
   const workflow = db.public.one(`SELECT generation_status FROM generation_workflows WHERE id = 'gen-a-step'`);
   const request = db.public.one(`SELECT request_status FROM generation_requests WHERE id = 'genreq-a-step'`);
   const review = db.public.one(`SELECT outcome FROM review_records WHERE id = 'review-a-step'`);
@@ -169,6 +185,7 @@ test("connector hardening migration upgrades old schemas safely", () => {
   assert.equal(datasheet.pin_table_status, "not_available");
   assert.equal(part.connector_family_id, "cf-test");
   assert.equal(relation.relationship_type, "best_mate");
+  assert.deepEqual(relationEvidence, { compatibility_status: "probable", evidence_kind: "catalog_fixture", source_record_id: null });
   assert.equal(workflow.generation_status, "available_to_request");
   assert.equal(request.request_status, "requested");
   assert.equal(review.outcome, "approved");
@@ -180,3 +197,41 @@ test("connector hardening migration upgrades old schemas safely", () => {
   assert.deepEqual(validation, { validation_status: "verified", validation_type: "three_d_geometry" });
   assert.deepEqual(promotionAudit, { blocker_reasons: ["smoke blocker"], promotion_outcome: "denied", validation_record_id: null });
 });
+
+/**
+ * Applies one SQL migration to pg-mem after rewriting idempotent DO-block guards into plain ALTER statements.
+ */
+function applyMigrationSql(db: ReturnType<typeof newDb>, sql: string): void {
+  db.public.none(rewriteMigrationSqlForPgMem(sql));
+  backfillPgMemLegacyDefaults(db);
+}
+
+/**
+ * Rewrites simple IF-NOT-EXISTS DO blocks because pg-mem does not execute plpgsql.
+ */
+function rewriteMigrationSqlForPgMem(sql: string): string {
+  return sql.replace(/DO \$\$[\s\S]*?THEN\s+([\s\S]*?;)\s+END IF;\s+END \$\$;/gu, "$1");
+}
+
+/**
+ * Backfills legacy rows for pg-mem because it does not fully emulate PostgreSQL default propagation on added columns.
+ */
+function backfillPgMemLegacyDefaults(db: ReturnType<typeof newDb>): void {
+  const backfillStatements = [
+    "UPDATE mate_relations SET compatibility_status = 'probable' WHERE compatibility_status IS NULL",
+    "UPDATE mate_relations SET evidence_kind = 'catalog_fixture' WHERE evidence_kind IS NULL",
+    "UPDATE accessory_requirements SET compatibility_status = 'probable' WHERE compatibility_status IS NULL",
+    "UPDATE accessory_requirements SET evidence_kind = 'catalog_fixture' WHERE evidence_kind IS NULL",
+    "UPDATE cable_compatibilities SET shielding_requirement = 'unknown' WHERE shielding_requirement IS NULL",
+    "UPDATE cable_compatibilities SET termination_style = 'unknown' WHERE termination_style IS NULL",
+    "UPDATE cable_compatibilities SET compatibility_status = 'probable' WHERE compatibility_status IS NULL"
+  ];
+
+  for (const statement of backfillStatements) {
+    try {
+      db.public.none(statement);
+    } catch {
+      // Ignore missing-table cases so one helper can follow every incremental migration step.
+    }
+  }
+}

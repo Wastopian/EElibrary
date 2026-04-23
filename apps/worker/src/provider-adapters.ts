@@ -10,6 +10,7 @@ import type {
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
+  ConnectorFamilyConflict,
   DatasheetRevision,
   GenerationWorkflow,
   Manufacturer,
@@ -31,6 +32,10 @@ export interface ProviderPartRequest {
   mpn: string;
   /** Optional manufacturer hint used only to narrow provider lookup. */
   manufacturerName?: string;
+  /** Optional provider product URL retained as intake context or lookup source. */
+  providerUrl?: string;
+  /** Optional datasheet URL retained as intake context for later traceability. */
+  datasheetUrl?: string;
 }
 
 /** RawProviderPayload preserves raw source data before normalization. */
@@ -67,6 +72,8 @@ export interface NormalizedProviderPart {
   accessoryRequirements: AccessoryRequirement[];
   /** Compatible cable relationships parsed from the provider payload. */
   cableCompatibilities: CableCompatibility[];
+  /** Connector-family ambiguity evidence parsed or derived for stronger connector warnings. */
+  connectorFamilyConflicts: ConnectorFamilyConflict[];
   /** Similar-part recommendations parsed from the provider payload. */
   similarPartRelations: SimilarPartRelation[];
   /** Companion recommendations parsed from the provider payload. */

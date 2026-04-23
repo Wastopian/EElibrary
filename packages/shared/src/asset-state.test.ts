@@ -78,15 +78,37 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     assets,
     accessoryRequirements: [],
     buildableMatingSet: {
+      alternateMates: [],
       bestMate: null,
+      cableAssumptions: [],
       cableOptions: [],
+      confidenceBreakdown: {
+        bestMateScore: null,
+        cableScore: null,
+        directEvidenceCount: 0,
+        evidenceCount: 0,
+        inferredEvidenceCount: 0,
+        optionalAccessoryScore: null,
+        overallScore: null,
+        requiredAccessoryScore: null,
+        toolingScore: null,
+        uncertainEvidenceCount: 0,
+        verifiedEvidenceCount: 0
+      },
+      confidenceScore: null,
+      familyConflicts: [],
+      optionalAccessories: [],
       requiredAccessories: [],
-      toolingRequirements: []
+      toolingRequirements: [],
+      warningDetails: [],
+      warnings: []
     },
     cableCompatibilities: [],
     companionRecommendations: [],
     connectorFamily: null,
+    connectorFamilyConflicts: [],
     datasheetRevision: null,
+    duplicateCandidates: [],
     extractionSignals: [],
     generationRequests: [],
     generationWorkflows: [],
@@ -99,6 +121,16 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     },
     mateRelations: [],
     metrics: [],
+    approval: {
+      decidedAt: null,
+      decidedBy: null,
+      detail: "Approval has not been requested.",
+      evidence: [],
+      lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+      partId: "part-test",
+      status: "not_requested",
+      summary: "Approval not requested"
+    },
     package: {
       bodyHeightMm: null,
       bodyLengthMm: null,
@@ -119,9 +151,24 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       packageId: "pkg-test",
       trustScore: 0
     },
+    issues: [],
     promotionAudits: [],
+    readinessSummary: {
+      blockerCount: 0,
+      blockerSummary: [],
+      connectorClass: "non_connector",
+      detail: "Whole-part readiness has not been evaluated yet.",
+      identityStatus: "unknown",
+      label: "Readiness unknown",
+      lastEvaluatedAt: "2026-04-12T00:00:00.000Z",
+      partId: "part-test",
+      recommendedActions: [],
+      status: "unknown"
+    },
     reviewRecords: [],
+    riskFlags: [],
     similarParts: [],
+    sourceReconciliation: null,
     sources: [],
     validationRecords: []
   };

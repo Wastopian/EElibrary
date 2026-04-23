@@ -13,6 +13,7 @@
   "dependencies": {
     "@ee-library/shared": "*",
     "@ee-library/worker": "*",
+    "jose": "^6.1.0",
     "pg": "^8.20.0"
   }
 }

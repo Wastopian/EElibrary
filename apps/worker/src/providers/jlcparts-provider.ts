@@ -235,6 +235,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     cableCompatibilities: [],
     companionRecommendations: [],
     connectorFamily: null,
+    connectorFamilyConflicts: [],
     datasheetRevisions: [
       buildDatasheetRevision(component, partId, datasheetRevisionId, datasheetAssetId, sourceRecordId, lastUpdatedAt)
     ],

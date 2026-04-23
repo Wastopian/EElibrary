@@ -59,6 +59,60 @@ export type ConnectorRelationshipType =
   | "supports_cable"
   | "tooling_requirement";
 
+/** ConnectorClass keeps connector-specific filtering explicit without leaking provider categories into the UI. */
+export type ConnectorClass = "connector" | "accessory" | "tooling" | "cable" | "non_connector";
+
+/** ConnectorRelationCompatibilityStatus keeps mate and accessory certainty explicit instead of flattening it into one score. */
+export type ConnectorRelationCompatibilityStatus = "verified" | "probable" | "uncertain" | "rejected";
+
+/** ConnectorEvidenceKind keeps direct provider evidence distinct from weaker family-inference paths. */
+export type ConnectorEvidenceKind = "provider_direct" | "datasheet_reference" | "family_inference" | "manual_review" | "catalog_fixture";
+
+/** CableShieldingRequirement keeps cable-side shielding assumptions explicit instead of flattening them into notes. */
+export type CableShieldingRequirement = "shielded" | "unshielded" | "either" | "unknown";
+
+/** CableTerminationStyle keeps cable-side termination assumptions queryable and reviewable. */
+export type CableTerminationStyle = "idc" | "crimp" | "solder" | "unknown";
+
+/** CableCompatibilityStatus keeps cable support honest when the evidence is tentative or rejected. */
+export type CableCompatibilityStatus = "verified" | "probable" | "uncertain" | "rejected";
+
+/** PartIdentityStatus keeps record identity confidence explicit instead of inferring certainty from one field. */
+export type PartIdentityStatus = "confirmed" | "low_confidence" | "unknown";
+
+/** PartReadinessStatus is the whole-part readiness state exposed by API and UI. */
+export type PartReadinessStatus = "ready_for_export_review" | "needs_attention" | "blocked" | "unknown";
+
+/** PartApprovalStatus keeps part approval separate from asset review and export verification. */
+export type PartApprovalStatus = "approved" | "pending_review" | "not_requested" | "not_applicable";
+
+/** PartIssueSeverity distinguishes hard blockers from follow-up work. */
+export type PartIssueSeverity = "error" | "warning";
+
+/** PartIssueWorkflowStatus keeps operational queue workflow separate from the underlying evidence. */
+export type PartIssueWorkflowStatus = "open" | "in_review" | "resolved" | "ignored";
+
+/** PartIssueCode names backend-derived part-level queue and blocker categories. */
+export type PartIssueCode =
+  | "low_confidence_identity"
+  | "pending_approval"
+  | "missing_verified_cad"
+  | "missing_datasheet"
+  | "missing_connector_mate"
+  | "missing_connector_accessories"
+  | "connector_low_confidence"
+  | "lifecycle_risk"
+  | "source_conflict"
+  | "duplicate_candidate";
+
+/** PartRiskFlagCode names compact risk chips shown in detail and admin surfaces. */
+export type PartRiskFlagCode =
+  | "lifecycle_not_active"
+  | "generated_assets_present"
+  | "source_conflict"
+  | "connector_low_confidence"
+  | "partial_readiness_data";
+
 /** Generation targets for datasheet-driven CAD creation workflows. */
 export type GenerationTargetAssetType = "footprint" | "symbol" | "three_d_model";
 
@@ -85,6 +139,9 @@ export type ReviewState = "pending_review" | "approved" | "rejected" | "changes_
 
 /** SourceImportStatus makes provider import outcomes queryable without provider-specific strings. */
 export type SourceImportStatus = "imported" | "failed";
+
+/** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
+export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
 
 /** SourceExtractionSignalType names explicit source material extracted for CAD recovery. */
 export type SourceExtractionSignalType = "package_mechanical_dimensions" | "pin_table" | "mechanical_drawing";
@@ -244,8 +301,11 @@ export interface MateRelation {
   partId: string;
   matePartId: string;
   relationshipType: "best_mate" | "alternate_mate";
+  compatibilityStatus: ConnectorRelationCompatibilityStatus;
+  evidenceKind: ConnectorEvidenceKind;
   confidenceScore: number;
   sourceRevisionId: string;
+  sourceRecordId: string | null;
   notes: string | null;
 }
 
@@ -255,8 +315,11 @@ export interface AccessoryRequirement {
   partId: string;
   accessoryPartId: string;
   relationshipType: "requires_accessory" | "optional_accessory" | "tooling_requirement";
+  compatibilityStatus: ConnectorRelationCompatibilityStatus;
+  evidenceKind: ConnectorEvidenceKind;
   confidenceScore: number;
   sourceRevisionId: string;
+  sourceRecordId: string | null;
   notes: string | null;
 }
 
@@ -266,9 +329,32 @@ export interface CableCompatibility {
   partId: string;
   cablePartId: string;
   relationshipType: "supports_cable";
+  wireGaugeMin: number | null;
+  wireGaugeMax: number | null;
+  shieldingRequirement: CableShieldingRequirement;
+  terminationStyle: CableTerminationStyle;
+  compatibilityStatus: CableCompatibilityStatus;
   confidenceScore: number;
   sourceRevisionId: string;
+  sourceRecordId: string | null;
   notes: string | null;
+}
+
+/** ConnectorFamilyConflictType distinguishes near-match variants from true family confusion. */
+export type ConnectorFamilyConflictType = "near_match_variant" | "family_confusion";
+
+/** ConnectorFamilyConflict stores one persisted connector-family ambiguity candidate. */
+export interface ConnectorFamilyConflict {
+  id: string;
+  partId: string;
+  candidatePartId: string;
+  candidateConnectorFamilyId: string | null;
+  conflictType: ConnectorFamilyConflictType;
+  confidenceScore: number;
+  summary: string;
+  detail: string;
+  sourceRecordId: string | null;
+  lastUpdatedAt: string;
 }
 
 /** SimilarPartRelation stores cross-suggested alternatives with confidence. */
@@ -441,12 +527,73 @@ export interface AssetGenerationOption {
   sourceDatasheetRevisionId: string | null;
 }
 
+/** ConnectorWarningCode keeps compatibility concerns structured instead of flattening everything into one string list. */
+export type ConnectorWarningCode =
+  | "support_without_best_mate"
+  | "best_mate_low_confidence"
+  | "near_match_alternates"
+  | "family_confusion"
+  | "missing_accessory_coverage"
+  | "required_accessory_low_confidence"
+  | "tooling_low_confidence"
+  | "cable_without_best_mate"
+  | "cable_low_confidence";
+
+/** ConnectorWarningTone keeps connector warnings visually aligned with existing review and danger surfaces. */
+export type ConnectorWarningTone = "review" | "danger";
+
+/** ConnectorWarning stores one structured connector-compatibility concern for detail, search, and admin surfaces. */
+export interface ConnectorWarning {
+  code: ConnectorWarningCode;
+  summary: string;
+  detail: string;
+  tone: ConnectorWarningTone;
+}
+
+/** ConnectorCableAssumptionType identifies the kind of cable-side assumption extracted from stored notes. */
+export type ConnectorCableAssumptionType = "wire_gauge" | "shielding" | "termination_style" | "environment";
+
+/** ConnectorCableAssumption keeps cable constraints explicit without pretending they were fully validated. */
+export interface ConnectorCableAssumption {
+  cablePartId: string;
+  sourceNote: string;
+  summary: string;
+  type: ConnectorCableAssumptionType;
+}
+
+/** ConnectorConfidenceBreakdown exposes how the buildable-set confidence was derived across relationship groups. */
+export interface ConnectorConfidenceBreakdown {
+  bestMateScore: number | null;
+  cableScore: number | null;
+  directEvidenceCount: number;
+  evidenceCount: number;
+  inferredEvidenceCount: number;
+  optionalAccessoryScore: number | null;
+  overallScore: number | null;
+  requiredAccessoryScore: number | null;
+  toolingScore: number | null;
+  uncertainEvidenceCount: number;
+  verifiedEvidenceCount: number;
+}
+
 /** BuildableMatingSet is the API-ready recommendation for procurement-friendly assembly. */
 export interface BuildableMatingSet {
   bestMate: MateRelation | null;
+  alternateMates: MateRelation[];
+  cableAssumptions: ConnectorCableAssumption[];
+  familyConflicts: ConnectorFamilyConflict[];
+  optionalAccessories: AccessoryRequirement[];
   requiredAccessories: AccessoryRequirement[];
   toolingRequirements: AccessoryRequirement[];
   cableOptions: CableCompatibility[];
+  /** Aggregate relationship confidence for the current buildable set, or null when no evidence exists. */
+  confidenceScore: number | null;
+  /** Relationship-group confidence makes the overall score auditable instead of opaque. */
+  confidenceBreakdown: ConnectorConfidenceBreakdown;
+  /** Compact warnings when connector evidence is incomplete or low-confidence. */
+  warnings: string[];
+  /** Structured warning details power richer connector review surfaces without UI-only heuristics. */
+  warningDetails: ConnectorWarning[];
 }
 
 /** CAD availability filters let search distinguish exportable records from unavailable ones. */
@@ -463,12 +610,95 @@ export interface PartSearchFilters {
   packageId?: string | undefined;
   lifecycleStatus?: LifecycleStatus | undefined;
   cadAvailability?: CadAvailabilityFilter | undefined;
+  providerPartId?: string | undefined;
+  providerUrl?: string | undefined;
+  datasheetUrl?: string | undefined;
+  readinessStatus?: PartReadinessStatus | undefined;
+  approvalStatus?: PartApprovalStatus | undefined;
+  connectorClass?: ConnectorClass | undefined;
   /** One-based result page used by SQL-backed search. */
   page?: number | undefined;
   /** Bounded page size used by SQL-backed search. */
   pageSize?: number | undefined;
   /** Stable sort mode used by SQL-backed search. */
   sort?: PartSearchSort | undefined;
+}
+
+/** PartReadinessSummary exposes whole-part readiness as API truth instead of UI-only inference. */
+export interface PartReadinessSummary {
+  partId: string;
+  status: PartReadinessStatus;
+  label: string;
+  detail: string;
+  identityStatus: PartIdentityStatus;
+  connectorClass: ConnectorClass;
+  blockerCount: number;
+  blockerSummary: string[];
+  recommendedActions: string[];
+  lastEvaluatedAt: string;
+}
+
+/** PartApproval exposes part-level approval separately from asset review and export promotion. */
+export interface PartApproval {
+  partId: string;
+  status: PartApprovalStatus;
+  summary: string;
+  detail: string;
+  evidence: string[];
+  decidedBy: string | null;
+  decidedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** PartDuplicateCandidate stores one DB-backed possible duplicate match for an existing part. */
+export interface PartDuplicateCandidate {
+  id: string;
+  partId: string;
+  duplicatePartId: string;
+  duplicatePartMpn: string;
+  duplicateManufacturerName: string;
+  detectionSource: string;
+  confidenceScore: number;
+  summary: string;
+  detail: string;
+  lastUpdatedAt: string;
+}
+
+/** PartIssue stores one backend-derived blocker or follow-up task for a part record. */
+export interface PartIssue {
+  id: string;
+  partId: string;
+  code: PartIssueCode;
+  severity: PartIssueSeverity;
+  status: PartIssueWorkflowStatus;
+  assignedTo: string | null;
+  resolutionNotes: string | null;
+  resolvedAt: string | null;
+  summary: string;
+  detail: string;
+  source: string;
+  lastUpdatedAt: string;
+}
+
+/** PartRiskFlag stores one compact risk chip for dense search/detail/admin rendering. */
+export interface PartRiskFlag {
+  id: string;
+  partId: string;
+  code: PartRiskFlagCode;
+  label: string;
+  detail: string;
+  tone: "review" | "danger";
+  lastUpdatedAt: string;
+}
+
+/** SourceReconciliationRecord stores operator-selected source handling for source-conflict follow-up. */
+export interface SourceReconciliationRecord {
+  partId: string;
+  preferredSourceRecordId: string | null;
+  resolutionStatus: SourceReconciliationStatus;
+  notes: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
 }
 
 /** SearchPagination describes a bounded result window without changing result truth. */
@@ -493,6 +723,7 @@ export interface PartSearchRecord {
   mateRelations: MateRelation[];
   accessoryRequirements: AccessoryRequirement[];
   cableCompatibilities: CableCompatibility[];
+  connectorFamilyConflicts: ConnectorFamilyConflict[];
   buildableMatingSet: BuildableMatingSet;
   similarParts: SimilarPartRelation[];
   companionRecommendations: CompanionRecommendation[];
@@ -502,6 +733,12 @@ export interface PartSearchRecord {
   reviewRecords: ReviewRecord[];
   validationRecords: AssetValidationRecord[];
   promotionAudits: AssetPromotionAuditRecord[];
+  readinessSummary: PartReadinessSummary;
+  approval: PartApproval;
+  duplicateCandidates: PartDuplicateCandidate[];
+  issues: PartIssue[];
+  riskFlags: PartRiskFlag[];
+  sourceReconciliation: SourceReconciliationRecord | null;
   /** ISO timestamp for the latest joined record update. */
   lastUpdatedAt: string;
 }
@@ -553,6 +790,30 @@ export interface ReviewActionResponse {
   updatedWorkflow?: GenerationWorkflow;
 }
 
+/** PartIssueWorkflowUpdateInput is the operator-facing body for issue assignment and resolve/reopen actions. */
+export interface PartIssueWorkflowUpdateInput {
+  status: PartIssueWorkflowStatus;
+  assignedTo?: string | null;
+  resolutionNotes?: string | null;
+}
+
+/** PartIssueWorkflowUpdateResponse returns the updated issue workflow state from the API. */
+export interface PartIssueWorkflowUpdateResponse {
+  issue: PartIssue;
+}
+
+/** SourceReconciliationUpdateInput stores operator reconciliation state for source-conflict follow-up. */
+export interface SourceReconciliationUpdateInput {
+  resolutionStatus: SourceReconciliationStatus;
+  preferredSourceRecordId?: string | null;
+  notes?: string | null;
+}
+
+/** SourceReconciliationUpdateResponse returns the latest persisted source reconciliation record. */
+export interface SourceReconciliationUpdateResponse {
+  reconciliation: SourceReconciliationRecord;
+}
+
 /** AssetPromotionInput is the explicit request to promote one reviewed asset for export. */
 export interface AssetPromotionInput {
   assetId: string;
@@ -572,6 +833,10 @@ export interface ProviderImportCreateInput {
   mpn?: string | null;
   /** Provider-specific part identifier (for example an LCSC code) when it differs from MPN. */
   providerPartId?: string | null;
+  /** Optional provider product URL that can be used as lookup context or parsed for a provider key. */
+  providerUrl?: string | null;
+  /** Optional datasheet URL retained as operator context for intake and later traceability. */
+  datasheetUrl?: string | null;
   /** Optional manufacturer hint for providers that support disambiguation. */
   manufacturerName?: string | null;
 }
@@ -598,6 +863,9 @@ export interface SearchFacets {
   categories: string[];
   packages: Package[];
   lifecycleStatuses: LifecycleStatus[];
+  readinessStatuses: PartReadinessStatus[];
+  approvalStatuses: PartApprovalStatus[];
+  connectorClasses: ConnectorClass[];
   /** Optional per-facet counts for DB-backed and seed-fallback consistency checks. */
   counts?: {
     manufacturers: Record<string, number>;
@@ -605,6 +873,9 @@ export interface SearchFacets {
     packages: Record<string, number>;
     lifecycleStatuses: Record<LifecycleStatus, number>;
     cadAvailability: Record<CadAvailabilityFilter, number>;
+    readinessStatuses: Record<PartReadinessStatus, number>;
+    approvalStatuses: Record<PartApprovalStatus, number>;
+    connectorClasses: Record<ConnectorClass, number>;
   };
 }
 

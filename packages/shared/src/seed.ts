@@ -10,6 +10,7 @@ import type {
   CableCompatibility,
   CompanionRecommendation,
   ConnectorFamily,
+  ConnectorFamilyConflict,
   GenerationRequest,
   DatasheetRevision,
   GenerationWorkflow,
@@ -855,12 +856,15 @@ export const assets = seedAssetRows.map(withCanonicalAssetTruth) satisfies Asset
 /** mateRelations seed direct connector mating relationships with confidence. */
 export const mateRelations = [
   {
+    compatibilityStatus: "verified",
     confidenceScore: 0.94,
+    evidenceKind: "datasheet_reference",
     id: "mate-te-215079-best",
     matePartId: "part-te-215083-8",
     notes: "Primary mating header per mechanical keying and retention geometry.",
     partId: "part-te-215079-8",
     relationshipType: "best_mate",
+    sourceRecordId: "source-seed-te-215079-8",
     sourceRevisionId: "dsr-te-215079-8-rev-b"
   }
 ] satisfies MateRelation[];
@@ -869,29 +873,38 @@ export const mateRelations = [
 export const accessoryRequirements = [
   {
     accessoryPartId: "part-te-215460-8",
+    compatibilityStatus: "verified",
     confidenceScore: 0.89,
+    evidenceKind: "datasheet_reference",
     id: "acc-te-215079-required-1",
     notes: "Strain relief required for rated cable pull force.",
     partId: "part-te-215079-8",
     relationshipType: "requires_accessory",
+    sourceRecordId: "source-seed-te-215079-8",
     sourceRevisionId: "dsr-te-215079-8-rev-b"
   },
   {
     accessoryPartId: "part-te-215464-1",
+    compatibilityStatus: "probable",
     confidenceScore: 0.83,
+    evidenceKind: "datasheet_reference",
     id: "acc-te-215079-required-2",
     notes: "Locking clip required for vibration environments.",
     partId: "part-te-215079-8",
     relationshipType: "requires_accessory",
+    sourceRecordId: "source-seed-te-215079-8",
     sourceRevisionId: "dsr-te-215079-8-rev-b"
   },
   {
     accessoryPartId: "part-te-734532-1",
+    compatibilityStatus: "verified",
     confidenceScore: 0.9,
+    evidenceKind: "manual_review",
     id: "acc-te-215079-tooling-1",
     notes: "Crimp tooling required for production assembly quality.",
     partId: "part-te-215079-8",
     relationshipType: "tooling_requirement",
+    sourceRecordId: "source-seed-te-215079-8",
     sourceRevisionId: "dsr-te-215079-8-rev-b"
   }
 ] satisfies AccessoryRequirement[];
@@ -900,14 +913,23 @@ export const accessoryRequirements = [
 export const cableCompatibilities = [
   {
     cablePartId: "part-molex-1513400800",
+    compatibilityStatus: "probable",
     confidenceScore: 0.78,
     id: "cable-te-215079-1",
-    notes: "Compatible ribbon cable option for 8-pos harness prototypes.",
+    notes: "Compatible 28 AWG unshielded ribbon cable option for IDC-style harness prototypes.",
     partId: "part-te-215079-8",
     relationshipType: "supports_cable",
-    sourceRevisionId: "dsr-te-215079-8-rev-b"
+    shieldingRequirement: "unshielded",
+    sourceRecordId: "source-seed-te-215079-8",
+    sourceRevisionId: "dsr-te-215079-8-rev-b",
+    terminationStyle: "idc",
+    wireGaugeMax: 28,
+    wireGaugeMin: 28
   }
 ] satisfies CableCompatibility[];
+
+/** connectorFamilyConflicts seed persisted family-confusion evidence when fallback data includes it. */
+export const connectorFamilyConflicts: ConnectorFamilyConflict[] = [];
 
 /** similarPartRelations seed alternatives without implying drop-in equivalence. */
 export const similarPartRelations = [
