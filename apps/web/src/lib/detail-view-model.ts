@@ -4,7 +4,20 @@
 
 import { getBundleReadinessSummary, getGenerationOptions } from "@ee-library/shared/asset-resolution";
 import { isFileBackedAsset, isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
-import type { Asset, AssetGenerationOption, AssetPromotionSummary, AssetValidationSummary, BundleReadinessState, GenerationWorkflow, PartSearchRecord, ReviewState, ReviewStatusSummary } from "@ee-library/shared/types";
+import type {
+  Asset,
+  AssetClassSummary,
+  AssetGenerationOption,
+  AssetPromotionSummary,
+  AssetValidationSummary,
+  BundleReadinessState,
+  BundleReadinessSummary,
+  GenerationWorkflow,
+  PartAcquisitionSummary,
+  PartSearchRecord,
+  ReviewState,
+  ReviewStatusSummary
+} from "@ee-library/shared/types";
 
 /** ViewTone mirrors shared badge tones without coupling this helper to UI components. */
 export type ViewTone = "neutral" | "info" | "verified" | "review" | "danger" | "generated";
@@ -61,6 +74,22 @@ export interface QuickReadinessDataCoverage {
   tone: ViewTone;
   /** True when the quick summary is missing important record families. */
   partial: boolean;
+}
+
+/** DetailCompletenessChecklistItem summarizes one engineering-readiness checkpoint for the part detail page. */
+export interface DetailCompletenessChecklistItem {
+  /** Stable item id for rendering and test targeting. */
+  id: string;
+  /** Short label shown in the checklist row. */
+  label: string;
+  /** Compact state label such as Available, Review, Blocked, or Missing. */
+  stateLabel: string;
+  /** Underlying checklist state keeps the rendered tone and copy explicit. */
+  state: "available" | "review" | "blocked" | "missing" | "neutral";
+  /** Detail explains the currently recorded evidence without inventing certainty. */
+  detail: string;
+  /** Tone keeps checklist badges aligned with the rest of the detail page. */
+  tone: ViewTone;
 }
 
 /**
@@ -440,6 +469,148 @@ export function getQuickReadinessDataCoverage(record: PartSearchRecord): QuickRe
 }
 
 /**
+ * Summarizes asset review and promotion progress without treating approval as export verification.
+ */
+export function getReviewWorkflowSummary(
+  assetReviewStatuses: ReviewStatusSummary[],
+  workflowReviewStatuses: ReviewStatusSummary[],
+  promotionSummaries: AssetPromotionSummary[]
+): WorkflowSignalLabel {
+  const statuses = [...assetReviewStatuses, ...workflowReviewStatuses];
+  const promotionReadyCount = promotionSummaries.filter((summary) => summary.canPromote).length;
+  const pendingCount = statuses.filter((status) => status.state === "pending_review").length;
+  const changesRequestedCount = statuses.filter((status) => status.state === "changes_requested").length;
+  const rejectedCount = statuses.filter((status) => status.state === "rejected").length;
+  const verifiedCount = statuses.filter((status) => status.state === "verified_for_export").length;
+
+  if (promotionReadyCount > 0) {
+    return {
+      detail: "Validation evidence is present. Verified-for-export still requires the explicit promotion action.",
+      label: `${promotionReadyCount} ready to promote`,
+      tone: "info"
+    };
+  }
+
+  if (pendingCount > 0) {
+    return {
+      detail: "Generated or newly sourced outputs are waiting for review and are not export-ready.",
+      label: `${pendingCount} in review`,
+      tone: "review"
+    };
+  }
+
+  if (changesRequestedCount > 0) {
+    return {
+      detail: "At least one reviewed output needs changes before approval or promotion can continue.",
+      label: "Changes requested",
+      tone: "review"
+    };
+  }
+
+  if (rejectedCount > 0) {
+    return {
+      detail: "Rejected outputs stay outside trust and export readiness until replaced or reworked.",
+      label: "Rejected output",
+      tone: "danger"
+    };
+  }
+
+  if (verifiedCount > 0) {
+    return {
+      detail: "At least one asset has passed review, validation evidence, and explicit export promotion.",
+      label: `${verifiedCount} verified for export`,
+      tone: "verified"
+    };
+  }
+
+  return {
+    detail: "No asset or generation workflow is currently waiting for review.",
+    label: "No open review",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Summarizes acquisition history for the part-detail card without exposing internal requester ids.
+ */
+export function getPartAcquisitionStateLabel(summary: PartAcquisitionSummary): WorkflowSignalLabel {
+  if (summary.state === "available") {
+    return {
+      detail: summary.lastJobStatus === "failed"
+        ? "The latest matching acquisition attempt failed, but attached provider/source evidence still exists on the part record."
+        : summary.lastJobStatus === "running" || summary.lastJobStatus === "queued"
+          ? "A matching acquisition job is still in progress for this part."
+          : "A provider acquisition job is recorded for this part detail record.",
+      label: summary.lastJobStatus === "failed"
+        ? "Latest acquisition failed"
+        : summary.lastJobStatus === "running"
+          ? "Acquisition running"
+          : summary.lastJobStatus === "queued"
+            ? "Acquisition queued"
+            : "Imported via acquisition job",
+      tone: summary.lastJobStatus === "failed" ? "review" : summary.lastJobStatus === "succeeded" ? "info" : "info"
+    };
+  }
+
+  if (summary.state === "legacy_source_only") {
+    return {
+      detail: summary.reason ?? "Provider source evidence is attached, but no acquisition job history is recorded for this part.",
+      label: "Legacy source evidence only",
+      tone: "review"
+    };
+  }
+
+  if (summary.state === "unavailable") {
+    return {
+      detail: summary.reason ?? "Acquisition history is unavailable for this detail response.",
+      label: "Acquisition history unavailable",
+      tone: "neutral"
+    };
+  }
+
+  return {
+    detail: summary.reason ?? "No provider acquisition job or attached source evidence is recorded for this part yet.",
+    label: "No acquisition history recorded",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Returns the explicit boundary copy that keeps imported parts separate from approval and export truth.
+ */
+export function getImportedPartBoundaryCopy(summary: PartAcquisitionSummary): string | null {
+  if (summary.state === "available" || summary.state === "legacy_source_only") {
+    return "Imported does not mean approved, export-ready, or CAD-verified.";
+  }
+
+  return null;
+}
+
+/**
+ * Builds the compact completeness checklist shown near the part-detail readiness summary.
+ */
+export function getPartCompletenessChecklist(
+  record: PartSearchRecord,
+  assetGroups: AssetClassSummary[],
+  bundleReadiness: BundleReadinessSummary,
+  generationOptions: AssetGenerationOption[],
+  reviewWorkflowSummary: WorkflowSignalLabel
+): DetailCompletenessChecklistItem[] {
+  return [
+    buildIdentityChecklistItem(record),
+    buildDatasheetChecklistItem(record, assetGroups),
+    buildNormalizedSpecsChecklistItem(record),
+    buildPackageMechanicalChecklistItem(record, assetGroups),
+    buildCadChecklistItem("symbol", "Symbol availability", assetGroups, generationOptions),
+    buildCadChecklistItem("footprint", "Footprint availability", assetGroups, generationOptions),
+    buildCadChecklistItem("three_d_model", "3D model availability", assetGroups, generationOptions),
+    buildConnectorChecklistItem(record),
+    buildApprovalChecklistItem(record, reviewWorkflowSummary),
+    buildExportChecklistItem(bundleReadiness)
+  ];
+}
+
+/**
  * Maps bundle readiness into search-card badge tone.
  */
 function bundleReadinessTone(state: BundleReadinessState): ViewTone {
@@ -451,6 +622,280 @@ function bundleReadinessTone(state: BundleReadinessState): ViewTone {
   };
 
   return tones[state];
+}
+
+/**
+ * Builds the checklist row for whole-part identity confidence.
+ */
+function buildIdentityChecklistItem(record: PartSearchRecord): DetailCompletenessChecklistItem {
+  const identityIssue = record.issues.find((issue) => issue.code === "low_confidence_identity");
+
+  if (record.readinessSummary.identityStatus === "confirmed") {
+    return createChecklistItem("identity", "Identity confidence", "available", "Confirmed", "Imported or attached source evidence is strong enough to treat part identity as confirmed.");
+  }
+
+  if (record.readinessSummary.identityStatus === "low_confidence") {
+    return createChecklistItem(
+      "identity",
+      "Identity confidence",
+      "review",
+      "Needs review",
+      identityIssue?.detail ?? "Identity evidence exists, but stronger confirmation is still needed before design use."
+    );
+  }
+
+  return createChecklistItem(
+    "identity",
+    "Identity confidence",
+    "blocked",
+    "Blocked",
+    identityIssue?.detail ?? "No imported provider source rows are attached, so the record cannot be treated as confirmed."
+  );
+}
+
+/**
+ * Builds the checklist row for datasheet availability and storage truth.
+ */
+function buildDatasheetChecklistItem(record: PartSearchRecord, assetGroups: AssetClassSummary[]): DetailCompletenessChecklistItem {
+  const datasheetGroup = assetGroups.find((group) => group.assetType === "datasheet");
+  const datasheetAsset = datasheetGroup?.bestAsset ?? null;
+  const missingDatasheetIssue = record.issues.find((issue) => issue.code === "missing_datasheet");
+
+  if (!record.datasheetRevision) {
+    return createChecklistItem(
+      "datasheet",
+      "Datasheet availability",
+      "missing",
+      "Missing",
+      missingDatasheetIssue?.detail ?? "No datasheet revision row is attached, so revision and extraction provenance stay incomplete."
+    );
+  }
+
+  if (datasheetAsset && isFileBackedAsset(datasheetAsset)) {
+    return createChecklistItem(
+      "datasheet",
+      "Datasheet availability",
+      "available",
+      "Stored file",
+      "Revision metadata and a file-backed datasheet asset are attached to this part."
+    );
+  }
+
+  return createChecklistItem(
+    "datasheet",
+    "Datasheet availability",
+    "review",
+    datasheetAsset?.sourceUrl ? "Reference only" : "Metadata only",
+    datasheetAsset?.sourceUrl
+      ? "Revision metadata exists, but only a referenced datasheet URL is attached."
+      : "Revision metadata exists, but no stored datasheet file is attached."
+  );
+}
+
+/**
+ * Builds the checklist row for normalized specifications captured from structured or datasheet evidence.
+ */
+function buildNormalizedSpecsChecklistItem(record: PartSearchRecord): DetailCompletenessChecklistItem {
+  if (record.metrics.length > 0) {
+    return createChecklistItem(
+      "normalized-specs",
+      "Normalized specs",
+      "available",
+      "Available",
+      `${record.metrics.length} normalized ${pluralize("spec", record.metrics.length)} are attached to this part.`
+    );
+  }
+
+  if (record.datasheetRevision || record.extractionSignals.length > 0) {
+    return createChecklistItem(
+      "normalized-specs",
+      "Normalized specs",
+      "review",
+      "Sparse",
+      "Source evidence exists, but normalized specifications are still sparse or missing."
+    );
+  }
+
+  return createChecklistItem(
+    "normalized-specs",
+    "Normalized specs",
+    "missing",
+    "Missing",
+    "No normalized specifications or supporting extraction evidence are recorded yet."
+  );
+}
+
+/**
+ * Builds the checklist row for package and mechanical confidence from stored dimensions and extraction signals.
+ */
+function buildPackageMechanicalChecklistItem(record: PartSearchRecord, assetGroups: AssetClassSummary[]): DetailCompletenessChecklistItem {
+  const packageSignal = record.extractionSignals.find((signal) => signal.signalType === "package_mechanical_dimensions");
+  const hasMechanicalDimensions = record.package.pitchMm !== null || record.package.bodyLengthMm !== null || record.package.bodyWidthMm !== null || record.package.bodyHeightMm !== null;
+  const mechanicalGroup = assetGroups.find((group) => group.assetType === "mechanical_drawing");
+
+  if (packageSignal?.extractionStatus === "available" && hasMechanicalDimensions) {
+    return createChecklistItem(
+      "package-mechanical",
+      "Package/mechanical confidence",
+      "available",
+      "Available",
+      packageSignal.notes ?? "Structured package dimensions are recorded and backed by extraction evidence."
+    );
+  }
+
+  if (hasMechanicalDimensions || packageSignal || mechanicalGroup?.bestAsset) {
+    return createChecklistItem(
+      "package-mechanical",
+      "Package/mechanical confidence",
+      "review",
+      "Needs review",
+      packageSignal?.notes ?? "Some package or mechanical evidence exists, but it still needs engineering review."
+    );
+  }
+
+  return createChecklistItem(
+    "package-mechanical",
+    "Package/mechanical confidence",
+    "missing",
+    "Missing",
+    "No extracted package dimensions or mechanical drawing evidence are recorded yet."
+  );
+}
+
+/**
+ * Builds one CAD-class checklist row from existing asset truth and generation workflow state.
+ */
+function buildCadChecklistItem(
+  assetType: AssetGenerationOption["targetAssetType"],
+  label: string,
+  assetGroups: AssetClassSummary[],
+  generationOptions: AssetGenerationOption[]
+): DetailCompletenessChecklistItem {
+  const assetGroup = assetGroups.find((group) => group.assetType === assetType);
+  const generationOption = generationOptions.find((option) => option.targetAssetType === assetType);
+
+  if (assetGroup?.readiness === "export_ready") {
+    return createChecklistItem(assetType, label, "available", "Verified", "A file-backed asset for this class is verified for export.");
+  }
+
+  if (generationOption?.workflowStatus === "review_required" || generationOption?.workflowStatus === "generated") {
+    return createChecklistItem(assetType, label, "review", "Draft in review", generationOption.reason);
+  }
+
+  if (generationOption?.workflowStatus === "requested" || generationOption?.workflowStatus === "queued" || generationOption?.workflowStatus === "processing") {
+    return createChecklistItem(assetType, label, "review", "In progress", generationOption.reason);
+  }
+
+  if (assetGroup?.readiness === "validated_file") {
+    return createChecklistItem(assetType, label, "review", "File-backed", "A file-backed asset exists, but it is not yet verified for export.");
+  }
+
+  if (assetGroup?.readiness === "downloaded_file") {
+    return createChecklistItem(assetType, label, "review", "Downloaded", "A downloaded asset exists, but review or export verification is still pending.");
+  }
+
+  if (assetGroup?.readiness === "reference_only") {
+    return createChecklistItem(assetType, label, "review", "Reference only", "Only referenced metadata exists for this asset class; no stored file is attached.");
+  }
+
+  if (assetGroup?.readiness === "failed" || generationOption?.workflowStatus === "failed") {
+    return createChecklistItem(assetType, label, "blocked", "Blocked", generationOption?.reason ?? "The latest recovery attempt failed for this asset class.");
+  }
+
+  if (generationOption?.canRequest) {
+    return createChecklistItem(assetType, label, "review", "Requestable", generationOption.reason);
+  }
+
+  return createChecklistItem(assetType, label, "missing", "Missing", "No stored asset or requestable recovery workflow is recorded for this class yet.");
+}
+
+/**
+ * Builds the connector/mating checklist row while keeping connector applicability explicit for non-connectors.
+ */
+function buildConnectorChecklistItem(record: PartSearchRecord): DetailCompletenessChecklistItem {
+  const connectorSummary = getConnectorWorkflowSummary(record);
+
+  if (!connectorSummary) {
+    return createChecklistItem(
+      "connector-data",
+      "Connector/mating data",
+      "neutral",
+      "Not applicable",
+      "This part does not expose connector-specific mate or accessory data."
+    );
+  }
+
+  if (connectorSummary.tone === "danger") {
+    return createChecklistItem("connector-data", "Connector/mating data", "blocked", "Blocked", connectorSummary.detail);
+  }
+
+  if (connectorSummary.tone === "review") {
+    return createChecklistItem("connector-data", "Connector/mating data", "review", "Needs review", connectorSummary.detail);
+  }
+
+  return createChecklistItem("connector-data", "Connector/mating data", "available", "Mapped", connectorSummary.detail);
+}
+
+/**
+ * Builds the approval/review checklist row without merging approval into export verification.
+ */
+function buildApprovalChecklistItem(record: PartSearchRecord, reviewWorkflowSummary: WorkflowSignalLabel): DetailCompletenessChecklistItem {
+  if (reviewWorkflowSummary.tone === "danger") {
+    return createChecklistItem(
+      "approval-review",
+      "Approval/review state",
+      "blocked",
+      "Blocked",
+      `${record.approval.detail} ${reviewWorkflowSummary.detail}`.trim()
+    );
+  }
+
+  if (record.approval.status === "approved" && reviewWorkflowSummary.tone === "neutral") {
+    return createChecklistItem(
+      "approval-review",
+      "Approval/review state",
+      "available",
+      "Approved",
+      "Whole-part approval is recorded, and no open asset or workflow review remains."
+    );
+  }
+
+  if (record.approval.status === "not_requested") {
+    return createChecklistItem(
+      "approval-review",
+      "Approval/review state",
+      "blocked",
+      "Not approved",
+      `${record.approval.detail} Whole-part approval remains separate from generated asset review and export promotion.`
+    );
+  }
+
+  return createChecklistItem(
+    "approval-review",
+    "Approval/review state",
+    "review",
+    record.approval.summary,
+    `${record.approval.detail} ${reviewWorkflowSummary.detail}`.trim()
+  );
+}
+
+/**
+ * Builds the export checklist row directly from the existing bundle-readiness truth.
+ */
+function buildExportChecklistItem(bundleReadiness: BundleReadinessSummary): DetailCompletenessChecklistItem {
+  if (bundleReadiness.state === "bundle_ready") {
+    return createChecklistItem("export-readiness", "Export readiness", "available", "Ready for review", bundleReadiness.reason);
+  }
+
+  if (bundleReadiness.state === "partial_bundle") {
+    return createChecklistItem("export-readiness", "Export readiness", "review", "Partial bundle", bundleReadiness.reason);
+  }
+
+  if (bundleReadiness.state === "references_only") {
+    return createChecklistItem("export-readiness", "Export readiness", "blocked", "Reference only", bundleReadiness.reason);
+  }
+
+  return createChecklistItem("export-readiness", "Export readiness", "missing", "Missing", bundleReadiness.reason);
 }
 
 /**
@@ -555,6 +1000,43 @@ function buildQuickReadinessDetail(
   workflow: WorkflowSignalLabel
 ): string {
   return `Whole-part readiness: ${record.readinessSummary.detail} Approval: ${record.approval.detail} Export bundle: ${exportReadiness.label}. CAD truth: ${assetTruth.detail} Workflow signal: ${workflow.detail}`;
+}
+
+/**
+ * Builds one checklist item with consistent tone and state-label mapping.
+ */
+function createChecklistItem(
+  id: string,
+  label: string,
+  state: DetailCompletenessChecklistItem["state"],
+  stateLabel: string,
+  detail: string
+): DetailCompletenessChecklistItem {
+  return {
+    detail,
+    id,
+    label,
+    state,
+    stateLabel,
+    tone: checklistTone(state)
+  };
+}
+
+/**
+ * Maps checklist states into the same tone vocabulary used by badges and status strips.
+ */
+function checklistTone(state: DetailCompletenessChecklistItem["state"]): ViewTone {
+  switch (state) {
+    case "available":
+      return "verified";
+    case "blocked":
+      return "danger";
+    case "review":
+      return "review";
+    case "missing":
+    case "neutral":
+      return "neutral";
+  }
 }
 
 /**

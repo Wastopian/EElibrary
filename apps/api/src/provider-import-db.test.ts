@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { buildPartDetailResponse } from "./detail-response";
-import { readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type { Pool, PoolClient } from "pg";
 
@@ -15,6 +15,12 @@ type TestPool = Pool & {
   /** Closes the in-memory pool after the test releases it from catalog-store. */
   end: () => Promise<void>;
 };
+
+/** ProviderImportPoolOptions lets focused tests turn acquisition-job fixtures on or off. */
+interface ProviderImportPoolOptions {
+  /** True when the canonical imported-part fixture should also include a succeeded acquisition job row. */
+  includeAcquisitionJobs?: boolean;
+}
 
 /**
  * Verifies imported provider-neutral rows are visible through DB-backed search and detail reads.
@@ -65,6 +71,161 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     assert.match(detailResponse.bundleReadiness.reason, /no file-backed CAD assets/u);
     assert.equal(detailResponse.generationOptions.find((option) => option.targetAssetType === "symbol")?.canRequest, false);
     assert.match(detailResponse.generationOptions.find((option) => option.targetAssetType === "footprint")?.reason ?? "", /Package\/mechanical dimensions extraction/u);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies detail reads expose the latest matching acquisition job summary for imported parts.
+ */
+test("DB-backed detail response includes acquisition summary for a matching provider acquisition job", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+
+    const detailResult = await readPartDetailRecordsFromDatabase("part-jlcparts-c1091");
+    const acquisitionSummary = await readPartAcquisitionSummaryFromDatabase("part-jlcparts-c1091");
+
+    assert.equal(detailResult.status, "available");
+    assert.equal(acquisitionSummary.state, "available");
+    assert.equal(acquisitionSummary.providerId, "jlcparts");
+    assert.equal(acquisitionSummary.providerPartKey, "C1091");
+    assert.equal(acquisitionSummary.requestedLookup, "RC-02W300JT");
+    assert.equal(acquisitionSummary.lastJobStatus, "succeeded");
+    assert.equal(acquisitionSummary.requestedBy, null);
+
+    if (detailResult.status !== "available") {
+      throw new Error("expected DB-backed detail records");
+    }
+
+    const detailRecord = detailResult.records.find((record) => record.part.id === "part-jlcparts-c1091");
+
+    assert.ok(detailRecord, "expected imported record in DB-backed detail");
+
+    const detailResponse = buildPartDetailResponse(detailRecord, detailResult.records, acquisitionSummary);
+
+    assert.equal(detailResponse.acquisitionSummary.state, "available");
+    assert.equal(detailResponse.acquisitionSummary.sourceUrl, "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies direct part-linked acquisition jobs stay authoritative even when newer source-derived matches exist.
+ */
+test("DB-backed detail acquisition summary prefers direct jobs over newer source-derived matches", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await pool.query(`
+      INSERT INTO provider_acquisition_jobs VALUES (
+        'acqjob-jlcparts-c1091-refresh-failed',
+        'jlcparts',
+        'C1091',
+        'C1091',
+        'Guangdong Fenghua Advanced Tech',
+        'RC-02W300JT',
+        '0402',
+        'https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html',
+        'exact_provider_part_id',
+        1,
+        'failed',
+        'admin-refresh',
+        '2026-04-18T10:00:00.000Z',
+        NULL,
+        NULL,
+        'imported',
+        'PROVIDER_IMPORT_FAILED',
+        'Refresh failed after the canonical part already existed.',
+        '2026-04-18T10:00:03.000Z',
+        '2026-04-18T10:00:05.000Z',
+        '2026-04-18T10:00:05.000Z'
+      )
+    `);
+
+    const acquisitionSummary = await readPartAcquisitionSummaryFromDatabase("part-jlcparts-c1091");
+
+    assert.equal(acquisitionSummary.state, "available");
+    assert.equal(acquisitionSummary.providerPartKey, "C1091");
+    assert.equal(acquisitionSummary.requestedLookup, "RC-02W300JT");
+    assert.equal(acquisitionSummary.lastJobStatus, "succeeded");
+    assert.equal(acquisitionSummary.completedAt, "2026-04-12T06:57:40.000Z");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies acquisition history can still resolve through attached source rows when no direct acquisition job is recorded.
+ */
+test("DB-backed detail acquisition summary can resolve through source provider keys only when no direct job exists", async () => {
+  const pool = createProviderImportPool({ includeAcquisitionJobs: false });
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await pool.query(`
+      INSERT INTO provider_acquisition_jobs VALUES (
+        'acqjob-jlcparts-c1091-source-fallback',
+        'jlcparts',
+        'C1091',
+        'C1091',
+        'Guangdong Fenghua Advanced Tech',
+        'RC-02W300JT',
+        '0402',
+        'https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html',
+        'exact_provider_part_id',
+        1,
+        'failed',
+        'admin-refresh',
+        '2026-04-18T10:00:00.000Z',
+        NULL,
+        NULL,
+        'imported',
+        'PROVIDER_IMPORT_FAILED',
+        'Refresh failed after the canonical part already existed.',
+        '2026-04-18T10:00:03.000Z',
+        '2026-04-18T10:00:05.000Z',
+        '2026-04-18T10:00:05.000Z'
+      )
+    `);
+
+    const acquisitionSummary = await readPartAcquisitionSummaryFromDatabase("part-jlcparts-c1091");
+
+    assert.equal(acquisitionSummary.state, "available");
+    assert.equal(acquisitionSummary.providerPartKey, "C1091");
+    assert.equal(acquisitionSummary.requestedLookup, "C1091");
+    assert.equal(acquisitionSummary.lastJobStatus, "failed");
+    assert.equal(acquisitionSummary.completedAt, "2026-04-18T10:00:05.000Z");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies legacy/manual imported parts stay explicit when source evidence exists without acquisition job history.
+ */
+test("DB-backed detail acquisition summary returns legacy_source_only when source rows exist without acquisition jobs", async () => {
+  const pool = createProviderImportPool({ includeAcquisitionJobs: false });
+
+  try {
+    setCatalogStorePoolForTests(pool);
+
+    const acquisitionSummary = await readPartAcquisitionSummaryFromDatabase("part-jlcparts-c1091");
+
+    assert.equal(acquisitionSummary.state, "legacy_source_only");
+    assert.equal(acquisitionSummary.providerId, "jlcparts");
+    assert.equal(acquisitionSummary.providerPartKey, "C1091");
+    assert.equal(acquisitionSummary.requestedLookup, null);
+    assert.equal(acquisitionSummary.lastJobStatus, null);
+    assert.match(acquisitionSummary.reason ?? "", /no acquisition job history/i);
   } finally {
     setCatalogStorePoolForTests(null);
     await pool.end();
@@ -294,11 +455,12 @@ test("DB-backed detail uses lightweight related-part summary reads", async () =>
 /**
  * Creates an in-memory Postgres-compatible pool seeded with one imported provider record.
  */
-function createProviderImportPool(): TestPool {
+function createProviderImportPool(options: ProviderImportPoolOptions = {}): TestPool {
   const db = newDb();
+  const includeAcquisitionJobs = options.includeAcquisitionJobs ?? true;
 
   db.public.none(buildMinimalCatalogSchemaSql());
-  db.public.none(buildProviderImportRowsSql());
+  db.public.none(buildProviderImportRowsSql(includeAcquisitionJobs));
 
   const { Pool: MemoryPool } = db.adapters.createPg();
 
@@ -416,13 +578,15 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE part_issues (id TEXT, part_id TEXT, issue_code TEXT, severity TEXT, status TEXT, assigned_to TEXT, resolution_notes TEXT, resolved_at TIMESTAMPTZ, summary TEXT, detail TEXT, source TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_source_reconciliations (part_id TEXT, preferred_source_record_id TEXT, resolution_status TEXT, notes TEXT, updated_by TEXT, updated_at TIMESTAMPTZ);
     CREATE TABLE part_risk_flags (id TEXT, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE provider_acquisition_jobs (id TEXT, provider_id TEXT, provider_part_key TEXT, requested_lookup TEXT, manufacturer_name TEXT, mpn TEXT, package_name TEXT, source_url TEXT, match_type TEXT, match_confidence NUMERIC, job_status TEXT, requested_by TEXT, requested_at TIMESTAMPTZ, part_id TEXT, import_outcome TEXT, previous_import_status TEXT, error_code TEXT, error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE provider_acquisition_job_events (id TEXT, job_id TEXT, event_type TEXT, message TEXT, detail JSONB, created_at TIMESTAMPTZ);
   `;
 }
 
 /**
  * Builds canonical rows for the real C1091/RC-02W300JT jlcparts import shape.
  */
-function buildProviderImportRowsSql(): string {
+function buildProviderImportRowsSql(includeAcquisitionJobs = true): string {
   return `
     INSERT INTO manufacturers VALUES ('mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Guangdong Fenghua Advanced Tech', '{"FH","FH(Guangdong Fenghua Advanced Tech)"}', NULL);
     INSERT INTO packages VALUES ('pkg-jlcparts-0402', '0402', 2, NULL, NULL, NULL, NULL);
@@ -437,6 +601,11 @@ function buildProviderImportRowsSql(): string {
     INSERT INTO part_approvals VALUES ('part-jlcparts-c1091', 'not_requested', 'Approval not requested', 'Approval has not been requested yet, so the part should not be treated as engineer-ready.', ARRAY['No approval decision recorded.'], NULL, NULL, '2026-04-12T06:57:40.000Z');
     INSERT INTO part_issues VALUES ('issue-jlcparts-c1091-missing-cad', 'part-jlcparts-c1091', 'missing_verified_cad', 'error', 'open', NULL, NULL, NULL, 'No file-backed CAD evidence is attached for export or downstream design handoff.', 'No file-backed CAD evidence is attached for export or downstream design handoff.', 'asset_truth', '2026-04-12T06:57:40.000Z');
     INSERT INTO part_risk_flags VALUES ('risk-jlcparts-c1091-partial-data', 'part-jlcparts-c1091', 'partial_readiness_data', 'Partial readiness data', 'Readiness evidence is still partial and should be reviewed before relying on this record.', 'review', '2026-04-12T06:57:40.000Z');
+    ${includeAcquisitionJobs ? `
+    INSERT INTO provider_acquisition_jobs VALUES ('acqjob-jlcparts-c1091', 'jlcparts', 'C1091', 'RC-02W300JT', 'Guangdong Fenghua Advanced Tech', 'RC-02W300JT', '0402', 'https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html', 'exact_mpn', 1, 'succeeded', 'admin-user', '2026-04-12T06:56:40.000Z', 'part-jlcparts-c1091', 'new_import', NULL, NULL, NULL, '2026-04-12T06:56:43.000Z', '2026-04-12T06:57:40.000Z', '2026-04-12T06:57:40.000Z');
+    INSERT INTO provider_acquisition_job_events VALUES ('acqevent-jlcparts-c1091-queued', 'acqjob-jlcparts-c1091', 'queued', 'Acquisition job queued.', '{"providerId":"jlcparts"}'::jsonb, '2026-04-12T06:56:40.000Z');
+    INSERT INTO provider_acquisition_job_events VALUES ('acqevent-jlcparts-c1091-succeeded', 'acqjob-jlcparts-c1091', 'succeeded', 'Acquisition job succeeded.', '{"partId":"part-jlcparts-c1091"}'::jsonb, '2026-04-12T06:57:40.000Z');
+    ` : ""}
   `;
 }
 

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getAllPartRecords } from "@ee-library/shared/search";
-import { buildPartDetailResponse } from "../../../../../api/src/detail-response";
+import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary } from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
 
 /**
@@ -81,6 +81,205 @@ test("connector detail elevates connector build set near the top of the readines
     assert.match(html, /Implementation-friendly mate and accessory context/u);
   } finally {
     restoreFetch();
+  }
+});
+
+/**
+ * Verifies imported parts show acquisition provenance and the explicit imported-does-not-mean boundary copy.
+ */
+test("part detail renders acquisition summary fields and imported boundary copy", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seeded regulator part");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, {
+        completedAt: "2026-04-18T10:03:00.000Z",
+        lastJobStatus: "succeeded",
+        manufacturerName: "Texas Instruments",
+        mpn: "TPS7A02DBVR",
+        providerId: "jlcparts",
+        providerPartKey: "C2841794",
+        reason: null,
+        requestedAt: "2026-04-18T10:00:00.000Z",
+        requestedBy: null,
+        requestedLookup: "TPS7A02DBVR",
+        sourceUrl: "https://lcsc.com/product-detail/example",
+        state: "available"
+      }),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /Acquisition summary/u);
+    assert.match(html, /Imported via acquisition job/u);
+    assert.match(html, /C2841794/u);
+    assert.match(html, /TPS7A02DBVR/u);
+    assert.match(html, /Imported does not mean approved, export-ready, or CAD-verified/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies legacy source-only provenance stays explicit without pretending a recorded acquisition job exists.
+ */
+test("part detail renders legacy source-only acquisition state explicitly", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seeded regulator part");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, {
+        completedAt: null,
+        lastJobStatus: null,
+        manufacturerName: null,
+        mpn: null,
+        providerId: "jlcparts",
+        providerPartKey: "C2841794",
+        reason: "This part has attached provider source evidence, but no acquisition job history was recorded for it.",
+        requestedAt: null,
+        requestedBy: null,
+        requestedLookup: null,
+        sourceUrl: "https://lcsc.com/product-detail/example",
+        state: "legacy_source_only"
+      }),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /Legacy source evidence only/u);
+    assert.match(html, /no acquisition job history was recorded for it/u);
+    assert.match(html, /Imported does not mean approved, export-ready, or CAD-verified/u);
+    assert.doesNotMatch(html, /Imported via acquisition job/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies the completeness checklist can show a realistic mix of available, review, blocked, and missing states.
+ */
+test("part detail renders the completeness checklist with realistic mixed states", async () => {
+  const records = getAllPartRecords();
+  const baseRecord = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(baseRecord, "expected seeded regulator part");
+
+  const record = structuredClone(baseRecord);
+  record.datasheetRevision = null;
+  record.approval = {
+    ...record.approval,
+    detail: "Approval has not been requested yet, so the part should not be treated as engineer-ready.",
+    status: "not_requested",
+    summary: "Approval not requested"
+  };
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, {
+        completedAt: null,
+        lastJobStatus: null,
+        manufacturerName: null,
+        mpn: null,
+        providerId: null,
+        providerPartKey: null,
+        reason: "No provider acquisition job or attached provider source evidence is recorded for this part yet.",
+        requestedAt: null,
+        requestedBy: null,
+        requestedLookup: null,
+        sourceUrl: null,
+        state: "not_recorded"
+      }),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /Completeness checklist/u);
+    assert.match(html, /Identity confidence/u);
+    assert.match(html, /Datasheet availability/u);
+    assert.match(html, /Symbol availability/u);
+    assert.match(html, /Approval\/review state/u);
+    assert.match(html, /Available/u);
+    assert.match(html, /Missing/u);
+    assert.match(html, /Not approved/u);
+    assert.match(html, /Requestable|Needs review|Draft in review/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies no-job and seed-fallback detail states stay explicit instead of inventing acquisition history.
+ */
+test("part detail keeps no-history and seed-fallback acquisition states explicit", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seeded regulator part");
+
+  const restoreNoHistoryFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, {
+        completedAt: null,
+        lastJobStatus: null,
+        manufacturerName: null,
+        mpn: null,
+        providerId: null,
+        providerPartKey: null,
+        reason: "No provider acquisition job or attached provider source evidence is recorded for this part yet.",
+        requestedAt: null,
+        requestedBy: null,
+        requestedLookup: null,
+        sourceUrl: null,
+        state: "not_recorded"
+      }),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /No acquisition history recorded/u);
+    assert.match(html, /No provider acquisition job or attached provider source evidence is recorded for this part yet/u);
+    assert.doesNotMatch(html, /Imported via acquisition job/u);
+  } finally {
+    restoreNoHistoryFetch();
+  }
+
+  const restoreSeedFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(
+        record,
+        records,
+        buildUnavailablePartAcquisitionSummary("Acquisition history is unavailable while this part detail is being served from seed fallback data.")
+      ),
+      source: "seed_fallback"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /Acquisition history unavailable/u);
+    assert.match(html, /seed fallback data/u);
+    assert.doesNotMatch(html, /Imported via acquisition job/u);
+  } finally {
+    restoreSeedFetch();
   }
 });
 

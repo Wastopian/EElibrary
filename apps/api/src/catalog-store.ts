@@ -29,6 +29,7 @@ import type {
   MateRelation,
   Package,
   Part,
+  PartAcquisitionSummary,
   PartApproval,
   PartApprovalStatus,
   PartDuplicateCandidate,
@@ -729,6 +730,35 @@ export async function readPartDetailRecordsFromDatabase(partId: string, options:
   }
 
   return { records: [...primaryRecords, ...(await readPartSummaryRecords(databasePool, relatedSummaryIds, options))], status: "available" };
+}
+
+/**
+ * Reads detail-safe acquisition history for one part without broadening search or exposing raw requester ids.
+ */
+export async function readPartAcquisitionSummaryFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<PartAcquisitionSummary> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return buildUnavailablePartAcquisitionSummary("Acquisition history is unavailable because the catalog database is not configured.");
+  }
+
+  try {
+    const latestJobRow = await readLatestPartAcquisitionJobRow(databasePool, partId, options);
+
+    if (latestJobRow) {
+      return mapPartAcquisitionSummaryFromJobRow(latestJobRow);
+    }
+
+    const latestSourceRow = await readLatestPartAcquisitionSourceRow(databasePool, partId, options);
+
+    if (latestSourceRow) {
+      return buildLegacySourceOnlyPartAcquisitionSummary(latestSourceRow);
+    }
+
+    return buildNotRecordedPartAcquisitionSummary();
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
 }
 
 /**
@@ -1490,6 +1520,136 @@ async function readPartSearchSummaryRecords(databasePool: Pool, partIds: string[
   } catch (error) {
     throw toCatalogStoreError(error);
   }
+}
+
+/**
+ * Reads the latest acquisition job relevant to one part, including source-record matches when direct part linkage is absent.
+ */
+async function readLatestPartAcquisitionJobRow(
+  databasePool: Pool,
+  partId: string,
+  options: CatalogReadOptions
+): Promise<DatabaseProviderAcquisitionJobRow | null> {
+  const directResult = await timedCatalogQuery<DatabaseProviderAcquisitionJobRow>(
+    databasePool,
+    "part_acquisition_jobs_direct",
+    `
+      SELECT
+        paj.id,
+        paj.provider_id,
+        paj.provider_part_key,
+        paj.requested_lookup,
+        paj.manufacturer_name,
+        paj.mpn,
+        paj.package_name,
+        paj.source_url,
+        paj.match_type,
+        paj.match_confidence,
+        paj.job_status,
+        paj.requested_by,
+        paj.requested_at,
+        paj.part_id,
+        paj.import_outcome,
+        paj.previous_import_status,
+        paj.error_code,
+        paj.error_message,
+        paj.started_at,
+        paj.completed_at,
+        paj.last_updated_at
+      FROM provider_acquisition_jobs paj
+      WHERE paj.part_id = $1
+      ORDER BY COALESCE(paj.completed_at, paj.started_at, paj.requested_at, paj.last_updated_at) DESC, paj.requested_at DESC, paj.id DESC
+      LIMIT 1
+    `,
+    [partId],
+    options
+  );
+
+  if (directResult.rows[0]) {
+    return directResult.rows[0];
+  }
+
+  const fallbackResult = await timedCatalogQuery<DatabaseProviderAcquisitionJobRow>(
+    databasePool,
+    "part_acquisition_jobs_source_fallback",
+    `
+      SELECT
+        paj.id,
+        paj.provider_id,
+        paj.provider_part_key,
+        paj.requested_lookup,
+        paj.manufacturer_name,
+        paj.mpn,
+        paj.package_name,
+        paj.source_url,
+        paj.match_type,
+        paj.match_confidence,
+        paj.job_status,
+        paj.requested_by,
+        paj.requested_at,
+        paj.part_id,
+        paj.import_outcome,
+        paj.previous_import_status,
+        paj.error_code,
+        paj.error_message,
+        paj.started_at,
+        paj.completed_at,
+        paj.last_updated_at
+      FROM provider_acquisition_jobs paj
+      INNER JOIN source_records sr
+        ON sr.part_id = $1
+        AND sr.provider_id = paj.provider_id
+        AND sr.provider_part_key = paj.provider_part_key
+      WHERE paj.part_id IS NULL
+      ORDER BY COALESCE(paj.completed_at, paj.started_at, paj.requested_at, paj.last_updated_at) DESC, paj.requested_at DESC, paj.id DESC
+      LIMIT 1
+    `,
+    [partId],
+    options
+  );
+
+  return fallbackResult.rows[0] ?? null;
+}
+
+/**
+ * Reads the latest attached provider source row when no acquisition job history is available for the part.
+ */
+async function readLatestPartAcquisitionSourceRow(
+  databasePool: Pool,
+  partId: string,
+  options: CatalogReadOptions
+): Promise<DatabaseSourceRow | null> {
+  const result = await timedCatalogQuery<DatabaseSourceRow>(
+    databasePool,
+    "part_acquisition_sources",
+    `
+      SELECT
+        id,
+        provider_id,
+        provider_part_key,
+        part_id,
+        source_url,
+        fetched_at,
+        raw_payload,
+        normalized_at,
+        source_last_seen_at,
+        source_last_imported_at,
+        import_status,
+        import_error_details,
+        last_updated_at
+      FROM source_records
+      WHERE part_id = $1
+      ORDER BY CASE import_status WHEN 'imported' THEN 0 ELSE 1 END ASC,
+        COALESCE(source_last_imported_at, normalized_at, fetched_at, last_updated_at) DESC,
+        last_updated_at DESC,
+        id DESC
+      LIMIT 1
+    `,
+    [partId],
+    options
+  );
+
+  return result.rows[0] ?? null;
 }
 
 /**
@@ -2612,6 +2772,77 @@ function mapAssetRow(row: DatabaseAssetRow): Asset {
     sourceUrl: row.source_url,
     storageKey: row.storage_key,
     validationStatus: row.validation_status
+  };
+}
+
+/**
+ * Maps the latest acquisition job into the detail-safe acquisition summary contract.
+ */
+function mapPartAcquisitionSummaryFromJobRow(row: DatabaseProviderAcquisitionJobRow): PartAcquisitionSummary {
+  return {
+    completedAt: row.completed_at ? toIsoTimestamp(row.completed_at) : null,
+    lastJobStatus: row.job_status,
+    manufacturerName: row.manufacturer_name,
+    mpn: row.mpn,
+    providerId: row.provider_id,
+    providerPartKey: row.provider_part_key,
+    reason: null,
+    requestedAt: toIsoTimestamp(row.requested_at),
+    requestedBy: null,
+    requestedLookup: row.requested_lookup,
+    sourceUrl: row.source_url,
+    state: "available"
+  };
+}
+
+/**
+ * Builds the explicit legacy-source state for parts that have provider evidence but no recorded acquisition job.
+ */
+function buildLegacySourceOnlyPartAcquisitionSummary(row: DatabaseSourceRow): PartAcquisitionSummary {
+  return {
+    completedAt: null,
+    lastJobStatus: null,
+    manufacturerName: null,
+    mpn: null,
+    providerId: row.provider_id,
+    providerPartKey: row.provider_part_key,
+    reason: "This part has attached provider source evidence, but no acquisition job history was recorded for it.",
+    requestedAt: null,
+    requestedBy: null,
+    requestedLookup: null,
+    sourceUrl: row.source_url,
+    state: "legacy_source_only"
+  };
+}
+
+/**
+ * Builds the honest default when neither acquisition jobs nor provider source rows are recorded for a part.
+ */
+function buildNotRecordedPartAcquisitionSummary(): PartAcquisitionSummary {
+  return {
+    completedAt: null,
+    lastJobStatus: null,
+    manufacturerName: null,
+    mpn: null,
+    providerId: null,
+    providerPartKey: null,
+    reason: "No provider acquisition job or attached provider source evidence is recorded for this part yet.",
+    requestedAt: null,
+    requestedBy: null,
+    requestedLookup: null,
+    sourceUrl: null,
+    state: "not_recorded"
+  };
+}
+
+/**
+ * Builds an unavailable acquisition summary when the detail route cannot safely read DB-backed provenance.
+ */
+function buildUnavailablePartAcquisitionSummary(reason: string): PartAcquisitionSummary {
+  return {
+    ...buildNotRecordedPartAcquisitionSummary(),
+    reason,
+    state: "unavailable"
   };
 }
 

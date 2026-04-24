@@ -5,9 +5,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
-import { buildPartDetailResponse } from "./detail-response";
+import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
@@ -234,7 +234,20 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
       return;
     }
 
-    const detailResponse = timeSyncRouteOperation(response, "detail-build", () => buildPartDetailResponse(record, records), (result) => `${result.relatedPartSummaries.length} related summaries`);
+    const acquisitionSummary = catalog.source === "database"
+      ? await timeRouteOperation(
+          response,
+          "detail-acquisition-read",
+          () => readPartAcquisitionSummaryFromDatabase(partId, { onQueryTiming: buildQueryTimingSink(response) }),
+          (result) => result.state
+        )
+      : buildUnavailablePartAcquisitionSummary("Acquisition history is unavailable while this part detail is being served from seed fallback data.");
+    const detailResponse = timeSyncRouteOperation(
+      response,
+      "detail-build",
+      () => buildPartDetailResponse(record, records, acquisitionSummary),
+      (result) => `${result.relatedPartSummaries.length} related summaries`
+    );
 
     sendCatalogJson(response, detailResponse, catalog.source, catalog.warnings);
     return;

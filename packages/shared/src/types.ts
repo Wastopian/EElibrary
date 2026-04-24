@@ -149,6 +149,9 @@ export type ProviderAcquisitionJobStatus = "queued" | "running" | "succeeded" | 
 /** ProviderAcquisitionJobEventType keeps the first queued-job event stream coarse and explicit. */
 export type ProviderAcquisitionJobEventType = ProviderAcquisitionJobStatus;
 
+/** PartAcquisitionSummaryState keeps part-detail acquisition history explicit without changing search records. */
+export type PartAcquisitionSummaryState = "available" | "legacy_source_only" | "not_recorded" | "unavailable";
+
 /** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
 export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
 
@@ -760,6 +763,34 @@ export interface RelatedPartSummary {
   category: string;
 }
 
+/** PartAcquisitionSummary exposes detail-safe acquisition/job provenance without leaking internal user ids. */
+export interface PartAcquisitionSummary {
+  /** State explains whether the detail page has job history, only legacy source evidence, or no acquisition record. */
+  state: PartAcquisitionSummaryState;
+  /** Provider id from the latest matching acquisition or source evidence when available. */
+  providerId: string | null;
+  /** Provider-specific part key attached to the latest matching acquisition or source row when available. */
+  providerPartKey: string | null;
+  /** Exact lookup that created the latest acquisition job, or null when no job record exists. */
+  requestedLookup: string | null;
+  /** Manufacturer part number shown in the acquisition summary when it is recorded or can be safely inferred from the canonical part. */
+  mpn: string | null;
+  /** Manufacturer name shown in the acquisition summary when it is recorded or can be safely inferred from the canonical part. */
+  manufacturerName: string | null;
+  /** Provider source URL for the latest acquisition or source evidence when available. */
+  sourceUrl: string | null;
+  /** Latest matching acquisition job status, or null when no acquisition job exists for this part. */
+  lastJobStatus: ProviderAcquisitionJobStatus | null;
+  /** When the latest matching acquisition job was requested, or null when no job is recorded. */
+  requestedAt: string | null;
+  /** When the latest matching acquisition job completed, or null when it has not completed or was never recorded. */
+  completedAt: string | null;
+  /** Public detail routes do not expose raw internal requester ids, so this stays null until a safe display label exists. */
+  requestedBy: string | null;
+  /** Human-readable reason for unavailable or legacy/no-history states. */
+  reason: string | null;
+}
+
 /** PartDetailResponse enriches the base record with resolved related-part summaries. */
 export interface PartDetailResponse {
   record: PartSearchRecord;
@@ -771,6 +802,7 @@ export interface PartDetailResponse {
   workflowReviewStatuses: ReviewStatusSummary[];
   assetValidationSummaries: AssetValidationSummary[];
   assetPromotionSummaries: AssetPromotionSummary[];
+  acquisitionSummary: PartAcquisitionSummary;
 }
 
 /** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */

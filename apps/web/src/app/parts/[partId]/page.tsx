@@ -11,10 +11,33 @@ import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
 import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
-import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
+import {
+  assetTrustStageTone,
+  formatAssetPromotionBlockers,
+  formatAssetPromotionHistory,
+  formatAssetSourceLabel,
+  formatAssetTrustStageLabel,
+  formatAssetValidationEvidence,
+  formatDatasheetParseConfidence,
+  formatGenerationWorkflowLabel,
+  formatReviewStateLabel,
+  getAssetTruthSummary,
+  getConnectorWorkflowSummary,
+  getImportedPartBoundaryCopy,
+  getPartAcquisitionStateLabel,
+  getPartCompletenessChecklist,
+  getQuickReadinessSummary,
+  getRecoveryWorkflowSummary,
+  getReviewWorkflowSummary,
+  reviewStateTone,
+  shouldRenderAssetPromotionAction,
+  shouldRenderConnectorSections,
+  shouldRenderGenerationOptions,
+  shouldRenderReviewActions
+} from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { DetailCompletenessChecklistItem, ViewTone } from "../../../lib/detail-view-model";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +46,11 @@ interface DetailPageProps {
   params: Promise<{ partId: string }>;
 }
 
+/** PartDetailPageDetail extracts the full detail payload shape directly from the API client return type. */
+type PartDetailPageDetail = NonNullable<Awaited<ReturnType<typeof fetchPartDetail>>>;
+
 /** PartDetailPageRecord extracts the detail record shape directly from the API client return type. */
-type PartDetailPageRecord = NonNullable<Awaited<ReturnType<typeof fetchPartDetail>>>["record"];
+type PartDetailPageRecord = PartDetailPageDetail["record"];
 
 /** DetailRiskFlag keeps derived risk messaging explicit and severity-based. */
 type DetailRiskFlag = {
@@ -53,7 +79,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const connectorSummary = getConnectorWorkflowSummary(record);
   const recoverySummary = getRecoveryWorkflowSummary(record);
   const quickReadinessSummary = getQuickReadinessSummary(record);
-  const reviewWorkflowSummary = buildReviewWorkflowSummary(assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
+  const reviewWorkflowSummary = getReviewWorkflowSummary(assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
+  const acquisitionSummarySignal = getPartAcquisitionStateLabel(detail.acquisitionSummary);
+  const importedBoundaryCopy = getImportedPartBoundaryCopy(detail.acquisitionSummary);
+  const completenessChecklist = getPartCompletenessChecklist(record, assetGroups, bundleReadiness, generationOptions, reviewWorkflowSummary);
   const latestSource = record.sources[0];
   const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
     label: formatMetricLabel(metric.metricKey),
@@ -182,6 +211,15 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           readinessSummary={record.readinessSummary}
           reviewWorkflowSummary={reviewWorkflowSummary}
         />
+
+        <div className="detail-two-col">
+          <SectionPanel description="Where this part came from and whether the current detail page has job-backed acquisition provenance." title="Acquisition summary">
+            <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
+          </SectionPanel>
+          <SectionPanel description="Compact engineering-readiness checkpoints derived from the existing detail truth." title="Completeness checklist">
+            <DetailCompletenessChecklist items={completenessChecklist} />
+          </SectionPanel>
+        </div>
 
         <div className="detail-overview-grid">
           <DetailContextPanel
@@ -530,7 +568,7 @@ function DetailReadinessSummary({
   connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>;
   quickReadinessSummary: ReturnType<typeof getQuickReadinessSummary>;
   readinessSummary: PartDetailPageRecord["readinessSummary"];
-  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
+  reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
     <section aria-label="Readiness summary" className={`detail-readiness-summary detail-readiness-summary--${quickReadinessSummary.tone}`}>
@@ -546,7 +584,7 @@ function DetailReadinessSummary({
           <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
           <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
           <StatusBadge label={connectorOrRecoverySummary.label} tone={mapViewToneToBadge(connectorOrRecoverySummary.tone)} />
-          <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+          <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
         </div>
       </div>
 
@@ -577,6 +615,119 @@ function DetailReadinessSummary({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Renders the acquisition/source summary without pretending import implies approval or export readiness.
+ */
+function DetailAcquisitionSummary({
+  acquisitionSummary,
+  boundaryCopy,
+  summarySignal
+}: {
+  acquisitionSummary: PartDetailPageDetail["acquisitionSummary"];
+  boundaryCopy: string | null;
+  summarySignal: ReturnType<typeof getPartAcquisitionStateLabel>;
+}) {
+  return (
+    <div className="detail-acquisition-summary">
+      <div className="detail-acquisition-summary__lead">
+        <div>
+          <p className="app-kicker">Acquisition provenance</p>
+          <h3>{summarySignal.label}</h3>
+          <p>{summarySignal.detail}</p>
+        </div>
+        <div className="detail-acquisition-summary__badges">
+          <StatusBadge label={summarySignal.label} tone={mapViewToneToBadge(summarySignal.tone)} />
+          {acquisitionSummary.lastJobStatus ? <StatusBadge label={`Job ${acquisitionSummary.lastJobStatus}`} tone={acquisitionJobStatusTone(acquisitionSummary.lastJobStatus)} /> : null}
+        </div>
+      </div>
+
+      {boundaryCopy ? (
+        <p className="detail-acquisition-summary__boundary">
+          <strong>{boundaryCopy}</strong> Use the completeness checklist below to confirm what still needs review before engineering use or export.
+        </p>
+      ) : null}
+
+      <dl className="detail-acquisition-grid">
+        <div>
+          <dt>Provider</dt>
+          <dd>{acquisitionSummary.providerId ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Provider part key</dt>
+          <dd className="ui-mono">{acquisitionSummary.providerPartKey ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Requested lookup</dt>
+          <dd className="ui-mono">{acquisitionSummary.requestedLookup ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Manufacturer</dt>
+          <dd>{acquisitionSummary.manufacturerName ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>MPN</dt>
+          <dd className="ui-mono">{acquisitionSummary.mpn ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Latest job status</dt>
+          <dd>{acquisitionSummary.lastJobStatus ?? "No job recorded"}</dd>
+        </div>
+        <div>
+          <dt>Requested at</dt>
+          <dd>{acquisitionSummary.requestedAt ? formatDateTime(acquisitionSummary.requestedAt) : "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Completed at</dt>
+          <dd>{acquisitionSummary.completedAt ? formatDateTime(acquisitionSummary.completedAt) : "Not recorded"}</dd>
+        </div>
+        <div className="detail-acquisition-grid__wide">
+          <dt>Source URL</dt>
+          <dd>
+            {acquisitionSummary.sourceUrl ? (
+              <a href={acquisitionSummary.sourceUrl}>{acquisitionSummary.sourceUrl}</a>
+            ) : (
+              "No source URL recorded"
+            )}
+          </dd>
+        </div>
+        {acquisitionSummary.reason ? (
+          <div className="detail-acquisition-grid__wide">
+            <dt>Acquisition note</dt>
+            <dd>{acquisitionSummary.reason}</dd>
+          </div>
+        ) : null}
+        {acquisitionSummary.requestedBy ? (
+          <div>
+            <dt>Requested by</dt>
+            <dd>{acquisitionSummary.requestedBy}</dd>
+          </div>
+        ) : null}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Renders the compact engineering-readiness checklist derived from existing detail truth only.
+ */
+function DetailCompletenessChecklist({ items }: { items: DetailCompletenessChecklistItem[] }) {
+  return (
+    <div className="detail-completeness-list" aria-label="Completeness checklist">
+      {items.map((item) => (
+        <article className={`detail-completeness-item detail-completeness-item--${item.state}`} key={item.id}>
+          <div className="detail-completeness-item__lead">
+            <div>
+              <strong>{item.label}</strong>
+              <p>{item.detail}</p>
+            </div>
+            <StatusBadge label={item.stateLabel} tone={mapViewToneToBadge(item.tone)} />
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -641,7 +792,7 @@ function DetailHeroWorkbench({
   approval: PartDetailPageRecord["approval"];
   bundleReadiness: { label: string; reason: string; state: BundleReadinessState };
   connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>;
-  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
+  reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
     <section aria-label="Top-level decision rail" className="detail-workbench-rail">
@@ -660,7 +811,7 @@ function DetailHeroWorkbench({
         <strong>{approval.summary}</strong>
         <p>{approval.detail}</p>
         <div className="detail-workbench-rail__badges">
-          <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+          <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
           <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
         </div>
       </div>
@@ -804,7 +955,7 @@ function DetailActionRail({
   bundleReadiness: { label: string; reason: string; state: BundleReadinessState };
   issues: PartDetailPageRecord["issues"];
   riskFlags: PartDetailPageRecord["riskFlags"];
-  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone };
+  reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
     <aside className="detail-action-rail" aria-label="Readiness blockers and next actions">
@@ -844,7 +995,7 @@ function DetailActionRail({
         <span>Review and export state</span>
         <div className="detail-action-rail__badges">
           <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
-          <StatusBadge label={reviewWorkflowSummary.label} tone={reviewWorkflowSummary.tone} />
+          <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
           <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
         </div>
         <p>{approval.detail}</p>
@@ -887,7 +1038,7 @@ function buildDetailWarnings(
   assetTruthSummary: ReturnType<typeof getAssetTruthSummary>,
   connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>,
   bundleReadiness: { reason: string; state: BundleReadinessState },
-  reviewWorkflowSummary: { detail: string; label: string; tone: BadgeTone }
+  reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>
 ): DetailRiskFlag[] {
   const warnings: DetailRiskFlag[] = [];
 
@@ -932,64 +1083,6 @@ function buildDetailWarnings(
   }
 
   return warnings;
-}
-
-/**
- * Summarizes review and promotion state without treating approval as export verification.
- */
-function buildReviewWorkflowSummary(assetReviewStatuses: ReviewStatusSummary[], workflowReviewStatuses: ReviewStatusSummary[], promotionSummaries: AssetPromotionSummary[]): { detail: string; label: string; tone: BadgeTone } {
-  const statuses = [...assetReviewStatuses, ...workflowReviewStatuses];
-  const promotionReadyCount = promotionSummaries.filter((summary) => summary.canPromote).length;
-  const pendingCount = statuses.filter((status) => status.state === "pending_review").length;
-  const changesRequestedCount = statuses.filter((status) => status.state === "changes_requested").length;
-  const rejectedCount = statuses.filter((status) => status.state === "rejected").length;
-  const verifiedCount = statuses.filter((status) => status.state === "verified_for_export").length;
-
-  if (promotionReadyCount > 0) {
-    return {
-      detail: "Validation evidence is present. Verified-for-export still requires the explicit promotion action.",
-      label: `${promotionReadyCount} ready to promote`,
-      tone: "info"
-    };
-  }
-
-  if (pendingCount > 0) {
-    return {
-      detail: "Generated or newly sourced outputs are waiting for review and are not export-ready.",
-      label: `${pendingCount} in review`,
-      tone: "review"
-    };
-  }
-
-  if (changesRequestedCount > 0) {
-    return {
-      detail: "At least one reviewed output needs changes before approval or promotion can continue.",
-      label: "Changes requested",
-      tone: "review"
-    };
-  }
-
-  if (rejectedCount > 0) {
-    return {
-      detail: "Rejected outputs stay outside trust and export readiness until replaced or reworked.",
-      label: "Rejected output",
-      tone: "danger"
-    };
-  }
-
-  if (verifiedCount > 0) {
-    return {
-      detail: "At least one asset has passed review, validation evidence, and explicit export promotion.",
-      label: `${verifiedCount} verified for export`,
-      tone: "verified"
-    };
-  }
-
-  return {
-    detail: "No asset or generation workflow is currently waiting for review.",
-    label: "No open review",
-    tone: "neutral"
-  };
 }
 
 /**
@@ -1514,6 +1607,20 @@ function approvalStatusTone(status: PartDetailPageRecord["approval"]["status"]):
     not_applicable: "neutral",
     not_requested: "review",
     pending_review: "info"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Maps acquisition job status into explicit badge tone without treating import as approval.
+ */
+function acquisitionJobStatusTone(status: NonNullable<PartAcquisitionSummary["lastJobStatus"]>): BadgeTone {
+  const tones: Record<NonNullable<PartAcquisitionSummary["lastJobStatus"]>, BadgeTone> = {
+    failed: "review",
+    queued: "info",
+    running: "info",
+    succeeded: "info"
   };
 
   return tones[status];
