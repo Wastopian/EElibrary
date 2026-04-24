@@ -29,8 +29,10 @@ import { localCatalogProviderAdapter } from "./providers/local-catalog-provider"
 
 /** ProviderPartRequest describes the minimum lookup input for future provider fetches. */
 export interface ProviderPartRequest {
-  /** Manufacturer part number requested by the ingestion worker. */
-  mpn: string;
+  /** Manufacturer part number requested by the ingestion worker when the import is MPN-driven. */
+  mpn?: string;
+  /** Provider-specific exact part identifier, such as an LCSC code, when intake selected a provider key. */
+  providerPartId?: string;
   /** Optional manufacturer hint used only to narrow provider lookup. */
   manufacturerName?: string;
   /** Optional provider product URL retained as intake context or lookup source. */

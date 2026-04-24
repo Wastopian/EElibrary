@@ -143,6 +143,12 @@ export type SourceImportStatus = "imported" | "failed";
 /** ProviderLookupMatchType keeps Phase 1 provider lookup results strictly exact-match only. */
 export type ProviderLookupMatchType = "exact_mpn" | "exact_provider_part_id";
 
+/** ProviderAcquisitionJobStatus is the durable queued-to-terminal lifecycle for provider acquisition. */
+export type ProviderAcquisitionJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+/** ProviderAcquisitionJobEventType keeps the first queued-job event stream coarse and explicit. */
+export type ProviderAcquisitionJobEventType = ProviderAcquisitionJobStatus;
+
 /** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
 export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
 
@@ -871,6 +877,60 @@ export interface ProviderLookupCandidateBase {
 export interface ProviderLookupCandidate extends ProviderLookupCandidateBase {
   /** True only when the current request context could use the existing admin-gated import route. */
   importAllowed: boolean;
+}
+
+/** ProviderAcquisitionJob stores one admin-gated provider intake job without implying part approval. */
+export interface ProviderAcquisitionJob {
+  id: string;
+  providerId: string;
+  providerPartKey: string;
+  requestedLookup: string;
+  manufacturerName: string | null;
+  mpn: string | null;
+  package: string | null;
+  sourceUrl: string | null;
+  matchType: ProviderLookupMatchType;
+  matchConfidence: number;
+  jobStatus: ProviderAcquisitionJobStatus;
+  requestedBy: string;
+  requestedAt: string;
+  partId: string | null;
+  importOutcome: ProviderImportOutcome | null;
+  previousImportStatus: SourceImportStatus | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** ProviderAcquisitionJobEvent records coarse queue lifecycle transitions and error context. */
+export interface ProviderAcquisitionJobEvent {
+  id: string;
+  jobId: string;
+  eventType: ProviderAcquisitionJobEventType;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+/** ProviderAcquisitionJobCreateInput is the admin-facing intake body built from an exact lookup candidate. */
+export interface ProviderAcquisitionJobCreateInput {
+  providerId: string;
+  providerPartKey: string;
+  requestedLookup: string;
+  manufacturerName?: string | null;
+  mpn?: string | null;
+  package?: string | null;
+  sourceUrl?: string | null;
+  matchType: ProviderLookupMatchType;
+  matchConfidence: number;
+}
+
+/** ProviderAcquisitionJobDetailResponse returns one job plus its coarse lifecycle events. */
+export interface ProviderAcquisitionJobDetailResponse {
+  job: ProviderAcquisitionJob;
+  events: ProviderAcquisitionJobEvent[];
 }
 
 /** ProviderImportCreateResponse summarizes one successful provider import without implying CAD readiness. */

@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { providerAdapters } from "./provider-adapters";
 import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
+import { processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { runProviderPartImport } from "./provider-part-import";
 import type { ProviderPartRequest } from "./provider-adapters";
 import type { ProviderImportDiagnostic, SourceImportStatus } from "@ee-library/shared/types";
@@ -116,6 +117,7 @@ function buildUsageLines(): string[] {
     "npm run ingest -w @ee-library/worker -- <providerId>",
     "npm run imports -w @ee-library/worker -- [failed]",
     "npm run operations -w @ee-library/worker -- [limit]",
+    "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
     "npm run generate:drafts -w @ee-library/worker -- [limit]",
     `providerId values: ${providerIds}`
   ];
@@ -149,6 +151,30 @@ async function generateDraftAssets(limitValue?: string): Promise<void> {
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.generate_draft_assets", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Processes queued provider acquisition jobs through the shared provider import runner.
+ */
+async function processQueuedProviderAcquisitionJobs(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const summary = await timeWorkerOperation(
+      "worker.process_provider_acquisition_jobs",
+      () => processProviderAcquisitionJobs(Number.isFinite(limit) ? limit : 20),
+      timings,
+      (value) => `${value.processed.length} jobs`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.process_provider_acquisition_jobs", error, timings);
     throw error;
   }
 }
@@ -263,6 +289,11 @@ async function main(): Promise<void> {
 
   if (command === "operations") {
     await printWorkerOperationalDiagnostics(process.argv[3]);
+    return;
+  }
+
+  if (command === "acquisition-jobs") {
+    await processQueuedProviderAcquisitionJobs(process.argv[3]);
     return;
   }
 

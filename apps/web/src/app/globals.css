@@ -918,6 +918,29 @@ main > .workspace-jump-nav {
   gap: 8px;
 }
 
+.quick-provider-candidate__job-status {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.quick-provider-candidate__job-status p {
+  margin: 0;
+}
+
+.quick-provider-candidate__job-status--pending {
+  color: var(--color-text-muted);
+}
+
+.quick-provider-candidate__job-status--success {
+  color: var(--color-accent);
+}
+
+.quick-provider-candidate__job-status--failed,
+.quick-provider-candidate__job-status--unavailable {
+  color: var(--color-review);
+}
+
 .quick-readiness-result {
   display: grid;
   gap: 12px;
@@ -1005,6 +1028,79 @@ main > .workspace-jump-nav {
   letter-spacing: 0.08em;
   margin: 0;
   text-transform: uppercase;
+}
+
+.trust-breakdown {
+  border-top: 1px solid var(--color-border-light);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.trust-breakdown__toggle {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  list-style: none;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.trust-breakdown__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.trust-breakdown__toggle::before {
+  content: "▸ ";
+  font-size: 0.6rem;
+}
+
+details[open] .trust-breakdown__toggle::before {
+  content: "▾ ";
+}
+
+.trust-breakdown__factors {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.trust-breakdown__row {
+  display: grid;
+  gap: 3px;
+}
+
+.trust-breakdown__row p {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.quick-actions-empty {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  padding: 12px;
+}
+
+.quick-actions-empty p {
+  margin: 0 0 8px;
+}
+
+.quick-actions-empty--ready {
+  background: var(--color-plum-soft);
+  border-radius: var(--radius-sm);
+}
+
+.quick-actions-empty--partial {
+  background: var(--color-review-soft);
+  border-radius: var(--radius-sm);
+}
+
+.quick-actions-empty__link {
+  font-size: 0.8rem;
 }
 
 .quick-readiness-result__identity {

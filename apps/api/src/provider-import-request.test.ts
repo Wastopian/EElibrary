@@ -31,6 +31,8 @@ test("parseProviderImportRequest requires a lookup value", () => {
     throw new Error("expected success branch");
   }
   assert.equal(usesPartId.requestedLookup, "C1091");
+  assert.equal(usesPartId.workerRequest.providerPartId, "C1091");
+  assert.equal(usesPartId.workerRequest.mpn, undefined);
 });
 
 test("parseProviderImportRequest can derive a lookup from provider URL and preserves intake context", () => {
@@ -46,8 +48,26 @@ test("parseProviderImportRequest can derive a lookup from provider URL and prese
   }
 
   assert.equal(result.requestedLookup, "C1091");
+  assert.equal(result.workerRequest.providerPartId, "C1091");
+  assert.equal(result.workerRequest.mpn, undefined);
   assert.equal(result.workerRequest.providerUrl?.includes("C1091.html"), true);
   assert.equal(result.workerRequest.datasheetUrl?.includes("C1091.pdf"), true);
+});
+
+test("parseProviderImportRequest preserves a true MPN while keeping provider part ids separate", () => {
+  const result = parseProviderImportRequest({
+    mpn: "RC-02W300JT",
+    providerId: "jlcparts",
+    providerPartId: "C1091"
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    throw new Error("expected success branch");
+  }
+
+  assert.equal(result.workerRequest.mpn, "RC-02W300JT");
+  assert.equal(result.workerRequest.providerPartId, "C1091");
 });
 
 test("formatProviderImportFailureMessage avoids raw DATABASE_URL jargon", () => {

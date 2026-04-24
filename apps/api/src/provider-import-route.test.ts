@@ -49,7 +49,7 @@ test("POST /imports/provider returns catalog envelope on successful import", asy
     previousImportStatus: null,
     providerId: "jlcparts",
     providerPartKey: "C1091",
-    requestedMpn: "C1091",
+    requestedLookup: "C1091",
     sourceLastImportedAt: "2026-04-15T00:00:00.000Z",
     sourceLastSeenAt: "2026-04-15T00:00:00.000Z",
     timings: []

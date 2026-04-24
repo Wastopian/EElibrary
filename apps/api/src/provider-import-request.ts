@@ -34,7 +34,8 @@ export function parseProviderImportRequest(body: unknown): ParsedProviderImportR
   const providerUrl = typeof record.providerUrl === "string" ? record.providerUrl.trim() : "";
   const datasheetUrl = typeof record.datasheetUrl === "string" ? record.datasheetUrl.trim() : "";
   const derivedProviderLookup = providerUrl ? extractLookupFromProviderUrl(providerId, providerUrl) : null;
-  const lookup = providerPartId || derivedProviderLookup || mpn;
+  const effectiveProviderPartId = providerPartId || derivedProviderLookup || "";
+  const lookup = effectiveProviderPartId || mpn;
 
   if (!lookup) {
     return { code: "MISSING_LOOKUP", message: "Enter an MPN or a provider part id.", ok: false, statusCode: 400 };
@@ -44,7 +45,8 @@ export function parseProviderImportRequest(body: unknown): ParsedProviderImportR
   const workerRequest: ProviderPartRequest = {
     ...(datasheetUrl.length > 0 ? { datasheetUrl } : {}),
     ...(manufacturerName.length > 0 ? { manufacturerName } : {}),
-    mpn: lookup,
+    ...(mpn.length > 0 ? { mpn } : {}),
+    ...(effectiveProviderPartId.length > 0 ? { providerPartId: effectiveProviderPartId } : {}),
     ...(providerUrl.length > 0 ? { providerUrl } : {})
   };
 

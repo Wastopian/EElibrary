@@ -607,6 +607,7 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
         <div className="quick-readiness-result__trust">
           <TrustMeter label="Trust" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
           <p>{readinessCounts.passCount} pass / {readinessCounts.attentionCount} attention</p>
+          <TrustScoreBreakdown record={record} />
         </div>
       </div>
 
@@ -644,7 +645,7 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
         <section className="quick-readiness-card">
           <div className="quick-readiness-card__header">
             <span>Next Actions</span>
-            <span>{summary.actions.length} derived</span>
+            <span>{summary.actions.length > 0 ? `${summary.actions.length} derived` : "none"}</span>
           </div>
           {summary.actions.length > 0 ? (
             summary.actions.map((action) => (
@@ -654,7 +655,7 @@ function QuickReadinessResult({ record }: { record: PartSearchRecord }) {
               </div>
             ))
           ) : (
-            <p className="muted-copy">No quick actions were derived from the current catalog record.</p>
+            <EmptyActionsMessage dataCoverage={dataCoverage} exportReadiness={exportReadiness} record={record} />
           )}
         </section>
 
@@ -765,6 +766,47 @@ function QuickConnectorPreviewCard({
 }
 
 /**
+ * Renders a contextual empty state for the Next Actions card based on actual record state.
+ */
+function EmptyActionsMessage({
+  dataCoverage,
+  exportReadiness,
+  record
+}: {
+  dataCoverage: ReturnType<typeof getQuickReadinessDataCoverage>;
+  exportReadiness: ReturnType<typeof getSearchExportReadiness>;
+  record: PartSearchRecord;
+}) {
+  if (dataCoverage.partial) {
+    return (
+      <div className="quick-actions-empty quick-actions-empty--partial">
+        <p>Readiness data is incomplete — actions could not be fully derived. Open the full record to assess what is missing.</p>
+      </div>
+    );
+  }
+
+  if (record.readinessSummary.status === "ready_for_export_review" && exportReadiness.tone === "verified") {
+    return (
+      <div className="quick-actions-empty quick-actions-empty--ready">
+        <p>No blocking actions. This part has verified file-backed CAD and is ready for export review.</p>
+        <Link className="button-link button-link--quiet quick-actions-empty__link" href={`/parts/${record.part.id}`}>
+          Open full record to promote
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="quick-actions-empty">
+      <p>No specific actions were identified from the current catalog record. Open the full record for a complete assessment.</p>
+      <Link className="button-link button-link--quiet quick-actions-empty__link" href={`/parts/${record.part.id}`}>
+        Open full record
+      </Link>
+    </div>
+  );
+}
+
+/**
  * Summarizes pass-vs-attention counts without inventing any new readiness scoring.
  */
 function summarizeQuickChecks(checks: ReturnType<typeof getQuickReadinessSummary>["checks"]) {
@@ -787,22 +829,7 @@ function buildQuickResultWarnings(
 ) {
   const warnings: Array<{ detail: string; label: string; tone: "info" | "warn" }> = [];
 
-  if (assetTruth.tone === "generated") {
-    warnings.push({
-      detail: "Generated assets remain visibly generated until review, evidence, and explicit promotion are complete.",
-      label: "Generated CAD still needs review",
-      tone: "warn"
-    });
-  }
-
-  if (exportReadiness.tone !== "verified") {
-    warnings.push({
-      detail: "Export actions stay gated by file-backed verified assets, not by catalog presence or review alone.",
-      label: "Export truth stays separate",
-      tone: "warn"
-    });
-  }
-
+  // Only warn about partial readiness data — it affects whether the quick summary can be trusted at all.
   if (dataCoverage.partial) {
     warnings.push({
       detail: dataCoverage.detail,
@@ -811,23 +838,116 @@ function buildQuickResultWarnings(
     });
   }
 
-  if (record.part.lifecycleStatus !== "active") {
+  // Lifecycle warnings fire only for genuinely risky states, not for the common "active" baseline.
+  if (record.part.lifecycleStatus === "obsolete") {
     warnings.push({
-      detail: `Lifecycle is ${record.part.lifecycleStatus}. Review this part carefully before design use.`,
-      label: "Lifecycle caution",
+      detail: "This part is obsolete. Do not use in new designs — source an active replacement.",
+      label: "Part obsolete",
+      tone: "warn"
+    });
+  } else if (record.part.lifecycleStatus === "not_recommended") {
+    warnings.push({
+      detail: "Manufacturer does not recommend this part for new designs.",
+      label: "Not recommended for new designs",
       tone: "warn"
     });
   }
 
-  if (workflowSignal.tone === "review" && summary.actions.length > 0) {
+  // Connector review warnings only fire when there is a specific unresolved problem, not on every non-verified state.
+  if (workflowSignal.tone === "danger") {
     warnings.push({
       detail: workflowSignal.detail,
-      label: "Workflow gap remains",
+      label: "Connector mapping blocked",
+      tone: "warn"
+    });
+  } else if (workflowSignal.tone === "review" && record.buildableMatingSet.warningDetails.length > 0 && summary.actions.length > 0) {
+    warnings.push({
+      detail: workflowSignal.detail,
+      label: "Connector review needed",
       tone: "info"
     });
   }
 
   return warnings;
+}
+
+/**
+ * Renders an expandable trust score breakdown using the record signals already on the page.
+ */
+function TrustScoreBreakdown({ record }: { record: PartSearchRecord }) {
+  const factors = buildTrustScoreBreakdown(record);
+
+  return (
+    <details className="trust-breakdown">
+      <summary className="trust-breakdown__toggle">Score breakdown</summary>
+      <div className="trust-breakdown__factors">
+        {factors.map((factor) => (
+          <div className="trust-breakdown__row" key={factor.label}>
+            <StatusBadge label={factor.label} tone={mapViewTone(factor.tone)} />
+            <p>{factor.detail}</p>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Derives trust score factor rows from the signals already present in the search record.
+ * The overall score comes from the backend — these factors explain what the backend is likely weighing.
+ */
+function buildTrustScoreBreakdown(record: PartSearchRecord): Array<{ label: string; detail: string; tone: BadgeTone }> {
+  const factors: Array<{ label: string; detail: string; tone: BadgeTone }> = [];
+
+  const sourceCount = record.sources.length;
+  factors.push({
+    label: `${sourceCount} provider ${sourceCount === 1 ? "source" : "sources"}`,
+    detail: sourceCount > 0 ? "Provider identity and import history confirmed." : "No provider source records attached.",
+    tone: sourceCount > 0 ? "verified" : "review"
+  });
+
+  const metricCount = record.metrics.length;
+  factors.push({
+    label: `${metricCount} normalized ${metricCount === 1 ? "metric" : "metrics"}`,
+    detail: metricCount > 2 ? "Specification data extracted and normalized." : metricCount > 0 ? "Partial spec data recorded." : "No normalized specs recorded.",
+    tone: metricCount > 2 ? "verified" : metricCount > 0 ? "info" : "neutral"
+  });
+
+  if (record.datasheetRevision) {
+    const parseConfidence = record.datasheetRevision.parseConfidence;
+    const pages = record.datasheetRevision.pageCount;
+    factors.push({
+      label: `Datasheet parsed — ${Math.round(parseConfidence * 100)}% confidence`,
+      detail: `Revision ${record.datasheetRevision.revisionLabel}${pages ? `, ${pages} pages` : ""}.`,
+      tone: parseConfidence >= 0.8 ? "verified" : parseConfidence >= 0.5 ? "info" : "review"
+    });
+  } else {
+    factors.push({
+      label: "No datasheet revision",
+      detail: "Datasheet metadata has not been parsed for this record.",
+      tone: "neutral"
+    });
+  }
+
+  const cadAssets = record.assets.filter((asset) => asset.assetType === "footprint" || asset.assetType === "symbol" || asset.assetType === "three_d_model");
+  const verifiedCadCount = cadAssets.filter((asset) => asset.exportStatus === "verified_for_export").length;
+  const totalCadCount = cadAssets.length;
+  factors.push({
+    detail: verifiedCadCount > 0 ? "File-backed verified assets count toward export readiness." : totalCadCount > 0 ? "CAD exists but is not yet verified for export." : "No CAD assets are attached to this record.",
+    label: verifiedCadCount > 0 ? `${verifiedCadCount} of ${totalCadCount} CAD verified` : totalCadCount > 0 ? `${totalCadCount} CAD unverified` : "No CAD assets",
+    tone: verifiedCadCount > 0 ? "verified" : totalCadCount > 0 ? "review" : "neutral"
+  });
+
+  if (record.buildableMatingSet.confidenceScore !== null) {
+    const score = record.buildableMatingSet.confidenceScore;
+    factors.push({
+      detail: score >= 0.8 ? "High-confidence connector mapping is recorded." : score >= 0.5 ? "Moderate connector confidence — review mate details." : "Low connector confidence — check warnings before layout.",
+      label: `${Math.round(score * 100)}% connector confidence`,
+      tone: score >= 0.8 ? "verified" : score >= 0.5 ? "info" : "review"
+    });
+  }
+
+  return factors;
 }
 
 function mapViewTone(tone: string): BadgeTone {

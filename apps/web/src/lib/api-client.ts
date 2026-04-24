@@ -16,6 +16,8 @@ import type {
   PartIssueWorkflowUpdateResponse,
   PartSearchFilters,
   PartSearchRecord,
+  ProviderAcquisitionJobCreateInput,
+  ProviderAcquisitionJobDetailResponse,
   ProviderLookupCandidate,
   ProviderLookupRequestInput,
   ProviderImportCreateInput,
@@ -205,6 +207,44 @@ export async function requestProviderLookup(input: ProviderLookupRequestInput): 
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProviderLookupCandidate[]>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates one admin-gated provider acquisition job from an exact-match provider candidate.
+ */
+export async function requestProviderAcquisitionJob(input: ProviderAcquisitionJobCreateInput): Promise<ProviderAcquisitionJobDetailResponse> {
+  const response = await fetch(buildApiUrl("/provider-acquisition-jobs"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider acquisition job");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderAcquisitionJobDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Reads one admin-gated provider acquisition job for client polling.
+ */
+export async function fetchProviderAcquisitionJob(jobId: string): Promise<ProviderAcquisitionJobDetailResponse> {
+  const response = await fetch(buildApiUrl(`/provider-acquisition-jobs/${encodeURIComponent(jobId)}`), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider acquisition job");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderAcquisitionJobDetailResponse>;
 
   return envelope.data;
 }

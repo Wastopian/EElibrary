@@ -5,9 +5,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse } from "./detail-response";
+import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
@@ -26,6 +27,7 @@ import type {
   PartIssueCode,
   PartIssueWorkflowUpdateInput,
   PartIssueWorkflowStatus,
+  ProviderAcquisitionJobDetailResponse,
   ProviderLookupCandidate,
   PartSearchFilters,
   PartSearchRecord,
@@ -82,6 +84,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
   beginRouteTelemetry(response, request.method ?? "UNKNOWN", url.pathname);
   const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(url.pathname);
+  const providerAcquisitionJobMatch = /^\/provider-acquisition-jobs\/([^/]+)$/u.exec(url.pathname);
   const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(url.pathname);
   const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
@@ -96,6 +99,20 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProviderImportCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/provider-acquisition-jobs") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProviderAcquisitionJobCreate(request, response, session.sub);
+    return;
+  }
+
+  if (request.method === "GET" && providerAcquisitionJobMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProviderAcquisitionJobRead(response, decodeURIComponent(providerAcquisitionJobMatch[1]));
     return;
   }
 
@@ -136,7 +153,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, provider-lookup POST, provider-import POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
+      error: "Only GET, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -352,6 +369,96 @@ async function handleProviderImportCreate(request: IncomingMessage, response: Se
         message: formatProviderImportFailureMessage(error)
       }
     });
+  }
+}
+
+/**
+ * Handles admin-gated provider acquisition job creation from one selected exact-match candidate.
+ */
+async function handleProviderAcquisitionJobCreate(request: IncomingMessage, response: ServerResponse, requestedBy: string): Promise<void> {
+  const body = await readJsonBody<Record<string, unknown>>(request);
+
+  if (!body) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_BODY",
+        message: "Request body must be valid JSON."
+      }
+    });
+    return;
+  }
+
+  const parsed = parseProviderAcquisitionJobCreateRequest(body);
+
+  if (!parsed.ok) {
+    sendJson(response, parsed.statusCode, {
+      error: {
+        code: parsed.code,
+        message: parsed.message
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "provider-acquisition-job-create",
+      () => createProviderAcquisitionJobInDatabase(parsed.jobInput, requestedBy),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Provider acquisition jobs require a configured catalog database so queue state can be persisted."
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus<ProviderAcquisitionJobDetailResponse>(response, 202, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated provider acquisition job reads for client polling and operator status checks.
+ */
+async function handleProviderAcquisitionJobRead(response: ServerResponse, jobId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "provider-acquisition-job-read",
+      () => readProviderAcquisitionJobInDatabase(jobId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Provider acquisition jobs require a configured catalog database so queue state can be read."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "PROVIDER_ACQUISITION_JOB_NOT_FOUND",
+          message: "Provider acquisition job not found."
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
   }
 }
 
@@ -995,6 +1102,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
   if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
   if (method === "POST" && pathname === "/provider-lookups") return "api-provider-lookup";
+  if (method === "POST" && pathname === "/provider-acquisition-jobs") return "api-provider-acquisition-job-create";
+  if (method === "GET" && /^\/provider-acquisition-jobs\/[^/]+$/u.test(pathname)) return "api-provider-acquisition-job-read";
   if (method === "POST" && /^\/parts\/[^/]+\/generation-requests$/u.test(pathname)) return "api-generation-request";
   if (method === "POST" && /^\/parts\/[^/]+\/reviews$/u.test(pathname)) return "api-review-action";
   if (method === "POST" && /^\/parts\/[^/]+\/asset-promotions$/u.test(pathname)) return "api-promotion-action";
@@ -1035,6 +1144,20 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
  * Sends a typed catalog data envelope with optional degraded-state warnings.
  */
 function sendCatalogJson<TData>(response: ServerResponse, data: TData, source: CatalogDataSource, warnings?: string[], pagination?: SearchPagination): void {
+  sendCatalogJsonWithStatus(response, 200, data, source, warnings, pagination);
+}
+
+/**
+ * Sends a typed catalog data envelope with a caller-selected success status code.
+ */
+function sendCatalogJsonWithStatus<TData>(
+  response: ServerResponse,
+  statusCode: number,
+  data: TData,
+  source: CatalogDataSource,
+  warnings?: string[],
+  pagination?: SearchPagination
+): void {
   const payload: ApiEnvelope<TData> = {
     data,
     ...(pagination ? { pagination } : {}),
@@ -1042,7 +1165,7 @@ function sendCatalogJson<TData>(response: ServerResponse, data: TData, source: C
     ...(warnings && warnings.length > 0 ? { warnings } : {})
   };
 
-  sendJson(response, 200, payload);
+  sendJson(response, statusCode, payload);
 }
 
 /**

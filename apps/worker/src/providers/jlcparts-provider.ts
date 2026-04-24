@@ -144,10 +144,14 @@ interface NormalizedManufacturerName {
 export const jlcpartsProviderAdapter: ProviderAdapter = {
   async findExactPartCandidates(request) {
     try {
-      const rawPayload = await fetchJlcPartsRawPart({
-        ...(request.manufacturerName ? { manufacturerName: request.manufacturerName } : {}),
-        mpn: request.query
-      });
+      const rawPayload = await fetchJlcPartsRawPart(
+        {
+          ...(request.manufacturerName ? { manufacturerName: request.manufacturerName } : {}),
+          mpn: request.query,
+          providerPartId: request.query
+        },
+        { allowEitherIdentifier: true }
+      );
       const normalizedPart = normalizeRawPart(rawPayload);
 
       return [buildExactLookupCandidate(normalizedPart, request.query)];
@@ -173,14 +177,17 @@ export const jlcpartsProviderAdapter: ProviderAdapter = {
 /**
  * Fetches one raw provider component by exact MPN or LCSC catalog id.
  */
-async function fetchJlcPartsRawPart(request: ProviderPartRequest): Promise<RawProviderPayload> {
+async function fetchJlcPartsRawPart(
+  request: ProviderPartRequest,
+  options: { allowEitherIdentifier?: boolean } = {}
+): Promise<RawProviderPayload> {
   const index = await fetchIndex();
   const categoryEntries = prioritizeCategoryEntries(flattenCategoryEntries(index), PRIORITY_CATEGORY_SOURCENAMES);
-  const lookup = request.mpn.trim().toLowerCase();
+  const identifiers = readRequestedIdentifiers(request);
 
   for (const entry of categoryEntries) {
     const categoryFile = await fetchCategoryFile(entry.metadata.sourcename);
-    const component = findMatchingComponent(categoryFile, lookup, request.manufacturerName);
+    const component = findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
 
     if (component) {
       return {
@@ -197,7 +204,7 @@ async function fetchJlcPartsRawPart(request: ProviderPartRequest): Promise<RawPr
     }
   }
 
-  throw new Error(`jlcparts metadata record not found for ${request.mpn}`);
+  throw new Error(`jlcparts metadata record not found for ${identifiers.providerPartId ?? identifiers.mpn ?? "unknown"}`);
 }
 
 /**
@@ -210,7 +217,12 @@ function isJlcPartsNotFoundError(error: unknown): boolean {
 /**
  * Finds the requested component by exact id before doing full row validation.
  */
-function findMatchingComponent(categoryFile: JlcPartsCategoryFile, lookup: string, manufacturerName: string | undefined): JlcPartsComponent | null {
+function findMatchingComponent(
+  categoryFile: JlcPartsCategoryFile,
+  identifiers: { mpn: string | null; providerPartId: string | null },
+  manufacturerName: string | undefined,
+  options: { allowEitherIdentifier?: boolean }
+): JlcPartsComponent | null {
   const lcscIndex = categoryFile.schema.indexOf("lcsc");
   const mfrIndex = categoryFile.schema.indexOf("mfr");
 
@@ -221,14 +233,21 @@ function findMatchingComponent(categoryFile: JlcPartsCategoryFile, lookup: strin
   for (const row of categoryFile.components) {
     const candidateLcsc = readNullableString(row[lcscIndex])?.toLowerCase();
     const candidateMpn = readNullableString(row[mfrIndex])?.toLowerCase();
+    const matchesProviderPartId = Boolean(identifiers.providerPartId && candidateLcsc === identifiers.providerPartId);
+    const matchesMpn = Boolean(identifiers.mpn && candidateMpn === identifiers.mpn);
+    const matchesIdentifier = options.allowEitherIdentifier
+      ? matchesProviderPartId || matchesMpn
+      : identifiers.providerPartId
+        ? matchesProviderPartId
+        : matchesMpn;
 
-    if (candidateLcsc !== lookup && candidateMpn !== lookup) {
+    if (!matchesIdentifier) {
       continue;
     }
 
     const component = mapComponentRow(categoryFile.schema, row);
 
-    if (matchesPartRequest(component, lookup, manufacturerName)) {
+    if (matchesPartRequest(component, identifiers, manufacturerName, options)) {
       return component;
     }
   }
@@ -561,15 +580,39 @@ function readLifecycleStatus(component: JlcPartsComponent): LifecycleStatus {
 /**
  * Returns true when a component exactly matches the requested MPN or LCSC id.
  */
-function matchesPartRequest(component: JlcPartsComponent, lookup: string, manufacturerName: string | undefined): boolean {
+function matchesPartRequest(
+  component: JlcPartsComponent,
+  identifiers: { mpn: string | null; providerPartId: string | null },
+  manufacturerName: string | undefined,
+  options: { allowEitherIdentifier?: boolean }
+): boolean {
   const manufacturer = readStringAttribute(component.attributes, "Manufacturer");
-  const matchesIdentifier = component.mfr.toLowerCase() === lookup || component.lcsc.toLowerCase() === lookup;
+  const matchesProviderPartId = identifiers.providerPartId ? component.lcsc.toLowerCase() === identifiers.providerPartId : false;
+  const matchesMpn = identifiers.mpn ? component.mfr.toLowerCase() === identifiers.mpn : false;
+  const matchesIdentifier = options.allowEitherIdentifier
+    ? matchesProviderPartId || matchesMpn
+    : identifiers.providerPartId
+      ? matchesProviderPartId
+      : matchesMpn;
   const normalizedManufacturer = manufacturer ? normalizeManufacturerName(manufacturer) : null;
   const manufacturerSearchValues = normalizedManufacturer && manufacturer ? [manufacturer, normalizedManufacturer.canonicalName, ...normalizedManufacturer.aliases] : [];
   const normalizedRequestManufacturer = manufacturerName ? normalizeComparableText(manufacturerName) : null;
   const matchesManufacturer = !normalizedRequestManufacturer || manufacturerSearchValues.some((value) => normalizeComparableText(value).includes(normalizedRequestManufacturer));
 
   return matchesIdentifier && matchesManufacturer;
+}
+
+/**
+ * Reads the exact request identifiers without forcing a provider catalog id through the MPN field.
+ */
+function readRequestedIdentifiers(request: ProviderPartRequest): { mpn: string | null; providerPartId: string | null } {
+  const normalizedMpn = request.mpn?.trim().toLowerCase() ?? "";
+  const normalizedProviderPartId = request.providerPartId?.trim().toLowerCase() ?? "";
+
+  return {
+    mpn: normalizedMpn.length > 0 ? normalizedMpn : null,
+    providerPartId: normalizedProviderPartId.length > 0 ? normalizedProviderPartId : null
+  };
 }
 
 /**

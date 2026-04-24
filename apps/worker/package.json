@@ -5,10 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./provider-acquisition-jobs": "./src/provider-acquisition-jobs.ts",
     "./provider-part-import": "./src/provider-part-import.ts",
     "./provider-part-lookup": "./src/provider-part-lookup.ts"
   },
   "scripts": {
+    "acquisition-jobs": "tsx src/index.ts acquisition-jobs",
     "build": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts status",
     "generate:drafts": "tsx src/index.ts generate-drafts",

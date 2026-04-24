@@ -101,6 +101,79 @@ export const sourceRecords = pgTable(
   ]
 );
 
+export const providerAcquisitionJobs = pgTable(
+  "provider_acquisition_jobs",
+  {
+    id: text("id").primaryKey(),
+    providerId: text("provider_id").notNull(),
+    providerPartKey: text("provider_part_key").notNull(),
+    requestedLookup: text("requested_lookup").notNull(),
+    manufacturerName: text("manufacturer_name"),
+    mpn: text("mpn"),
+    packageName: text("package_name"),
+    sourceUrl: text("source_url"),
+    matchType: text("match_type").notNull(),
+    matchConfidence: numeric("match_confidence").notNull(),
+    jobStatus: text("job_status").notNull().default("queued"),
+    requestedBy: text("requested_by").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    partId: text("part_id").references(() => parts.id),
+    importOutcome: text("import_outcome"),
+    previousImportStatus: text("previous_import_status"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uq_provider_acquisition_jobs_active_provider_part")
+      .on(t.providerId, t.providerPartKey)
+      .where(sql`${t.jobStatus} IN ('queued', 'running')`),
+    index("idx_provider_acquisition_jobs_status_requested_at").on(t.jobStatus, t.requestedAt, t.id),
+    index("idx_provider_acquisition_jobs_provider_part").on(t.providerId, t.providerPartKey, t.requestedAt),
+    index("idx_provider_acquisition_jobs_part_completed_at").on(t.partId, t.completedAt),
+    check(
+      "provider_acquisition_jobs_match_type_check",
+      literalCheck(`match_type IN ('exact_mpn', 'exact_provider_part_id')`)
+    ),
+    check(
+      "provider_acquisition_jobs_status_check",
+      literalCheck(`job_status IN ('queued', 'running', 'succeeded', 'failed')`)
+    ),
+    check(
+      "provider_acquisition_jobs_import_outcome_check",
+      literalCheck(`import_outcome IS NULL OR import_outcome IN ('new_import', 'refreshed_existing')`)
+    ),
+    check(
+      "provider_acquisition_jobs_previous_import_status_check",
+      literalCheck(`previous_import_status IS NULL OR previous_import_status IN ('imported', 'failed')`)
+    ),
+  ]
+);
+
+export const providerAcquisitionJobEvents = pgTable(
+  "provider_acquisition_job_events",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id")
+      .notNull()
+      .references(() => providerAcquisitionJobs.id),
+    eventType: text("event_type").notNull(),
+    message: text("message").notNull(),
+    detail: jsonb("detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_provider_acquisition_job_events_job_created_at").on(t.jobId, t.createdAt),
+    index("idx_provider_acquisition_job_events_type_created_at").on(t.eventType, t.createdAt),
+    check(
+      "provider_acquisition_job_events_type_check",
+      literalCheck(`event_type IN ('queued', 'running', 'succeeded', 'failed')`)
+    ),
+  ]
+);
+
 export const assets = pgTable(
   "assets",
   {

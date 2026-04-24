@@ -37,6 +37,9 @@ const connectorConflictMigrationSql = readFileSync(new URL("../../../infra/postg
 /** connectorRelationEvidenceMigrationSql loads the Phase 6D connector relation evidence migration under test. */
 const connectorRelationEvidenceMigrationSql = readFileSync(new URL("../../../infra/postgres/016_phase6d_connector_relation_evidence.sql", import.meta.url), "utf8");
 
+/** providerAcquisitionJobsMigrationSql loads the Phase 8A provider acquisition migration under test. */
+const providerAcquisitionJobsMigrationSql = readFileSync(new URL("../../../infra/postgres/017_phase8a_provider_acquisition_jobs.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -148,6 +151,7 @@ test("connector hardening migration upgrades old schemas safely", () => {
   applyMigrationSql(db, validationPromotionAuditMigrationSql);
   applyMigrationSql(db, connectorConflictMigrationSql);
   applyMigrationSql(db, connectorRelationEvidenceMigrationSql);
+  applyMigrationSql(db, providerAcquisitionJobsMigrationSql);
   db.public.none(`
     INSERT INTO generation_requests (id, part_id, target_asset_type, source_datasheet_revision_id, source_asset_id, request_status, requested_at, requested_by, workflow_id)
     VALUES ('genreq-a-step', 'part-a', 'three_d_model', 'dsr-a', NULL, 'requested', '2026-04-13T00:00:00.000Z', 'smoke-test', 'gen-a-step');
@@ -159,6 +163,10 @@ test("connector hardening migration upgrades old schemas safely", () => {
     VALUES ('promotion-a-step-denied', 'part-a', 'asset-a-step', 'partially_exportable', 'partially_exportable', 'denied', '{"smoke blocker"}', NULL, 'smoke-test', '2026-04-13T00:06:00.000Z');
     INSERT INTO source_extraction_signals (id, part_id, source_record_id, datasheet_revision_id, asset_id, signal_type, extraction_status, confidence_score, extraction_source, notes)
     VALUES ('sig-a-mechanical', 'part-a', 'source-smoke-old', 'dsr-a', 'asset-a-step', 'mechanical_drawing', 'needs_review', 0.6, 'asset_reference', 'smoke test extraction signal');
+    INSERT INTO provider_acquisition_jobs (id, provider_id, provider_part_key, requested_lookup, manufacturer_name, mpn, package_name, source_url, match_type, match_confidence, job_status, requested_by, requested_at, part_id, import_outcome, previous_import_status, error_code, error_message, started_at, completed_at, last_updated_at)
+    VALUES ('acqjob-a-step', 'jlcparts', 'C1091', 'RC-02W300JT', 'Guangdong Fenghua Advanced Tech', 'RC-02W300JT', '0402', 'https://lcsc.com/product-detail/example', 'exact_mpn', 1, 'succeeded', 'smoke-test', '2026-04-13T00:07:00.000Z', 'part-a', 'new_import', NULL, NULL, NULL, '2026-04-13T00:07:05.000Z', '2026-04-13T00:07:08.000Z', '2026-04-13T00:07:08.000Z');
+    INSERT INTO provider_acquisition_job_events (id, job_id, event_type, message, detail, created_at)
+    VALUES ('acqevent-a-step', 'acqjob-a-step', 'succeeded', 'Acquisition job succeeded.', '{"partId":"part-a"}'::jsonb, '2026-04-13T00:07:08.000Z');
   `);
 
   const asset = db.public.one(`SELECT asset_state, asset_status, availability_status, review_status, export_status, provenance FROM assets WHERE id = 'asset-a-step'`);
@@ -180,6 +188,8 @@ test("connector hardening migration upgrades old schemas safely", () => {
   const signal = db.public.one(`SELECT signal_type, extraction_status FROM source_extraction_signals WHERE id = 'sig-a-mechanical'`);
   const validation = db.public.one(`SELECT validation_status, validation_type FROM asset_validation_records WHERE id = 'validation-a-step'`);
   const promotionAudit = db.public.one(`SELECT promotion_outcome, blocker_reasons, validation_record_id FROM asset_promotion_audits WHERE id = 'promotion-a-step-denied'`);
+  const acquisitionJob = db.public.one(`SELECT job_status, provider_part_key, part_id, import_outcome FROM provider_acquisition_jobs WHERE id = 'acqjob-a-step'`);
+  const acquisitionEvent = db.public.one(`SELECT event_type, message FROM provider_acquisition_job_events WHERE id = 'acqevent-a-step'`);
 
   assert.deepEqual(asset, { asset_state: "validated", asset_status: "validated", availability_status: "validated", review_status: "review_required", export_status: "partially_exportable", provenance: "manual_internal" });
   assert.equal(datasheet.pin_table_status, "not_available");
@@ -196,6 +206,8 @@ test("connector hardening migration upgrades old schemas safely", () => {
   assert.deepEqual(signal, { extraction_status: "needs_review", signal_type: "mechanical_drawing" });
   assert.deepEqual(validation, { validation_status: "verified", validation_type: "three_d_geometry" });
   assert.deepEqual(promotionAudit, { blocker_reasons: ["smoke blocker"], promotion_outcome: "denied", validation_record_id: null });
+  assert.deepEqual(acquisitionJob, { import_outcome: "new_import", job_status: "succeeded", part_id: "part-a", provider_part_key: "C1091" });
+  assert.deepEqual(acquisitionEvent, { event_type: "succeeded", message: "Acquisition job succeeded." });
 });
 
 /**

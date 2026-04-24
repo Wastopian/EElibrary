@@ -26,6 +26,8 @@ export const importUiCopy = {
   buttonSearchProviders: "Search supported providers",
   /** Action that starts import from one selected provider candidate. */
   buttonImportCandidate: "Import candidate",
+  /** Action that queues one selected provider candidate for admin-gated acquisition. */
+  buttonQueueAcquisition: "Queue acquisition",
   /** Primary next-step link after success. */
   linkOpenPart: "Open part detail",
   /** Link to operational admin after success. */
@@ -44,6 +46,24 @@ export const importUiCopy = {
   providerLookupNoMatch: "No exact-match provider candidates were found for this lookup.",
   /** Shown when explicit provider lookup fails before candidates can be listed. */
   providerLookupFailure: "Provider lookup did not complete.",
+  /** Shown while the selected provider candidate is being turned into a queued acquisition job. */
+  providerAcquisitionCreating: "Queueing provider acquisition.",
+  /** Shown when one visible candidate currently owns the in-flight acquisition lock for this result set. */
+  providerAcquisitionActiveLead: "Acquisition in progress for",
+  /** Badge shown on the currently active candidate row. */
+  providerAcquisitionActiveBadge: "Active acquisition job",
+  /** Explains why the other candidate buttons stay disabled while one job is still pending. */
+  providerAcquisitionLocked: "Wait for it to finish before queueing another candidate.",
+  /** Shown while a queued job is waiting for the worker to claim it. */
+  providerAcquisitionQueued: "Acquisition queued. The worker will pick it up shortly.",
+  /** Shown while the worker is running the existing provider import flow for the queued job. */
+  providerAcquisitionRunning: "Acquisition in progress using the existing provider import flow.",
+  /** Shown after a queued job succeeds with a usable part detail route target. */
+  providerAcquisitionSucceeded: "Acquisition finished. Opening the imported part detail record.",
+  /** Shown after a queued job succeeds but no safe route target is available yet. */
+  providerAcquisitionSucceededRefresh: "Acquisition finished. Refresh the current catalog search to look for the imported part.",
+  /** Shown when a queued acquisition job fails. */
+  providerAcquisitionFailed: "Acquisition did not complete.",
   /** Explains why candidates may be visible while import remains unavailable to the current request context. */
   providerLookupImportUnavailable: "Candidate import still requires an admin session and a configured catalog database.",
   /** Explains why no-match acquisition is hidden in local seed mode. */

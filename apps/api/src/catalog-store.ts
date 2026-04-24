@@ -42,6 +42,13 @@ import type {
   PartSearchFilters,
   PartSearchRecord,
   PartSearchSort,
+  ProviderAcquisitionJob,
+  ProviderAcquisitionJobCreateInput,
+  ProviderAcquisitionJobDetailResponse,
+  ProviderAcquisitionJobEvent,
+  ProviderAcquisitionJobStatus,
+  ProviderImportOutcome,
+  ProviderLookupMatchType,
   ReviewActionInput,
   ReviewActionResponse,
   ReviewRecord,
@@ -99,6 +106,17 @@ export type GenerationRequestCreateResult =
   | { status: "not_configured" }
   | { status: "not_found" }
   | { status: "not_requestable"; reason: string };
+
+/** ProviderAcquisitionJobCreateResult reports queue creation or an honest persistence boundary failure. */
+export type ProviderAcquisitionJobCreateResult =
+  | { status: "created"; response: ProviderAcquisitionJobDetailResponse }
+  | { status: "not_configured" };
+
+/** ProviderAcquisitionJobReadResult reports whether one persisted acquisition job could be read. */
+export type ProviderAcquisitionJobReadResult =
+  | { status: "available"; response: ProviderAcquisitionJobDetailResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
 
 /** ReviewActionResult reports review persistence or explicit target failure. */
 export type ReviewActionResult =
@@ -405,6 +423,41 @@ interface DatabaseSourceRow {
   last_updated_at: Date | string;
 }
 
+/** DatabaseProviderAcquisitionJobRow is one persisted provider acquisition job row. */
+interface DatabaseProviderAcquisitionJobRow {
+  id: string;
+  provider_id: string;
+  provider_part_key: string;
+  requested_lookup: string;
+  manufacturer_name: string | null;
+  mpn: string | null;
+  package_name: string | null;
+  source_url: string | null;
+  match_type: ProviderLookupMatchType;
+  match_confidence: string;
+  job_status: ProviderAcquisitionJobStatus;
+  requested_by: string;
+  requested_at: Date | string;
+  part_id: string | null;
+  import_outcome: ProviderImportOutcome | null;
+  previous_import_status: SourceImportStatus | null;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabaseProviderAcquisitionJobEventRow is one persisted lifecycle event row for a provider acquisition job. */
+interface DatabaseProviderAcquisitionJobEventRow {
+  id: string;
+  job_id: string;
+  event_type: ProviderAcquisitionJobEvent["eventType"];
+  message: string;
+  detail: Record<string, unknown> | null;
+  created_at: Date | string;
+}
+
 /** DatabaseSourceExtractionSignalRow is the source extraction signal shape read from Postgres. */
 interface DatabaseSourceExtractionSignalRow {
   /** SourceExtractionSignal fields from source_extraction_signals. */
@@ -569,11 +622,21 @@ interface DatabaseSearchFacetConnectorClassRow {
 /** pool is initialized lazily so tests and seed fallback do not require DATABASE_URL. */
 let pool: Pool | null = null;
 
+/** providerAcquisitionJobBeforeInsertHook lets focused tests simulate a concurrent insert between dedupe read and insert. */
+let providerAcquisitionJobBeforeInsertHook: (() => Promise<void>) | null = null;
+
 /**
  * Replaces the database pool for tests that use an in-memory Postgres adapter.
  */
 export function setCatalogStorePoolForTests(databasePool: Pool | null): void {
   pool = databasePool;
+}
+
+/**
+ * Replaces the provider acquisition pre-insert hook for tests that simulate concurrent active-job creation.
+ */
+export function setProviderAcquisitionJobBeforeInsertHookForTests(next: (() => Promise<void>) | null): void {
+  providerAcquisitionJobBeforeInsertHook = next;
 }
 
 /**
@@ -666,6 +729,102 @@ export async function readPartDetailRecordsFromDatabase(partId: string, options:
   }
 
   return { records: [...primaryRecords, ...(await readPartSummaryRecords(databasePool, relatedSummaryIds, options))], status: "available" };
+}
+
+/**
+ * Creates or reuses one active provider acquisition job without broadening normal catalog search.
+ */
+export async function createProviderAcquisitionJobInDatabase(
+  input: ProviderAcquisitionJobCreateInput,
+  requestedBy = "local-dev-admin",
+  requestedAt = new Date().toISOString()
+): Promise<ProviderAcquisitionJobCreateResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const existingJobId = await findActiveProviderAcquisitionJobId(client, input.providerId, input.providerPartKey);
+
+    if (existingJobId) {
+      const existingJobDetail = await readProviderAcquisitionJobDetail(databasePool, existingJobId);
+      await client.query("COMMIT");
+
+      if (!existingJobDetail) {
+        throw new Error("Active provider acquisition job disappeared before it could be read.");
+      }
+
+      return {
+        response: existingJobDetail,
+        status: "created"
+      };
+    }
+
+    const createdJob = buildProviderAcquisitionJobRecord(input, requestedBy, requestedAt);
+    const createdEvent = buildProviderAcquisitionJobEventRecord(createdJob.id, "queued", "Acquisition job queued.", requestedAt, {
+      providerId: input.providerId,
+      providerPartKey: input.providerPartKey,
+      requestedLookup: input.requestedLookup
+    });
+
+    if (providerAcquisitionJobBeforeInsertHook) {
+      await providerAcquisitionJobBeforeInsertHook();
+    }
+
+    await persistProviderAcquisitionJobRow(client, createdJob);
+    await persistProviderAcquisitionJobEventRow(client, createdEvent);
+    await client.query("COMMIT");
+
+    return {
+      response: {
+        events: [createdEvent],
+        job: createdJob
+      },
+      status: "created"
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    if (isUniqueViolationError(error)) {
+      const existingJobDetail = await readActiveProviderAcquisitionJobDetailByProviderKey(
+        databasePool,
+        input.providerId,
+        input.providerPartKey
+      );
+
+      if (existingJobDetail) {
+        return {
+          response: existingJobDetail,
+          status: "created"
+        };
+      }
+    }
+
+    throw toCatalogStoreError(error);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Reads one provider acquisition job plus its coarse lifecycle events.
+ */
+export async function readProviderAcquisitionJobInDatabase(jobId: string): Promise<ProviderAcquisitionJobReadResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const response = await readProviderAcquisitionJobDetail(databasePool, jobId);
+
+  return response ? { response, status: "available" } : { status: "not_found" };
 }
 
 /**
@@ -1533,6 +1692,280 @@ function getDatabasePool(): Pool | null {
 }
 
 /**
+ * Reads the id of an active queued/running acquisition job for one provider part key when it already exists.
+ */
+async function findActiveProviderAcquisitionJobId(client: PoolClient, providerId: string, providerPartKey: string): Promise<string | null> {
+  const result = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM provider_acquisition_jobs
+      WHERE provider_id = $1
+        AND provider_part_key = $2
+        AND job_status IN ('queued', 'running')
+      ORDER BY CASE job_status WHEN 'running' THEN 0 ELSE 1 END ASC, requested_at ASC, id ASC
+      LIMIT 1
+    `,
+    [providerId, providerPartKey]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Reads an active queued/running acquisition job detail by provider id and provider part key.
+ */
+async function readActiveProviderAcquisitionJobDetailByProviderKey(
+  databasePool: Pool,
+  providerId: string,
+  providerPartKey: string
+): Promise<ProviderAcquisitionJobDetailResponse | null> {
+  const result = await databasePool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM provider_acquisition_jobs
+      WHERE provider_id = $1
+        AND provider_part_key = $2
+        AND job_status IN ('queued', 'running')
+      ORDER BY CASE job_status WHEN 'running' THEN 0 ELSE 1 END ASC, requested_at ASC, id ASC
+      LIMIT 1
+    `,
+    [providerId, providerPartKey]
+  );
+  const activeJobId = result.rows[0]?.id ?? null;
+
+  return activeJobId ? readProviderAcquisitionJobDetail(databasePool, activeJobId) : null;
+}
+
+/**
+ * Reads one acquisition job detail payload directly from Postgres.
+ */
+async function readProviderAcquisitionJobDetail(databasePool: Pool, jobId: string): Promise<ProviderAcquisitionJobDetailResponse | null> {
+  const [jobResult, eventResult] = await Promise.all([
+    databasePool.query<DatabaseProviderAcquisitionJobRow>(
+      `
+        SELECT
+          id,
+          provider_id,
+          provider_part_key,
+          requested_lookup,
+          manufacturer_name,
+          mpn,
+          package_name,
+          source_url,
+          match_type,
+          match_confidence,
+          job_status,
+          requested_by,
+          requested_at,
+          part_id,
+          import_outcome,
+          previous_import_status,
+          error_code,
+          error_message,
+          started_at,
+          completed_at,
+          last_updated_at
+        FROM provider_acquisition_jobs
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [jobId]
+    ),
+    databasePool.query<DatabaseProviderAcquisitionJobEventRow>(
+      `
+        SELECT
+          id,
+          job_id,
+          event_type,
+          message,
+          detail,
+          created_at
+        FROM provider_acquisition_job_events
+        WHERE job_id = $1
+        ORDER BY created_at ASC, id ASC
+      `,
+      [jobId]
+    )
+  ]);
+  const jobRow = jobResult.rows[0];
+
+  if (!jobRow) {
+    return null;
+  }
+
+  return {
+    events: eventResult.rows.map((row) => ({
+      createdAt: toIsoTimestamp(row.created_at),
+      detail: row.detail,
+      eventType: row.event_type,
+      id: row.id,
+      jobId: row.job_id,
+      message: row.message
+    })),
+    job: mapProviderAcquisitionJobRow(jobRow)
+  };
+}
+
+/**
+ * Builds one provider acquisition job record before it is inserted into Postgres.
+ */
+function buildProviderAcquisitionJobRecord(
+  input: ProviderAcquisitionJobCreateInput,
+  requestedBy: string,
+  requestedAt: string
+): ProviderAcquisitionJob {
+  return {
+    completedAt: null,
+    errorCode: null,
+    errorMessage: null,
+    id: buildProviderAcquisitionJobId(input.providerId, input.providerPartKey, requestedAt),
+    importOutcome: null,
+    jobStatus: "queued",
+    lastUpdatedAt: requestedAt,
+    manufacturerName: input.manufacturerName?.trim() || null,
+    matchConfidence: input.matchConfidence,
+    matchType: input.matchType,
+    mpn: input.mpn?.trim() || null,
+    package: input.package?.trim() || null,
+    partId: null,
+    previousImportStatus: null,
+    providerId: input.providerId,
+    providerPartKey: input.providerPartKey,
+    requestedAt,
+    requestedBy,
+    requestedLookup: input.requestedLookup,
+    sourceUrl: input.sourceUrl?.trim() || null,
+    startedAt: null
+  };
+}
+
+/**
+ * Builds one coarse provider acquisition lifecycle event.
+ */
+function buildProviderAcquisitionJobEventRecord(
+  jobId: string,
+  eventType: ProviderAcquisitionJobEvent["eventType"],
+  message: string,
+  createdAt: string,
+  detail: Record<string, unknown> | null
+): ProviderAcquisitionJobEvent {
+  return {
+    createdAt,
+    detail,
+    eventType,
+    id: buildProviderAcquisitionJobEventId(jobId, eventType, createdAt),
+    jobId,
+    message
+  };
+}
+
+/**
+ * Persists one provider acquisition job inside an existing transaction.
+ */
+async function persistProviderAcquisitionJobRow(client: PoolClient, job: ProviderAcquisitionJob): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO provider_acquisition_jobs (
+        id,
+        provider_id,
+        provider_part_key,
+        requested_lookup,
+        manufacturer_name,
+        mpn,
+        package_name,
+        source_url,
+        match_type,
+        match_confidence,
+        job_status,
+        requested_by,
+        requested_at,
+        part_id,
+        import_outcome,
+        previous_import_status,
+        error_code,
+        error_message,
+        started_at,
+        completed_at,
+        last_updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+    `,
+    [
+      job.id,
+      job.providerId,
+      job.providerPartKey,
+      job.requestedLookup,
+      job.manufacturerName,
+      job.mpn,
+      job.package,
+      job.sourceUrl,
+      job.matchType,
+      job.matchConfidence,
+      job.jobStatus,
+      job.requestedBy,
+      job.requestedAt,
+      job.partId,
+      job.importOutcome,
+      job.previousImportStatus,
+      job.errorCode,
+      job.errorMessage,
+      job.startedAt,
+      job.completedAt,
+      job.lastUpdatedAt
+    ]
+  );
+}
+
+/**
+ * Persists one provider acquisition lifecycle event inside an existing transaction.
+ */
+async function persistProviderAcquisitionJobEventRow(client: PoolClient, event: ProviderAcquisitionJobEvent): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO provider_acquisition_job_events (
+        id,
+        job_id,
+        event_type,
+        message,
+        detail,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [event.id, event.jobId, event.eventType, event.message, event.detail, event.createdAt]
+  );
+}
+
+/**
+ * Maps one raw acquisition job row into the shared API contract.
+ */
+function mapProviderAcquisitionJobRow(row: DatabaseProviderAcquisitionJobRow): ProviderAcquisitionJob {
+  return {
+    completedAt: row.completed_at ? toIsoTimestamp(row.completed_at) : null,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    id: row.id,
+    importOutcome: row.import_outcome,
+    jobStatus: row.job_status,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    manufacturerName: row.manufacturer_name,
+    matchConfidence: toNumber(row.match_confidence),
+    matchType: row.match_type,
+    mpn: row.mpn,
+    package: row.package_name,
+    partId: row.part_id,
+    previousImportStatus: row.previous_import_status,
+    providerId: row.provider_id,
+    providerPartKey: row.provider_part_key,
+    requestedAt: toIsoTimestamp(row.requested_at),
+    requestedBy: row.requested_by,
+    requestedLookup: row.requested_lookup,
+    sourceUrl: row.source_url,
+    startedAt: row.started_at ? toIsoTimestamp(row.started_at) : null
+  };
+}
+
+/**
  * Collects relationship target identifiers needed for the detail related-part summaries.
  */
 function collectRelatedPartIds(record: PartSearchRecord): string[] {
@@ -1596,6 +2029,41 @@ function buildWorkflowId(partId: string, targetAssetType: GenerationTargetAssetT
  */
 function buildGenerationRequestId(partId: string, targetAssetType: GenerationTargetAssetType, requestedAt: string): string {
   return `genreq-${partId}-${targetAssetType}-${requestedAt.replace(/\D/gu, "")}`;
+}
+
+/**
+ * Builds a deterministic provider acquisition job id from provider key and request timestamp.
+ */
+function buildProviderAcquisitionJobId(providerId: string, providerPartKey: string, requestedAt: string): string {
+  return `acqjob-${slugify(providerId)}-${slugify(providerPartKey)}-${requestedAt.replace(/\D/gu, "")}`;
+}
+
+/**
+ * Detects duplicate-key failures so acquisition-job creation can re-read the existing active job instead of creating duplicates.
+ */
+function isUniqueViolationError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const errorCode = "code" in error && typeof error.code === "string" ? error.code : null;
+  const errorMessage = "message" in error && typeof error.message === "string" ? error.message : "";
+
+  return errorCode === "23505" || /duplicate key value violates unique constraint/u.test(errorMessage);
+}
+
+/**
+ * Builds a deterministic provider acquisition event id from job, event type, and timestamp.
+ */
+function buildProviderAcquisitionJobEventId(jobId: string, eventType: ProviderAcquisitionJobEvent["eventType"], createdAt: string): string {
+  return `acqevent-${slugify(jobId)}-${eventType}-${createdAt.replace(/\D/gu, "")}`;
+}
+
+/**
+ * Converts ids and lookup keys into deterministic lowercase fragments for locally generated ids.
+ */
+function slugify(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "unknown";
 }
 
 /**

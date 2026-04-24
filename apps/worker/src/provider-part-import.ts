@@ -14,8 +14,8 @@ import type { ProviderImportOutcome, SourceImportStatus } from "@ee-library/shar
 export interface ImportResultSummary {
   /** Provider adapter identifier. */
   providerId: string;
-  /** Requested MPN or provider lookup string. */
-  requestedMpn: string;
+  /** Requested exact lookup string, which may be an MPN or a provider-specific id. */
+  requestedLookup: string;
   /** Provider source key that was persisted. */
   providerPartKey: string;
   /** Canonical part id that was updated. */
@@ -63,7 +63,7 @@ export async function runProviderPartImport(adapterId: string, request: Provider
   const adapter = getProviderAdapter(adapterId);
   const startedAt = performance.now();
   const timings: WorkerTiming[] = [];
-  let diagnosticProviderPartKey = request.mpn;
+  let diagnosticProviderPartKey = readRequestedLookup(request);
 
   try {
     await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
@@ -89,7 +89,7 @@ export async function runProviderPartImport(adapterId: string, request: Provider
       previousImportStatus,
       providerId: adapter.id,
       providerPartKey: normalizedPart.sourceRecord.providerPartKey,
-      requestedMpn: request.mpn,
+      requestedLookup: readRequestedLookup(request),
       sourceLastImportedAt: normalizedPart.sourceRecord.sourceLastImportedAt,
       sourceLastSeenAt: normalizedPart.sourceRecord.sourceLastSeenAt,
       timings
@@ -134,6 +134,13 @@ function getProviderAdapter(adapterId: string): ProviderAdapter {
   }
 
   return adapter;
+}
+
+/**
+ * Reads the exact import lookup string without overloading provider ids as manufacturer part numbers.
+ */
+function readRequestedLookup(request: ProviderPartRequest): string {
+  return request.providerPartId?.trim() || request.mpn?.trim() || request.providerUrl?.trim() || "unknown";
 }
 
 function formatUnknownError(error: unknown): string {

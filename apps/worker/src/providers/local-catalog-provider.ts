@@ -120,10 +120,14 @@ const DATA_PATH = fileURLToPath(new URL("./local-catalog-data.json", import.meta
 export const localCatalogProviderAdapter: ProviderAdapter = {
   async findExactPartCandidates(request) {
     try {
-      const rawPayload = await fetchLocalCatalogRawPart({
-        ...(request.manufacturerName ? { manufacturerName: request.manufacturerName } : {}),
-        mpn: request.query
-      });
+      const rawPayload = await fetchLocalCatalogRawPart(
+        {
+          ...(request.manufacturerName ? { manufacturerName: request.manufacturerName } : {}),
+          mpn: request.query,
+          providerPartId: request.query
+        },
+        { allowEitherIdentifier: true }
+      );
       const normalizedPart = normalizeRawPart(rawPayload);
 
       return [buildExactLookupCandidate(normalizedPart, request.query)];
@@ -161,17 +165,15 @@ function isLocalCatalogNotFoundError(error: unknown): boolean {
 /**
  * Fetches one deterministic local-catalog row by exact MPN or provider part key.
  */
-async function fetchLocalCatalogRawPart(request: ProviderPartRequest): Promise<RawProviderPayload> {
+async function fetchLocalCatalogRawPart(
+  request: ProviderPartRequest,
+  options: { allowEitherIdentifier?: boolean } = {}
+): Promise<RawProviderPayload> {
   const catalog = readCatalogFile();
-  const lookup = request.mpn.toLowerCase();
-  const record = catalog.records.find(
-    (candidate) =>
-      candidate.part.mpn.toLowerCase() === lookup ||
-      candidate.providerPartKey.toLowerCase() === lookup
-  );
+  const record = findLocalCatalogRecord(catalog.records, request, options);
 
   if (!record) {
-    throw new Error(`Local catalog part not found: ${request.mpn}`);
+    throw new Error(`Local catalog part not found: ${request.providerPartId ?? request.mpn ?? "unknown"}`);
   }
 
   return {
@@ -179,6 +181,38 @@ async function fetchLocalCatalogRawPart(request: ProviderPartRequest): Promise<R
     payload: record,
     providerId: catalog.providerId
   };
+}
+
+/**
+ * Finds one local-catalog record using exact import semantics or an explicit exact-lookup "either id type" mode.
+ */
+function findLocalCatalogRecord(
+  records: LocalCatalogRecord[],
+  request: ProviderPartRequest,
+  options: { allowEitherIdentifier?: boolean }
+): LocalCatalogRecord | undefined {
+  const normalizedMpn = request.mpn?.trim().toLowerCase() ?? "";
+  const normalizedProviderPartId = request.providerPartId?.trim().toLowerCase() ?? "";
+  const normalizedManufacturerName = request.manufacturerName?.trim().toLowerCase() ?? "";
+
+  return records.find((candidate) => {
+    const matchesProviderPartId =
+      normalizedProviderPartId.length > 0 &&
+      candidate.providerPartKey.toLowerCase() === normalizedProviderPartId;
+    const matchesMpn =
+      normalizedMpn.length > 0 &&
+      candidate.part.mpn.toLowerCase() === normalizedMpn;
+    const matchesIdentifier = options.allowEitherIdentifier
+      ? matchesProviderPartId || matchesMpn
+      : normalizedProviderPartId.length > 0
+        ? matchesProviderPartId
+        : matchesMpn;
+    const matchesManufacturer =
+      normalizedManufacturerName.length === 0 ||
+      candidate.manufacturer.name.toLowerCase().includes(normalizedManufacturerName);
+
+    return matchesIdentifier && matchesManufacturer;
+  });
 }
 
 /**

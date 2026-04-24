@@ -170,7 +170,7 @@ test("homepage renders quick readiness result from matched catalog record", asyn
     assert.match(html, /Identity confirmed/u);
     assert.match(html, /source row/u);
     assert.match(html, /Use list mode for explanation-first review or table mode for faster dense scanning/u);
-    assert.match(html, /Export truth stays separate/u);
+    assert.match(html, /production-ready exports/u);
     assert.match(html, /Risk flag/u);
     assert.match(html, /generated CAD/i);
     assert.doesNotMatch(html, /approved part/u);
