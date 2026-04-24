@@ -14,7 +14,7 @@ import { createAssetPromotion, createGenerationRequest, createReviewAction, fetc
 import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessSummary, getRecoveryWorkflowSummary, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -506,25 +506,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         ) : null}
 
         <SectionPanel description="Only file-backed assets that passed review, validation evidence, and explicit promotion can authorize export bundles." title="Export bundles" tone="technical">
-          <div className="datasheet-panel">
-            <div>
-              <p className="ui-mono">{bundleReadiness.label}</p>
-              <p className="muted-copy">{bundleReadiness.reason}</p>
-            </div>
-            <div className="datasheet-panel__badges">
-              <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-              <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
-              <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
-            </div>
-          </div>
-          <div className="export-list">
-            {exportActions.map((action) => (
-              <button className="export-action" disabled={!action.available} key={action.id} title={action.reason} type="button">
-                <span>{action.label}</span>
-                <small>{action.reason}</small>
-              </button>
-            ))}
-          </div>
+          <ExportBundleSummary bundleReadiness={bundleReadiness} />
         </SectionPanel>
 
       </section>
@@ -1044,16 +1026,38 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
 
   if (!bestAsset) {
     return (
-      <article className="ui-asset-card">
-        <div>
-          <h3>{assetTypeLabel(group.assetType)}</h3>
-          <p className="ui-mono">No asset record</p>
+      <article className="ui-asset-card ui-asset-card--missing">
+        <div className="ui-asset-card__header">
+          <div className="ui-asset-card__identity">
+            <span className="ui-asset-card__eyebrow">Asset class</span>
+            <h3>{assetTypeLabel(group.assetType)}</h3>
+          </div>
+          <span className="ui-asset-card__format ui-mono">No file</span>
         </div>
-        <div className="ui-asset-card__badges">
-          <StatusBadge label="Missing" tone="neutral" />
-          <StatusBadge label="No validation" tone="neutral" />
-          <StatusBadge label="No source" tone="neutral" />
+        <div className="ui-asset-card__status-grid">
+          <div className="ui-asset-card__status-item">
+            <span className="ui-asset-card__status-label">Availability</span>
+            <StatusBadge label="Missing" tone="neutral" />
+          </div>
+          <div className="ui-asset-card__status-item">
+            <span className="ui-asset-card__status-label">Validation</span>
+            <StatusBadge label="No validation" tone="neutral" />
+          </div>
+          <div className="ui-asset-card__status-item">
+            <span className="ui-asset-card__status-label">Review</span>
+            <StatusBadge label="No review" tone="neutral" />
+          </div>
+          <div className="ui-asset-card__status-item">
+            <span className="ui-asset-card__status-label">Coverage</span>
+            <StatusBadge label="No candidate rows" tone="neutral" />
+          </div>
         </div>
+        <dl className="ui-asset-card__meta">
+          <div>
+            <dt>Detail</dt>
+            <dd>No asset rows are attached to this class yet, so it cannot contribute to review or export readiness.</dd>
+          </div>
+        </dl>
       </article>
     );
   }
@@ -1061,6 +1065,7 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
   const reviewStatus = findReviewStatus(reviewStatuses, "asset", bestAsset.id);
   const validationSummary = findAssetValidationSummary(validationSummaries, bestAsset);
   const promotionSummary = findAssetPromotionSummary(promotionSummaries, bestAsset);
+  const workflowSummary = buildAssetWorkflowSurfaceSummary(bestAsset, promotionSummary, reviewStatus);
 
   return (
     <div className="asset-review-card">
@@ -1078,7 +1083,19 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
         validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetExportStatus(bestAsset.exportStatus)}`}
         validationTone={validationTone(bestAsset.validationStatus)}
       />
-      <details className="audit-disclosure">
+      <div className="asset-review-card__snapshot">
+        <div>
+          <span>Class state</span>
+          <strong>{formatAssetClassReadinessLabel(group.readiness)}</strong>
+          <p>{formatAssetClassReadinessDetail(group.readiness, group.assets.length)}</p>
+        </div>
+        <div>
+          <span>Review lane</span>
+          <strong>{workflowSummary.title}</strong>
+          <p>{workflowSummary.detail}</p>
+        </div>
+      </div>
+      <details className="audit-disclosure audit-disclosure--asset">
         <summary>Validation evidence and promotion history</summary>
         <div className="asset-review-card__evidence">
           <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
@@ -1086,9 +1103,70 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
           <p>Promotion blockers: {formatAssetPromotionBlockers(promotionSummary)}</p>
         </div>
       </details>
-      <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
-      <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
+      <div className="asset-review-card__actions">
+        <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
+        <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
+      </div>
     </div>
+  );
+}
+
+/**
+ * Renders the export bundle gate as a compact workstation summary plus bundle actions.
+ */
+function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: BundleReadinessSummary }) {
+  const availableBundleCount = bundleReadiness.exportActions.filter((action) => action.available).length;
+  const blockedBundleCount = bundleReadiness.exportActions.length - availableBundleCount;
+
+  return (
+    <>
+      <section aria-label="Export bundle summary" className={`detail-export-summary detail-export-summary--${bundleReadiness.state}`}>
+        <div className="detail-export-summary__lead">
+          <div>
+            <p className="app-kicker">Bundle gate</p>
+            <h3 className="ui-mono">{bundleReadiness.label}</h3>
+            <p>{bundleReadiness.reason}</p>
+          </div>
+          <div className="detail-export-summary__badges">
+            <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+            <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
+            <StatusBadge label={`${bundleReadiness.fileBackedCadAssetCount} file-backed CAD`} tone={bundleReadiness.fileBackedCadAssetCount > 0 ? "info" : "neutral"} />
+            <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
+          </div>
+        </div>
+        <div className="detail-export-summary__grid">
+          <div>
+            <span>Ready bundles</span>
+            <strong>{availableBundleCount}</strong>
+            <p>{availableBundleCount > 0 ? "These bundles have every required verified file-backed asset." : "No bundle has all required verified file-backed assets yet."}</p>
+          </div>
+          <div>
+            <span>Blocked bundles</span>
+            <strong>{blockedBundleCount}</strong>
+            <p>{blockedBundleCount > 0 ? "These bundle targets still need missing review, validation, or promotion steps." : "Every supported bundle target is currently open."}</p>
+          </div>
+          <div>
+            <span>Verified CAD</span>
+            <strong>{bundleReadiness.verifiedCadAssetCount}</strong>
+            <p>Verified CAD is the only asset class that can satisfy bundle export gates.</p>
+          </div>
+          <div>
+            <span>Reference-only rows</span>
+            <strong>{bundleReadiness.referencedAssetCount}</strong>
+            <p>Referenced metadata stays visible for provenance, but it never unlocks export actions on its own.</p>
+          </div>
+        </div>
+      </section>
+      <div className="export-list">
+        {bundleReadiness.exportActions.map((action) => (
+          <button className={`export-action ${action.available ? "export-action--available" : "export-action--blocked"}`} disabled={!action.available} key={action.id} title={action.reason} type="button">
+            <span className="export-action__eyebrow">{action.available ? "Export lane open" : "Export lane blocked"}</span>
+            <strong>{action.label}</strong>
+            <small>{action.reason}</small>
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -1137,6 +1215,105 @@ function findAssetPromotionSummary(summaries: AssetPromotionSummary[], asset: As
       promotionHistory: []
     }
   );
+}
+
+/**
+ * Maps the best asset class state into dense workstation copy without implying stronger certainty.
+ */
+function formatAssetClassReadinessLabel(readiness: AssetClassReadiness): string {
+  const labels: Record<AssetClassReadiness, string> = {
+    downloaded_file: "Downloaded file on hand",
+    export_ready: "Export-ready best asset",
+    failed: "Failed asset state",
+    missing: "No asset coverage",
+    reference_only: "Reference-only record",
+    validated_file: "Validated file on hand"
+  };
+
+  return labels[readiness];
+}
+
+/**
+ * Explains what the current best-asset class state means for review and export work.
+ */
+function formatAssetClassReadinessDetail(readiness: AssetClassReadiness, assetCount: number): string {
+  const coverageLabel = assetCount === 1 ? "1 candidate row is stored." : `${assetCount} candidate rows are stored.`;
+  const detailByReadiness: Record<AssetClassReadiness, string> = {
+    downloaded_file: "A file-backed asset exists, but it still needs stronger validation or export promotion before bundles can rely on it.",
+    export_ready: "The best-ranked asset already carries the strongest review, validation, and export evidence available in this class.",
+    failed: "The best-ranked row is currently a failed asset record and does not support export work.",
+    missing: "No asset rows are stored for this class yet.",
+    reference_only: "Only URL-level provenance exists for this class, so engineers can inspect provenance without treating it as a usable file.",
+    validated_file: "A validated file is present, but explicit verified-for-export promotion still remains separate."
+  };
+
+  return `${detailByReadiness[readiness]} ${coverageLabel}`;
+}
+
+/**
+ * Summarizes the current review and promotion lane for one best-ranked asset.
+ */
+function buildAssetWorkflowSurfaceSummary(asset: Asset, promotionSummary: AssetPromotionSummary, reviewStatus: ReviewStatusSummary): { detail: string; title: string } {
+  if (asset.exportStatus === "verified_for_export" || reviewStatus.state === "verified_for_export") {
+    return {
+      detail: "Review, validation evidence, and explicit promotion are all recorded, so this asset can satisfy export bundle gates.",
+      title: "Verified for export"
+    };
+  }
+
+  if (promotionSummary.canPromote) {
+    return {
+      detail: "Review and validation evidence line up. The remaining step is an explicit promotion action to make this asset export-authoritative.",
+      title: "Ready for promotion"
+    };
+  }
+
+  if (reviewStatus.state === "pending_review") {
+    return {
+      detail: "The file is visible in the workspace, but engineering review still has to complete before promotion can even be considered.",
+      title: "Awaiting review"
+    };
+  }
+
+  if (reviewStatus.state === "changes_requested") {
+    return {
+      detail: "Review feedback is open, so this asset should stay out of export decisions until a corrected revision is reviewed again.",
+      title: "Changes requested"
+    };
+  }
+
+  if (reviewStatus.state === "rejected") {
+    return {
+      detail: "Rejected assets remain visible for audit trail purposes, but they cannot satisfy trust or export readiness.",
+      title: "Rejected"
+    };
+  }
+
+  if (reviewStatus.state === "approved" && asset.validationStatus !== "verified") {
+    return {
+      detail: "Review is complete, but validation evidence still needs to catch up before export promotion can open.",
+      title: "Approved, validation pending"
+    };
+  }
+
+  if (asset.validationStatus === "failed") {
+    return {
+      detail: "Current validation evidence blocks this asset from promotion and keeps it outside export-authoritative workflows.",
+      title: "Validation failed"
+    };
+  }
+
+  if (asset.validationStatus === "needs_review") {
+    return {
+      detail: "The asset exists, but validation still needs engineering attention before it can move toward export-authoritative status.",
+      title: "Validation review needed"
+    };
+  }
+
+  return {
+    detail: "The asset is tracked with provenance, but the review and validation lane is still incomplete for export work.",
+    title: "Evidence still incomplete"
+  };
 }
 
 /**

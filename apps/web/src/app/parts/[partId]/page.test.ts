@@ -43,6 +43,11 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /draft CAD needs review/u);
     assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
     assert.match(html, /Files and models/u);
+    assert.match(html, /Class state/u);
+    assert.match(html, /Review lane/u);
+    assert.match(html, /Ready bundles/u);
+    assert.match(html, /Blocked bundles/u);
+    assert.match(html, /Export lane/u);
     assert.doesNotMatch(html, /approved part/u);
   } finally {
     restoreFetch();

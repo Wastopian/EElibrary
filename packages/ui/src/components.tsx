@@ -203,21 +203,48 @@ export function AssetCard({
 }: AssetCardProps) {
   return (
     <article className="ui-asset-card">
-      <div>
-        <h3>{title}</h3>
-        <p className="ui-mono">{fileFormat}</p>
+      <div className="ui-asset-card__header">
+        <div className="ui-asset-card__identity">
+          <span className="ui-asset-card__eyebrow">Asset class</span>
+          <h3>{title}</h3>
+        </div>
+        <span className="ui-asset-card__format ui-mono">{fileFormat}</span>
       </div>
-      <div className="ui-asset-card__badges">
-        <StatusBadge label={validationLabel} tone={validationTone} />
-        <StatusBadge label={previewLabel} tone={previewTone} />
-        <StatusBadge label={availabilityLabel} tone={availabilityTone} />
-        {reviewLabel ? <StatusBadge label={reviewLabel} tone={reviewTone} /> : null}
+      <div className="ui-asset-card__status-grid">
+        <div className="ui-asset-card__status-item">
+          <span className="ui-asset-card__status-label">Validation</span>
+          <StatusBadge label={validationLabel} tone={validationTone} />
+        </div>
+        {reviewLabel ? (
+          <div className="ui-asset-card__status-item">
+            <span className="ui-asset-card__status-label">Review</span>
+            <StatusBadge label={reviewLabel} tone={reviewTone} />
+          </div>
+        ) : null}
+        <div className="ui-asset-card__status-item">
+          <span className="ui-asset-card__status-label">Preview</span>
+          <StatusBadge label={previewLabel} tone={previewTone} />
+        </div>
+        <div className="ui-asset-card__status-item">
+          <span className="ui-asset-card__status-label">Availability</span>
+          <StatusBadge label={availabilityLabel} tone={availabilityTone} />
+        </div>
       </div>
       {sourceLabel || updatedLabel ? (
-        <div className="ui-asset-card__meta">
-          {sourceLabel ? <span>{sourceLabel}</span> : null}
-          {updatedLabel ? <span>{updatedLabel}</span> : null}
-        </div>
+        <dl className="ui-asset-card__meta">
+          {sourceLabel ? (
+            <div>
+              <dt>Source</dt>
+              <dd>{sourceLabel}</dd>
+            </div>
+          ) : null}
+          {updatedLabel ? (
+            <div>
+              <dt>Updated</dt>
+              <dd>{updatedLabel}</dd>
+            </div>
+          ) : null}
+        </dl>
       ) : null}
     </article>
   );
