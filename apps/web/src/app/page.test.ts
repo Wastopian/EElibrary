@@ -7,6 +7,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { getAllPartRecords } from "@ee-library/shared/search";
+import { importUiCopy } from "../lib/import-ui-copy";
 import SearchPage from "./page";
 
 /**
@@ -44,6 +45,7 @@ test("homepage renders actionable setup state when DB is not configured and seed
     assert.match(html, /Backend unavailable/u);
     assert.match(html, /EE_LIBRARY_ALLOW_SEED_FALLBACK/u);
     assert.match(html, /No catalog records are shown here/u);
+    assert.match(html, new RegExp(importUiCopy.catalogAcquisitionUnavailableSetup, "u"));
     assert.doesNotMatch(html, /matched records/u);
   } finally {
     restoreFetch();
@@ -370,11 +372,165 @@ test("homepage renders no-match quick readiness state without fabricated data", 
   });
 
   try {
-    const html = await renderHomepage({ q: "NO-SUCH-PART" });
+    const html = await renderHomepage({ q: "TPS7A02DBVR-999" });
 
     assert.match(html, /Part not found/u);
     assert.match(html, /will not create a readiness answer without backend data/u);
+    assert.match(html, /Try a one-part catalog acquisition/u);
+    assert.match(html, /Catalog acquisition from no-match only/u);
+    assert.match(html, /Try importing this part/u);
+    assert.match(html, /value="TPS7A02DBVR-999"/u);
     assert.doesNotMatch(html, /Readiness Checks/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies numeric-only MPN lookups still expose no-match acquisition when the catalog has no row yet.
+ */
+test("homepage shows inline catalog acquisition for numeric-only no-match lookups", async () => {
+  const records = getAllPartRecords();
+  const facets = getSearchFacetsFromRecords(records);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: [],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 0
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: "0430250200" });
+
+    assert.match(html, /Part not found/u);
+    assert.match(html, /Try a one-part catalog acquisition/u);
+    assert.match(html, /Try importing this part/u);
+    assert.match(html, /value="0430250200"/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies package-style misses stay honest instead of exposing a live-search style acquisition CTA.
+ */
+test("homepage keeps catalog acquisition unavailable for package-style no-match queries", async () => {
+  const records = getAllPartRecords();
+  const facets = getSearchFacetsFromRecords(records);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: [],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 0
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: "QFN-16" });
+
+    assert.match(html, /Part not found/u);
+    assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
+    assert.match(html, /does not run live provider search for generic keywords/u);
+    assert.doesNotMatch(html, /Try importing this part/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies seed-mode no-match states keep catalog acquisition honest instead of implying DB-backed import availability.
+ */
+test("homepage keeps catalog acquisition unavailable when no-match runs in seed fallback", async () => {
+  const records = getAllPartRecords();
+  const facets = getSearchFacetsFromRecords(records);
+  const warning = "Catalog database is not configured. Seed fallback is explicitly enabled for local development.";
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "not_configured",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({
+        data: facets,
+        source: "seed_fallback",
+        warnings: [warning]
+      });
+    }
+
+    return jsonResponse({
+      data: [],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 0
+      },
+      source: "seed_fallback",
+      warnings: [warning]
+    });
+  });
+
+  try {
+    const html = await renderHomepage({ q: "TPS7A02DBVR-999" });
+
+    assert.match(html, /Part not found/u);
+    assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
+    assert.match(html, /local seed examples/u);
+    assert.doesNotMatch(html, /Try importing this part/u);
   } finally {
     restoreFetch();
   }
