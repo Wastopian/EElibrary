@@ -338,7 +338,7 @@ test("homepage renders partial readiness data state from incomplete record", asy
 /**
  * Verifies no-match state remains explicit and does not fabricate readiness.
  */
-test("homepage renders no-match quick readiness state without fabricated data", async () => {
+test("homepage renders explicit provider lookup CTA for DB-backed concrete no-match queries", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const restoreFetch = mockFetch((url) => {
@@ -376,10 +376,10 @@ test("homepage renders no-match quick readiness state without fabricated data", 
 
     assert.match(html, /Part not found/u);
     assert.match(html, /will not create a readiness answer without backend data/u);
-    assert.match(html, /Try a one-part catalog acquisition/u);
-    assert.match(html, /Catalog acquisition from no-match only/u);
-    assert.match(html, /Try importing this part/u);
-    assert.match(html, /value="TPS7A02DBVR-999"/u);
+    assert.match(html, new RegExp(importUiCopy.providerLookupLead, "u"));
+    assert.match(html, new RegExp(importUiCopy.providerLookupExactNote, "u"));
+    assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.doesNotMatch(html, /Try importing this part/u);
     assert.doesNotMatch(html, /Readiness Checks/u);
   } finally {
     restoreFetch();
@@ -389,7 +389,7 @@ test("homepage renders no-match quick readiness state without fabricated data", 
 /**
  * Verifies numeric-only MPN lookups still expose no-match acquisition when the catalog has no row yet.
  */
-test("homepage shows inline catalog acquisition for numeric-only no-match lookups", async () => {
+test("homepage shows provider lookup CTA for numeric-only no-match lookups", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const restoreFetch = mockFetch((url) => {
@@ -426,9 +426,8 @@ test("homepage shows inline catalog acquisition for numeric-only no-match lookup
     const html = await renderHomepage({ q: "0430250200" });
 
     assert.match(html, /Part not found/u);
-    assert.match(html, /Try a one-part catalog acquisition/u);
-    assert.match(html, /Try importing this part/u);
-    assert.match(html, /value="0430250200"/u);
+    assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.doesNotMatch(html, /Try importing this part/u);
   } finally {
     restoreFetch();
   }
@@ -476,7 +475,59 @@ test("homepage keeps catalog acquisition unavailable for package-style no-match 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
     assert.match(html, /does not run live provider search for generic keywords/u);
-    assert.doesNotMatch(html, /Try importing this part/u);
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies normal homepage search does not auto-run provider lookup during server render.
+ */
+test("homepage does not automatically call provider lookup during normal catalog search", async () => {
+  const records = getAllPartRecords();
+  const facets = getSearchFacetsFromRecords(records);
+  const requestedPaths: string[] = [];
+  const restoreFetch = mockFetch((url) => {
+    requestedPaths.push(url.pathname);
+
+    if (url.pathname === "/provider-lookups") {
+      throw new Error("provider lookup should not run during initial search render");
+    }
+
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "not_connected_phase_0",
+          queue: "not_connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/parts/facets") {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({
+      data: [],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        sort: "mpn_asc",
+        totalPages: 1,
+        totalRecords: 0
+      },
+      source: "database"
+    });
+  });
+
+  try {
+    await renderHomepage({ q: "TPS7A02DBVR-999" });
+
+    assert.deepEqual(requestedPaths, ["/health", "/parts/facets", "/parts"]);
   } finally {
     restoreFetch();
   }
@@ -530,7 +581,7 @@ test("homepage keeps catalog acquisition unavailable when no-match runs in seed 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
     assert.match(html, /local seed examples/u);
-    assert.doesNotMatch(html, /Try importing this part/u);
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
   } finally {
     restoreFetch();
   }

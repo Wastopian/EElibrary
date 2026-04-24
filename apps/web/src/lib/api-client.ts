@@ -16,6 +16,8 @@ import type {
   PartIssueWorkflowUpdateResponse,
   PartSearchFilters,
   PartSearchRecord,
+  ProviderLookupCandidate,
+  ProviderLookupRequestInput,
   ProviderImportCreateInput,
   ProviderImportCreateResponse,
   ReviewActionInput,
@@ -183,6 +185,26 @@ export async function requestProviderImport(input: ProviderImportCreateInput): P
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProviderImportCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Runs an explicit exact-match provider candidate lookup without changing normal catalog search behavior.
+ */
+export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupCandidate[]> {
+  const response = await fetch(buildApiUrl("/provider-lookups"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider lookup");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupCandidate[]>;
 
   return envelope.data;
 }

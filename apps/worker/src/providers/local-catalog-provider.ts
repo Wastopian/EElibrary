@@ -9,6 +9,7 @@ import { normalizeAssetState, normalizeLifecycleStatus, normalizeMetricUnit, nor
 import type { Asset, AssetPromotionAuditRecord, AssetValidationRecord, DatasheetRevision, Manufacturer, Package, Part, PartMetric } from "@ee-library/shared/types";
 import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, ConnectorFamilyConflict, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
+import { buildExactLookupCandidate } from "../provider-lookup-candidate";
 
 /** LocalCatalogFile describes the adapter fixture envelope. */
 interface LocalCatalogFile {
@@ -117,19 +118,25 @@ const DATA_PATH = fileURLToPath(new URL("./local-catalog-data.json", import.meta
 
 /** localCatalogProviderAdapter reads and normalizes the local catalog provider payload. */
 export const localCatalogProviderAdapter: ProviderAdapter = {
-  async fetchRawPart(request) {
-    const catalog = readCatalogFile();
-    const record = catalog.records.find((candidate) => candidate.part.mpn.toLowerCase() === request.mpn.toLowerCase());
+  async findExactPartCandidates(request) {
+    try {
+      const rawPayload = await fetchLocalCatalogRawPart({
+        ...(request.manufacturerName ? { manufacturerName: request.manufacturerName } : {}),
+        mpn: request.query
+      });
+      const normalizedPart = normalizeRawPart(rawPayload);
 
-    if (!record) {
-      throw new Error(`Local catalog part not found: ${request.mpn}`);
+      return [buildExactLookupCandidate(normalizedPart, request.query)];
+    } catch (error) {
+      if (isLocalCatalogNotFoundError(error)) {
+        return [];
+      }
+
+      throw error;
     }
-
-    return {
-      fetchedAt: new Date().toISOString(),
-      payload: record,
-      providerId: catalog.providerId
-    };
+  },
+  async fetchRawPart(request) {
+    return fetchLocalCatalogRawPart(request);
   },
   id: "local-catalog",
   async listAvailablePartRequests() {
@@ -143,6 +150,36 @@ export const localCatalogProviderAdapter: ProviderAdapter = {
   name: "Local catalog fixture",
   normalizeRawPart
 };
+
+/**
+ * Returns whether a local-catalog lookup failure is just a clean not-found outcome.
+ */
+function isLocalCatalogNotFoundError(error: unknown): boolean {
+  return error instanceof Error && /^Local catalog part not found:/u.test(error.message);
+}
+
+/**
+ * Fetches one deterministic local-catalog row by exact MPN or provider part key.
+ */
+async function fetchLocalCatalogRawPart(request: ProviderPartRequest): Promise<RawProviderPayload> {
+  const catalog = readCatalogFile();
+  const lookup = request.mpn.toLowerCase();
+  const record = catalog.records.find(
+    (candidate) =>
+      candidate.part.mpn.toLowerCase() === lookup ||
+      candidate.providerPartKey.toLowerCase() === lookup
+  );
+
+  if (!record) {
+    throw new Error(`Local catalog part not found: ${request.mpn}`);
+  }
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    payload: record,
+    providerId: catalog.providerId
+  };
+}
 
 /**
  * Normalizes one raw local catalog payload into provider-neutral records.

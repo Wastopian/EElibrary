@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { gzipSync } from "node:zlib";
 import { jlcpartsProviderAdapter } from "./providers/jlcparts-provider";
 import type { RawProviderPayload } from "./provider-adapters";
 
@@ -48,6 +49,87 @@ test("jlcparts provider normalizes structured metadata without implying CAD avai
       ["operating_temperature_range", null, -55, 155, "deg C"]
     ]
   );
+});
+
+/**
+ * Verifies exact provider lookup returns one provider-neutral candidate row for a supported provider part id.
+ */
+test("jlcparts provider returns exact candidate rows for supported lookups", async () => {
+  const rawPayload = buildRawPayload();
+  const payload = rawPayload.payload as {
+    component: {
+      attributes: Record<string, unknown>;
+      datasheet: string | null;
+      description: string;
+      img: string | null;
+      joints: number | null;
+      lcsc: string;
+      mfr: string;
+      price: unknown;
+      url: string | null;
+    };
+  };
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname.endsWith("/index.json")) {
+      return jsonResponse({
+        categories: {
+          Resistors: {
+            "Chip Resistor - Surface Mount": {
+              datahash: "hash",
+              sourcename: "ResistorsChip_Resistor___Surface_Mount",
+              stockhash: "stock-hash"
+            }
+          }
+        },
+        created: "2026-04-12T06:57:40+00:00"
+      });
+    }
+
+    if (url.pathname.endsWith("/ResistorsChip_Resistor___Surface_Mount.json.gz")) {
+      return new Response(
+        gzipSync(
+          Buffer.from(
+            JSON.stringify({
+              components: [
+                [
+                  payload.component.attributes,
+                  payload.component.datasheet,
+                  payload.component.description,
+                  payload.component.img,
+                  payload.component.joints,
+                  payload.component.lcsc,
+                  payload.component.mfr,
+                  payload.component.price,
+                  payload.component.url
+                ]
+              ],
+              schema: ["attributes", "datasheet", "description", "img", "joints", "lcsc", "mfr", "price", "url"]
+            })
+          )
+        )
+      );
+    }
+
+    throw new Error(`Unexpected URL: ${url.toString()}`);
+  });
+
+  try {
+    const candidates = await jlcpartsProviderAdapter.findExactPartCandidates({ query: "C1091" });
+
+    assert.equal(candidates.length, 1);
+    assert.deepEqual(candidates[0], {
+      manufacturerName: "Guangdong Fenghua Advanced Tech",
+      matchConfidence: 1,
+      matchType: "exact_provider_part_id",
+      mpn: "RC-02W300JT",
+      package: "0402",
+      providerId: "jlcparts",
+      providerPartKey: "C1091",
+      sourceUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
+    });
+  } finally {
+    restoreFetch();
+  }
 });
 
 /**
@@ -103,4 +185,32 @@ function buildStringAttribute(value: string) {
       default: [value, "string"]
     }
   };
+}
+
+/**
+ * Replaces global fetch for one adapter test and returns a restore callback.
+ */
+function mockFetch(handler: (url: URL) => Response): () => void {
+  const previousFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    return handler(url);
+  }) as typeof fetch;
+
+  return () => {
+    globalThis.fetch = previousFetch;
+  };
+}
+
+/**
+ * Builds a JSON response for mocked provider fetches.
+ */
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      "Content-Type": "application/json"
+    },
+    status
+  });
 }

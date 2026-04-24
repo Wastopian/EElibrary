@@ -17,6 +17,14 @@ export interface ImportByMpnPanelProps {
   anchorId?: string;
   /** Optional MPN prefill for catalog acquisition from a no-match search state. */
   initialMpn?: string;
+  /** Optional provider adapter prefill when importing a known provider candidate. */
+  initialProviderId?: string;
+  /** Optional provider part id prefill when a candidate was found by provider key. */
+  initialProviderPartId?: string;
+  /** Optional provider URL prefill retained as import context for a selected candidate. */
+  initialProviderUrl?: string;
+  /** Optional manufacturer hint prefill retained from a selected provider candidate. */
+  initialManufacturerName?: string;
   /** Optional compact layout for the homepage no-match acquisition callout. */
   compact?: boolean;
   /** Optional redirect toggle after a successful import resolves a safe next route. */
@@ -143,17 +151,21 @@ export function ImportByMpnPanel({
   anchorId,
   autoRedirectOnSuccess = false,
   compact = false,
+  initialManufacturerName,
   initialMpn,
+  initialProviderId = "jlcparts",
+  initialProviderPartId,
+  initialProviderUrl,
   onSuccess,
   refreshHref
 }: ImportByMpnPanelProps): React.ReactElement {
   const isCompact = compact;
-  const [providerId, setProviderId] = useState("jlcparts");
+  const [providerId, setProviderId] = useState(initialProviderId);
   const [mpn, setMpn] = useState(initialMpn ?? "");
-  const [providerPartId, setProviderPartId] = useState("");
-  const [providerUrl, setProviderUrl] = useState("");
+  const [providerPartId, setProviderPartId] = useState(initialProviderPartId ?? "");
+  const [providerUrl, setProviderUrl] = useState(initialProviderUrl ?? "");
   const [datasheetUrl, setDatasheetUrl] = useState("");
-  const [manufacturerName, setManufacturerName] = useState("");
+  const [manufacturerName, setManufacturerName] = useState(initialManufacturerName ?? "");
   const [status, setStatus] = useState<ImportPanelStatus>({ kind: "idle" });
   const refreshTimeoutRef = useRef<number | null>(null);
   const submitLabel = isCompact ? importUiCopy.buttonAcquireNoMatch : importUiCopy.buttonSubmit;
@@ -173,14 +185,14 @@ export function ImportByMpnPanel({
    */
   useEffect(() => {
     clearScheduledRefresh();
-    setProviderId("jlcparts");
+    setProviderId(initialProviderId);
     setMpn(initialMpn ?? "");
-    setProviderPartId("");
-    setProviderUrl("");
+    setProviderPartId(initialProviderPartId ?? "");
+    setProviderUrl(initialProviderUrl ?? "");
     setDatasheetUrl("");
-    setManufacturerName("");
+    setManufacturerName(initialManufacturerName ?? "");
     setStatus({ kind: "idle" });
-  }, [clearScheduledRefresh, initialMpn, refreshHref]);
+  }, [clearScheduledRefresh, initialManufacturerName, initialMpn, initialProviderId, initialProviderPartId, initialProviderUrl, refreshHref]);
 
   /**
    * Clears the delayed refresh when the compact panel unmounts so no stale redirect survives navigation.

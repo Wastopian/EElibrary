@@ -10,4 +10,5 @@ export * from "./asset-resolution";
 export * from "./catalog-runtime";
 export * from "./connector-intelligence";
 export * from "./normalization";
+export * from "./provider-lookup";
 export * from "./review-workflow";

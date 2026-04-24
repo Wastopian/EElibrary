@@ -7,6 +7,7 @@ import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/as
 import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
+import { buildExactLookupCandidate } from "../provider-lookup-candidate";
 
 /** JLC_PARTS_PROVIDER_ID is the canonical worker-only provider identifier. */
 const JLC_PARTS_PROVIDER_ID = "jlcparts";
@@ -141,6 +142,23 @@ interface NormalizedManufacturerName {
 
 /** jlcpartsProviderAdapter fetches and normalizes structured JLCPCB/LCSC metadata. */
 export const jlcpartsProviderAdapter: ProviderAdapter = {
+  async findExactPartCandidates(request) {
+    try {
+      const rawPayload = await fetchJlcPartsRawPart({
+        ...(request.manufacturerName ? { manufacturerName: request.manufacturerName } : {}),
+        mpn: request.query
+      });
+      const normalizedPart = normalizeRawPart(rawPayload);
+
+      return [buildExactLookupCandidate(normalizedPart, request.query)];
+    } catch (error) {
+      if (isJlcPartsNotFoundError(error)) {
+        return [];
+      }
+
+      throw error;
+    }
+  },
   async fetchRawPart(request) {
     return fetchJlcPartsRawPart(request);
   },
@@ -180,6 +198,13 @@ async function fetchJlcPartsRawPart(request: ProviderPartRequest): Promise<RawPr
   }
 
   throw new Error(`jlcparts metadata record not found for ${request.mpn}`);
+}
+
+/**
+ * Returns whether a jlcparts lookup failure is just a clean no-match result.
+ */
+function isJlcPartsNotFoundError(error: unknown): boolean {
+  return error instanceof Error && /metadata record not found/u.test(error.message);
 }
 
 /**

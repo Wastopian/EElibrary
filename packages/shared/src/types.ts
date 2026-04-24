@@ -140,6 +140,9 @@ export type ReviewState = "pending_review" | "approved" | "rejected" | "changes_
 /** SourceImportStatus makes provider import outcomes queryable without provider-specific strings. */
 export type SourceImportStatus = "imported" | "failed";
 
+/** ProviderLookupMatchType keeps Phase 1 provider lookup results strictly exact-match only. */
+export type ProviderLookupMatchType = "exact_mpn" | "exact_provider_part_id";
+
 /** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
 export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
 
@@ -843,6 +846,32 @@ export interface ProviderImportCreateInput {
 
 /** ProviderImportOutcome labels whether the import created a new source row or refreshed an existing one. */
 export type ProviderImportOutcome = "new_import" | "refreshed_existing";
+
+/** ProviderLookupRequestInput is the explicit exact-match lookup body for supported providers. */
+export interface ProviderLookupRequestInput {
+  /** Exact lookup text entered by the user, such as an MPN or supported provider part id. */
+  query: string;
+  /** Optional manufacturer hint retained only for exact provider disambiguation. */
+  manufacturerName?: string | null;
+}
+
+/** ProviderLookupCandidateBase is the provider-neutral exact-match row produced before auth-derived import gating. */
+export interface ProviderLookupCandidateBase {
+  providerId: string;
+  providerPartKey: string;
+  manufacturerName: string;
+  mpn: string;
+  package: string;
+  sourceUrl: string | null;
+  matchType: ProviderLookupMatchType;
+  matchConfidence: number;
+}
+
+/** ProviderLookupCandidate adds request-time import gating without leaking auth rules into worker adapters. */
+export interface ProviderLookupCandidate extends ProviderLookupCandidateBase {
+  /** True only when the current request context could use the existing admin-gated import route. */
+  importAllowed: boolean;
+}
 
 /** ProviderImportCreateResponse summarizes one successful provider import without implying CAD readiness. */
 export interface ProviderImportCreateResponse {

@@ -75,6 +75,11 @@ export async function requireAuth(
   return session;
 }
 
+/** readOptionalSession returns a verified session when one is present without changing anonymous lookup flows. */
+export async function readOptionalSession(request: IncomingMessage): Promise<ApiSession | null> {
+  return verifyBearerToken(request.headers["authorization"] as string | undefined);
+}
+
 /** requireAdmin returns the session or an HTTP error descriptor for non-admin requests. */
 export async function requireAdmin(
   request: IncomingMessage

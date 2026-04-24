@@ -18,6 +18,7 @@ import type {
   Package,
   Part,
   PartMetric,
+  ProviderLookupCandidateBase,
   ReviewRecord,
   SimilarPartRelation,
   SourceExtractionSignal,
@@ -36,6 +37,14 @@ export interface ProviderPartRequest {
   providerUrl?: string;
   /** Optional datasheet URL retained as intake context for later traceability. */
   datasheetUrl?: string;
+}
+
+/** ProviderExactLookupRequest describes one explicit exact-match provider candidate lookup. */
+export interface ProviderExactLookupRequest {
+  /** Exact lookup text entered by the caller. */
+  query: string;
+  /** Optional manufacturer hint used only for exact provider disambiguation. */
+  manufacturerName?: string;
 }
 
 /** RawProviderPayload preserves raw source data before normalization. */
@@ -96,6 +105,8 @@ export interface ProviderAdapter {
   id: string;
   /** Display-ready adapter name for logs and admin screens. */
   name: string;
+  /** Finds exact-match provider candidates without persisting any catalog rows. */
+  findExactPartCandidates: (request: ProviderExactLookupRequest) => Promise<ProviderLookupCandidateBase[]>;
   /** Lists supported local requests when the adapter can enumerate records. */
   listAvailablePartRequests: () => Promise<ProviderPartRequest[]>;
   /** Fetches raw source payloads without normalizing in the fetch step. */

@@ -22,6 +22,10 @@ export const importUiCopy = {
   buttonSubmit: "Import into catalog",
   /** Primary no-match acquisition action label. */
   buttonAcquireNoMatch: "Try importing this part",
+  /** Explicit action that runs supported-provider exact lookup from a catalog no-match state. */
+  buttonSearchProviders: "Search supported providers",
+  /** Action that starts import from one selected provider candidate. */
+  buttonImportCandidate: "Import candidate",
   /** Primary next-step link after success. */
   linkOpenPart: "Open part detail",
   /** Link to operational admin after success. */
@@ -30,6 +34,18 @@ export const importUiCopy = {
   linkRefreshSearch: "Refresh search results",
   /** Clarifies that no-match acquisition is still catalog ingestion, not a global live search. */
   catalogAcquisitionNote: "Catalog acquisition from no-match only. This is not live global search.",
+  /** Introduces the explicit provider lookup step from a DB-backed no-match state. */
+  providerLookupLead: "Search supported providers for exact matches before deciding whether to import.",
+  /** Clarifies that provider lookup remains explicit and exact-match only. */
+  providerLookupExactNote: "This only checks the currently supported providers for exact MPN or provider part id matches.",
+  /** Shown while the explicit provider lookup request is in flight. */
+  providerLookupSearching: "Searching supported providers for exact matches.",
+  /** Shown when supported providers have no exact candidate rows for the lookup. */
+  providerLookupNoMatch: "No exact-match provider candidates were found for this lookup.",
+  /** Shown when explicit provider lookup fails before candidates can be listed. */
+  providerLookupFailure: "Provider lookup did not complete.",
+  /** Explains why candidates may be visible while import remains unavailable to the current request context. */
+  providerLookupImportUnavailable: "Candidate import still requires an admin session and a configured catalog database.",
   /** Explains why no-match acquisition is hidden in local seed mode. */
   catalogAcquisitionUnavailableSeed: "Catalog acquisition is unavailable while the page is using local seed examples. Seed mode does not imply DB-backed import availability.",
   /** Explains why generic keyword misses do not become live provider lookups. */

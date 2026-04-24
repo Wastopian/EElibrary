@@ -10,7 +10,9 @@ import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearch
 import { buildPartDetailResponse } from "./detail-response";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
-import { isAuthError, requireAdmin } from "./auth";
+import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
+import { runProviderPartLookup } from "./provider-lookup-runner";
+import { isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -24,6 +26,7 @@ import type {
   PartIssueCode,
   PartIssueWorkflowUpdateInput,
   PartIssueWorkflowStatus,
+  ProviderLookupCandidate,
   PartSearchFilters,
   PartSearchRecord,
   PartReadinessStatus,
@@ -84,6 +87,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
 
+  if (request.method === "POST" && url.pathname === "/provider-lookups") {
+    await handleProviderLookupCreate(request, response);
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/imports/provider") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -128,7 +136,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, provider-import POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
+      error: "Only GET, provider-lookup POST, provider-import POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -216,6 +224,68 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   sendJson(response, 404, { error: "Route not found" });
+}
+
+/**
+ * Handles explicit exact-match provider candidate lookup without changing normal catalog search behavior.
+ */
+async function handleProviderLookupCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<Record<string, unknown>>(request);
+
+  if (!body) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_BODY",
+        message: "Request body must be valid JSON."
+      }
+    });
+    return;
+  }
+
+  const parsed = parseProviderLookupRequest(body);
+
+  if (!parsed.ok) {
+    sendJson(response, parsed.statusCode, {
+      error: {
+        code: parsed.code,
+        message: parsed.message
+      }
+    });
+    return;
+  }
+
+  try {
+    const workerLookupRequest = {
+      ...(parsed.lookupRequest.manufacturerName ? { manufacturerName: parsed.lookupRequest.manufacturerName } : {}),
+      query: parsed.lookupRequest.query
+    };
+    const [session, databaseStatus, lookupCandidates] = await Promise.all([
+      readOptionalSession(request),
+      timeRouteOperation(response, "catalog-status", () => getCatalogStoreStatus(), (status) => status.label),
+      timeRouteOperation(
+        response,
+        "provider-lookup-run",
+        () => runProviderPartLookup(workerLookupRequest),
+        (value) => `${value.length} candidates`
+      )
+    ]);
+    const importAllowed = Boolean(session && session.role === "admin" && databaseStatus.connected);
+    const payload: ProviderLookupCandidate[] = lookupCandidates.map((candidate) => ({
+      ...candidate,
+      importAllowed
+    }));
+
+    sendJson(response, 200, {
+      data: payload
+    });
+  } catch (error) {
+    sendJson(response, 422, {
+      error: {
+        code: "PROVIDER_LOOKUP_FAILED",
+        message: formatProviderLookupFailureMessage(error)
+      }
+    });
+  }
 }
 
 /**
@@ -924,6 +994,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts") return "api-search";
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
   if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
+  if (method === "POST" && pathname === "/provider-lookups") return "api-provider-lookup";
   if (method === "POST" && /^\/parts\/[^/]+\/generation-requests$/u.test(pathname)) return "api-generation-request";
   if (method === "POST" && /^\/parts\/[^/]+\/reviews$/u.test(pathname)) return "api-review-action";
   if (method === "POST" && /^\/parts\/[^/]+\/asset-promotions$/u.test(pathname)) return "api-promotion-action";

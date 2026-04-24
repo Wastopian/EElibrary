@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ApiClientError, requestProviderImport } from "../lib/api-client";
+import { ApiClientError, requestProviderImport, requestProviderLookup } from "../lib/api-client";
 import { importUiCopy } from "../lib/import-ui-copy";
 import { ImportByMpnPanel, ImportByMpnPanelStatus, resolveCanonicalImportRouteTarget, resolveImportFailureState, resolveImportSuccessAction, resolvePartDetailRouteTarget } from "./ImportByMpnPanel";
 
@@ -35,6 +35,25 @@ test("ImportByMpnPanel supports catalog acquisition from no-match without implyi
   assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   assert.match(html, /Add provider-specific lookup context/u);
   assert.doesNotMatch(html, /Advanced: worker CLI/u);
+});
+
+test("ImportByMpnPanel supports selected provider-candidate prefills without duplicating the import form", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(ImportByMpnPanel, {
+      compact: true,
+      initialManufacturerName: "Guangdong Fenghua Advanced Tech",
+      initialMpn: "RC-02W300JT",
+      initialProviderId: "jlcparts",
+      initialProviderPartId: "C1091",
+      initialProviderUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html",
+      refreshHref: "/?q=RC-02W300JT"
+    })
+  );
+
+  assert.match(html, /value="RC-02W300JT"/u);
+  assert.match(html, /value="C1091"/u);
+  assert.match(html, /Guangdong Fenghua Advanced Tech/u);
+  assert.match(html, /C1091\.html/u);
 });
 
 test("importUiCopy success wording does not imply export readiness", () => {
@@ -126,6 +145,41 @@ test("requestProviderImport posts to the provider import route", async () => {
 
     assert.equal(result.partId, "part-jlcparts-c1091");
     assert.equal(result.importStatus, "imported");
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("requestProviderLookup posts to the provider lookup route", async () => {
+  const restoreFetch = mockFetch((url, init) => {
+    assert.equal(url.pathname, "/provider-lookups");
+    assert.equal(init?.method, "POST");
+    assert.ok(typeof init?.body === "string");
+    assert.match(init?.body as string, /C1091/u);
+
+    return jsonResponse({
+      data: [
+        {
+          importAllowed: false,
+          manufacturerName: "Guangdong Fenghua Advanced Tech",
+          matchConfidence: 1,
+          matchType: "exact_provider_part_id",
+          mpn: "RC-02W300JT",
+          package: "0402",
+          providerId: "jlcparts",
+          providerPartKey: "C1091",
+          sourceUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
+        }
+      ]
+    });
+  });
+
+  try {
+    const result = await requestProviderLookup({ query: "C1091" });
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0]?.providerPartKey, "C1091");
+    assert.equal(result[0]?.importAllowed, false);
   } finally {
     restoreFetch();
   }

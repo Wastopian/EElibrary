@@ -4,9 +4,11 @@
 
 import Link from "next/link";
 import React from "react";
+import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../components/ImportByMpnPanel";
+import { ProviderLookupPanel } from "../components/ProviderLookupPanel";
 import { WorkspaceJumpNav } from "../components/WorkspaceJumpNav";
 import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../lib/api-client";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../lib/detail-view-model";
@@ -59,9 +61,9 @@ type QuickLookupState =
   | { status: "ambiguous"; query: string; records: PartSearchRecord[]; totalRecords: number }
   | { status: "matched"; record: PartSearchRecord };
 
-/** NoMatchCatalogAcquisitionState keeps no-match intake honest and limited to catalog acquisition, not live search. */
-type NoMatchCatalogAcquisitionState =
-  | { status: "available"; initialMpn: string; refreshHref: string }
+/** NoMatchProviderLookupState keeps no-match intake honest and limited to explicit provider lookup, not live search. */
+type NoMatchProviderLookupState =
+  | { status: "available"; initialQuery: string; refreshHref: string }
   | { status: "unavailable"; reason: string };
 
 export const dynamic = "force-dynamic";
@@ -119,7 +121,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const providerSummary = buildProviderSummary(results, source, health);
   const resultRange = buildResultRange(pagination, results.length);
   const quickLookupState = buildQuickLookupState(buildLookupValue(query, providerPartId, providerUrl, datasheetUrl), results, pagination);
-  const noMatchCatalogAcquisition = buildNoMatchCatalogAcquisition(query, source, buildSearchHref(filters, 1));
+  const noMatchProviderLookup = buildNoMatchProviderLookup(query, source, buildSearchHref(filters, 1));
   const catalogResultRows = buildCatalogResultRows(results);
   const activeFilterPills = buildActiveFilterPills({
     approvalStatus,
@@ -232,7 +234,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               <p className="mode-warning">Local seed mode uses deterministic local examples only. It is not DB-backed catalog data.</p>
             ) : null}
 
-            <QuickLookupPanel noMatchCatalogAcquisition={noMatchCatalogAcquisition} state={quickLookupState} />
+              <QuickLookupPanel noMatchProviderLookup={noMatchProviderLookup} state={quickLookupState} />
 
             <div className="quick-actions-row">
               <Link className="button-link button-link--quiet" href="/#import-by-mpn">
@@ -508,7 +510,7 @@ function HomepageWorkspaceRail({
 /**
  * Renders the explicit quick lookup state before any detailed readiness answer.
  */
-function QuickLookupPanel({ noMatchCatalogAcquisition, state }: { noMatchCatalogAcquisition: NoMatchCatalogAcquisitionState; state: QuickLookupState }) {
+function QuickLookupPanel({ noMatchProviderLookup, state }: { noMatchProviderLookup: NoMatchProviderLookupState; state: QuickLookupState }) {
   if (state.status === "idle") {
     return (
       <div className="quick-check-empty quick-check-empty--idle" role="status">
@@ -519,7 +521,7 @@ function QuickLookupPanel({ noMatchCatalogAcquisition, state }: { noMatchCatalog
   }
 
   if (state.status === "no_match") {
-    return <NoMatchCatalogAcquisition acquisition={noMatchCatalogAcquisition} lookup={state.query} />;
+    return <NoMatchProviderLookup lookup={state.query} providerLookup={noMatchProviderLookup} />;
   }
 
   if (state.status === "ambiguous") {
@@ -530,20 +532,20 @@ function QuickLookupPanel({ noMatchCatalogAcquisition, state }: { noMatchCatalog
 }
 
 /**
- * Renders catalog acquisition from a no-match state without pretending the site is doing live global search.
+ * Renders explicit provider lookup from a no-match state without pretending the site is doing live global search.
  */
-function NoMatchCatalogAcquisition({ acquisition, lookup }: { acquisition: NoMatchCatalogAcquisitionState; lookup: string }) {
+function NoMatchProviderLookup({ lookup, providerLookup }: { lookup: string; providerLookup: NoMatchProviderLookupState }) {
   return (
     <div className="quick-check-empty quick-check-empty--acquisition" role="status">
       <strong>Part not found</strong>
       <p>
         No catalog records matched <span className="ui-mono">{lookup}</span>. The UI will not create a readiness answer without backend data.
       </p>
-      {acquisition.status === "available" ? (
-        <ImportByMpnPanel autoRedirectOnSuccess compact initialMpn={acquisition.initialMpn} refreshHref={acquisition.refreshHref} />
+      {providerLookup.status === "available" ? (
+        <ProviderLookupPanel initialQuery={providerLookup.initialQuery} refreshHref={providerLookup.refreshHref} />
       ) : (
         <p className="quick-check-empty__note">
-          <strong>{importUiCopy.unavailableLead}</strong> {acquisition.reason}
+          <strong>{importUiCopy.unavailableLead}</strong> {providerLookup.reason}
         </p>
       )}
     </div>
@@ -863,9 +865,9 @@ function buildQuickLookupState(query: string | undefined, records: PartSearchRec
 }
 
 /**
- * Builds a no-match catalog acquisition state from the main MPN field only, never from live provider search.
+ * Builds a no-match provider lookup state from the main MPN field only, never from live provider search.
  */
-function buildNoMatchCatalogAcquisition(query: string | undefined, source: CatalogDataSource, refreshHref: string): NoMatchCatalogAcquisitionState {
+function buildNoMatchProviderLookup(query: string | undefined, source: CatalogDataSource, refreshHref: string): NoMatchProviderLookupState {
   const normalizedQuery = query?.trim() ?? "";
 
   if (source !== "database") {
@@ -875,7 +877,7 @@ function buildNoMatchCatalogAcquisition(query: string | undefined, source: Catal
     };
   }
 
-  if (!looksLikeCatalogAcquisitionQuery(normalizedQuery)) {
+  if (!looksLikeProviderLookupQuery(normalizedQuery)) {
     return {
       reason: importUiCopy.catalogAcquisitionUnavailableLookup,
       status: "unavailable"
@@ -883,42 +885,17 @@ function buildNoMatchCatalogAcquisition(query: string | undefined, source: Catal
   }
 
   return {
-    initialMpn: normalizedQuery,
+    initialQuery: normalizedQuery,
     refreshHref,
     status: "available"
   };
 }
 
 /**
- * Uses a conservative MPN-style heuristic so no-match acquisition stays scoped to concrete part lookups.
+ * Uses a conservative MPN-style heuristic so no-match provider lookup stays scoped to concrete part lookups.
  */
-function looksLikeCatalogAcquisitionQuery(query: string): boolean {
-  const hasDigits = /[0-9]/u.test(query);
-  const hasLetters = /[A-Za-z]/u.test(query);
-  const hasWhitespace = /\s/u.test(query);
-
-  if (query.length < 3 || hasWhitespace || !/^[A-Za-z0-9._/+:-]+$/u.test(query) || !hasDigits) {
-    return false;
-  }
-
-  if (looksLikeGenericPackageFilterQuery(query)) {
-    return false;
-  }
-
-  if (!hasLetters) {
-    return query.length >= 6;
-  }
-
-  return true;
-}
-
-/**
- * Blocks common package/filter shorthands so no-match acquisition does not become a package search affordance.
- */
-function looksLikeGenericPackageFilterQuery(query: string): boolean {
-  const normalizedQuery = query.toUpperCase();
-
-  return /^(?:QFN|SOIC|DFN|TSSOP|SOT)-?\d+(?:-\d+)?$/u.test(normalizedQuery);
+function looksLikeProviderLookupQuery(query: string): boolean {
+  return looksLikeConcreteProviderLookupQuery(query);
 }
 
 function formatLifecycleShort(status: string): string {
