@@ -418,6 +418,13 @@ async function buildApiError(response: Response, action: string): Promise<Error>
 }
 
 /**
+ * Builds the API download URL for one asset so the UI can link directly to the redirect endpoint.
+ */
+export function buildAssetDownloadUrl(partId: string, assetId: string): string {
+  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+}
+
+/**
  * Resolves the API base URL for local and deployed web runtimes.
  */
 function getApiBaseUrl(): string {

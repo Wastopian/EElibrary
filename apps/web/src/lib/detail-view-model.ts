@@ -14,6 +14,7 @@ import type {
   BundleReadinessSummary,
   GenerationWorkflow,
   PartAcquisitionSummary,
+  PartEnrichmentSummary,
   PartSearchRecord,
   ReviewState,
   ReviewStatusSummary
@@ -90,6 +91,26 @@ export interface DetailCompletenessChecklistItem {
   detail: string;
   /** Tone keeps checklist badges aligned with the rest of the detail page. */
   tone: ViewTone;
+}
+
+/** DetailEnrichmentStatusItem summarizes one persisted enrichment job for the part detail page. */
+export interface DetailEnrichmentStatusItem {
+  /** Stable persisted job id used for rendering and test targeting. */
+  id: string;
+  /** Short label shown for the enrichment work item. */
+  label: string;
+  /** Compact state label such as Queued, Running, Succeeded, or Failed. */
+  stateLabel: string;
+  /** Underlying item state keeps the rendered tone explicit. */
+  state: "available" | "review" | "blocked" | "neutral";
+  /** Detail explains what the background job did or why it did not complete. */
+  detail: string;
+  /** Tone keeps enrichment badges aligned with the rest of the detail page. */
+  tone: ViewTone;
+  /** Requested time remains visible without making the page infer job order. */
+  requestedAt: string;
+  /** Completed time is explicit when the job reached a terminal state. */
+  completedAt: string | null;
 }
 
 /**
@@ -587,6 +608,86 @@ export function getImportedPartBoundaryCopy(summary: PartAcquisitionSummary): st
 }
 
 /**
+ * Summarizes enrichment history for the part-detail card without turning background work into truth completion.
+ */
+export function getPartEnrichmentStateLabel(summary: PartEnrichmentSummary): WorkflowSignalLabel {
+  if (summary.state === "available") {
+    if (summary.latestJobStatus === "failed") {
+      return {
+        detail: "The latest background enrichment attempt failed. Stored truth on the checklist stays unchanged until evidence is captured and reviewed.",
+        label: "Latest enrichment failed",
+        tone: "review"
+      };
+    }
+
+    if (summary.latestJobStatus === "running") {
+      return {
+        detail: "Background enrichment is currently running for this part. It can improve source evidence, but it does not imply approval or export readiness.",
+        label: "Enrichment running",
+        tone: "info"
+      };
+    }
+
+    if (summary.latestJobStatus === "queued") {
+      return {
+        detail: "Background enrichment is queued for this part. Stored truth on the checklist stays unchanged until evidence is persisted.",
+        label: "Enrichment queued",
+        tone: "info"
+      };
+    }
+
+    return {
+      detail: "Background enrichment history is recorded for this part. Captured evidence can improve usefulness, but it does not imply parsing, verification, approval, or export readiness.",
+      label: "Enrichment history recorded",
+      tone: "info"
+    };
+  }
+
+  if (summary.state === "unavailable") {
+    return {
+      detail: summary.reason ?? "Enrichment history is unavailable for this detail response.",
+      label: "Enrichment unavailable",
+      tone: "neutral"
+    };
+  }
+
+  return {
+    detail: summary.reason ?? "No provider enrichment jobs are recorded for this part yet.",
+    label: "No enrichment jobs recorded",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Returns explicit boundary copy so enrichment stays separate from approval, parsing, and export truth.
+ */
+export function getEnrichmentBoundaryCopy(summary: PartEnrichmentSummary): string | null {
+  if (summary.state === "available") {
+    return "Enriched does not mean approved. Captured does not mean parsed. Parsed does not mean verified. Generated does not mean export-ready.";
+  }
+
+  return null;
+}
+
+/**
+ * Builds compact enrichment status rows for the part detail page without inventing new truth states.
+ */
+export function getPartEnrichmentStatusItems(
+  summary: PartEnrichmentSummary
+): DetailEnrichmentStatusItem[] {
+  return summary.jobs.map((job) => ({
+    completedAt: job.completedAt,
+    detail: describePartEnrichmentJob(job),
+    id: job.id,
+    label: formatPartEnrichmentJobLabel(job.jobType),
+    requestedAt: job.requestedAt,
+    state: enrichmentJobItemState(job.jobStatus),
+    stateLabel: formatPartEnrichmentJobStateLabel(job.jobStatus),
+    tone: enrichmentJobTone(job.jobStatus)
+  }));
+}
+
+/**
  * Builds the compact completeness checklist shown near the part-detail readiness summary.
  */
 export function getPartCompletenessChecklist(
@@ -896,6 +997,89 @@ function buildExportChecklistItem(bundleReadiness: BundleReadinessSummary): Deta
   }
 
   return createChecklistItem("export-readiness", "Export readiness", "missing", "Missing", bundleReadiness.reason);
+}
+
+/**
+ * Formats the currently supported enrichment job type into a readable checklist label.
+ */
+function formatPartEnrichmentJobLabel(jobType: PartEnrichmentSummary["jobs"][number]["jobType"]): string {
+  switch (jobType) {
+    case "datasheet_capture":
+      return "Datasheet capture";
+  }
+}
+
+/**
+ * Formats the persisted enrichment job status for compact badges.
+ */
+function formatPartEnrichmentJobStateLabel(
+  jobStatus: PartEnrichmentSummary["jobs"][number]["jobStatus"]
+): string {
+  switch (jobStatus) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "succeeded":
+      return "Succeeded";
+    case "failed":
+      return "Failed";
+  }
+}
+
+/**
+ * Maps enrichment job status to the same small set of detail-item states used elsewhere on the page.
+ */
+function enrichmentJobItemState(
+  jobStatus: PartEnrichmentSummary["jobs"][number]["jobStatus"]
+): DetailEnrichmentStatusItem["state"] {
+  switch (jobStatus) {
+    case "queued":
+    case "running":
+      return "review";
+    case "succeeded":
+      return "available";
+    case "failed":
+      return "blocked";
+  }
+}
+
+/**
+ * Maps enrichment job status into UI tones without treating background work as approval or verification.
+ */
+function enrichmentJobTone(
+  jobStatus: PartEnrichmentSummary["jobs"][number]["jobStatus"]
+): ViewTone {
+  switch (jobStatus) {
+    case "queued":
+    case "running":
+      return "info";
+    case "succeeded":
+      return "verified";
+    case "failed":
+      return "danger";
+  }
+}
+
+/**
+ * Builds explicit background-job detail text without inventing parsing, verification, or export readiness.
+ */
+function describePartEnrichmentJob(
+  job: PartEnrichmentSummary["jobs"][number]
+): string {
+  if (job.jobStatus === "failed") {
+    return job.errorMessage ?? "The background enrichment job did not complete.";
+  }
+
+  if (job.jobStatus === "queued") {
+    return "This background enrichment job is queued and has not started yet.";
+  }
+
+  if (job.jobStatus === "running") {
+    return "This background enrichment job is currently running. Stored readiness, approval, and export truth stay unchanged until evidence is persisted.";
+  }
+
+  return "This background enrichment job completed. Captured evidence can improve usefulness, but it does not imply parsing, verification, approval, or export readiness.";
 }
 
 /**

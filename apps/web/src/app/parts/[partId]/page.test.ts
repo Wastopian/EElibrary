@@ -6,7 +6,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getAllPartRecords } from "@ee-library/shared/search";
-import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary } from "../../../../../api/src/detail-response";
+import {
+  buildPartDetailResponse,
+  buildUnavailablePartAcquisitionSummary,
+  buildUnavailablePartEnrichmentSummary
+} from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
 
 /**
@@ -223,6 +227,114 @@ test("part detail renders the completeness checklist with realistic mixed states
 });
 
 /**
+ * Verifies the enrichment card renders queued, running, succeeded, and failed job states without changing checklist truth.
+ */
+test("part detail renders enrichment states while the completeness checklist stays tied to stored truth", async () => {
+  const records = getAllPartRecords();
+  const baseRecord = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(baseRecord, "expected seeded regulator part");
+
+  const record = structuredClone(baseRecord);
+  record.datasheetRevision = null;
+  record.assets = record.assets.filter((asset) => asset.assetType !== "datasheet");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(
+        record,
+        records,
+        {
+          completedAt: null,
+          lastJobStatus: null,
+          manufacturerName: null,
+          mpn: null,
+          providerId: null,
+          providerPartKey: null,
+          reason: "No provider acquisition job or attached provider source evidence is recorded for this part yet.",
+          requestedAt: null,
+          requestedBy: null,
+          requestedLookup: null,
+          sourceUrl: null,
+          state: "not_recorded"
+        },
+        {
+          activeJobCount: 2,
+          jobs: [
+            {
+              completedAt: null,
+              errorCode: null,
+              errorMessage: null,
+              id: "enrichjob-queued",
+              jobStatus: "queued",
+              jobType: "datasheet_capture",
+              lastUpdatedAt: "2026-04-24T12:00:00.000Z",
+              requestedAt: "2026-04-24T12:00:00.000Z",
+              startedAt: null
+            },
+            {
+              completedAt: null,
+              errorCode: null,
+              errorMessage: null,
+              id: "enrichjob-running",
+              jobStatus: "running",
+              jobType: "datasheet_capture",
+              lastUpdatedAt: "2026-04-24T12:01:00.000Z",
+              requestedAt: "2026-04-24T12:00:30.000Z",
+              startedAt: "2026-04-24T12:01:00.000Z"
+            },
+            {
+              completedAt: "2026-04-24T11:59:00.000Z",
+              errorCode: null,
+              errorMessage: null,
+              id: "enrichjob-succeeded",
+              jobStatus: "succeeded",
+              jobType: "datasheet_capture",
+              lastUpdatedAt: "2026-04-24T11:59:00.000Z",
+              requestedAt: "2026-04-24T11:58:00.000Z",
+              startedAt: "2026-04-24T11:58:10.000Z"
+            },
+            {
+              completedAt: "2026-04-24T11:57:00.000Z",
+              errorCode: "NO_DATASHEET_SOURCE",
+              errorMessage: "No official provider datasheet source is recorded for this part yet.",
+              id: "enrichjob-failed",
+              jobStatus: "failed",
+              jobType: "datasheet_capture",
+              lastUpdatedAt: "2026-04-24T11:57:00.000Z",
+              requestedAt: "2026-04-24T11:56:00.000Z",
+              startedAt: "2026-04-24T11:56:10.000Z"
+            }
+          ],
+          latestJobStatus: "running",
+          reason: null,
+          state: "available"
+        }
+      ),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /Enrichment status/u);
+    assert.match(html, /Enrichment running/u);
+    assert.match(html, /Datasheet capture/u);
+    assert.match(html, /Queued/u);
+    assert.match(html, /Running/u);
+    assert.match(html, /Succeeded/u);
+    assert.match(html, /Failed/u);
+    assert.match(html, /Enriched does not mean approved/u);
+    assert.match(html, /Datasheet availability/u);
+    assert.match(html, /Missing/u);
+    assert.match(html, /No official provider datasheet source is recorded for this part yet/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies no-job and seed-fallback detail states stay explicit instead of inventing acquisition history.
  */
 test("part detail keeps no-history and seed-fallback acquisition states explicit", async () => {
@@ -267,6 +379,8 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
         record,
         records,
         buildUnavailablePartAcquisitionSummary("Acquisition history is unavailable while this part detail is being served from seed fallback data.")
+        ,
+        buildUnavailablePartEnrichmentSummary("Enrichment history is unavailable while this part detail is being served from seed fallback data.")
       ),
       source: "seed_fallback"
     })
@@ -276,6 +390,7 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
     const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
 
     assert.match(html, /Acquisition history unavailable/u);
+    assert.match(html, /Enrichment unavailable/u);
     assert.match(html, /seed fallback data/u);
     assert.doesNotMatch(html, /Imported via acquisition job/u);
   } finally {

@@ -41,6 +41,14 @@
     "./types": {
       "types": "./src/types.ts",
       "default": "./src/types.ts"
+    },
+    "./file-storage": {
+      "types": "./src/file-storage.ts",
+      "default": "./src/file-storage.ts"
+    },
+    "./part-readiness": {
+      "types": "./src/part-readiness.ts",
+      "default": "./src/part-readiness.ts"
     }
   },
   "scripts": {

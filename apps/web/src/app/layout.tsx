@@ -46,18 +46,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </section>
           </aside>
           <div className="app-main">
-            <header className="app-main-header">
-              <div>
-                <p className="app-kicker">Engineering workstation</p>
-                <p className="app-main-header__title">Search, inspect, trust, and export with explicit evidence.</p>
-                <p className="app-main-header__subtitle">The current product surface is centered on quick readiness checks, detailed part records, connector buildability, and admin issue operations backed by real catalog truth.</p>
-              </div>
-              <div className="app-main-header__panel">
-                <span>Current focus</span>
-                <strong>Quick readiness check, search triage, detail records, and admin review operations</strong>
-                <p>Non-functional compare and tool areas stay out of the shell until they are real workflows.</p>
-              </div>
-            </header>
             <div className="app-main__content" id="page-content">
               {children}
             </div>

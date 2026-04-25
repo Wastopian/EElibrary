@@ -414,6 +414,7 @@ function buildAdminDbPart(config: {
     part: {
       category: "Resistors / Chip Resistor - Surface Mount",
       connectorFamilyId: null,
+      description: "",
       id: config.partId,
       lastUpdatedAt: config.lastUpdatedAt,
       lifecycleStatus: config.lifecycleStatus,

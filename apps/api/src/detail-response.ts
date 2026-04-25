@@ -2,7 +2,7 @@
  * File header: Builds typed provider-neutral part detail responses from a chosen catalog record set.
  */
 
-import type { PartAcquisitionSummary, PartDetailResponse, PartSearchRecord, RelatedPartSummary } from "@ee-library/shared/types";
+import type { PartAcquisitionSummary, PartDetailResponse, PartEnrichmentSummary, PartSearchRecord, RelatedPartSummary } from "@ee-library/shared/types";
 import { getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getAssetPromotionSummaries, getAssetReviewStatuses, getAssetValidationSummaries, getWorkflowReviewStatuses } from "@ee-library/shared/review-workflow";
 
@@ -12,7 +12,8 @@ import { getAssetPromotionSummaries, getAssetReviewStatuses, getAssetValidationS
 export function buildPartDetailResponse(
   record: PartSearchRecord,
   records: PartSearchRecord[],
-  acquisitionSummary: PartAcquisitionSummary = buildNotRecordedPartAcquisitionSummary()
+  acquisitionSummary: PartAcquisitionSummary = buildNotRecordedPartAcquisitionSummary(),
+  enrichmentSummary: PartEnrichmentSummary = buildNotRecordedPartEnrichmentSummary()
 ): PartDetailResponse {
   const relatedIds = new Set<string>([
     ...record.mateRelations.map((relation) => relation.matePartId),
@@ -42,6 +43,7 @@ export function buildPartDetailResponse(
     assetPromotionSummaries: getAssetPromotionSummaries(record.assets, record.validationRecords, record.promotionAudits),
     assetValidationSummaries: getAssetValidationSummaries(record.assets, record.validationRecords),
     bundleReadiness: getBundleReadinessSummary(record),
+    enrichmentSummary,
     generationOptions: getGenerationOptions(record, assetGroups),
     record,
     relatedPartSummaries,
@@ -75,6 +77,30 @@ export function buildNotRecordedPartAcquisitionSummary(): PartAcquisitionSummary
 export function buildUnavailablePartAcquisitionSummary(reason: string): PartAcquisitionSummary {
   return {
     ...buildNotRecordedPartAcquisitionSummary(),
+    reason,
+    state: "unavailable"
+  };
+}
+
+/**
+ * Builds the honest default when no provider enrichment jobs are recorded for a detail response.
+ */
+export function buildNotRecordedPartEnrichmentSummary(): PartEnrichmentSummary {
+  return {
+    activeJobCount: 0,
+    jobs: [],
+    latestJobStatus: null,
+    reason: "No provider enrichment jobs are recorded for this part yet.",
+    state: "not_recorded"
+  };
+}
+
+/**
+ * Builds the explicit unavailable state used when detail data is served without DB-backed enrichment history.
+ */
+export function buildUnavailablePartEnrichmentSummary(reason: string): PartEnrichmentSummary {
+  return {
+    ...buildNotRecordedPartEnrichmentSummary(),
     reason,
     state: "unavailable"
   };

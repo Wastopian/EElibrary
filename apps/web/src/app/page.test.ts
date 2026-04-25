@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { getAllPartRecords } from "@ee-library/shared/search";
 import { importUiCopy } from "../lib/import-ui-copy";
-import SearchPage from "./page";
+import SearchPage from "./catalog/page";
 
 /**
  * Verifies the homepage renders setup instructions instead of crashing when DB is missing.

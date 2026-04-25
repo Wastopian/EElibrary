@@ -47,6 +47,7 @@ export const parts = pgTable(
   {
     id: text("id").primaryKey(),
     mpn: text("mpn").notNull(),
+    description: text("description").notNull().default(""),
     manufacturerId: text("manufacturer_id")
       .notNull()
       .references(() => manufacturers.id),
@@ -169,6 +170,66 @@ export const providerAcquisitionJobEvents = pgTable(
     index("idx_provider_acquisition_job_events_type_created_at").on(t.eventType, t.createdAt),
     check(
       "provider_acquisition_job_events_type_check",
+      literalCheck(`event_type IN ('queued', 'running', 'succeeded', 'failed')`)
+    ),
+  ]
+);
+
+export const providerEnrichmentJobs = pgTable(
+  "provider_enrichment_jobs",
+  {
+    id: text("id").primaryKey(),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    sourceAcquisitionJobId: text("source_acquisition_job_id")
+      .notNull()
+      .references(() => providerAcquisitionJobs.id),
+    jobType: text("job_type").notNull(),
+    jobStatus: text("job_status").notNull().default("queued"),
+    requestedBy: text("requested_by").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uq_provider_enrichment_jobs_active_part_job_type")
+      .on(t.partId, t.jobType)
+      .where(sql`${t.jobStatus} IN ('queued', 'running')`),
+    index("idx_provider_enrichment_jobs_status_requested_at").on(t.jobStatus, t.requestedAt, t.id),
+    index("idx_provider_enrichment_jobs_part_requested_at").on(t.partId, t.requestedAt, t.id),
+    index("idx_provider_enrichment_jobs_source_acquisition_job").on(t.sourceAcquisitionJobId, t.requestedAt),
+    check(
+      "provider_enrichment_jobs_type_check",
+      literalCheck(`job_type IN ('datasheet_capture')`)
+    ),
+    check(
+      "provider_enrichment_jobs_status_check",
+      literalCheck(`job_status IN ('queued', 'running', 'succeeded', 'failed')`)
+    ),
+  ]
+);
+
+export const providerEnrichmentJobEvents = pgTable(
+  "provider_enrichment_job_events",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id")
+      .notNull()
+      .references(() => providerEnrichmentJobs.id),
+    eventType: text("event_type").notNull(),
+    message: text("message").notNull(),
+    detail: jsonb("detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_provider_enrichment_job_events_job_created_at").on(t.jobId, t.createdAt),
+    index("idx_provider_enrichment_job_events_type_created_at").on(t.eventType, t.createdAt),
+    check(
+      "provider_enrichment_job_events_type_check",
       literalCheck(`event_type IN ('queued', 'running', 'succeeded', 'failed')`)
     ),
   ]

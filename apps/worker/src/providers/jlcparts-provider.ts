@@ -32,6 +32,32 @@ const DEFAULT_IMPORT_REQUESTS: ProviderPartRequest[] = [
 /** PRIORITY_CATEGORY_SOURCENAMES checks the known sample category before broad scanning. */
 const PRIORITY_CATEGORY_SOURCENAMES = ["ResistorsChip_Resistor___Surface_Mount"];
 
+/** FETCH_CONCURRENCY is the number of category files fetched in parallel during full enumeration. */
+const FETCH_CONCURRENCY = 6;
+
+/** CATEGORY_HINT_PREFIX namespaces the category sourcename stored in acquisition job source_url. */
+const CATEGORY_HINT_PREFIX = "jlcparts:category:";
+
+/** INDEX_CACHE_TTL_MS keeps the index fresh without re-fetching it for every drain job. */
+const INDEX_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/** CATEGORY_CACHE_TTL_MS keeps recently accessed category files in memory across drain batches. */
+const CATEGORY_CACHE_TTL_MS = 15 * 60 * 1000;
+
+/** MAX_CACHED_CATEGORIES bounds peak memory use during a drain run (~5 MB per category file). */
+const MAX_CACHED_CATEGORIES = 50;
+
+/** cachedIndex stores the provider index between drain jobs so it is only fetched once per process. */
+let cachedIndex: { index: JlcPartsIndex; cachedAt: number } | null = null;
+
+/**
+ * categoryFileCache keeps recently accessed compressed category payloads in memory.
+ * Entries are evicted in insertion order (oldest first) once the map reaches MAX_CACHED_CATEGORIES.
+ * During a drain run, jobs from the same category are consecutive in the queue so cache hit
+ * rates are near 100% after the first job in each category.
+ */
+const categoryFileCache = new Map<string, { file: JlcPartsCategoryFile; cachedAt: number }>();
+
 /** JlcPartsIndex describes the public catalog index envelope. */
 interface JlcPartsIndex {
   /** Source catalog generation timestamp from the jlcparts index. */
@@ -140,6 +166,96 @@ interface NormalizedManufacturerName {
   aliases: string[];
 }
 
+/**
+ * Returns the total number of category entries in the provider index.
+ * Useful for progress reporting before a full enumeration run.
+ */
+export async function countJlcCategories(): Promise<number> {
+  const index = await fetchIndex();
+  return flattenCategoryEntries(index).length;
+}
+
+/**
+ * Yields one batch of ProviderPartRequest per category. Fetches FETCH_CONCURRENCY category
+ * files in parallel to saturate the CDN connection without overwhelming it. Categories that
+ * fail to load are skipped silently so a single bad payload does not abort the full run.
+ */
+export async function* enumerateJlcPartRequests(): AsyncGenerator<ProviderPartRequest[]> {
+  const index = await fetchIndex();
+  const entries = flattenCategoryEntries(index);
+
+  for (let offset = 0; offset < entries.length; offset += FETCH_CONCURRENCY) {
+    const batch = entries.slice(offset, offset + FETCH_CONCURRENCY);
+    const results = await Promise.allSettled(batch.map((entry) => fetchCategoryPartRequests(entry)));
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value.length > 0) {
+        yield result.value;
+      }
+    }
+  }
+}
+
+/**
+ * Fetches and extracts all ProviderPartRequests from one category entry, embedding
+ * the category sourcename as a hint so drain jobs can go directly to the right file.
+ */
+async function fetchCategoryPartRequests(entry: JlcPartsCategoryEntry): Promise<ProviderPartRequest[]> {
+  const categoryFile = await fetchCategoryFile(entry.metadata.sourcename);
+  return extractRequestsFromCategoryFile(categoryFile, entry.metadata.sourcename);
+}
+
+/**
+ * Extracts ProviderPartRequests from a parsed category payload. The sourcename is embedded
+ * in providerUrl as a namespaced hint so fetchJlcPartsRawPart can skip the full category
+ * scan when processing the resulting acquisition jobs.
+ */
+function extractRequestsFromCategoryFile(categoryFile: JlcPartsCategoryFile, sourcename: string): ProviderPartRequest[] {
+  const lcscIndex = categoryFile.schema.indexOf("lcsc");
+  const mfrIndex = categoryFile.schema.indexOf("mfr");
+
+  if (lcscIndex === -1 || mfrIndex === -1) {
+    return [];
+  }
+
+  const hint = buildCategoryHint(sourcename);
+  const requests: ProviderPartRequest[] = [];
+
+  for (const row of categoryFile.components) {
+    const lcsc = readNullableString(row[lcscIndex]);
+    const mpn = readNullableString(row[mfrIndex]);
+
+    if (lcsc) {
+      requests.push({
+        ...(mpn ? { mpn } : {}),
+        providerPartId: lcsc,
+        providerUrl: hint
+      });
+    }
+  }
+
+  return requests;
+}
+
+/**
+ * Encodes a category sourcename as a namespaced hint string stored in providerUrl.
+ */
+function buildCategoryHint(sourcename: string): string {
+  return `${CATEGORY_HINT_PREFIX}${sourcename}`;
+}
+
+/**
+ * Decodes a category sourcename from providerUrl, or returns null when no hint is present.
+ */
+function extractCategoryHint(providerUrl: string | undefined): string | null {
+  if (!providerUrl?.startsWith(CATEGORY_HINT_PREFIX)) {
+    return null;
+  }
+
+  const sourcename = providerUrl.slice(CATEGORY_HINT_PREFIX.length);
+  return sourcename.length > 0 ? sourcename : null;
+}
+
 /** jlcpartsProviderAdapter fetches and normalizes structured JLCPCB/LCSC metadata. */
 export const jlcpartsProviderAdapter: ProviderAdapter = {
   async findExactPartCandidates(request) {
@@ -176,35 +292,71 @@ export const jlcpartsProviderAdapter: ProviderAdapter = {
 
 /**
  * Fetches one raw provider component by exact MPN or LCSC catalog id.
+ *
+ * Fast path: when request.providerUrl carries a jlcparts:category: hint (set during bulk
+ * enqueue), the function goes directly to that category file and returns immediately on
+ * a match — no full-catalog scan required. This reduces each drain job from potentially
+ * hundreds of HTTP fetches to a single cache lookup (index warm) or two fetches (cold start).
+ *
+ * Fallback: if no hint is present, or the hinted category file does not contain the part
+ * (e.g. the feed was updated and a part moved categories), the full priority-ordered scan
+ * runs as before. The already-tried category is skipped to avoid a double fetch.
  */
 async function fetchJlcPartsRawPart(
   request: ProviderPartRequest,
   options: { allowEitherIdentifier?: boolean } = {}
 ): Promise<RawProviderPayload> {
   const index = await fetchIndex();
-  const categoryEntries = prioritizeCategoryEntries(flattenCategoryEntries(index), PRIORITY_CATEGORY_SOURCENAMES);
   const identifiers = readRequestedIdentifiers(request);
+  const categoryHint = extractCategoryHint(request.providerUrl);
+  const allEntries = flattenCategoryEntries(index);
+
+  if (categoryHint !== null) {
+    const hintedEntry = allEntries.find((entry) => entry.metadata.sourcename === categoryHint);
+
+    if (hintedEntry !== undefined) {
+      const categoryFile = await fetchCategoryFile(categoryHint);
+      const component = findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
+
+      if (component !== null) {
+        return buildRawPayload(index, hintedEntry, component);
+      }
+    }
+  }
+
+  const categoryEntries = prioritizeCategoryEntries(allEntries, PRIORITY_CATEGORY_SOURCENAMES);
 
   for (const entry of categoryEntries) {
+    if (categoryHint !== null && entry.metadata.sourcename === categoryHint) {
+      continue;
+    }
+
     const categoryFile = await fetchCategoryFile(entry.metadata.sourcename);
     const component = findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
 
-    if (component) {
-      return {
-        fetchedAt: new Date().toISOString(),
-        payload: {
-          categoryName: entry.categoryName,
-          categorySourceName: entry.metadata.sourcename,
-          component,
-          indexCreatedAt: index.created,
-          subcategoryName: entry.subcategoryName
-        } satisfies JlcPartsRawPayload,
-        providerId: JLC_PARTS_PROVIDER_ID
-      };
+    if (component !== null) {
+      return buildRawPayload(index, entry, component);
     }
   }
 
   throw new Error(`jlcparts metadata record not found for ${identifiers.providerPartId ?? identifiers.mpn ?? "unknown"}`);
+}
+
+/**
+ * Assembles the canonical raw payload envelope from a matched index entry and component.
+ */
+function buildRawPayload(index: JlcPartsIndex, entry: JlcPartsCategoryEntry, component: JlcPartsComponent): RawProviderPayload {
+  return {
+    fetchedAt: new Date().toISOString(),
+    payload: {
+      categoryName: entry.categoryName,
+      categorySourceName: entry.metadata.sourcename,
+      component,
+      indexCreatedAt: index.created,
+      subcategoryName: entry.subcategoryName
+    } satisfies JlcPartsRawPayload,
+    providerId: JLC_PARTS_PROVIDER_ID
+  };
 }
 
 /**
@@ -305,6 +457,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     part: {
       category: partCategory,
       connectorFamilyId: null,
+      description: component.description,
       id: partId,
       lastUpdatedAt,
       lifecycleStatus: readLifecycleStatus(component),
@@ -336,22 +489,46 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
 }
 
 /**
- * Fetches and validates the provider index JSON.
+ * Fetches and validates the provider index JSON, using an in-process cache to avoid
+ * re-fetching on every drain job. The cache is intentionally process-scoped: each worker
+ * invocation gets a fresh start and the TTL prevents stale data on long-running drain runs.
  */
 async function fetchIndex(): Promise<JlcPartsIndex> {
+  if (cachedIndex !== null && Date.now() - cachedIndex.cachedAt < INDEX_CACHE_TTL_MS) {
+    return cachedIndex.index;
+  }
+
   const response = await fetch(INDEX_URL);
 
   if (!response.ok) {
     throw new Error(`Unable to fetch jlcparts index: ${response.status} ${response.statusText}`);
   }
 
-  return response.json() as Promise<JlcPartsIndex>;
+  const index = (await response.json()) as JlcPartsIndex;
+  cachedIndex = { cachedAt: Date.now(), index };
+  return index;
 }
 
 /**
- * Fetches and decompresses one provider category payload.
+ * Fetches and decompresses one provider category payload, keeping it in-process for
+ * CATEGORY_CACHE_TTL_MS. During a drain run, jobs from the same category arrive
+ * consecutively (same requested_at in the queue) so this eliminates redundant downloads
+ * and gunzip passes for the common case. Evicts the oldest entry when the cache is full.
  */
 async function fetchCategoryFile(sourceName: string): Promise<JlcPartsCategoryFile> {
+  const cached = categoryFileCache.get(sourceName);
+
+  if (cached !== undefined && Date.now() - cached.cachedAt < CATEGORY_CACHE_TTL_MS) {
+    return cached.file;
+  }
+
+  if (categoryFileCache.size >= MAX_CACHED_CATEGORIES) {
+    const oldestKey = categoryFileCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      categoryFileCache.delete(oldestKey);
+    }
+  }
+
   const response = await fetch(`${DATA_BASE_URL}/${sourceName}.json.gz`);
 
   if (!response.ok) {
@@ -365,6 +542,7 @@ async function fetchCategoryFile(sourceName: string): Promise<JlcPartsCategoryFi
     throw new Error(`Invalid jlcparts category payload: ${sourceName}`);
   }
 
+  categoryFileCache.set(sourceName, { cachedAt: Date.now(), file: payload });
   return payload;
 }
 

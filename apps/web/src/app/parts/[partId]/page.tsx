@@ -10,7 +10,7 @@ import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, Statu
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
-import { createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
 import {
   assetTrustStageTone,
   formatAssetPromotionBlockers,
@@ -21,11 +21,14 @@ import {
   formatDatasheetParseConfidence,
   formatGenerationWorkflowLabel,
   formatReviewStateLabel,
+  getEnrichmentBoundaryCopy,
   getAssetTruthSummary,
   getConnectorWorkflowSummary,
   getImportedPartBoundaryCopy,
   getPartAcquisitionStateLabel,
   getPartCompletenessChecklist,
+  getPartEnrichmentStateLabel,
+  getPartEnrichmentStatusItems,
   getQuickReadinessSummary,
   getRecoveryWorkflowSummary,
   getReviewWorkflowSummary,
@@ -36,7 +39,7 @@ import {
   shouldRenderReviewActions
 } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { DetailCompletenessChecklistItem, ViewTone } from "../../../lib/detail-view-model";
+import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, ViewTone } from "../../../lib/detail-view-model";
 import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -82,6 +85,9 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const reviewWorkflowSummary = getReviewWorkflowSummary(assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
   const acquisitionSummarySignal = getPartAcquisitionStateLabel(detail.acquisitionSummary);
   const importedBoundaryCopy = getImportedPartBoundaryCopy(detail.acquisitionSummary);
+  const enrichmentSummarySignal = getPartEnrichmentStateLabel(detail.enrichmentSummary);
+  const enrichmentBoundaryCopy = getEnrichmentBoundaryCopy(detail.enrichmentSummary);
+  const enrichmentStatusItems = getPartEnrichmentStatusItems(detail.enrichmentSummary);
   const completenessChecklist = getPartCompletenessChecklist(record, assetGroups, bundleReadiness, generationOptions, reviewWorkflowSummary);
   const latestSource = record.sources[0];
   const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
@@ -151,7 +157,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
   return (
     <main className="detail-layout">
-      <Link className="back-link" href="/">
+      <Link className="back-link" href="/catalog">
         &larr; Back to catalog search
       </Link>
 
@@ -173,17 +179,24 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               <span>Lifecycle {record.part.lifecycleStatus}</span>
               <span>{record.connectorFamily ? record.connectorFamily.name : "General component"}</span>
             </div>
+            {record.part.description && (
+              <p className="detail-hero__description">{record.part.description}</p>
+            )}
             <p className="detail-trust-callout">
               <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
             </p>
             <div className="signal-strip" role="group" aria-label="Engineering signals">
-              <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
-              <StatusBadge label={record.approval.summary} tone={approvalStatusTone(record.approval.status)} />
-              <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-              <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
-              <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
-              <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name}` : "Non-connector"} tone={record.connectorFamily ? "info" : "neutral"} />
-              <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
+              <div className="signal-strip__primary">
+                <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
+                <StatusBadge label={record.approval.summary} tone={approvalStatusTone(record.approval.status)} />
+                <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+                <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
+                <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
+              </div>
+              <div className="signal-strip__secondary">
+                <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name}` : "Non-connector"} tone={record.connectorFamily ? "info" : "neutral"} />
+                <StatusBadge label={`Updated ${formatDateTime(record.lastUpdatedAt)}`} tone="neutral" />
+              </div>
             </div>
           </div>
           <div className="detail-hero__status">
@@ -216,10 +229,14 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           <SectionPanel description="Where this part came from and whether the current detail page has job-backed acquisition provenance." title="Acquisition summary">
             <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
           </SectionPanel>
-          <SectionPanel description="Compact engineering-readiness checkpoints derived from the existing detail truth." title="Completeness checklist">
-            <DetailCompletenessChecklist items={completenessChecklist} />
+          <SectionPanel description="Background enrichment progress stays separate from approval, parsing, and export truth." title="Enrichment status">
+            <DetailEnrichmentSummary boundaryCopy={enrichmentBoundaryCopy} items={enrichmentStatusItems} summary={detail.enrichmentSummary} summarySignal={enrichmentSummarySignal} />
           </SectionPanel>
         </div>
+
+        <SectionPanel description="Compact engineering-readiness checkpoints derived from the existing detail truth." title="Completeness checklist">
+          <DetailCompletenessChecklist items={completenessChecklist} />
+        </SectionPanel>
 
         <div className="detail-overview-grid">
           <DetailContextPanel
@@ -711,6 +728,79 @@ function DetailAcquisitionSummary({
 }
 
 /**
+ * Renders the background enrichment summary without turning queued or succeeded work into approval or export truth.
+ */
+function DetailEnrichmentSummary({
+  boundaryCopy,
+  items,
+  summary,
+  summarySignal
+}: {
+  boundaryCopy: string | null;
+  items: DetailEnrichmentStatusItem[];
+  summary: PartDetailPageDetail["enrichmentSummary"];
+  summarySignal: ReturnType<typeof getPartEnrichmentStateLabel>;
+}) {
+  return (
+    <div className="detail-acquisition-summary">
+      <div className="detail-acquisition-summary__lead">
+        <div>
+          <p className="app-kicker">Background enrichment</p>
+          <h3>{summarySignal.label}</h3>
+          <p>{summarySignal.detail}</p>
+        </div>
+        <div className="detail-acquisition-summary__badges">
+          <StatusBadge label={summarySignal.label} tone={mapViewToneToBadge(summarySignal.tone)} />
+          {summary.latestJobStatus ? <StatusBadge label={`Latest ${summary.latestJobStatus}`} tone={enrichmentJobStatusTone(summary.latestJobStatus)} /> : null}
+          {summary.activeJobCount > 0 ? <StatusBadge label={`${summary.activeJobCount} active`} tone="info" /> : null}
+        </div>
+      </div>
+
+      {boundaryCopy ? (
+        <p className="detail-acquisition-summary__boundary">
+          <strong>{boundaryCopy}</strong> The completeness checklist below still reflects only currently stored review, asset, and export truth.
+        </p>
+      ) : null}
+
+      <dl className="detail-acquisition-grid">
+        <div>
+          <dt>Latest job status</dt>
+          <dd>{summary.latestJobStatus ?? "No jobs recorded"}</dd>
+        </div>
+        <div>
+          <dt>Active jobs</dt>
+          <dd>{summary.activeJobCount}</dd>
+        </div>
+        <div className="detail-acquisition-grid__wide">
+          <dt>Enrichment note</dt>
+          <dd>{summary.reason ?? "Background enrichment can improve source evidence, but it does not imply parsing, verification, approval, or export readiness."}</dd>
+        </div>
+      </dl>
+
+      {items.length > 0 ? (
+        <div className="detail-completeness-list" aria-label="Enrichment jobs">
+          {items.map((item) => (
+            <article className={`detail-completeness-item detail-completeness-item--${item.state}`} key={item.id}>
+              <div className="detail-completeness-item__lead">
+                <div>
+                  <strong>{item.label}</strong>
+                  <p>{item.detail}</p>
+                  <p className="muted-copy">
+                    Requested {formatDateTime(item.requestedAt)}
+                    {item.completedAt ? ` · Completed ${formatDateTime(item.completedAt)}` : ""}
+                  </p>
+                </div>
+                <StatusBadge label={item.stateLabel} tone={mapViewToneToBadge(item.tone)} />
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Renders the compact engineering-readiness checklist derived from existing detail truth only.
  */
 function DetailCompletenessChecklist({ items }: { items: DetailCompletenessChecklistItem[] }) {
@@ -1197,6 +1287,11 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
         </div>
       </details>
       <div className="asset-review-card__actions">
+        {bestAsset.availabilityStatus !== "missing" && bestAsset.availabilityStatus !== "failed" ? (
+          <a className="asset-download-link" href={buildAssetDownloadUrl(bestAsset.partId, bestAsset.id)} rel="noopener noreferrer" target="_blank">
+            {bestAsset.availabilityStatus === "referenced" ? "View source" : "Download"}
+          </a>
+        ) : null}
         <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
         <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
       </div>
@@ -1621,6 +1716,25 @@ function acquisitionJobStatusTone(status: NonNullable<PartAcquisitionSummary["la
     queued: "info",
     running: "info",
     succeeded: "info"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Maps enrichment job status into explicit badge tone without treating enrichment as approval or verification.
+ */
+function enrichmentJobStatusTone(
+  status: NonNullable<PartDetailPageDetail["enrichmentSummary"]["latestJobStatus"]>
+): BadgeTone {
+  const tones: Record<
+    NonNullable<PartDetailPageDetail["enrichmentSummary"]["latestJobStatus"]>,
+    BadgeTone
+  > = {
+    failed: "danger",
+    queued: "info",
+    running: "info",
+    succeeded: "verified"
   };
 
   return tones[status];

@@ -4,8 +4,9 @@
 
 import { randomUUID } from "node:crypto";
 import { getWorkerDatabasePool } from "./catalog-repository";
+import { enqueueProviderEnrichmentJobsForPart } from "./provider-enrichment-jobs";
 import { runProviderPartImport as defaultRunProviderPartImport } from "./provider-part-import";
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type {
   ProviderAcquisitionJob,
   ProviderAcquisitionJobEvent,
@@ -17,6 +18,30 @@ import type { ImportResultSummary, ProviderPartRequest } from "./provider-part-i
 
 /** RunProviderPartImport captures the shared import runner signature so tests can stub it cleanly. */
 type RunProviderPartImport = typeof defaultRunProviderPartImport;
+
+/** BulkEnqueueSummary reports the outcome of a full bulk catalog enqueue run. */
+export interface BulkEnqueueSummary {
+  /** Total acquisition jobs inserted during the run. */
+  totalEnqueued: number;
+  /** Total requests skipped because a source record or active job already existed. */
+  totalSkipped: number;
+  /** Number of category batches yielded by the generator. */
+  categoryBatches: number;
+}
+
+/** BulkEnqueueProgressEvent is emitted after each category batch is inserted. */
+export interface BulkEnqueueProgressEvent {
+  /** Category batches processed so far. */
+  categoryBatch: number;
+  /** Jobs inserted from this batch. */
+  batchEnqueued: number;
+  /** Requests skipped from this batch. */
+  batchSkipped: number;
+  /** Running total inserted. */
+  totalEnqueued: number;
+  /** Running total skipped. */
+  totalSkipped: number;
+}
 
 /** DatabaseProviderAcquisitionJobRow is the SQL row shape used while claiming and updating jobs. */
 interface DatabaseProviderAcquisitionJobRow {
@@ -65,6 +90,119 @@ export interface ProviderAcquisitionProcessingSummary {
   processed: ProviderAcquisitionJobProcessingResult[];
 }
 
+/** SUB_BATCH_SIZE is the maximum rows per parameterized INSERT to stay well within pg limits. */
+const SUB_BATCH_SIZE = 100;
+
+/**
+ * Bulk-inserts provider acquisition jobs for every request yielded by the generator.
+ * Requests are skipped when a source record already exists for the provider key (part is
+ * already in the catalog) or when an active or succeeded acquisition job already exists.
+ */
+export async function bulkEnqueueProviderAcquisitionJobs(
+  providerId: string,
+  requestBatches: AsyncGenerator<ProviderPartRequest[]>,
+  requestedBy: string,
+  onCategoryProgress?: (progress: BulkEnqueueProgressEvent) => void
+): Promise<BulkEnqueueSummary> {
+  const databasePool = getWorkerDatabasePool();
+  let totalEnqueued = 0;
+  let totalSkipped = 0;
+  let categoryBatches = 0;
+
+  for await (const requests of requestBatches) {
+    categoryBatches += 1;
+    const { enqueued, skipped } = await insertBulkAcquisitionJobBatch(databasePool, providerId, requests, requestedBy);
+    totalEnqueued += enqueued;
+    totalSkipped += skipped;
+    onCategoryProgress?.({ batchEnqueued: enqueued, batchSkipped: skipped, categoryBatch: categoryBatches, totalEnqueued, totalSkipped });
+  }
+
+  return { categoryBatches, totalEnqueued, totalSkipped };
+}
+
+/**
+ * Splits one category's requests into sub-batches and inserts them, returning enqueued vs skipped counts.
+ */
+async function insertBulkAcquisitionJobBatch(
+  pool: Pool,
+  providerId: string,
+  requests: ProviderPartRequest[],
+  requestedBy: string
+): Promise<{ enqueued: number; skipped: number }> {
+  if (requests.length === 0) {
+    return { enqueued: 0, skipped: 0 };
+  }
+
+  let totalEnqueued = 0;
+
+  for (let offset = 0; offset < requests.length; offset += SUB_BATCH_SIZE) {
+    const subBatch = requests.slice(offset, offset + SUB_BATCH_SIZE);
+    const rows = subBatch
+      .map((request) => ({
+        id: `acq-${randomUUID()}`,
+        manufacturerName: request.manufacturerName ?? null,
+        mpn: request.mpn ?? null,
+        providerPartKey: request.providerPartId ?? request.mpn ?? ""
+      }))
+      .filter((row) => row.providerPartKey.length > 0);
+
+    if (rows.length === 0) {
+      continue;
+    }
+
+    const query = buildBulkInsertQuery(providerId, rows, requestedBy);
+    const result = await pool.query(query);
+    totalEnqueued += result.rowCount ?? 0;
+  }
+
+  return { enqueued: totalEnqueued, skipped: requests.length - totalEnqueued };
+}
+
+/**
+ * Builds a parameterized batch INSERT that skips provider keys already present in
+ * source_records or with a queued/running/succeeded acquisition job.
+ */
+function buildBulkInsertQuery(
+  providerId: string,
+  rows: Array<{ id: string; providerPartKey: string; manufacturerName: string | null; mpn: string | null }>,
+  requestedBy: string
+): { text: string; values: Array<string | null> } {
+  const values: Array<string | null> = [providerId, requestedBy];
+  const valueClauses: string[] = [];
+
+  for (const row of rows) {
+    const base = values.length + 1;
+    values.push(row.id, row.providerPartKey, row.manufacturerName, row.mpn);
+    valueClauses.push(`($${base}::text, $${base + 1}::text, $${base + 2}::text, $${base + 3}::text)`);
+  }
+
+  return {
+    text: `
+      WITH candidates(id, provider_part_key, manufacturer_name, mpn) AS (
+        VALUES ${valueClauses.join(", ")}
+      )
+      INSERT INTO provider_acquisition_jobs (
+        id, provider_id, provider_part_key, requested_lookup, manufacturer_name, mpn,
+        match_type, match_confidence, job_status, requested_by, requested_at, last_updated_at
+      )
+      SELECT
+        c.id, $1, c.provider_part_key, c.provider_part_key, c.manufacturer_name, c.mpn,
+        'exact_provider_part_id', 1.0, 'queued', $2, now(), now()
+      FROM candidates c
+      WHERE NOT EXISTS (
+        SELECT 1 FROM source_records sr
+        WHERE sr.provider_id = $1 AND sr.provider_part_key = c.provider_part_key
+      ) AND NOT EXISTS (
+        SELECT 1 FROM provider_acquisition_jobs paj
+        WHERE paj.provider_id = $1
+          AND paj.provider_part_key = c.provider_part_key
+          AND paj.job_status IN ('queued', 'running', 'succeeded')
+      )
+    `,
+    values
+  };
+}
+
 /** runProviderPartImportImpl keeps the real import runner replaceable in focused queue tests. */
 let runProviderPartImportImpl: RunProviderPartImport = defaultRunProviderPartImport;
 
@@ -76,20 +214,31 @@ export function setProviderAcquisitionImportRunnerForTests(next: RunProviderPart
 }
 
 /**
- * Processes up to limit queued provider acquisition jobs in oldest-first order.
+ * Processes up to limit queued provider acquisition jobs with up to concurrency jobs running
+ * simultaneously. FOR UPDATE SKIP LOCKED ensures each concurrent claim grabs a distinct row
+ * so there is no double-processing. Concurrency defaults to 5 — enough to saturate network
+ * I/O without overwhelming the provider or the database pool.
  */
-export async function processProviderAcquisitionJobs(limit = 20): Promise<ProviderAcquisitionProcessingSummary> {
+export async function processProviderAcquisitionJobs(limit = 20, concurrency = 5): Promise<ProviderAcquisitionProcessingSummary> {
   const processed: ProviderAcquisitionJobProcessingResult[] = [];
   const boundedLimit = Math.max(1, Math.min(limit, 100));
+  const boundedConcurrency = Math.max(1, Math.min(concurrency, 20));
+  let exhausted = false;
 
-  for (let index = 0; index < boundedLimit; index += 1) {
-    const nextResult = await processNextProviderAcquisitionJob();
+  while (!exhausted && processed.length < boundedLimit) {
+    const batchSize = Math.min(boundedConcurrency, boundedLimit - processed.length);
+    const batchResults = await Promise.all(
+      Array.from({ length: batchSize }, () => processNextProviderAcquisitionJob())
+    );
 
-    if (!nextResult) {
-      break;
+    for (const result of batchResults) {
+      if (result === null) {
+        exhausted = true;
+        break;
+      }
+
+      processed.push(result);
     }
-
-    processed.push(nextResult);
   }
 
   return { processed };
@@ -308,7 +457,7 @@ async function markProviderAcquisitionJobSucceeded(jobId: string, summary: Impor
 
   try {
     await client.query("BEGIN");
-    await client.query(
+    const updateResult = await client.query<{ requested_by: string }>(
       `
         UPDATE provider_acquisition_jobs
         SET
@@ -321,9 +470,11 @@ async function markProviderAcquisitionJobSucceeded(jobId: string, summary: Impor
           completed_at = $5,
           last_updated_at = $5
         WHERE id = $1
+        RETURNING requested_by
       `,
       [jobId, summary.partId, summary.outcome, summary.previousImportStatus, completedAt]
     );
+    const requestedBy = updateResult.rows[0]?.requested_by ?? "system";
     await insertProviderAcquisitionJobEvent(
       client,
       buildProviderAcquisitionJobEvent(jobId, "succeeded", "Acquisition job succeeded.", completedAt, {
@@ -332,6 +483,15 @@ async function markProviderAcquisitionJobSucceeded(jobId: string, summary: Impor
         previousImportStatus: summary.previousImportStatus,
         providerPartKey: summary.providerPartKey
       })
+    );
+    await enqueueProviderEnrichmentJobsForPart(
+      {
+        partId: summary.partId,
+        requestedAt: completedAt,
+        requestedBy,
+        sourceAcquisitionJobId: jobId
+      },
+      { client }
     );
     await client.query("COMMIT");
   } catch (error) {

@@ -62,6 +62,7 @@ export const parts = [
   {
     category: "Connector",
     connectorFamilyId: "cf-micro-match-1-27",
+    description: "",
     id: "part-te-215079-8",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -73,6 +74,7 @@ export const parts = [
   {
     category: "Connector",
     connectorFamilyId: "cf-micro-match-1-27",
+    description: "",
     id: "part-te-215083-8",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -84,6 +86,7 @@ export const parts = [
   {
     category: "Connector accessory",
     connectorFamilyId: "cf-micro-match-1-27",
+    description: "",
     id: "part-te-215460-8",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -95,6 +98,7 @@ export const parts = [
   {
     category: "Connector accessory",
     connectorFamilyId: "cf-micro-match-1-27",
+    description: "",
     id: "part-te-215464-1",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -106,6 +110,7 @@ export const parts = [
   {
     category: "Connector tooling",
     connectorFamilyId: "cf-micro-match-1-27",
+    description: "",
     id: "part-te-734532-1",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -117,6 +122,7 @@ export const parts = [
   {
     category: "Connector cable",
     connectorFamilyId: "cf-micro-match-1-27",
+    description: "",
     id: "part-molex-1513400800",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -128,6 +134,7 @@ export const parts = [
   {
     category: "Power management",
     connectorFamilyId: null,
+    description: "",
     id: "part-tps7a02dbvr",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -139,6 +146,7 @@ export const parts = [
   {
     category: "Capacitor",
     connectorFamilyId: null,
+    description: "",
     id: "part-grm188r71c104ka01d",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",
@@ -150,6 +158,7 @@ export const parts = [
   {
     category: "Microcontroller",
     connectorFamilyId: null,
+    description: "",
     id: "part-stm32g031k8t6",
     lastUpdatedAt: LAST_UPDATED_AT,
     lifecycleStatus: "active",

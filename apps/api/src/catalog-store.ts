@@ -33,6 +33,8 @@ import type {
   PartApproval,
   PartApprovalStatus,
   PartDuplicateCandidate,
+  PartEnrichmentJobSummary,
+  PartEnrichmentSummary,
   PartIssueCode,
   PartIssueWorkflowUpdateInput,
   PartIssueWorkflowUpdateResponse,
@@ -48,6 +50,8 @@ import type {
   ProviderAcquisitionJobDetailResponse,
   ProviderAcquisitionJobEvent,
   ProviderAcquisitionJobStatus,
+  ProviderEnrichmentJobStatus,
+  ProviderEnrichmentJobType,
   ProviderImportOutcome,
   ProviderLookupMatchType,
   ReviewActionInput,
@@ -170,6 +174,7 @@ interface DatabasePartRow {
   /** Canonical part fields from parts. */
   part_id: string;
   mpn: string;
+  description: string;
   manufacturer_id: string;
   category: string;
   lifecycle_status: Part["lifecycleStatus"];
@@ -459,6 +464,22 @@ interface DatabaseProviderAcquisitionJobEventRow {
   created_at: Date | string;
 }
 
+/** DatabaseProviderEnrichmentJobRow is one persisted provider enrichment job row. */
+interface DatabaseProviderEnrichmentJobRow {
+  id: string;
+  part_id: string;
+  source_acquisition_job_id: string;
+  job_type: ProviderEnrichmentJobType;
+  job_status: ProviderEnrichmentJobStatus;
+  requested_by: string;
+  requested_at: Date | string;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  error_code: string | null;
+  error_message: string | null;
+  last_updated_at: Date | string;
+}
+
 /** DatabaseSourceExtractionSignalRow is the source extraction signal shape read from Postgres. */
 interface DatabaseSourceExtractionSignalRow {
   /** SourceExtractionSignal fields from source_extraction_signals. */
@@ -481,6 +502,20 @@ interface SearchSqlFilter {
   whereSql: string;
   /** Parameter values matching the assembled WHERE clause placeholders. */
   params: unknown[];
+  /**
+   * Raw lowercased query text when a free-text search is active, or null when no query was
+   * provided. Kept separate from params so it can be appended after WHERE params and before
+   * LIMIT/OFFSET without disturbing the WHERE clause placeholder indices.
+   */
+  queryText: string | null;
+  /**
+   * True when the WHERE clause references the prs alias (part_readiness_summaries). When false
+   * the count and IDs queries omit that LEFT JOIN entirely, halving join overhead on searches
+   * that don't filter by readiness status, connector class, or approval status.
+   */
+  needsReadinessJoin: boolean;
+  /** True when the WHERE clause references the pa alias (part_approvals). */
+  needsApprovalJoin: boolean;
 }
 
 /** DatabaseSearchFacetManufacturerRow is one grouped manufacturer facet row. */
@@ -665,10 +700,14 @@ export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilte
 
   const cadAvailability = filters.cadAvailability ?? "any";
   const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
-  const totalCount = await readSearchResultCount(databasePool, searchFilter, options);
+  const estimatedPagination = buildSearchPagination(0, filters);
+  const requestedPage = Math.max(1, filters.page ?? 1);
+  const offset = (requestedPage - 1) * estimatedPagination.pageSize;
+  const [totalCount, partIds] = await Promise.all([
+    readSearchResultCount(databasePool, searchFilter, options),
+    readSearchPartIds(databasePool, searchFilter, estimatedPagination.sort, estimatedPagination.pageSize, offset, options)
+  ]);
   const pagination = buildSearchPagination(totalCount, filters);
-  const offset = (pagination.page - 1) * pagination.pageSize;
-  const partIds = await readSearchPartIds(databasePool, searchFilter, pagination.sort, pagination.pageSize, offset, options);
 
   if (partIds.length === 0) {
     return {
@@ -756,6 +795,97 @@ export async function readPartAcquisitionSummaryFromDatabase(partId: string, opt
     }
 
     return buildNotRecordedPartAcquisitionSummary();
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads detail-safe enrichment history for one part without changing readiness, approval, or export truth.
+ */
+export async function readPartEnrichmentSummaryFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<PartEnrichmentSummary> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return buildUnavailablePartEnrichmentSummary("Enrichment history is unavailable because the catalog database is not configured.");
+  }
+
+  try {
+    const jobRows = await readPartEnrichmentJobRows(databasePool, partId, options);
+
+    if (jobRows.length === 0) {
+      return buildNotRecordedPartEnrichmentSummary();
+    }
+
+    return buildPartEnrichmentSummaryFromJobRows(jobRows);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/** AssetDownloadTargetResult describes what the download route should do for one asset. */
+export type AssetDownloadTargetResult =
+  | { status: "not_configured" }
+  | { status: "not_found" }
+  | { status: "not_accessible"; reason: string }
+  | { status: "redirect"; url: string; assetType: Asset["assetType"]; fileFormat: Asset["fileFormat"] }
+  | { status: "file_only"; storageKey: string; assetType: Asset["assetType"]; fileFormat: Asset["fileFormat"] };
+
+/** DatabaseAssetDownloadRow is the minimal shape needed to resolve one asset download target. */
+interface DatabaseAssetDownloadRow {
+  id: string;
+  part_id: string;
+  asset_type: Asset["assetType"];
+  file_format: Asset["fileFormat"];
+  availability_status: Asset["availabilityStatus"];
+  source_url: string | null;
+  storage_key: string | null;
+}
+
+/**
+ * Reads the minimum asset fields needed to resolve a download redirect or file-serve path.
+ */
+export async function readAssetDownloadTargetFromDatabase(partId: string, assetId: string): Promise<AssetDownloadTargetResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const result = await databasePool.query<DatabaseAssetDownloadRow>(
+      `
+        SELECT id, part_id, asset_type, file_format, availability_status, source_url, storage_key
+        FROM assets
+        WHERE id = $1 AND part_id = $2
+        LIMIT 1
+      `,
+      [assetId, partId]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    if (row.availability_status === "missing") {
+      return { status: "not_accessible", reason: "This asset has no file or URL recorded." };
+    }
+
+    if (row.availability_status === "failed") {
+      return { status: "not_accessible", reason: "This asset's last download or validation attempt failed." };
+    }
+
+    if (row.source_url) {
+      return { status: "redirect", url: row.source_url, assetType: row.asset_type, fileFormat: row.file_format };
+    }
+
+    if (row.storage_key) {
+      return { status: "file_only", storageKey: row.storage_key, assetType: row.asset_type, fileFormat: row.file_format };
+    }
+
+    return { status: "not_accessible", reason: "This asset has no accessible URL or stored file." };
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -1653,11 +1783,47 @@ async function readLatestPartAcquisitionSourceRow(
 }
 
 /**
+ * Reads provider enrichment jobs for one part in newest-first order.
+ */
+async function readPartEnrichmentJobRows(
+  databasePool: Pool,
+  partId: string,
+  options: CatalogReadOptions
+): Promise<DatabaseProviderEnrichmentJobRow[]> {
+  const result = await timedCatalogQuery<DatabaseProviderEnrichmentJobRow>(
+    databasePool,
+    "part_enrichment_jobs",
+    `
+      SELECT
+        id,
+        part_id,
+        source_acquisition_job_id,
+        job_type,
+        job_status,
+        requested_by,
+        requested_at,
+        started_at,
+        completed_at,
+        error_code,
+        error_message,
+        last_updated_at
+      FROM provider_enrichment_jobs
+      WHERE part_id = $1
+      ORDER BY COALESCE(completed_at, started_at, requested_at, last_updated_at) DESC, requested_at DESC, id DESC
+    `,
+    [partId],
+    options
+  );
+
+  return result.rows;
+}
+
+/**
  * Counts matching parts using the same SQL predicate as the paged search id query.
  */
 async function readSearchResultCount(databasePool: Pool, searchFilter: SearchSqlFilter, options: CatalogReadOptions): Promise<number> {
   try {
-    const result = await timedCatalogQuery<{ total_count: string }>(databasePool, "search_count", buildSearchCountSql(searchFilter.whereSql), searchFilter.params, options);
+    const result = await timedCatalogQuery<{ total_count: string }>(databasePool, "search_count", buildSearchCountSql(searchFilter), searchFilter.params, options);
 
     return Number(result.rows[0]?.total_count ?? 0);
   } catch (error) {
@@ -1667,10 +1833,16 @@ async function readSearchResultCount(databasePool: Pool, searchFilter: SearchSql
 
 /**
  * Reads only matching part identifiers for the current page and stable sort mode.
+ * When queryText is present it is appended between the WHERE params and the LIMIT/OFFSET
+ * values to match the parameter indices emitted by buildSearchPartIdsSql.
  */
 async function readSearchPartIds(databasePool: Pool, searchFilter: SearchSqlFilter, sort: PartSearchSort, pageSize: number, offset: number, options: CatalogReadOptions): Promise<string[]> {
   try {
-    const result = await timedCatalogQuery<{ id: string }>(databasePool, "search_part_ids", buildSearchPartIdsSql(searchFilter, sort), [...searchFilter.params, pageSize, offset], options);
+    const paginationParams = searchFilter.queryText !== null
+      ? [...searchFilter.params, searchFilter.queryText, pageSize, offset]
+      : [...searchFilter.params, pageSize, offset];
+
+    const result = await timedCatalogQuery<{ id: string }>(databasePool, "search_part_ids", buildSearchPartIdsSql(searchFilter, sort), paginationParams, options);
 
     return result.rows.map((row) => row.id);
   } catch (error) {
@@ -1691,7 +1863,7 @@ async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilte
       timedCatalogQuery<DatabaseSearchFacetReadinessRow>(databasePool, "search_facet_readiness", buildSearchReadinessFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetApprovalRow>(databasePool, "search_facet_approval", buildSearchApprovalFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetConnectorClassRow>(databasePool, "search_facet_connector_class", buildSearchConnectorClassFacetSql(searchFilter.whereSql), searchFilter.params, options),
-      timedCatalogQuery<DatabaseSearchFacetCountRow>(databasePool, "search_facet_total", buildSearchCountSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetCountRow>(databasePool, "search_facet_total", buildSearchCountSql(searchFilter), searchFilter.params, options),
       timedCatalogQuery<DatabaseCadAvailableFacetRow>(databasePool, "search_facet_cad_available", buildSearchCadAvailableCountSql(searchFilter.whereSql), searchFilter.params, options)
     ]);
     const lifecycleCounts: Record<"active" | "not_recommended" | "obsolete" | "unknown", number> = {
@@ -2674,6 +2846,7 @@ function mapPartRow(row: DatabasePartRow): Part {
   return {
     category: row.category,
     connectorFamilyId: row.connector_family_id,
+    description: row.description,
     id: row.part_id,
     lastUpdatedAt: toIsoTimestamp(row.part_last_updated_at),
     lifecycleStatus: row.lifecycle_status,
@@ -2841,6 +3014,62 @@ function buildNotRecordedPartAcquisitionSummary(): PartAcquisitionSummary {
 function buildUnavailablePartAcquisitionSummary(reason: string): PartAcquisitionSummary {
   return {
     ...buildNotRecordedPartAcquisitionSummary(),
+    reason,
+    state: "unavailable"
+  };
+}
+
+/**
+ * Maps one persisted provider enrichment job into the detail-safe part-detail summary contract.
+ */
+function mapPartEnrichmentJobSummary(row: DatabaseProviderEnrichmentJobRow): PartEnrichmentJobSummary {
+  return {
+    completedAt: row.completed_at ? toIsoTimestamp(row.completed_at) : null,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    id: row.id,
+    jobStatus: row.job_status,
+    jobType: row.job_type,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    requestedAt: toIsoTimestamp(row.requested_at),
+    startedAt: row.started_at ? toIsoTimestamp(row.started_at) : null
+  };
+}
+
+/**
+ * Builds the detail-safe enrichment summary from persisted job rows without implying approval or readiness.
+ */
+function buildPartEnrichmentSummaryFromJobRows(rows: DatabaseProviderEnrichmentJobRow[]): PartEnrichmentSummary {
+  const jobs = rows.map(mapPartEnrichmentJobSummary);
+
+  return {
+    activeJobCount: jobs.filter((job) => job.jobStatus === "queued" || job.jobStatus === "running").length,
+    jobs,
+    latestJobStatus: jobs[0]?.jobStatus ?? null,
+    reason: null,
+    state: "available"
+  };
+}
+
+/**
+ * Builds the honest default when no provider enrichment jobs are recorded for the part.
+ */
+function buildNotRecordedPartEnrichmentSummary(): PartEnrichmentSummary {
+  return {
+    activeJobCount: 0,
+    jobs: [],
+    latestJobStatus: null,
+    reason: "No provider enrichment jobs are recorded for this part yet.",
+    state: "not_recorded"
+  };
+}
+
+/**
+ * Builds an unavailable enrichment summary when the detail route cannot safely read DB-backed enrichment history.
+ */
+function buildUnavailablePartEnrichmentSummary(reason: string): PartEnrichmentSummary {
+  return {
+    ...buildNotRecordedPartEnrichmentSummary(),
     reason,
     state: "unavailable"
   };
@@ -3281,30 +3510,35 @@ function buildSearchQueryPattern(query: string | undefined): string | null {
 }
 
 /**
- * Builds the paged search identifier query with a safe static ORDER BY clause.
+ * Builds the paged search identifier query. When a free-text query is active, relevance
+ * ordering is used regardless of the caller's sort preference — queryText is appended as
+ * the next parameter after the WHERE params, shifting LIMIT and OFFSET by one slot.
  */
 function buildSearchPartIdsSql(searchFilter: SearchSqlFilter, sort: PartSearchSort): string {
-  const limitParamIndex = searchFilter.params.length + 1;
-  const offsetParamIndex = searchFilter.params.length + 2;
+  const hasRelevance = searchFilter.queryText !== null;
+  const queryParamIndex = hasRelevance ? searchFilter.params.length + 1 : null;
+  const limitParamIndex = searchFilter.params.length + (hasRelevance ? 2 : 1);
+  const offsetParamIndex = searchFilter.params.length + (hasRelevance ? 3 : 2);
 
   return `
     SELECT p.id
-    ${SEARCH_PART_FROM_SQL}
+    ${buildSearchFromSql(searchFilter.needsReadinessJoin, searchFilter.needsApprovalJoin)}
     ${searchFilter.whereSql}
-    ${searchOrderByClause(sort)}
+    ${hasRelevance ? relevanceOrderByClause(queryParamIndex!) : searchOrderByClause(sort)}
     LIMIT $${limitParamIndex}::integer
     OFFSET $${offsetParamIndex}::integer
   `;
 }
 
 /**
- * Builds the matching count query with the same CAD predicate as the id query.
+ * Builds the matching count query. Uses the conditional FROM so the prs/pa joins are only
+ * included when the active filter references them.
  */
-function buildSearchCountSql(whereSql: string): string {
+function buildSearchCountSql(searchFilter: SearchSqlFilter): string {
   return `
     SELECT count(*)::text AS total_count
-    ${SEARCH_PART_FROM_SQL}
-    ${whereSql}
+    ${buildSearchFromSql(searchFilter.needsReadinessJoin, searchFilter.needsApprovalJoin)}
+    ${searchFilter.whereSql}
   `;
 }
 
@@ -3319,7 +3553,7 @@ function buildSearchManufacturerFacetSql(whereSql: string): string {
       m.aliases,
       m.website,
       count(*)::text AS facet_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     ${whereSql}
     GROUP BY m.id, m.name, m.aliases, m.website
     ORDER BY lower(m.name) ASC
@@ -3334,7 +3568,7 @@ function buildSearchCategoryFacetSql(whereSql: string): string {
     SELECT
       p.category,
       count(*)::text AS facet_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     ${whereSql}
     GROUP BY p.category
     ORDER BY lower(p.category) ASC
@@ -3355,7 +3589,7 @@ function buildSearchPackageFacetSql(whereSql: string): string {
       pk.body_width_mm,
       pk.body_height_mm,
       count(*)::text AS facet_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     ${whereSql}
     GROUP BY pk.id, pk.package_name, pk.pin_count, pk.pitch_mm, pk.body_length_mm, pk.body_width_mm, pk.body_height_mm
     ORDER BY lower(pk.package_name) ASC
@@ -3370,7 +3604,7 @@ function buildSearchLifecycleFacetSql(whereSql: string): string {
     SELECT
       p.lifecycle_status,
       count(*)::text AS facet_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     ${whereSql}
     GROUP BY p.lifecycle_status
     ORDER BY p.lifecycle_status ASC
@@ -3385,7 +3619,7 @@ function buildSearchReadinessFacetSql(whereSql: string): string {
     SELECT
       COALESCE(prs.readiness_status, 'unknown') AS readiness_status,
       count(*)::text AS facet_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     ${whereSql}
     GROUP BY COALESCE(prs.readiness_status, 'unknown')
     ORDER BY COALESCE(prs.readiness_status, 'unknown') ASC
@@ -3400,7 +3634,7 @@ function buildSearchApprovalFacetSql(whereSql: string): string {
     SELECT
       COALESCE(pa.approval_status, 'not_requested') AS approval_status,
       count(*)::text AS facet_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     ${whereSql}
     GROUP BY COALESCE(pa.approval_status, 'not_requested')
     ORDER BY COALESCE(pa.approval_status, 'not_requested') ASC
@@ -3424,7 +3658,7 @@ function buildSearchConnectorClassFacetSql(whereSql: string): string {
           WHEN p.connector_family_id IS NOT NULL OR lower(p.category) LIKE '%connector%' THEN 'connector'
           ELSE 'non_connector'
         END) AS connector_class
-      ${SEARCH_PART_FROM_SQL}
+      ${SEARCH_PART_FULL_FROM_SQL}
       ${whereSql}
     ) scoped
     GROUP BY scoped.connector_class
@@ -3438,7 +3672,7 @@ function buildSearchConnectorClassFacetSql(whereSql: string): string {
 function buildSearchCadAvailableCountSql(whereSql: string): string {
   return `
     SELECT count(DISTINCT p.id)::text AS available_count
-    ${SEARCH_PART_FROM_SQL}
+    ${SEARCH_PART_FULL_FROM_SQL}
     JOIN assets cad ON cad.part_id = p.id
       AND cad.asset_type IN ('footprint', 'symbol', 'three_d_model')
       AND cad.availability_status = 'validated'
@@ -3457,27 +3691,31 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
   const clauses: string[] = [];
   const params: unknown[] = [];
   const queryPattern = buildSearchQueryPattern(filters.query);
+  const queryText = filters.query?.trim().toLowerCase() || null;
 
   if (queryPattern) {
     params.push(queryPattern);
     clauses.push(`(
       lower(p.mpn) LIKE $${params.length}
+      OR lower(p.description) LIKE $${params.length}
       OR lower(p.category) LIKE $${params.length}
       OR lower(m.name) LIKE $${params.length}
       OR lower(pk.package_name) LIKE $${params.length}
       OR lower(COALESCE(cf.name, '')) LIKE $${params.length}
-      OR p.id IN (
-        SELECT sr.part_id
+      OR EXISTS (
+        SELECT 1
         FROM source_records sr
-        WHERE (
-          lower(sr.provider_part_key) LIKE $${params.length}
-          OR lower(COALESCE(sr.source_url, '')) LIKE $${params.length}
-        )
+        WHERE sr.part_id = p.id
+          AND (
+            lower(sr.provider_part_key) LIKE $${params.length}
+            OR lower(COALESCE(sr.source_url, '')) LIKE $${params.length}
+          )
       )
-      OR p.id IN (
-        SELECT datasheet_asset.part_id
+      OR EXISTS (
+        SELECT 1
         FROM assets datasheet_asset
-        WHERE datasheet_asset.asset_type = 'datasheet'
+        WHERE datasheet_asset.part_id = p.id
+          AND datasheet_asset.asset_type = 'datasheet'
           AND lower(COALESCE(datasheet_asset.source_url, '')) LIKE $${params.length}
       )
     )`);
@@ -3514,15 +3752,18 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
   );
 
   if (cadAvailability === "available") {
-    clauses.push(`p.id IN (${CAD_READY_PART_IDS_SQL})`);
+    clauses.push(`EXISTS (${CAD_READY_EXISTS_SQL})`);
   }
 
   if (cadAvailability === "unavailable") {
-    clauses.push(`p.id NOT IN (${CAD_READY_PART_IDS_SQL})`);
+    clauses.push(`NOT EXISTS (${CAD_READY_EXISTS_SQL})`);
   }
 
   return {
+    needsApprovalJoin: !!filters.approvalStatus?.trim(),
+    needsReadinessJoin: !!(filters.readinessStatus?.trim() || filters.connectorClass?.trim()),
     params,
+    queryText,
     whereSql: clauses.length > 0 ? `WHERE ${clauses.join("\n    AND ")}` : ""
   };
 }
@@ -3559,10 +3800,10 @@ function appendPartIdLikeClause(
 
   params.push(`%${normalizedValue}%`);
   clauses.push(`
-    p.id IN (
-      SELECT ${partIdColumn}
+    EXISTS (
+      SELECT 1
       FROM ${tableExpression}
-      WHERE ${partIdColumn} IS NOT NULL
+      WHERE ${partIdColumn} = p.id
         ${staticPredicate ? `AND ${staticPredicate}` : ""}
         AND ${columnName} LIKE $${params.length}
     )
@@ -3588,33 +3829,76 @@ function searchOrderByClause(sort: PartSearchSort): string {
   return "ORDER BY lower(p.mpn) ASC, p.id ASC";
 }
 
-/** CAD_READY_PART_IDS_SQL returns parts with verified file-backed CAD evidence. */
-const CAD_READY_PART_IDS_SQL = `
-  SELECT part_id
-  FROM assets
-  WHERE asset_type IN ('footprint', 'symbol', 'three_d_model')
-    AND availability_status = 'validated'
-    AND export_status = 'verified_for_export'
-    AND storage_key IS NOT NULL
-    AND file_hash IS NOT NULL
-    AND validation_status = 'verified'
+/**
+ * Builds a relevance ORDER BY clause that ranks results by how closely they match the
+ * free-text query. The composite GREATEST() score picks the strongest matching signal:
+ *
+ *   1.5 — exact MPN match          (e.g. searching "LM358" finds part with mpn "LM358" first)
+ *   1.2 — MPN prefix match         (e.g. "LM3" surfaces LM358, LM311, LM393 before unrelated parts)
+ *   0–1 — trigram similarity(mpn)  (typo-tolerant, handles "LM35" vs "LM358")
+ *   0–0.6 — similarity(mfr name)   (manufacturer name is a useful but secondary signal)
+ *   0–0.4 — similarity(category)   (category is the weakest signal; used as a tiebreaker)
+ *
+ * Within the same relevance bucket, trust_score is the next tiebreaker so that better-curated
+ * parts surface before low-confidence imports. Alphabetical MPN + id provide final stability.
+ *
+ * queryParamIndex is the SQL parameter index ($N) that holds the raw lowercased query text.
+ */
+function relevanceOrderByClause(queryParamIndex: number): string {
+  return `
+    ORDER BY
+      GREATEST(
+        CASE WHEN lower(p.mpn) = $${queryParamIndex}                        THEN 1.5 ELSE 0 END,
+        CASE WHEN lower(p.mpn) LIKE ($${queryParamIndex} || '%')            THEN 1.2 ELSE 0 END,
+        similarity(lower(p.mpn),      $${queryParamIndex}),
+        similarity(lower(m.name),     $${queryParamIndex}) * 0.6,
+        similarity(lower(p.category), $${queryParamIndex}) * 0.4
+      ) DESC,
+      p.trust_score DESC,
+      lower(p.mpn) ASC,
+      p.id ASC
+  `;
+}
+
+/** CAD_READY_EXISTS_SQL is a correlated subquery returning parts with verified file-backed CAD evidence. */
+const CAD_READY_EXISTS_SQL = `
+  SELECT 1
+  FROM assets cad
+  WHERE cad.part_id = p.id
+    AND cad.asset_type IN ('footprint', 'symbol', 'three_d_model')
+    AND cad.availability_status = 'validated'
+    AND cad.export_status = 'verified_for_export'
+    AND cad.storage_key IS NOT NULL
+    AND cad.file_hash IS NOT NULL
+    AND cad.validation_status = 'verified'
 `;
 
-/** SEARCH_PART_FROM_SQL contains the DB-backed search joins shared by count and id queries. */
-const SEARCH_PART_FROM_SQL = `
+/**
+ * Builds the FROM clause for count/IDs search queries. The prs and pa LEFT JOINs are
+ * omitted when the active WHERE clause doesn't reference them — eliminating a 600k-row
+ * join on every unfiltered search. Facet builders always pass true for both flags because
+ * they group by readiness status, connector class, and approval status unconditionally.
+ */
+function buildSearchFromSql(needsReadinessJoin: boolean, needsApprovalJoin: boolean): string {
+  return `
   FROM parts p
   JOIN manufacturers m ON m.id = p.manufacturer_id
   JOIN packages pk ON pk.id = p.package_id
   LEFT JOIN connector_families cf ON cf.id = p.connector_family_id
-  LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
-  LEFT JOIN part_approvals pa ON pa.part_id = p.id
-`;
+  ${needsReadinessJoin ? "LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id" : ""}
+  ${needsApprovalJoin ? "LEFT JOIN part_approvals pa ON pa.part_id = p.id" : ""}
+  `;
+}
+
+/** SEARCH_PART_FULL_FROM_SQL is the full join chain used by facet queries that always need prs and pa. */
+const SEARCH_PART_FULL_FROM_SQL = buildSearchFromSql(true, true);
 
 /** PART_ROWS_SQL reads canonical parts with manufacturer and package joins. */
 const PART_ROWS_SQL = `
   SELECT
     p.id AS part_id,
     p.mpn,
+    p.description,
     p.manufacturer_id,
     p.category,
     p.lifecycle_status,

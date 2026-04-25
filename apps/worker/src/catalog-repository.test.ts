@@ -498,6 +498,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
     part: {
       category: "Connector",
       connectorFamilyId: "cf-test",
+      description: "",
       id: "part-test",
       lastUpdatedAt: "2026-04-12T00:00:00.000Z",
       lifecycleStatus: "active",
@@ -572,6 +573,7 @@ function buildMinimalImportPart(
     part: {
       category: "Resistors / Chip Resistor - Surface Mount",
       connectorFamilyId: null,
+      description: "",
       id: "part-repeat-c1",
       lastUpdatedAt,
       lifecycleStatus,
@@ -647,6 +649,7 @@ function buildConnectorConflictSupportPart(
     part: {
       category: "Connector",
       connectorFamilyId,
+      description: "",
       id: partId,
       lastUpdatedAt: "2026-04-16T00:00:00.000Z",
       lifecycleStatus: "active",
@@ -754,6 +757,7 @@ function buildConnectorConflictSourcePart(): NormalizedProviderPart {
     part: {
       category: "Connector",
       connectorFamilyId: "cf-header",
+      description: "",
       id: "part-source-connector",
       lastUpdatedAt: "2026-04-16T00:05:00.000Z",
       lifecycleStatus: "active",
@@ -849,6 +853,7 @@ function buildBestMateConflictSourcePart(): NormalizedProviderPart {
     part: {
       category: "Connector",
       connectorFamilyId: "cf-header",
+      description: "",
       id: "part-best-conflict-source",
       lastUpdatedAt: "2026-04-16T00:10:00.000Z",
       lifecycleStatus: "active",

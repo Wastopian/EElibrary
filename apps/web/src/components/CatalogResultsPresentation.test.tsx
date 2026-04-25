@@ -45,6 +45,7 @@ function buildRow() {
     assetTruthDetail: "One generated asset still needs review.",
     assetTruthLabel: "Generated CAD present",
     category: "Connector",
+    description: "",
     connectorSignalDetail: "Mating set exists, but one accessory relationship still needs review.",
     connectorSignalLabel: "Mapped with follow-up",
     connectorSignalTitle: "Connector intelligence",

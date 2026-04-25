@@ -5,7 +5,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getAllPartRecords } from "@ee-library/shared/search";
-import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary } from "./detail-response";
+import {
+  buildPartDetailResponse,
+  buildUnavailablePartAcquisitionSummary,
+  buildUnavailablePartEnrichmentSummary
+} from "./detail-response";
 
 /**
  * Verifies related part summaries use the provided record set, not seed globals.
@@ -56,6 +60,7 @@ test("buildPartDetailResponse returns asset pipeline and review workflow fields"
   assert.equal(bundleReadyResponse.bundleReadiness.state, "bundle_ready");
   assert.equal(bundleReadyResponse.generationOptions.length, 0);
   assert.equal(regulatorResponse.acquisitionSummary.state, "not_recorded");
+  assert.equal(regulatorResponse.enrichmentSummary.state, "not_recorded");
   assert.equal(regulatorResponse.acquisitionSummary.mpn, regulatorRecord.part.mpn);
   assert.equal(regulatorResponse.acquisitionSummary.manufacturerName, regulatorRecord.manufacturer.name);
 });
@@ -79,4 +84,25 @@ test("buildPartDetailResponse preserves an explicit unavailable acquisition summ
   assert.equal(response.acquisitionSummary.providerId, null);
   assert.match(response.acquisitionSummary.reason ?? "", /seed fallback/u);
   assert.equal(response.acquisitionSummary.mpn, record.part.mpn);
+});
+
+/**
+ * Verifies detail responses can carry an explicit unavailable enrichment summary without inventing job history.
+ */
+test("buildPartDetailResponse preserves an explicit unavailable enrichment summary", () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seeded regulator part");
+
+  const response = buildPartDetailResponse(
+    record,
+    records,
+    buildUnavailablePartAcquisitionSummary("Acquisition history is unavailable while this part detail is being served from seed fallback data."),
+    buildUnavailablePartEnrichmentSummary("Enrichment history is unavailable while this part detail is being served from seed fallback data.")
+  );
+
+  assert.equal(response.enrichmentSummary.state, "unavailable");
+  assert.equal(response.enrichmentSummary.jobs.length, 0);
+  assert.match(response.enrichmentSummary.reason ?? "", /seed fallback/u);
 });

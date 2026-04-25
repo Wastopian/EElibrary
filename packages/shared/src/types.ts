@@ -152,6 +152,18 @@ export type ProviderAcquisitionJobEventType = ProviderAcquisitionJobStatus;
 /** PartAcquisitionSummaryState keeps part-detail acquisition history explicit without changing search records. */
 export type PartAcquisitionSummaryState = "available" | "legacy_source_only" | "not_recorded" | "unavailable";
 
+/** ProviderEnrichmentJobType keeps Phase 2C.1 explicit while only datasheet capture is supported. */
+export type ProviderEnrichmentJobType = "datasheet_capture";
+
+/** ProviderEnrichmentJobStatus is the durable queued-to-terminal lifecycle for provider enrichment work. */
+export type ProviderEnrichmentJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+/** ProviderEnrichmentJobEventType keeps enrichment lifecycle events coarse and aligned with job status. */
+export type ProviderEnrichmentJobEventType = ProviderEnrichmentJobStatus;
+
+/** PartEnrichmentSummaryState keeps part-detail enrichment visibility explicit without changing readiness truth. */
+export type PartEnrichmentSummaryState = "available" | "not_recorded" | "unavailable";
+
 /** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
 export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
 
@@ -195,6 +207,7 @@ export interface ConnectorFamily {
 export interface Part {
   id: string;
   mpn: string;
+  description: string;
   manufacturerId: string;
   category: string;
   lifecycleStatus: LifecycleStatus;
@@ -791,6 +804,59 @@ export interface PartAcquisitionSummary {
   reason: string | null;
 }
 
+/** ProviderEnrichmentJob stores one background enrichment attempt without implying approval or export readiness. */
+export interface ProviderEnrichmentJob {
+  id: string;
+  partId: string;
+  sourceAcquisitionJobId: string;
+  jobType: ProviderEnrichmentJobType;
+  jobStatus: ProviderEnrichmentJobStatus;
+  requestedBy: string;
+  requestedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  lastUpdatedAt: string;
+}
+
+/** ProviderEnrichmentJobEvent records one coarse lifecycle event for a background enrichment job. */
+export interface ProviderEnrichmentJobEvent {
+  id: string;
+  jobId: string;
+  eventType: ProviderEnrichmentJobEventType;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+/** PartEnrichmentJobSummary is the detail-safe view of one enrichment job on the public part detail route. */
+export interface PartEnrichmentJobSummary {
+  id: string;
+  jobType: ProviderEnrichmentJobType;
+  jobStatus: ProviderEnrichmentJobStatus;
+  requestedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  lastUpdatedAt: string;
+}
+
+/** PartEnrichmentSummary exposes read-only enrichment activity without changing approval or export truth. */
+export interface PartEnrichmentSummary {
+  /** State explains whether enrichment jobs are recorded, absent, or unavailable for this detail response. */
+  state: PartEnrichmentSummaryState;
+  /** Recorded enrichment jobs in newest-first order. */
+  jobs: PartEnrichmentJobSummary[];
+  /** Latest recorded enrichment status, or null when no jobs exist. */
+  latestJobStatus: ProviderEnrichmentJobStatus | null;
+  /** Count of queued or running enrichment jobs still in progress for this part. */
+  activeJobCount: number;
+  /** Human-readable reason for unavailable or no-history states. */
+  reason: string | null;
+}
+
 /** PartDetailResponse enriches the base record with resolved related-part summaries. */
 export interface PartDetailResponse {
   record: PartSearchRecord;
@@ -803,6 +869,7 @@ export interface PartDetailResponse {
   assetValidationSummaries: AssetValidationSummary[];
   assetPromotionSummaries: AssetPromotionSummary[];
   acquisitionSummary: PartAcquisitionSummary;
+  enrichmentSummary: PartEnrichmentSummary;
 }
 
 /** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */

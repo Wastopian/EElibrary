@@ -3,6 +3,7 @@
  */
 
 import { Pool, type PoolClient } from "pg";
+import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { buildBuildableMatingSet, getConnectorRelationEffectiveConfidence } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import type {
@@ -56,6 +57,32 @@ interface ProviderImportFailureInput {
   failedAt: string;
   /** Original failure object from fetch, normalization, or persistence. */
   error: unknown;
+}
+
+/** ReferencedDatasheetCaptureInput carries the minimum official-source evidence needed to attach a referenced datasheet. */
+export interface ReferencedDatasheetCaptureInput {
+  /** Canonical part id receiving the datasheet evidence. */
+  partId: string;
+  /** Provider identifier used for deterministic asset/revision ids and provenance. */
+  providerId: string;
+  /** Provider-specific exact part key used for deterministic asset/revision ids. */
+  providerPartKey: string;
+  /** Source record that exposed the official datasheet reference. */
+  sourceRecordId: string;
+  /** Official provider-exposed datasheet URL. */
+  sourceUrl: string;
+  /** Capture timestamp used for asset, revision, and projection refresh rows. */
+  capturedAt: string;
+}
+
+/** ReferencedDatasheetCaptureResult reports which asset and revision now carry the referenced datasheet evidence. */
+export interface ReferencedDatasheetCaptureResult {
+  /** Datasheet asset id after persistence. */
+  assetId: string;
+  /** Datasheet revision id after persistence. */
+  datasheetRevisionId: string;
+  /** True when the helper updated an existing revision instead of creating a new placeholder. */
+  reusedExistingRevision: boolean;
 }
 
 /** GenerationRunDiagnostic is a compact local view of request/workflow progress. */
@@ -552,6 +579,79 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
 }
 
 /**
+ * Attaches referenced datasheet evidence from an official provider URL and refreshes stored part projections.
+ */
+export async function captureReferencedDatasheetEvidenceForPart(
+  client: PoolClient,
+  input: ReferencedDatasheetCaptureInput
+): Promise<ReferencedDatasheetCaptureResult> {
+  const existingDatasheetAsset = await readLatestDatasheetAssetRow(client, input.partId);
+  const existingDatasheetRevision = await readLatestDatasheetRevisionRow(client, input.partId);
+  const assetId = existingDatasheetAsset?.id ?? buildDatasheetAssetId(input.providerId, input.providerPartKey);
+  const assetState = deriveAssetState({
+    fileHash: existingDatasheetAsset?.file_hash ?? null,
+    sourceUrl: input.sourceUrl,
+    storageKey: existingDatasheetAsset?.storage_key ?? null,
+    validationStatus: existingDatasheetAsset?.validation_status ?? "not_validated"
+  });
+  const asset = withCanonicalAssetTruth({
+    assetState,
+    assetStatus: assetState,
+    assetType: "datasheet",
+    fileFormat: existingDatasheetAsset?.file_format ?? "pdf",
+    fileHash: existingDatasheetAsset?.file_hash ?? null,
+    generationMethod: existingDatasheetAsset?.generation_method ?? null,
+    generationSourceAssetId: existingDatasheetAsset?.generation_source_asset_id ?? null,
+    id: assetId,
+    lastUpdatedAt: input.capturedAt,
+    licenseMode: existingDatasheetAsset?.license_mode ?? "metadata_only",
+    partId: input.partId,
+    previewStatus: existingDatasheetAsset?.preview_status ?? "not_available",
+    providerId: existingDatasheetAsset?.provider_id ?? input.providerId,
+    provenance: existingDatasheetAsset?.provenance ?? "trusted_external",
+    sourceRecordId: input.sourceRecordId,
+    sourceUrl: input.sourceUrl,
+    storageKey: existingDatasheetAsset?.storage_key ?? null,
+    validationStatus: existingDatasheetAsset?.validation_status ?? "not_validated"
+  });
+  const datasheetRevision: DatasheetRevision = existingDatasheetRevision
+    ? {
+        fileAssetId: assetId,
+        id: existingDatasheetRevision.id,
+        lastUpdatedAt: input.capturedAt,
+        pageCount: existingDatasheetRevision.page_count,
+        parseConfidence: Number(existingDatasheetRevision.parse_confidence),
+        partId: input.partId,
+        pinTableStatus: existingDatasheetRevision.pin_table_status,
+        revisionDate: existingDatasheetRevision.revision_date ? toIsoDate(existingDatasheetRevision.revision_date) : null,
+        revisionLabel: existingDatasheetRevision.revision_label,
+        sourceRecordId: input.sourceRecordId
+      }
+    : {
+        fileAssetId: assetId,
+        id: buildDatasheetRevisionId(input.providerId, input.providerPartKey),
+        lastUpdatedAt: input.capturedAt,
+        pageCount: null,
+        parseConfidence: 0,
+        partId: input.partId,
+        pinTableStatus: "not_available",
+        revisionDate: null,
+        revisionLabel: "Captured datasheet reference",
+        sourceRecordId: input.sourceRecordId
+      };
+
+  await persistAsset(client, asset);
+  await persistDatasheetRevision(client, datasheetRevision);
+  await refreshStoredPartProjectionRows(client, input.partId);
+
+  return {
+    assetId,
+    datasheetRevisionId: datasheetRevision.id,
+    reusedExistingRevision: Boolean(existingDatasheetRevision)
+  };
+}
+
+/**
  * Reads the current import status for a pending provider + part key, or null when no row exists.
  */
 export async function readSourceRecordImportStatus(providerId: string, providerPartKey: string): Promise<SourceImportStatus | null> {
@@ -676,6 +776,7 @@ async function persistPart(client: PoolClient, part: Part): Promise<void> {
       INSERT INTO parts (
         id,
         mpn,
+        description,
         manufacturer_id,
         category,
         lifecycle_status,
@@ -684,9 +785,10 @@ async function persistPart(client: PoolClient, part: Part): Promise<void> {
         trust_score,
         last_updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO UPDATE SET
         mpn = EXCLUDED.mpn,
+        description = EXCLUDED.description,
         manufacturer_id = EXCLUDED.manufacturer_id,
         category = EXCLUDED.category,
         lifecycle_status = EXCLUDED.lifecycle_status,
@@ -695,7 +797,7 @@ async function persistPart(client: PoolClient, part: Part): Promise<void> {
         trust_score = EXCLUDED.trust_score,
         last_updated_at = EXCLUDED.last_updated_at
     `,
-    [part.id, part.mpn, part.manufacturerId, part.category, part.lifecycleStatus, part.packageId, part.connectorFamilyId, part.trustScore, part.lastUpdatedAt]
+    [part.id, part.mpn, part.description, part.manufacturerId, part.category, part.lifecycleStatus, part.packageId, part.connectorFamilyId, part.trustScore, part.lastUpdatedAt]
   );
 }
 
@@ -1358,6 +1460,118 @@ function buildSourceRecordId(providerId: string, providerPartKey: string): strin
 }
 
 /**
+ * Builds a deterministic datasheet asset id for provider-backed datasheet references.
+ */
+function buildDatasheetAssetId(providerId: string, providerPartKey: string): string {
+  return `asset-${slugify(providerId)}-${slugify(providerPartKey)}-datasheet`;
+}
+
+/**
+ * Builds a deterministic datasheet revision id for provider-backed datasheet references.
+ */
+function buildDatasheetRevisionId(providerId: string, providerPartKey: string): string {
+  return `dsr-${slugify(providerId)}-${slugify(providerPartKey)}`;
+}
+
+/**
+ * Reads the latest datasheet asset row for one part so capture jobs can update or reuse it safely.
+ */
+async function readLatestDatasheetAssetRow(
+  client: PoolClient,
+  partId: string
+): Promise<{
+  id: string;
+  file_format: Asset["fileFormat"];
+  file_hash: string | null;
+  generation_method: string | null;
+  generation_source_asset_id: string | null;
+  license_mode: Asset["licenseMode"];
+  preview_status: Asset["previewStatus"];
+  provider_id: string | null;
+  provenance: Asset["provenance"];
+  storage_key: string | null;
+  validation_status: Asset["validationStatus"];
+} | null> {
+  const result = await client.query<{
+    id: string;
+    file_format: Asset["fileFormat"];
+    file_hash: string | null;
+    generation_method: string | null;
+    generation_source_asset_id: string | null;
+    license_mode: Asset["licenseMode"];
+    preview_status: Asset["previewStatus"];
+    provider_id: string | null;
+    provenance: Asset["provenance"];
+    storage_key: string | null;
+    validation_status: Asset["validationStatus"];
+  }>(
+    `
+      SELECT
+        id,
+        file_format,
+        file_hash,
+        generation_method,
+        generation_source_asset_id,
+        license_mode,
+        preview_status,
+        provider_id,
+        provenance,
+        storage_key,
+        validation_status
+      FROM assets
+      WHERE part_id = $1
+        AND asset_type = 'datasheet'
+      ORDER BY last_updated_at DESC, id DESC
+      LIMIT 1
+    `,
+    [partId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Reads the latest datasheet revision row for one part so capture jobs can attach the captured asset to it when possible.
+ */
+async function readLatestDatasheetRevisionRow(
+  client: PoolClient,
+  partId: string
+): Promise<{
+  id: string;
+  page_count: number | null;
+  parse_confidence: number | string;
+  pin_table_status: DatasheetRevision["pinTableStatus"];
+  revision_date: Date | string | null;
+  revision_label: string;
+} | null> {
+  const result = await client.query<{
+    id: string;
+    page_count: number | null;
+    parse_confidence: number | string;
+    pin_table_status: DatasheetRevision["pinTableStatus"];
+    revision_date: Date | string | null;
+    revision_label: string;
+  }>(
+    `
+      SELECT
+        id,
+        page_count,
+        parse_confidence,
+        pin_table_status,
+        revision_date,
+        revision_label
+      FROM datasheet_revisions
+      WHERE part_id = $1
+      ORDER BY revision_date DESC NULLS LAST, last_updated_at DESC, id DESC
+      LIMIT 1
+    `,
+    [partId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/**
  * Converts unknown failures into bounded operator-readable details.
  */
 function formatImportError(error: unknown): string {
@@ -1371,6 +1585,13 @@ function formatImportError(error: unknown): string {
  */
 function toIsoTimestamp(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+/**
+ * Converts a database date or timestamp into an ISO date string for persisted datasheet revision metadata.
+ */
+function toIsoDate(value: Date | string): string {
+  return toIsoTimestamp(value).slice(0, 10);
 }
 
 /**
@@ -1715,6 +1936,7 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
     client.query<{
       id: string;
       mpn: string;
+      description: string;
       manufacturerId: string;
       category: string;
       lifecycleStatus: Part["lifecycleStatus"];
@@ -1727,6 +1949,7 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
         SELECT
           id,
           mpn,
+          description,
           manufacturer_id AS "manufacturerId",
           category,
           lifecycle_status AS "lifecycleStatus",

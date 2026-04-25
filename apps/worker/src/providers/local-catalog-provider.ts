@@ -254,6 +254,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     part: {
       category: record.part.category,
       connectorFamilyId: record.part.connectorFamilyId ?? record.connectorFamily?.id ?? null,
+      description: record.part.description,
       id: record.part.id,
       lastUpdatedAt,
       lifecycleStatus: normalizeLifecycleStatus(record.part.lifecycleStatus),

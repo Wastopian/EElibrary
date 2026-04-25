@@ -6,8 +6,10 @@ import { performance } from "node:perf_hooks";
 import { providerAdapters } from "./provider-adapters";
 import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
-import { processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
+import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
+import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { runProviderPartImport } from "./provider-part-import";
+import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
 import type { ProviderPartRequest } from "./provider-adapters";
 import type { ProviderImportDiagnostic, SourceImportStatus } from "@ee-library/shared/types";
 import type { ImportResultSummary, WorkerTiming } from "./provider-part-import";
@@ -105,6 +107,77 @@ async function ingestProviderPart(adapterId: string, request: ProviderPartReques
 }
 
 /**
+ * Bulk-enqueues all parts from the JLC catalog into the acquisition job queue.
+ * Fetches the provider index, streams every category payload, and inserts one
+ * acquisition job per LCSC code — skipping parts already in the catalog or already queued.
+ */
+async function enqueueCatalog(): Promise<void> {
+  const timings: WorkerTiming[] = [];
+
+  await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+  const categoryCount = await timeWorkerOperation(
+    "jlcparts.count_categories",
+    () => countJlcCategories(),
+    timings,
+    (n) => `${n} categories`
+  );
+
+  process.stderr.write(JSON.stringify({ stage: "enqueue_start", totalCategories: categoryCount }) + "\n");
+
+  const summary = await timeWorkerOperation(
+    "worker.bulk_enqueue",
+    () =>
+      bulkEnqueueProviderAcquisitionJobs("jlcparts", enumerateJlcPartRequests(), "system:bulk_catalog_enqueue", (progress) => {
+        process.stderr.write(JSON.stringify({ stage: "category_done", ...progress }) + "\n");
+      }),
+    timings,
+    (s) => `${s.totalEnqueued} enqueued, ${s.totalSkipped} skipped`
+  );
+
+  console.log(JSON.stringify({ ...summary, timings }, null, 2));
+}
+
+/**
+ * Continuously processes queued provider acquisition jobs in batches until the queue is empty.
+ * Pass concurrency as the second CLI arg to override the default of 5 concurrent jobs per batch.
+ */
+async function drainProviderAcquisitionJobs(batchSizeValue?: string, concurrencyValue?: string): Promise<void> {
+  const batchSize = batchSizeValue ? Number(batchSizeValue) : 20;
+  const concurrency = concurrencyValue ? Number(concurrencyValue) : 5;
+  const boundedBatchSize = Number.isFinite(batchSize) ? Math.max(1, Math.min(batchSize, 100)) : 20;
+  const boundedConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.min(concurrency, 20)) : 5;
+  const timings: WorkerTiming[] = [];
+  let totalProcessed = 0;
+  let totalSucceeded = 0;
+  let totalFailed = 0;
+  let batchNumber = 0;
+
+  await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+  for (;;) {
+    const summary = await processProviderAcquisitionJobs(boundedBatchSize, boundedConcurrency);
+
+    if (summary.processed.length === 0) {
+      break;
+    }
+
+    batchNumber += 1;
+    const batchSucceeded = summary.processed.filter((r) => r.status === "succeeded").length;
+    const batchFailed = summary.processed.filter((r) => r.status === "failed").length;
+    totalProcessed += summary.processed.length;
+    totalSucceeded += batchSucceeded;
+    totalFailed += batchFailed;
+
+    process.stderr.write(
+      JSON.stringify({ batch: batchNumber, batchProcessed: summary.processed.length, batchSucceeded, batchFailed, totalProcessed, totalSucceeded, totalFailed }) + "\n"
+    );
+  }
+
+  console.log(JSON.stringify({ totalProcessed, totalSucceeded, totalFailed, batches: batchNumber, timings }, null, 2));
+}
+
+/**
  * Builds concise command usage lines from the registered provider adapters.
  */
 function buildUsageLines(): string[] {
@@ -118,6 +191,9 @@ function buildUsageLines(): string[] {
     "npm run imports -w @ee-library/worker -- [failed]",
     "npm run operations -w @ee-library/worker -- [limit]",
     "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
+    "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
+    "npm run enqueue-catalog -w @ee-library/worker",
+    "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
     "npm run generate:drafts -w @ee-library/worker -- [limit]",
     `providerId values: ${providerIds}`
   ];
@@ -175,6 +251,30 @@ async function processQueuedProviderAcquisitionJobs(limitValue?: string): Promis
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.process_provider_acquisition_jobs", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Processes queued provider enrichment jobs through the background enrichment worker.
+ */
+async function processQueuedProviderEnrichmentJobs(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const summary = await timeWorkerOperation(
+      "worker.process_provider_enrichment_jobs",
+      () => processProviderEnrichmentJobs(Number.isFinite(limit) ? limit : 20),
+      timings,
+      (value) => `${value.processed.length} jobs`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.process_provider_enrichment_jobs", error, timings);
     throw error;
   }
 }
@@ -297,8 +397,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "enrichment-jobs") {
+    await processQueuedProviderEnrichmentJobs(process.argv[3]);
+    return;
+  }
+
   if (command === "generate-drafts") {
     await generateDraftAssets(process.argv[3]);
+    return;
+  }
+
+  if (command === "enqueue-catalog") {
+    await enqueueCatalog();
+    return;
+  }
+
+  if (command === "drain-acquisition-jobs") {
+    await drainProviderAcquisitionJobs(process.argv[3], process.argv[4]);
     return;
   }
 

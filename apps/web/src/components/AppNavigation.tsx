@@ -73,9 +73,9 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
       items: [
         {
           description: "Quick readiness checks, recent records, and engineering-first search filters.",
-          href: "/",
+          href: "/catalog",
           label: "Catalog workspace",
-          match: { path: "/", type: "path" }
+          match: { path: "/catalog", type: "path" }
         },
         {
           description: "Issue operations, review queues, import history, and promotion workflow.",
@@ -90,19 +90,19 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
       items: [
         {
           description: "Connector records with mates, accessories, cable assumptions, and family warnings in view.",
-          href: "/?category=Connector",
+          href: "/catalog?category=Connector",
           label: "Connector coverage",
           match: { name: "category", type: "query", value: "Connector" }
         },
         {
           description: "Records missing verified file-backed CAD for export workflows.",
-          href: "/?cad=unavailable",
+          href: "/catalog?cad=unavailable",
           label: "Missing verified CAD",
           match: { name: "cad", type: "query", value: "unavailable" }
         },
         {
           description: "Parts still waiting on a design-use approval decision.",
-          href: "/?approvalStatus=pending_review",
+          href: "/catalog?approvalStatus=pending_review",
           label: "Pending approval",
           match: { name: "approvalStatus", type: "query", value: "pending_review" }
         }
@@ -141,14 +141,14 @@ function isNavigationItemActive(item: NavigationItem, currentLocation: string): 
   const { pathname, searchParams } = parseCurrentLocation(currentLocation);
 
   if (item.match.type === "path") {
-    if (item.match.path === "/") {
-      return pathname === "/" || pathname.startsWith("/parts/");
+    if (item.match.path === "/catalog") {
+      return pathname === "/catalog" || pathname.startsWith("/parts/");
     }
 
     return pathname.startsWith(item.match.path);
   }
 
-  return pathname === "/" && searchParams.get(item.match.name) === item.match.value;
+  return pathname === "/catalog" && searchParams.get(item.match.name) === item.match.value;
 }
 
 /**

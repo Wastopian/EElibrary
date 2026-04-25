@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { buildPartDetailResponse } from "./detail-response";
-import { readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type { Pool, PoolClient } from "pg";
 
@@ -20,6 +20,8 @@ type TestPool = Pool & {
 interface ProviderImportPoolOptions {
   /** True when the canonical imported-part fixture should also include a succeeded acquisition job row. */
   includeAcquisitionJobs?: boolean;
+  /** True when the canonical imported-part fixture should also include enrichment job history. */
+  includeEnrichmentJobs?: boolean;
 }
 
 /**
@@ -109,6 +111,68 @@ test("DB-backed detail response includes acquisition summary for a matching prov
 
     assert.equal(detailResponse.acquisitionSummary.state, "available");
     assert.equal(detailResponse.acquisitionSummary.sourceUrl, "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies detail reads expose recorded enrichment summary for imported parts without changing readiness truth.
+ */
+test("DB-backed detail response includes enrichment summary for matching provider enrichment jobs", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+
+    const detailResult = await readPartDetailRecordsFromDatabase("part-jlcparts-c1091");
+    const acquisitionSummary = await readPartAcquisitionSummaryFromDatabase("part-jlcparts-c1091");
+    const enrichmentSummary = await readPartEnrichmentSummaryFromDatabase("part-jlcparts-c1091");
+
+    assert.equal(detailResult.status, "available");
+    assert.equal(enrichmentSummary.state, "available");
+    assert.equal(enrichmentSummary.latestJobStatus, "succeeded");
+    assert.equal(enrichmentSummary.activeJobCount, 0);
+    assert.equal(enrichmentSummary.jobs[0]?.jobType, "datasheet_capture");
+
+    if (detailResult.status !== "available") {
+      throw new Error("expected DB-backed detail records");
+    }
+
+    const detailRecord = detailResult.records.find((record) => record.part.id === "part-jlcparts-c1091");
+
+    assert.ok(detailRecord, "expected imported record in DB-backed detail");
+
+    const detailResponse = buildPartDetailResponse(
+      detailRecord,
+      detailResult.records,
+      acquisitionSummary,
+      enrichmentSummary
+    );
+
+    assert.equal(detailResponse.enrichmentSummary.state, "available");
+    assert.equal(detailResponse.enrichmentSummary.jobs[0]?.jobType, "datasheet_capture");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies parts without enrichment jobs stay explicit instead of inventing background-work history.
+ */
+test("DB-backed detail enrichment summary returns not_recorded when no enrichment jobs exist", async () => {
+  const pool = createProviderImportPool({ includeEnrichmentJobs: false });
+
+  try {
+    setCatalogStorePoolForTests(pool);
+
+    const enrichmentSummary = await readPartEnrichmentSummaryFromDatabase("part-jlcparts-c1091");
+
+    assert.equal(enrichmentSummary.state, "not_recorded");
+    assert.equal(enrichmentSummary.jobs.length, 0);
+    assert.match(enrichmentSummary.reason ?? "", /no provider enrichment jobs/i);
   } finally {
     setCatalogStorePoolForTests(null);
     await pool.end();
@@ -458,9 +522,10 @@ test("DB-backed detail uses lightweight related-part summary reads", async () =>
 function createProviderImportPool(options: ProviderImportPoolOptions = {}): TestPool {
   const db = newDb();
   const includeAcquisitionJobs = options.includeAcquisitionJobs ?? true;
+  const includeEnrichmentJobs = options.includeEnrichmentJobs ?? includeAcquisitionJobs;
 
   db.public.none(buildMinimalCatalogSchemaSql());
-  db.public.none(buildProviderImportRowsSql(includeAcquisitionJobs));
+  db.public.none(buildProviderImportRowsSql(includeAcquisitionJobs, includeEnrichmentJobs));
 
   const { Pool: MemoryPool } = db.adapters.createPg();
 
@@ -580,13 +645,18 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE part_risk_flags (id TEXT, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE provider_acquisition_jobs (id TEXT, provider_id TEXT, provider_part_key TEXT, requested_lookup TEXT, manufacturer_name TEXT, mpn TEXT, package_name TEXT, source_url TEXT, match_type TEXT, match_confidence NUMERIC, job_status TEXT, requested_by TEXT, requested_at TIMESTAMPTZ, part_id TEXT, import_outcome TEXT, previous_import_status TEXT, error_code TEXT, error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
     CREATE TABLE provider_acquisition_job_events (id TEXT, job_id TEXT, event_type TEXT, message TEXT, detail JSONB, created_at TIMESTAMPTZ);
+    CREATE TABLE provider_enrichment_jobs (id TEXT, part_id TEXT, source_acquisition_job_id TEXT, job_type TEXT, job_status TEXT, requested_by TEXT, requested_at TIMESTAMPTZ, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, error_code TEXT, error_message TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE provider_enrichment_job_events (id TEXT, job_id TEXT, event_type TEXT, message TEXT, detail JSONB, created_at TIMESTAMPTZ);
   `;
 }
 
 /**
  * Builds canonical rows for the real C1091/RC-02W300JT jlcparts import shape.
  */
-function buildProviderImportRowsSql(includeAcquisitionJobs = true): string {
+function buildProviderImportRowsSql(
+  includeAcquisitionJobs = true,
+  includeEnrichmentJobs = true
+): string {
   return `
     INSERT INTO manufacturers VALUES ('mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Guangdong Fenghua Advanced Tech', '{"FH","FH(Guangdong Fenghua Advanced Tech)"}', NULL);
     INSERT INTO packages VALUES ('pkg-jlcparts-0402', '0402', 2, NULL, NULL, NULL, NULL);
@@ -605,6 +675,11 @@ function buildProviderImportRowsSql(includeAcquisitionJobs = true): string {
     INSERT INTO provider_acquisition_jobs VALUES ('acqjob-jlcparts-c1091', 'jlcparts', 'C1091', 'RC-02W300JT', 'Guangdong Fenghua Advanced Tech', 'RC-02W300JT', '0402', 'https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html', 'exact_mpn', 1, 'succeeded', 'admin-user', '2026-04-12T06:56:40.000Z', 'part-jlcparts-c1091', 'new_import', NULL, NULL, NULL, '2026-04-12T06:56:43.000Z', '2026-04-12T06:57:40.000Z', '2026-04-12T06:57:40.000Z');
     INSERT INTO provider_acquisition_job_events VALUES ('acqevent-jlcparts-c1091-queued', 'acqjob-jlcparts-c1091', 'queued', 'Acquisition job queued.', '{"providerId":"jlcparts"}'::jsonb, '2026-04-12T06:56:40.000Z');
     INSERT INTO provider_acquisition_job_events VALUES ('acqevent-jlcparts-c1091-succeeded', 'acqjob-jlcparts-c1091', 'succeeded', 'Acquisition job succeeded.', '{"partId":"part-jlcparts-c1091"}'::jsonb, '2026-04-12T06:57:40.000Z');
+    ` : ""}
+    ${includeEnrichmentJobs ? `
+    INSERT INTO provider_enrichment_jobs VALUES ('enrichjob-jlcparts-c1091-datasheet', 'part-jlcparts-c1091', 'acqjob-jlcparts-c1091', 'datasheet_capture', 'succeeded', 'admin-user', '2026-04-12T06:57:41.000Z', '2026-04-12T06:57:42.000Z', '2026-04-12T06:57:43.000Z', NULL, NULL, '2026-04-12T06:57:43.000Z');
+    INSERT INTO provider_enrichment_job_events VALUES ('enrichevent-jlcparts-c1091-queued', 'enrichjob-jlcparts-c1091-datasheet', 'queued', 'Enrichment job queued.', '{"jobType":"datasheet_capture"}'::jsonb, '2026-04-12T06:57:41.000Z');
+    INSERT INTO provider_enrichment_job_events VALUES ('enrichevent-jlcparts-c1091-succeeded', 'enrichjob-jlcparts-c1091-datasheet', 'succeeded', 'Referenced datasheet evidence was captured from provider source data.', '{"jobType":"datasheet_capture"}'::jsonb, '2026-04-12T06:57:43.000Z');
     ` : ""}
   `;
 }

@@ -23,6 +23,7 @@ type TestPool = Pool & {
 test("provider acquisition worker claims the oldest queued job, marks running before import, and succeeds with part id", async () => {
   const pool = createProviderAcquisitionPool();
   setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-jlcparts-c1091");
   await seedQueuedJob(pool, "acqjob-older", "2026-04-24T12:00:00.000Z", "C1091", "RC-02W300JT");
   await seedQueuedJob(pool, "acqjob-newer", "2026-04-24T12:05:00.000Z", "C2040", "RC-03W100JT");
   const runnerCalls: ProviderPartRequest[] = [];
@@ -50,6 +51,9 @@ test("provider acquisition worker claims the oldest queued job, marks running be
     const events = await pool.query<{ event_type: string; message: string }>(
       "SELECT event_type, message FROM provider_acquisition_job_events WHERE job_id = 'acqjob-older' ORDER BY created_at ASC"
     );
+    const enrichmentJobs = await pool.query<{ part_id: string; job_type: string }>(
+      "SELECT part_id, job_type FROM provider_enrichment_jobs ORDER BY requested_at ASC"
+    );
 
     assert.deepEqual(result, {
       errorCode: null,
@@ -66,6 +70,102 @@ test("provider acquisition worker claims the oldest queued job, marks running be
     assert.equal(succeededJob.rows[0]?.import_outcome, "new_import");
     assert.equal(newerJob.rows[0]?.job_status, "queued");
     assert.deepEqual(events.rows.map((row) => row.event_type), ["queued", "running", "succeeded"]);
+    assert.deepEqual(enrichmentJobs.rows, [
+      {
+        job_type: "datasheet_capture",
+        part_id: "part-jlcparts-c1091"
+      }
+    ]);
+  } finally {
+    setProviderAcquisitionImportRunnerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("provider acquisition worker enqueues datasheet capture only when datasheet evidence is missing", async () => {
+  const pool = createProviderAcquisitionPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-needs-datasheet");
+  await seedPartRow(pool, "part-has-datasheet");
+  await seedQueuedJob(pool, "acqjob-needs-datasheet", "2026-04-24T12:00:00.000Z", "C1091", "RC-02W300JT");
+  await seedQueuedJob(pool, "acqjob-has-datasheet", "2026-04-24T12:05:00.000Z", "C2040", "RC-03W100JT");
+  await pool.query(
+    `
+      INSERT INTO assets (
+        id,
+        part_id,
+        asset_type,
+        file_format,
+        storage_key,
+        file_hash,
+        provider_id,
+        license_mode,
+        provenance,
+        availability_status,
+        review_status,
+        export_status,
+        asset_status,
+        generation_method,
+        generation_source_asset_id,
+        validation_status,
+        preview_status,
+        asset_state,
+        source_url,
+        source_record_id,
+        last_updated_at
+      )
+      VALUES (
+        'asset-existing-datasheet',
+        'part-has-datasheet',
+        'datasheet',
+        'pdf',
+        NULL,
+        NULL,
+        'jlcparts',
+        'metadata_only',
+        'trusted_external',
+        'referenced',
+        'not_reviewed',
+        'not_exportable',
+        'referenced',
+        NULL,
+        NULL,
+        'not_validated',
+        'not_available',
+        'referenced',
+        'https://example.test/datasheet.pdf',
+        NULL,
+        '2026-04-24T12:00:00.000Z'
+      )
+    `
+  );
+  const partIdsByJobId = new Map<string, string>([
+    ["acqjob-needs-datasheet", "part-needs-datasheet"],
+    ["acqjob-has-datasheet", "part-has-datasheet"]
+  ]);
+
+  setProviderAcquisitionImportRunnerForTests(async (_providerId, request) => {
+    const partId = partIdsByJobId.get(
+      request.providerPartId === "C1091" ? "acqjob-needs-datasheet" : "acqjob-has-datasheet"
+    );
+
+    if (!partId) {
+      throw new Error("Expected mapped part id for test import summary.");
+    }
+
+    return buildImportSummary(partId, request.providerPartId ?? "unknown");
+  });
+
+  try {
+    await processNextProviderAcquisitionJob();
+    await processNextProviderAcquisitionJob();
+
+    const enrichmentJobs = await pool.query<{ part_id: string }>(
+      "SELECT part_id FROM provider_enrichment_jobs ORDER BY part_id ASC"
+    );
+
+    assert.deepEqual(enrichmentJobs.rows, [{ part_id: "part-needs-datasheet" }]);
   } finally {
     setProviderAcquisitionImportRunnerForTests(null);
     setWorkerRepositoryPoolForTests(null);
@@ -132,6 +232,9 @@ function createProviderAcquisitionPool(): TestPool {
   const db = newDb();
 
   db.public.none(`
+    CREATE TABLE parts (
+      id TEXT PRIMARY KEY
+    );
     CREATE TABLE provider_acquisition_jobs (
       id TEXT PRIMARY KEY,
       provider_id TEXT NOT NULL,
@@ -163,11 +266,63 @@ function createProviderAcquisitionPool(): TestPool {
       detail JSONB,
       created_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE provider_enrichment_jobs (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      source_acquisition_job_id TEXT NOT NULL,
+      job_type TEXT NOT NULL,
+      job_status TEXT NOT NULL,
+      requested_by TEXT NOT NULL,
+      requested_at TIMESTAMPTZ NOT NULL,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      error_code TEXT,
+      error_message TEXT,
+      last_updated_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE TABLE provider_enrichment_job_events (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      detail JSONB,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE TABLE assets (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      asset_type TEXT NOT NULL,
+      file_format TEXT NOT NULL,
+      storage_key TEXT,
+      file_hash TEXT,
+      provider_id TEXT,
+      license_mode TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      availability_status TEXT NOT NULL,
+      review_status TEXT NOT NULL,
+      export_status TEXT NOT NULL,
+      asset_status TEXT NOT NULL,
+      generation_method TEXT,
+      generation_source_asset_id TEXT,
+      validation_status TEXT NOT NULL,
+      preview_status TEXT NOT NULL,
+      asset_state TEXT NOT NULL,
+      source_url TEXT,
+      source_record_id TEXT,
+      last_updated_at TIMESTAMPTZ NOT NULL
+    );
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();
 
   return new MemoryPool() as TestPool;
+}
+
+/**
+ * Inserts one canonical part row so acquisition-success enrichment can reference it safely.
+ */
+async function seedPartRow(pool: TestPool, partId: string): Promise<void> {
+  await pool.query(`INSERT INTO parts (id) VALUES ($1)`, [partId]);
 }
 
 /**

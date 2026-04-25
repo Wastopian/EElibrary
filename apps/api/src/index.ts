@@ -2,17 +2,22 @@
  * File header: Provides the provider-neutral HTTP API for catalog search and detail reads.
  */
 
+import { createReadStream } from "node:fs";
+import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { extname, basename } from "node:path";
 import { performance } from "node:perf_hooks";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { resolveStorageKey } from "@ee-library/shared/file-storage";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
-import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary } from "./detail-response";
+import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
+import { getStorageClient, setStorageClientForTests } from "./file-storage";
 import { isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
@@ -89,6 +94,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
+  const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(url.pathname);
+  const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
 
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
     await handleProviderLookupCreate(request, response);
@@ -164,12 +171,17 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     sendJson(response, 200, {
       dependencies: {
         database: database.label,
-        objectStorage: "not_connected_phase_0",
+        objectStorage: getStorageClient().backend,
         queue: "not_connected_phase_0"
       },
       service: "api",
       status: "ok"
     });
+    return;
+  }
+
+  if (storageServeMatch?.[1]) {
+    await handleStorageFileServe(response, storageServeMatch[1]);
     return;
   }
 
@@ -210,6 +222,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (assetDownloadMatch?.[1] && assetDownloadMatch[2]) {
+    await handleAssetDownload(response, decodeURIComponent(assetDownloadMatch[1]), decodeURIComponent(assetDownloadMatch[2]));
+    return;
+  }
+
   const partMatch = /^\/parts\/([^/]+)$/u.exec(url.pathname);
 
   if (partMatch?.[1]) {
@@ -242,10 +259,18 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
           (result) => result.state
         )
       : buildUnavailablePartAcquisitionSummary("Acquisition history is unavailable while this part detail is being served from seed fallback data.");
+    const enrichmentSummary = catalog.source === "database"
+      ? await timeRouteOperation(
+          response,
+          "detail-enrichment-read",
+          () => readPartEnrichmentSummaryFromDatabase(partId, { onQueryTiming: buildQueryTimingSink(response) }),
+          (result) => result.state
+        )
+      : buildUnavailablePartEnrichmentSummary("Enrichment history is unavailable while this part detail is being served from seed fallback data.");
     const detailResponse = timeSyncRouteOperation(
       response,
       "detail-build",
-      () => buildPartDetailResponse(record, records, acquisitionSummary),
+      () => buildPartDetailResponse(record, records, acquisitionSummary, enrichmentSummary),
       (result) => `${result.relatedPartSummaries.length} related summaries`
     );
 
@@ -589,6 +614,132 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
 /**
  * Handles explicit promotion from approved draft/reviewed asset into export verification.
  */
+/**
+ * Streams a stored asset file from local storage after validating the key against path traversal.
+ */
+async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: string): Promise<void> {
+  const storageKey = decodeURIComponent(rawEncodedKey);
+  const localBasePath = process.env["STORAGE_LOCAL_PATH"] ?? "./storage";
+  const fullPath = resolveStorageKey(localBasePath, storageKey);
+
+  if (!fullPath) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_STORAGE_KEY",
+        message: "The storage key is invalid."
+      }
+    });
+    return;
+  }
+
+  try {
+    await access(fullPath);
+  } catch {
+    sendJson(response, 404, {
+      error: {
+        code: "FILE_NOT_FOUND",
+        message: "The requested storage file was not found."
+      }
+    });
+    return;
+  }
+
+  const ext = extname(fullPath).toLowerCase();
+  const contentType = inferStorageContentType(ext);
+  const isInline = contentType === "application/pdf";
+  const filename = basename(fullPath);
+
+  response.writeHead(200, {
+    "Content-Disposition": isInline ? "inline" : `attachment; filename="${filename}"`,
+    "Content-Type": contentType,
+    ...buildTelemetryHeaders(response, 200)
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const readable = createReadStream(fullPath);
+    readable.on("error", reject);
+    response.on("error", reject);
+    response.on("finish", resolve);
+    readable.pipe(response);
+  });
+}
+
+/**
+ * Maps a file extension to a Content-Type for stored asset files.
+ */
+function inferStorageContentType(ext: string): string {
+  const types: Record<string, string> = {
+    ".dxf": "application/octet-stream",
+    ".kicad_mod": "application/octet-stream",
+    ".kicad_sym": "application/octet-stream",
+    ".pdf": "application/pdf",
+    ".step": "application/octet-stream",
+    ".stp": "application/octet-stream"
+  };
+
+  return types[ext] ?? "application/octet-stream";
+}
+
+/**
+ * Redirects to source_url for referenced assets, or reports why a file is not accessible.
+ */
+async function handleAssetDownload(response: ServerResponse, partId: string, assetId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "asset-download-read", () => readAssetDownloadTargetFromDatabase(partId, assetId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Asset download requires a configured database."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "ASSET_NOT_FOUND",
+          message: "The requested asset does not exist for this part."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_accessible") {
+      sendJson(response, 404, {
+        error: {
+          code: "ASSET_NOT_ACCESSIBLE",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    if (result.status === "redirect") {
+      sendRedirect(response, result.url);
+      return;
+    }
+
+    const fileUrl = await getStorageClient().getDownloadUrl(result.storageKey);
+
+    if (!fileUrl) {
+      sendJson(response, 503, {
+        error: {
+          code: "STORAGE_BACKEND_NOT_CONFIGURED",
+          message: "This file has a local storage key but the storage backend could not produce a download URL."
+        }
+      });
+      return;
+    }
+
+    sendRedirect(response, fileUrl);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
 async function handleAssetPromotionCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
   const body = await readJsonBody<AssetPromotionInput>(request);
 
@@ -1113,6 +1264,8 @@ function buildTelemetryHeaders(response: ServerResponse, statusCode: number): Re
 function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts") return "api-search";
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
+  if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
+  if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
   if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
   if (method === "POST" && pathname === "/provider-lookups") return "api-provider-lookup";
   if (method === "POST" && pathname === "/provider-acquisition-jobs") return "api-provider-acquisition-job-create";
@@ -1151,6 +1304,17 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
     ...buildTelemetryHeaders(response, statusCode)
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Sends an HTTP 302 redirect to the given URL with telemetry headers.
+ */
+function sendRedirect(response: ServerResponse, url: string): void {
+  response.writeHead(302, {
+    Location: url,
+    ...buildTelemetryHeaders(response, 302)
+  });
+  response.end();
 }
 
 /**

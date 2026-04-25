@@ -143,6 +143,7 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     part: {
       category: "Test",
       connectorFamilyId: null,
+      description: "",
       id: "part-test",
       lastUpdatedAt: "2026-04-12T00:00:00.000Z",
       lifecycleStatus: "unknown",

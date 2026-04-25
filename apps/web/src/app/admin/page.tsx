@@ -231,7 +231,7 @@ export default async function AdminPage() {
 
   return (
     <main className="admin-layout">
-      <Link className="back-link" href="/">
+      <Link className="back-link" href="/catalog">
         &larr; Back to catalog
       </Link>
 
@@ -1313,7 +1313,7 @@ async function loadAdminCatalog(): Promise<AdminCatalogState> {
 function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogState, { status: "setup_required" }> }) {
   return (
     <main className="admin-layout">
-      <Link className="back-link" href="/">
+      <Link className="back-link" href="/catalog">
         &larr; Back to catalog
       </Link>
       <section className="admin-hero">

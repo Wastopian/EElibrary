@@ -16,6 +16,7 @@ export type CatalogResultRowViewModel = {
   assetTruthDetail: string;
   assetTruthLabel: string;
   category: string;
+  description: string;
   connectorSignalDetail: string;
   connectorSignalLabel: string;
   connectorSignalTitle: string;
@@ -144,6 +145,7 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
           {row.mpn}
         </a>
         <p>{row.manufacturerName} - {row.category}</p>
+        {row.description && <p className="result-row__description muted-copy">{row.description}</p>}
         <div className="result-row__identity-meta">
           <span className="ui-mono">{row.packageName}</span>
           <span>{row.lifecycleLabel}</span>

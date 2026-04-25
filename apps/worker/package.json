@@ -6,13 +6,17 @@
   "exports": {
     ".": "./src/index.ts",
     "./provider-acquisition-jobs": "./src/provider-acquisition-jobs.ts",
+    "./provider-enrichment-jobs": "./src/provider-enrichment-jobs.ts",
     "./provider-part-import": "./src/provider-part-import.ts",
     "./provider-part-lookup": "./src/provider-part-lookup.ts"
   },
   "scripts": {
     "acquisition-jobs": "tsx src/index.ts acquisition-jobs",
     "build": "tsc -p tsconfig.json --noEmit",
+    "drain-acquisition-jobs": "tsx src/index.ts drain-acquisition-jobs",
+    "enqueue-catalog": "tsx src/index.ts enqueue-catalog",
     "dev": "tsx src/index.ts status",
+    "enrichment-jobs": "tsx src/index.ts enrichment-jobs",
     "generate:drafts": "tsx src/index.ts generate-drafts",
     "ingest": "tsx src/index.ts ingest",
     "ingest:jlcparts": "tsx src/index.ts ingest jlcparts",
