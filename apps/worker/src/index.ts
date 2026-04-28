@@ -4,6 +4,7 @@
 
 import { performance } from "node:perf_hooks";
 import { providerAdapters } from "./provider-adapters";
+import { DEFAULT_HEARTBEAT_INTERVAL_MS, emitHeartbeat, resolveWorkerId, shutdownHeartbeatPool } from "./heartbeat";
 import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
@@ -465,7 +466,59 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "heartbeat") {
+    try {
+      await safeEmitHeartbeat({ command: "heartbeat" });
+      console.log(`Emitted heartbeat for worker ${resolveWorkerId()}`);
+    } finally {
+      await shutdownHeartbeatPool();
+    }
+    return;
+  }
+
+  if (command === "daemon") {
+    await runDaemon();
+    return;
+  }
+
   throw new Error(`Unknown worker command: ${command}\n\n${buildUsageLines().join("\n")}`);
+}
+
+/**
+ * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM.
+ * Used by the local-dev `npm run dev:worker` script and the GET /system/health liveness check.
+ */
+async function runDaemon(): Promise<void> {
+  console.log(`Worker daemon starting (workerId=${resolveWorkerId()}, interval=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms).`);
+
+  await safeEmitHeartbeat({ command: "daemon" });
+
+  const interval = setInterval(() => {
+    void safeEmitHeartbeat({ command: "daemon" });
+  }, DEFAULT_HEARTBEAT_INTERVAL_MS);
+
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      clearInterval(interval);
+      resolve();
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+
+  console.log("Worker daemon stopping.");
+  await shutdownHeartbeatPool();
+}
+
+/**
+ * Emits a heartbeat without throwing so transient DB errors do not crash the daemon.
+ */
+async function safeEmitHeartbeat(details: Record<string, unknown>): Promise<void> {
+  try {
+    await emitHeartbeat(details);
+  } catch (error) {
+    console.error("Heartbeat emit failed.", error instanceof Error ? error.message : error);
+  }
 }
 
 main().catch((error: unknown) => {

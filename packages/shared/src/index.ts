@@ -12,3 +12,4 @@ export * from "./connector-intelligence";
 export * from "./normalization";
 export * from "./provider-lookup";
 export * from "./review-workflow";
+export * from "./system-health-types";

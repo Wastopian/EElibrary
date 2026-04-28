@@ -19,6 +19,7 @@ import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient, setStorageClientForTests } from "./file-storage";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
+import { buildSystemHealth } from "./system-health";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -177,6 +178,18 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
       service: "api",
       status: "ok"
     });
+    return;
+  }
+
+  if (url.pathname === "/system/health") {
+    const health = await timeRouteOperation(
+      response,
+      "system-health",
+      () => buildSystemHealth(),
+      (payload) => `database=${payload.database.status} worker=${payload.worker.status}`
+    );
+
+    sendJson(response, 200, health);
     return;
   }
 

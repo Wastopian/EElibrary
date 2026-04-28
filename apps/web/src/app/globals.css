@@ -4954,3 +4954,46 @@ details[open] .trust-breakdown__toggle::before {
     grid-template-columns: 1fr;
   }
 }
+
+/* WorkerStatusBanner — local-stack-reliability banner shown on the landing page when
+   the API is unreachable, the database is unconfigured/unavailable, or the worker
+   daemon is offline. Each tone is a flat info card with a left-edge accent. */
+.status-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.85rem 1rem;
+  margin: 0 0 1rem 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.9rem;
+}
+
+.status-banner strong {
+  font-size: 0.95rem;
+}
+
+.status-banner code {
+  font-family: var(--font-mono, monospace);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0 0.3rem;
+  border-radius: 4px;
+}
+
+.status-banner--danger {
+  border-left: 3px solid #f56565;
+  background: rgba(245, 101, 101, 0.07);
+}
+
+.status-banner--warning {
+  border-left: 3px solid #f6ad55;
+  background: rgba(246, 173, 85, 0.07);
+}
+
+.status-banner__list {
+  list-style: disc;
+  margin: 0.25rem 0 0 1.25rem;
+  padding: 0;
+  font-size: 0.85rem;
+}

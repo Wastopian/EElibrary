@@ -5,7 +5,8 @@
 import Link from "next/link";
 import React from "react";
 import { StatusBadge } from "@ee-library/ui";
-import { fetchApiHealth, fetchSearchFacetsEnvelope } from "../lib/api-client";
+import { fetchApiHealth, fetchSearchFacetsEnvelope, fetchSystemHealth } from "../lib/api-client";
+import { WorkerStatusBanner } from "../components/WorkerStatusBanner";
 
 export const dynamic = "force-dynamic";
 
@@ -13,16 +14,26 @@ export const dynamic = "force-dynamic";
  * Renders the EE Library landing page with value props and live catalog status.
  */
 export default async function LandingPage() {
-  const [health, facetsEnvelope] = await Promise.all([
+  const [health, facetsEnvelope, systemHealth] = await Promise.all([
     fetchApiHealth().catch(() => null),
-    fetchSearchFacetsEnvelope({}).catch(() => null)
+    fetchSearchFacetsEnvelope({}).catch(() => null),
+    fetchSystemHealth().catch(() => null)
   ]);
   const dbStatus = health?.dependencies.database ?? "unknown";
   const dbConnected = dbStatus === "connected";
   const readinessCounts = facetsEnvelope?.data?.counts?.readinessStatuses ?? null;
+  const apiBaseUrl = process.env["EE_LIBRARY_API_BASE_URL"] ?? "http://127.0.0.1:4000";
+  const isLocalDev = (process.env["LOCAL_DEV"] ?? "").toLowerCase() !== "false" && process.env["NODE_ENV"] !== "production";
+  const databaseUrlConfigured = Boolean(process.env["DATABASE_URL"] && process.env["DATABASE_URL"].trim());
 
   return (
     <main className="landing">
+      <WorkerStatusBanner
+        apiBaseUrl={apiBaseUrl}
+        databaseUrlConfigured={databaseUrlConfigured}
+        health={systemHealth}
+        isLocalDev={isLocalDev}
+      />
       <section className="landing-hero">
         <div className="landing-hero__inner">
           <p className="landing-hero__eyebrow">EE Library</p>

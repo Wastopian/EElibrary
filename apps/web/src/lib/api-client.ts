@@ -28,6 +28,7 @@ import type {
   SourceReconciliationUpdateResponse,
   SearchFacets
 } from "@ee-library/shared/types";
+import type { SystemHealthResponse } from "@ee-library/shared/system-health-types";
 
 /** ApiHealth describes the lightweight operational status response from the API. */
 export interface ApiHealth {
@@ -145,6 +146,19 @@ export async function fetchPartSearchEnvelope(filters: PartSearchFilters): Promi
 export async function fetchApiHealth(): Promise<ApiHealth | null> {
   try {
     return await fetchApi<ApiHealth>("/health");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches the system-health payload that drives the WorkerStatusBanner. Returns null on
+ * transport failure so the landing page can render an "API unreachable" state without
+ * crashing.
+ */
+export async function fetchSystemHealth(): Promise<SystemHealthResponse | null> {
+  try {
+    return await fetchApi<SystemHealthResponse>("/system/health");
   } catch {
     return null;
   }
