@@ -446,18 +446,15 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     mateRelations: [],
     metrics: buildMetrics(component, partId, datasheetRevisionId, sourceRecordId, lastUpdatedAt),
     package: {
-      bodyHeightMm: null,
-      bodyLengthMm: null,
-      bodyWidthMm: null,
+      ...buildPackageDimensions(component.attributes),
       id: packageId,
       packageName,
-      pinCount: parsePinCount(component.joints, packageName),
-      pitchMm: null
+      pinCount: parsePinCount(component.joints, packageName)
     },
     part: {
       category: partCategory,
       connectorFamilyId: null,
-      description: component.description,
+      description: buildNormalizedDescription(component, partCategory, packageName),
       id: partId,
       lastUpdatedAt,
       lifecycleStatus: readLifecycleStatus(component),
@@ -887,6 +884,123 @@ function normalizePartCategory(categoryName: string, subcategoryName: string): s
   return category === subcategory ? category : `${category} / ${subcategory}`;
 }
 
+/** Maximum description length persisted to the parts table for keyword search. */
+const MAX_NORMALIZED_DESCRIPTION_LENGTH = 200;
+
+/**
+ * Builds an engineer-readable description from category, key attributes, MPN, and package.
+ * Falls back to the raw provider description when synthesis is too sparse to be useful.
+ */
+function buildNormalizedDescription(component: JlcPartsComponent, partCategory: string, packageName: string): string {
+  const segments: string[] = [];
+  const parentCategory = extractParentCategory(partCategory);
+
+  if (parentCategory) {
+    segments.push(parentCategory);
+  }
+
+  const keyAttributes = pickDescriptionKeyAttributes(component.attributes);
+  segments.push(...keyAttributes);
+
+  // When attributes are sparse, anchor the description on the MPN so it stays specific.
+  if (keyAttributes.length === 0 && component.mfr.trim().length > 0) {
+    segments.push(component.mfr.trim());
+  }
+
+  if (segments.length === 0) {
+    return truncateDescription(collapseWhitespace(component.description));
+  }
+
+  let result = segments.join(" ");
+  const normalizedPackage = packageName.trim();
+
+  if (normalizedPackage.length > 0 && normalizedPackage !== "Unknown") {
+    result += ` (${normalizedPackage})`;
+  }
+
+  return truncateDescription(result);
+}
+
+/**
+ * Extracts the parent category portion of a "Parent / Subcategory" path.
+ */
+function extractParentCategory(partCategory: string): string | null {
+  const trimmed = collapseWhitespace(partCategory);
+
+  if (!trimmed || trimmed === "Unknown") {
+    return null;
+  }
+
+  const parent = trimmed.split(" / ")[0]?.trim();
+
+  return parent && parent !== "Unknown" ? parent : null;
+}
+
+/**
+ * Selects engineering-relevant attribute snippets in deterministic order.
+ */
+function pickDescriptionKeyAttributes(attributes: Record<string, JlcPartsAttribute>): string[] {
+  const result: string[] = [];
+
+  const resistance = readPrimaryNumber(attributes, "Resistance");
+
+  if (resistance !== null) {
+    result.push(`${formatCompactNumber(resistance)}Ω`);
+  }
+
+  const capacitance = readPrimaryNumber(attributes, "Capacitance");
+
+  if (capacitance !== null) {
+    result.push(`${formatCompactNumber(capacitance)}F`);
+  }
+
+  const inductance = readPrimaryNumber(attributes, "Inductance");
+
+  if (inductance !== null) {
+    result.push(`${formatCompactNumber(inductance)}H`);
+  }
+
+  const tolerance = readStringAttribute(attributes, "Tolerance");
+
+  if (tolerance) {
+    result.push(collapseWhitespace(tolerance).replace(/^±\s*/u, ""));
+  }
+
+  const power = readStringAttribute(attributes, "Power") ?? readStringAttribute(attributes, "Power Rating") ?? readStringAttribute(attributes, "Power(W)");
+
+  if (power) {
+    result.push(collapseWhitespace(power));
+  }
+
+  return result;
+}
+
+/**
+ * Formats a numeric provider attribute as a compact decimal string without trailing zeros.
+ */
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (Number.isInteger(value)) {
+    return value.toString();
+  }
+
+  return value.toString().replace(/(\.\d*?)0+$/u, "$1").replace(/\.$/u, "");
+}
+
+/**
+ * Truncates a description to the persisted column budget without splitting mid-word when avoidable.
+ */
+function truncateDescription(value: string): string {
+  if (value.length <= MAX_NORMALIZED_DESCRIPTION_LENGTH) {
+    return value;
+  }
+
+  return value.slice(0, MAX_NORMALIZED_DESCRIPTION_LENGTH).trimEnd();
+}
+
 /**
  * Collapses repeated whitespace in provider text values.
  */
@@ -996,6 +1110,60 @@ function readTemperatureRange(value: string | null): { minValue: number; maxValu
   const maxValue = matches[1] ? Number(matches[1]) : null;
 
   return minValue !== null && maxValue !== null ? { maxValue, minValue } : null;
+}
+
+/**
+ * Extracts package body and pitch dimensions from provider structured attributes.
+ * Tries multiple attribute key variants for each dimension field.
+ */
+function buildPackageDimensions(attributes: Record<string, JlcPartsAttribute>): {
+  pitchMm: number | null;
+  bodyLengthMm: number | null;
+  bodyWidthMm: number | null;
+  bodyHeightMm: number | null;
+} {
+  return {
+    bodyHeightMm: readDimensionMm(attributes, "Height (Max)", "Body Height", "Mounting Height (Max)"),
+    bodyLengthMm: readDimensionMm(attributes, "Body Length", "Overall Length"),
+    bodyWidthMm: readDimensionMm(attributes, "Body Width", "Overall Width"),
+    pitchMm: readDimensionMm(attributes, "Pitch")
+  };
+}
+
+/**
+ * Reads the first matching attribute key and converts it to mm.
+ * Returns null if none of the keys are present or parseable.
+ */
+function readDimensionMm(attributes: Record<string, JlcPartsAttribute>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const attribute = attributes[key];
+    if (!attribute) continue;
+    const mm = parseLengthToMm(readPrimaryAttributeValue(attribute));
+    if (mm !== null) return mm;
+  }
+  return null;
+}
+
+/**
+ * Converts a raw provider dimension value to millimeters.
+ * Bare numbers are assumed mm (JLC convention for length-typed attributes).
+ * Strings are parsed for a leading number plus optional unit (mm, mil, inch).
+ */
+function parseLengthToMm(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const match = /^([+-]?\d+(?:\.\d+)?)\s*(mm|mil|inch|in)?$/iu.exec(value.trim());
+    if (!match) return null;
+    const n = Number(match[1]);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const unit = (match[2] ?? "mm").toLowerCase();
+    if (unit === "mil") return n * 0.0254;
+    if (unit === "inch" || unit === "in") return n * 25.4;
+    return n;
+  }
+  return null;
 }
 
 /**

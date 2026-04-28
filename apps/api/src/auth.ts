@@ -11,10 +11,40 @@ export interface ApiSession {
 }
 
 /**
- * Returns a deterministic admin session for route tests that do not exercise auth behavior.
+ * Minimum byte length for AUTH_SECRET. HS256 nominally accepts any length but a 32-byte
+ * (256-bit) secret matches the underlying SHA-256 block and is the smallest length that
+ * resists offline brute-force at any plausible scale. Anything shorter is treated as
+ * misconfigured and refused, instead of silently signing or verifying with a weak key.
  */
-function readTestSession(): ApiSession | null {
-  if (process.env.NODE_ENV !== "test") {
+const MIN_AUTH_SECRET_BYTES = 32;
+
+/**
+ * Reads the AUTH_SECRET environment variable and returns it as a Uint8Array, or null when
+ * the value is missing or shorter than {@link MIN_AUTH_SECRET_BYTES}. The legacy
+ * `?? ""` fallback used to coerce missing AUTH_SECRET into an empty HMAC key, which would
+ * happily verify any token signed with an empty secret. This explicit length check refuses
+ * that path so a misconfigured deploy fails closed instead of granting admin to anyone.
+ */
+export function readAuthSecret(env: NodeJS.ProcessEnv = process.env): Uint8Array | null {
+  const raw = env["AUTH_SECRET"];
+
+  if (typeof raw !== "string") {
+    return null;
+  }
+
+  const encoded = new TextEncoder().encode(raw);
+
+  return encoded.byteLength >= MIN_AUTH_SECRET_BYTES ? encoded : null;
+}
+
+/**
+ * Returns a deterministic admin session only when both `NODE_ENV === "test"` and the
+ * explicit opt-in env var is set. Requiring a second flag prevents a misconfigured prod
+ * deploy that accidentally inherits `NODE_ENV=test` from silently granting admin to every
+ * request, which is exactly the failure mode the previous unconditional bypass had.
+ */
+function readTestSession(env: NodeJS.ProcessEnv = process.env): ApiSession | null {
+  if (env.NODE_ENV !== "test" || env["EE_LIBRARY_ALLOW_TEST_AUTH"] !== "1") {
     return null;
   }
 
@@ -31,7 +61,15 @@ export async function verifyBearerToken(
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   const token = authHeader.slice(7);
-  const secret = new TextEncoder().encode(process.env["AUTH_SECRET"] ?? "");
+  const secret = readAuthSecret();
+
+  if (!secret) {
+    // Fail closed: refuse every token when AUTH_SECRET is missing or too short, instead of
+    // verifying against an empty key. Logging once here would be helpful for ops triage but
+    // would also leak through every unauthenticated request, so the failure is silent on
+    // the verify path and is meant to be caught by the startup-time configuration check.
+    return null;
+  }
 
   try {
     const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
@@ -47,6 +85,25 @@ export async function verifyBearerToken(
     return { sub: payload.sub, role };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Asserts that AUTH_SECRET is present and long enough at process boot. Production deploys
+ * should call this once during startup so the process refuses to listen on the network when
+ * the secret is missing — matching the "fail fast on missing config" pattern used by
+ * DATABASE_URL elsewhere in the API.
+ */
+export function assertAuthSecretConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  if (env["EE_LIBRARY_ALLOW_TEST_AUTH"] === "1" && env.NODE_ENV === "test") {
+    return;
+  }
+
+  if (!readAuthSecret(env)) {
+    throw new Error(
+      `AUTH_SECRET is required and must be at least ${MIN_AUTH_SECRET_BYTES} bytes. ` +
+        `Generate one with \`openssl rand -hex 32\` and add it to the deployment environment.`
+    );
   }
 }
 

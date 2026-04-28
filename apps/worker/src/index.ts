@@ -4,7 +4,7 @@
 
 import { performance } from "node:perf_hooks";
 import { providerAdapters } from "./provider-adapters";
-import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics } from "./catalog-repository";
+import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
@@ -195,8 +195,51 @@ function buildUsageLines(): string[] {
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
     "npm run generate:drafts -w @ee-library/worker -- [limit]",
+    "npm run recompute:readiness -w @ee-library/worker -- [--batch-size N] [--since ISO_DATE]",
     `providerId values: ${providerIds}`
   ];
+}
+
+/**
+ * Bulk-recomputes readiness projections for all parts, or for parts updated since a given date.
+ */
+async function recomputeReadiness(args: string[]): Promise<void> {
+  const batchSizeValue = parseNamedArg(args, "batch-size");
+  const since = parseNamedArg(args, "since");
+  const parsedBatchSize = batchSizeValue ? Number(batchSizeValue) : NaN;
+  const batchSize = Number.isFinite(parsedBatchSize) ? Math.max(1, Math.min(parsedBatchSize, 500)) : 50;
+  const timings: WorkerTiming[] = [];
+
+  await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+  process.stderr.write(JSON.stringify({ stage: "recompute_start", batchSize, since: since ?? null }) + "\n");
+
+  const summary = await timeWorkerOperation(
+    "worker.recompute_readiness",
+    () =>
+      recomputeReadinessForAllParts(batchSize, since, (progress) => {
+        process.stderr.write(JSON.stringify({ stage: "batch_done", ...progress }) + "\n");
+      }),
+    timings,
+    (s) => `${s.succeededCount} succeeded, ${s.failedCount} failed`
+  );
+
+  console.log(JSON.stringify({ ...summary, timings }, null, 2));
+}
+
+/**
+ * Reads a named CLI argument of the form --name value from an args array.
+ */
+function parseNamedArg(args: string[], name: string): string | undefined {
+  const flag = `--${name}`;
+
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === flag) {
+      return args[i + 1];
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -414,6 +457,11 @@ async function main(): Promise<void> {
 
   if (command === "drain-acquisition-jobs") {
     await drainProviderAcquisitionJobs(process.argv[3], process.argv[4]);
+    return;
+  }
+
+  if (command === "recompute-readiness") {
+    await recomputeReadiness(process.argv.slice(3));
     return;
   }
 

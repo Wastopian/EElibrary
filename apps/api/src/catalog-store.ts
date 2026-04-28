@@ -497,7 +497,7 @@ interface DatabaseSourceExtractionSignalRow {
 }
 
 /** SearchSqlFilter is the parameterized WHERE clause for one SQL-backed search read. */
-interface SearchSqlFilter {
+export interface SearchSqlFilter {
   /** SQL WHERE clause assembled from present filters only. */
   whereSql: string;
   /** Parameter values matching the assembled WHERE clause placeholders. */
@@ -3686,6 +3686,15 @@ function buildSearchCadAvailableCountSql(whereSql: string): string {
 
 /**
  * Builds a parameterized WHERE clause from present filters only.
+ * Exported for tests so structural assertions on the SQL can codify which trigram indexes
+ * the WHERE clause depends on (migrations 019 and 021).
+ */
+export function buildSearchSqlFilterForTests(filters: PartSearchFilters, cadAvailability: PartSearchFilters["cadAvailability"]): SearchSqlFilter {
+  return buildSearchSqlFilter(filters, cadAvailability);
+}
+
+/**
+ * Builds a parameterized WHERE clause from present filters only.
  */
 function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartSearchFilters["cadAvailability"]): SearchSqlFilter {
   const clauses: string[] = [];
@@ -3695,6 +3704,11 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
 
   if (queryPattern) {
     params.push(queryPattern);
+    // The source_records and datasheet asset branches use non-correlated IN-subqueries instead of
+    // correlated EXISTS so PostgreSQL pre-filters those tables on the trigram-indexed LIKE
+    // (idx_source_records_provider_part_key_trgm) once, then performs a hash semi-join back to parts —
+    // rather than running the inner LIKE per candidate part row. Direct LIKE columns stay on the
+    // OR-chain to ride trigram indexes on parts.mpn, parts.category, manufacturers.name, etc.
     clauses.push(`(
       lower(p.mpn) LIKE $${params.length}
       OR lower(p.description) LIKE $${params.length}
@@ -3702,19 +3716,19 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
       OR lower(m.name) LIKE $${params.length}
       OR lower(pk.package_name) LIKE $${params.length}
       OR lower(COALESCE(cf.name, '')) LIKE $${params.length}
-      OR EXISTS (
-        SELECT 1
+      OR p.id IN (
+        SELECT sr.part_id
         FROM source_records sr
-        WHERE sr.part_id = p.id
+        WHERE sr.part_id IS NOT NULL
           AND (
             lower(sr.provider_part_key) LIKE $${params.length}
             OR lower(COALESCE(sr.source_url, '')) LIKE $${params.length}
           )
       )
-      OR EXISTS (
-        SELECT 1
+      OR p.id IN (
+        SELECT datasheet_asset.part_id
         FROM assets datasheet_asset
-        WHERE datasheet_asset.part_id = p.id
+        WHERE datasheet_asset.part_id IS NOT NULL
           AND datasheet_asset.asset_type = 'datasheet'
           AND lower(COALESCE(datasheet_asset.source_url, '')) LIKE $${params.length}
       )
@@ -3752,11 +3766,11 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
   );
 
   if (cadAvailability === "available") {
-    clauses.push(`EXISTS (${CAD_READY_EXISTS_SQL})`);
+    clauses.push(`p.id IN (${CAD_READY_PART_IDS_SQL})`);
   }
 
   if (cadAvailability === "unavailable") {
-    clauses.push(`NOT EXISTS (${CAD_READY_EXISTS_SQL})`);
+    clauses.push(`p.id NOT IN (${CAD_READY_PART_IDS_SQL})`);
   }
 
   return {
@@ -3799,11 +3813,14 @@ function appendPartIdLikeClause(
   }
 
   params.push(`%${normalizedValue}%`);
+  // Non-correlated IN-subquery so the planner can pre-filter the joined table on the
+  // trigram-indexed LIKE expression first, then hash-join back to parts.id. Correlated EXISTS
+  // re-runs the inner predicate per candidate part row, which dominates query time at scale.
   clauses.push(`
-    EXISTS (
-      SELECT 1
+    p.id IN (
+      SELECT ${partIdColumn}
       FROM ${tableExpression}
-      WHERE ${partIdColumn} = p.id
+      WHERE ${partIdColumn} IS NOT NULL
         ${staticPredicate ? `AND ${staticPredicate}` : ""}
         AND ${columnName} LIKE $${params.length}
     )
@@ -3860,11 +3877,18 @@ function relevanceOrderByClause(queryParamIndex: number): string {
   `;
 }
 
-/** CAD_READY_EXISTS_SQL is a correlated subquery returning parts with verified file-backed CAD evidence. */
-const CAD_READY_EXISTS_SQL = `
-  SELECT 1
+/**
+ * CAD_READY_PART_IDS_SQL returns all part_ids whose assets satisfy the verified-file-backed
+ * export predicate. It is non-correlated so the search WHERE clause can use it as
+ * `p.id IN (...)` / `p.id NOT IN (...)`. The non-correlated form lets PostgreSQL's planner
+ * compute the matching part_ids once via the assets indexes and hash-semi-join back to parts,
+ * instead of re-evaluating the inner predicate per outer candidate row. The `part_id IS NOT
+ * NULL` predicate keeps `NOT IN` safe under SQL three-valued logic.
+ */
+const CAD_READY_PART_IDS_SQL = `
+  SELECT cad.part_id
   FROM assets cad
-  WHERE cad.part_id = p.id
+  WHERE cad.part_id IS NOT NULL
     AND cad.asset_type IN ('footprint', 'symbol', 'three_d_model')
     AND cad.availability_status = 'validated'
     AND cad.export_status = 'verified_for_export'

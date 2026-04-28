@@ -23,8 +23,17 @@ async function main() {
     return;
   }
 
+  // EE_LIBRARY_ALLOW_TEST_AUTH=1 opts the API auth layer into the deterministic test admin
+  // session. Without this the auth middleware fails closed even when NODE_ENV === "test", so
+  // a misconfigured production deploy that inherits NODE_ENV cannot accidentally grant admin.
+  // Only the test runner sets this flag.
   const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...testFiles], {
     cwd: workspaceRoot,
+    env: {
+      ...process.env,
+      EE_LIBRARY_ALLOW_TEST_AUTH: "1",
+      NODE_ENV: "test"
+    },
     stdio: "inherit"
   });
 

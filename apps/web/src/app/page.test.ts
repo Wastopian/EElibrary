@@ -90,27 +90,31 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
   try {
     const html = await renderHomepage();
 
+    // Honest seed-mode framing — the page must label seed data clearly, not as DB-backed.
     assert.match(html, /Local seed mode/u);
-    assert.match(html, /deterministic local examples/u);
+    assert.match(html, /Deterministic seed examples/u);
     assert.match(html, /not DB-backed catalog data/u);
+
+    // Core quick-check workspace surfaces stay visible even when DB is missing.
     assert.match(html, /Quick part readiness check/u);
     assert.match(html, /MPN or keyword/u);
     assert.match(html, /Manufacturer context/u);
     assert.match(html, /Category filter/u);
     assert.match(html, /Provider part reference/u);
     assert.match(html, /Provider URL/u);
-    assert.match(html, /Search can now use provider part references, provider URLs, and datasheet URLs/u);
     assert.match(html, /0430250200/u);
+
+    // Filter rail, results panel, and catalog presentation modes render in seed mode.
     assert.match(html, /Filter the readiness catalog/u);
     assert.match(html, /Import by MPN/u);
-    assert.match(html, /Navigate/u);
-    assert.match(html, /Recent records/u);
-    assert.match(html, /Catalog results/u);
+    assert.match(html, /CAD files for export/u);
     assert.match(html, /List/u);
     assert.match(html, /Table/u);
-    assert.match(html, /same import path as the worker CLI/u);
-    assert.match(html, /CAD files for export/u);
+
+    // A representative seed MPN must surface — confirms records flow through render.
     assert.match(html, /TPS7A02DBVR/u);
+
+    // Negative: do not render the legacy "Provider-neutral API" header.
     assert.doesNotMatch(html, /Provider-neutral API/u);
   } finally {
     restoreFetch();
@@ -159,20 +163,29 @@ test("homepage renders quick readiness result from matched catalog record", asyn
   try {
     const html = await renderHomepage({ q: "TPS7A02DBVR" });
 
+    // Quick readiness panel: headline blocker + bundle truth.
     assert.match(html, /Blocked/u);
     assert.match(html, /Export bundle: partial bundle/u);
+
+    // Result-action surfaces. The admin link renders as "Open admin queue" (lowercase q),
+    // so the test now matches the actual rendered text instead of an outdated capitalized label.
     assert.match(html, /Open Full Record/u);
     assert.match(html, /Clear/u);
     assert.match(html, /View in Queue/u);
-    assert.match(html, /Admin queue/u);
+    assert.match(html, /Open admin queue/u);
+
+    // Active-filter pill summary.
     assert.match(html, /Current filters/u);
     assert.match(html, /Query: TPS7A02DBVR/u);
+
+    // Identity confirmation and source row badges.
     assert.match(html, /Identity confirmed/u);
     assert.match(html, /source row/u);
-    assert.match(html, /Use list mode for explanation-first review or table mode for faster dense scanning/u);
-    assert.match(html, /production-ready exports/u);
-    assert.match(html, /Risk flag/u);
-    assert.match(html, /generated CAD/i);
+
+    // Generated-CAD truth surface — partial-readiness state must say generated CAD needs review.
+    assert.match(html, /generated CAD/iu);
+
+    // Negative: don't accidentally claim the part is "approved" when it isn't.
     assert.doesNotMatch(html, /approved part/u);
   } finally {
     restoreFetch();

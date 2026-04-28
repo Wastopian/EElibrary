@@ -524,12 +524,46 @@ function createProviderImportPool(options: ProviderImportPoolOptions = {}): Test
   const includeAcquisitionJobs = options.includeAcquisitionJobs ?? true;
   const includeEnrichmentJobs = options.includeEnrichmentJobs ?? includeAcquisitionJobs;
 
+  registerPgTrgmShims(db);
+
   db.public.none(buildMinimalCatalogSchemaSql());
   db.public.none(buildProviderImportRowsSql(includeAcquisitionJobs, includeEnrichmentJobs));
 
   const { Pool: MemoryPool } = db.adapters.createPg();
 
   return new MemoryPool() as TestPool;
+}
+
+/**
+ * Registers deterministic shims for the `pg_trgm` functions used by the search SQL.
+ * pg-mem does not implement `pg_trgm`, so without these shims the relevance ORDER BY
+ * (`relevanceOrderByClause`) errors at execution time and three DB-backed search tests
+ * cannot run. The shim is intentionally simple — exact match → 1, prefix → 0.6, contains
+ * → 0.3, otherwise 0 — which is enough to verify the SQL compiles, the relevance branch
+ * is invoked, and rows order in a stable, predictable way for fixture-based assertions.
+ * Production behavior with real pg_trgm trigram similarity is exercised by manual
+ * `npm run migrations` + integration testing, not by this in-memory shim.
+ */
+function registerPgTrgmShims(db: ReturnType<typeof newDb>): void {
+  db.public.registerFunction({
+    name: "similarity",
+    args: ["text", "text"] as never,
+    returns: "float" as never,
+    allowNullArguments: true,
+    implementation: (left: string | null, right: string | null): number => {
+      if (typeof left !== "string" || typeof right !== "string" || left.length === 0 || right.length === 0) {
+        return 0;
+      }
+
+      const a = left.toLowerCase();
+      const b = right.toLowerCase();
+
+      if (a === b) return 1;
+      if (a.startsWith(b) || b.startsWith(a)) return 0.6;
+      if (a.includes(b) || b.includes(a)) return 0.3;
+      return 0;
+    }
+  });
 }
 
 /**
@@ -621,7 +655,7 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE manufacturers (id TEXT, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
     CREATE TABLE connector_families (id TEXT, name TEXT, series TEXT, description TEXT);
-    CREATE TABLE parts (id TEXT, mpn TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE parts (id TEXT, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_extraction_signals (id TEXT, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE assets (id TEXT, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
@@ -660,7 +694,7 @@ function buildProviderImportRowsSql(
   return `
     INSERT INTO manufacturers VALUES ('mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Guangdong Fenghua Advanced Tech', '{"FH","FH(Guangdong Fenghua Advanced Tech)"}', NULL);
     INSERT INTO packages VALUES ('pkg-jlcparts-0402', '0402', 2, NULL, NULL, NULL, NULL);
-    INSERT INTO parts VALUES ('part-jlcparts-c1091', 'RC-02W300JT', 'mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Resistors / Chip Resistor - Surface Mount', 'active', 'pkg-jlcparts-0402', NULL, 0.62, '2026-04-12T06:57:40.000Z');
+    INSERT INTO parts VALUES ('part-jlcparts-c1091', 'RC-02W300JT', 'Resistors 30Ω (0402)', 'mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Resistors / Chip Resistor - Surface Mount', 'active', 'pkg-jlcparts-0402', NULL, 0.62, '2026-04-12T06:57:40.000Z');
     INSERT INTO source_records VALUES ('source-jlcparts-c1091', 'jlcparts', 'C1091', 'part-jlcparts-c1091', 'https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html', '2026-04-12T06:57:40.000Z', '{"component":{"lcsc":"C1091","mfr":"RC-02W300JT"},"indexCreatedAt":"2026-04-12T06:57:40+00:00"}'::jsonb, '2026-04-12T06:57:40.000Z', '2026-04-12T06:57:40.000Z', '2026-04-12T06:57:40.000Z', 'imported', NULL, '2026-04-12T06:57:40.000Z');
     INSERT INTO assets VALUES ('asset-jlcparts-c1091-datasheet', 'part-jlcparts-c1091', 'datasheet', 'pdf', NULL, NULL, 'jlcparts', 'metadata_only', 'trusted_external', 'referenced', 'not_reviewed', 'not_exportable', 'referenced', NULL, NULL, 'not_validated', 'not_available', 'referenced', 'https://www.lcsc.com/datasheet/lcsc_datasheet_2411121005_FH--Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.pdf', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
     INSERT INTO datasheet_revisions VALUES ('dsr-jlcparts-c1091', 'part-jlcparts-c1091', 'Provider datasheet reference', NULL, NULL, 'asset-jlcparts-c1091-datasheet', 0, 'not_available', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
@@ -708,9 +742,9 @@ async function insertSearchIdentityRows(client: PoolClient): Promise<void> {
     INSERT INTO manufacturers VALUES ('mfr-search-beta', 'Beta Components', '{"Beta"}', NULL);
     INSERT INTO packages VALUES ('pkg-search-sot23', 'SOT-23', 3, NULL, NULL, NULL, NULL);
     INSERT INTO packages VALUES ('pkg-search-qfn', 'QFN-16', 16, 0.5, 3, 3, 0.85);
-    INSERT INTO parts VALUES ('part-search-a', 'AAA-100', 'mfr-search-alpha', 'Connector', 'active', 'pkg-search-sot23', NULL, 0.7, '2026-04-10T00:00:00.000Z');
-    INSERT INTO parts VALUES ('part-search-b', 'BBB-200', 'mfr-search-beta', 'Power', 'obsolete', 'pkg-search-qfn', NULL, 0.95, '2026-04-11T00:00:00.000Z');
-    INSERT INTO parts VALUES ('part-search-c', 'CCC-300', 'mfr-search-alpha', 'Connector', 'active', 'pkg-search-qfn', NULL, 0.95, '2026-04-12T00:00:00.000Z');
+    INSERT INTO parts VALUES ('part-search-a', 'AAA-100', 'Connector AAA-100 (SOT-23)', 'mfr-search-alpha', 'Connector', 'active', 'pkg-search-sot23', NULL, 0.7, '2026-04-10T00:00:00.000Z');
+    INSERT INTO parts VALUES ('part-search-b', 'BBB-200', 'Power BBB-200 (QFN-16)', 'mfr-search-beta', 'Power', 'obsolete', 'pkg-search-qfn', NULL, 0.95, '2026-04-11T00:00:00.000Z');
+    INSERT INTO parts VALUES ('part-search-c', 'CCC-300', 'Connector CCC-300 (QFN-16)', 'mfr-search-alpha', 'Connector', 'active', 'pkg-search-qfn', NULL, 0.95, '2026-04-12T00:00:00.000Z');
   `);
 }
 

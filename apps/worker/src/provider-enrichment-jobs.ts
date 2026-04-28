@@ -2,11 +2,13 @@
  * File header: Enqueues and processes provider enrichment jobs, starting with metadata-only datasheet capture.
  */
 
+import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import {
-  captureReferencedDatasheetEvidenceForPart,
-  getWorkerDatabasePool
+  getWorkerDatabasePool,
+  markDatasheetAssetAsDownloaded
 } from "./catalog-repository";
+import { getWorkerStorageClient } from "./file-storage";
 import type { PoolClient } from "pg";
 import type {
   ProviderEnrichmentJob,
@@ -113,6 +115,15 @@ let providerEnrichmentJobBeforeInsertHook: (() => Promise<void>) | null = null;
 /** datasheetCaptureHandlerImpl keeps the real datasheet handler replaceable in focused queue tests. */
 let datasheetCaptureHandlerImpl: ProviderEnrichmentDatasheetCaptureHandler = runDatasheetCaptureJob;
 
+/** datasheetFetcher is the HTTP client used to download PDFs; injectable for tests. */
+let datasheetFetcher: typeof fetch = fetch;
+
+/** Maximum bytes allowed for a single datasheet download (50 MB). */
+const DATASHEET_MAX_BYTES = 50 * 1024 * 1024;
+
+/** Timeout in milliseconds for a single datasheet fetch. */
+const DATASHEET_FETCH_TIMEOUT_MS = 30_000;
+
 /**
  * Overrides the datasheet capture handler for queue tests; pass null to restore the real handler.
  */
@@ -120,6 +131,13 @@ export function setProviderEnrichmentDatasheetCaptureHandlerForTests(
   next: ProviderEnrichmentDatasheetCaptureHandler | null
 ): void {
   datasheetCaptureHandlerImpl = next ?? runDatasheetCaptureJob;
+}
+
+/**
+ * Overrides the HTTP fetcher used for datasheet downloads; pass null to restore the real fetch.
+ */
+export function setDatasheetFetcherForTests(next: typeof fetch | null): void {
+  datasheetFetcher = next ?? fetch;
 }
 
 /**
@@ -428,68 +446,146 @@ async function runProviderEnrichmentJob(
 }
 
 /**
- * Runs the metadata-only datasheet capture handler using official provider URLs already stored in source evidence.
+ * Downloads a datasheet PDF from the official provider URL and advances the asset to downloaded state.
  */
 async function runDatasheetCaptureJob(
   job: ProviderEnrichmentJob
 ): Promise<ProviderEnrichmentDatasheetCaptureResult> {
   const databasePool = getWorkerDatabasePool();
-  const client = await databasePool.connect();
-  const completedAt = new Date().toISOString();
+
+  // Phase 1: check already-downloaded and read source URL (short-lived read, no transaction).
+  const readClient = await databasePool.connect();
+  let datasheetSource: (DatabaseSourceDatasheetRow & { datasheetSourceUrl: string }) | null = null;
 
   try {
-    await client.query("BEGIN");
-
-    if (await partHasDatasheetEvidence(client, job.partId)) {
-      await client.query("COMMIT");
-
+    if (await partHasDatasheetEvidence(readClient, job.partId)) {
       return {
-        detail: {
-          result: "noop_existing_evidence"
-        },
-        message:
-          "Datasheet capture skipped because referenced or stored datasheet evidence already exists."
+        detail: { result: "noop_already_downloaded" },
+        message: "Datasheet already downloaded; skipping re-download."
       };
     }
 
-    const datasheetSource = await readLatestOfficialDatasheetSourceRow(client, job.partId);
+    datasheetSource = await readLatestOfficialDatasheetSourceRow(readClient, job.partId);
+  } finally {
+    readClient.release();
+  }
 
-    if (!datasheetSource) {
-      throw new ProviderEnrichmentJobError(
-        "NO_DATASHEET_SOURCE",
-        "No official provider datasheet source is recorded for this part yet."
-      );
-    }
+  if (!datasheetSource) {
+    throw new ProviderEnrichmentJobError(
+      "NO_DATASHEET_SOURCE",
+      "No official provider datasheet source is recorded for this part yet."
+    );
+  }
 
-    const captureResult = await captureReferencedDatasheetEvidenceForPart(client, {
-      capturedAt: completedAt,
+  // Phase 2: fetch file — no DB connection held during network I/O.
+  let fileBytes: Buffer;
+
+  try {
+    fileBytes = await fetchDatasheetWithLimit(datasheetSource.datasheetSourceUrl);
+  } catch (error) {
+    throw new ProviderEnrichmentJobError(
+      "DATASHEET_FETCH_FAILED",
+      `Failed to fetch datasheet: ${formatUnknownError(error)}`
+    );
+  }
+
+  // Phase 3: hash, derive storage key, write to storage.
+  const fileHash = createHash("sha256").update(fileBytes).digest("hex");
+  const storageKey = buildDatasheetStorageKey(job.partId);
+  const storageClient = getWorkerStorageClient();
+
+  if (storageClient.backend === "not_configured") {
+    throw new ProviderEnrichmentJobError(
+      "STORAGE_NOT_CONFIGURED",
+      "Storage backend is not configured — cannot store downloaded datasheet."
+    );
+  }
+
+  await storageClient.write(storageKey, fileBytes);
+
+  // Phase 4: advance asset to downloaded state in a transaction.
+  const completedAt = new Date().toISOString();
+  const writeClient = await databasePool.connect();
+
+  try {
+    await writeClient.query("BEGIN");
+    const { assetId } = await markDatasheetAssetAsDownloaded(writeClient, {
+      fileHash,
       partId: job.partId,
-      providerId: datasheetSource.provider_id,
-      providerPartKey: datasheetSource.provider_part_key,
-      sourceRecordId: datasheetSource.id,
-      sourceUrl: datasheetSource.datasheetSourceUrl
+      sourceUrl: datasheetSource.datasheetSourceUrl,
+      storageKey,
+      updatedAt: completedAt
     });
-
-    await client.query("COMMIT");
+    await writeClient.query("COMMIT");
 
     return {
       detail: {
-        assetId: captureResult.assetId,
-        datasheetRevisionId: captureResult.datasheetRevisionId,
-        providerId: datasheetSource.provider_id,
-        providerPartKey: datasheetSource.provider_part_key,
-        result: "captured",
-        reusedExistingRevision: captureResult.reusedExistingRevision,
-        sourceRecordId: datasheetSource.id,
-        sourceUrl: datasheetSource.datasheetSourceUrl
+        assetId,
+        fileHash,
+        result: "downloaded",
+        sourceUrl: datasheetSource.datasheetSourceUrl,
+        storageKey
       },
-      message: "Referenced datasheet evidence was captured from provider source data."
+      message: "Datasheet downloaded and stored successfully."
     };
   } catch (error) {
-    await client.query("ROLLBACK");
+    await writeClient.query("ROLLBACK");
     throw error;
   } finally {
-    client.release();
+    writeClient.release();
+  }
+}
+
+/**
+ * Derives the storage key for a part's datasheet PDF.
+ */
+function buildDatasheetStorageKey(partId: string): string {
+  return `datasheets/${partId}.pdf`;
+}
+
+/**
+ * Fetches a URL and returns its body as a Buffer, enforcing timeout and size limits.
+ */
+async function fetchDatasheetWithLimit(url: string): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => { controller.abort(); }, DATASHEET_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await datasheetFetcher(url, { signal: controller.signal });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+
+    if (!reader) {
+      throw new Error("Response body is not readable");
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      totalBytes += value.byteLength;
+
+      if (totalBytes > DATASHEET_MAX_BYTES) {
+        await reader.cancel();
+        throw new Error(`Datasheet exceeds ${DATASHEET_MAX_BYTES / (1024 * 1024)}MB size limit`);
+      }
+
+      chunks.push(value);
+    }
+
+    return Buffer.concat(chunks);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -600,10 +696,8 @@ async function partHasDatasheetEvidence(
         FROM assets
         WHERE part_id = $1
           AND asset_type = 'datasheet'
-          AND (
-            source_url IS NOT NULL
-            OR (storage_key IS NOT NULL AND file_hash IS NOT NULL)
-          )
+          AND storage_key IS NOT NULL
+          AND file_hash IS NOT NULL
       ) AS has_datasheet_evidence
     `,
     [partId]

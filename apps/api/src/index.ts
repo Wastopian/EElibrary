@@ -18,7 +18,7 @@ import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient, setStorageClientForTests } from "./file-storage";
-import { isAuthError, readOptionalSession, requireAdmin } from "./auth";
+import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -1393,6 +1393,10 @@ async function loadSeedSearchFacets(filters: PartSearchFilters): Promise<ReturnT
 }
 
 if (process.env.NODE_ENV !== "test") {
+  // Refuse to bind the network port without a strong AUTH_SECRET — silently coercing a missing
+  // secret to "" would let any forged HS256 token pass verification.
+  assertAuthSecretConfigured();
+
   /** server starts the provider-neutral API process. */
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {

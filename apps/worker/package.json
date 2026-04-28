@@ -23,6 +23,7 @@
     "imports": "tsx src/index.ts imports",
     "lint": "tsc -p tsconfig.json --noEmit",
     "operations": "tsx src/index.ts operations",
+    "recompute:readiness": "tsx src/index.ts recompute-readiness",
     "test": "node ../../scripts/run-tests.mjs src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

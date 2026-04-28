@@ -894,7 +894,7 @@ function createMinimalImportPool(): TestPool {
     CREATE TABLE manufacturers (id TEXT PRIMARY KEY, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT PRIMARY KEY, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
     CREATE TABLE connector_families (id TEXT PRIMARY KEY, name TEXT, series TEXT, description TEXT);
-    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
@@ -952,8 +952,172 @@ function createOperationalDiagnosticsPool(): TestPool {
 }
 
 /**
+ * Verifies that importing two parts with the same MPN and package creates duplicate_candidate issues for both.
+ */
+test("persistNormalizedPartRows creates duplicate_candidate issues for parts sharing MPN and package", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildDuplicateTestPart("part-dup-a", "dup-provider-a", "DUP-KEY-A"));
+    await persistNormalizedPartRows(client, buildDuplicateTestPart("part-dup-b", "dup-provider-b", "DUP-KEY-B"));
+
+    const issuesA = await client.query<{ issue_code: string }>(
+      "SELECT issue_code FROM part_issues WHERE part_id = 'part-dup-a' AND issue_code = 'duplicate_candidate'"
+    );
+    const issuesB = await client.query<{ issue_code: string }>(
+      "SELECT issue_code FROM part_issues WHERE part_id = 'part-dup-b' AND issue_code = 'duplicate_candidate'"
+    );
+
+    assert.equal(issuesA.rows.length, 1, "part-dup-a should have a duplicate_candidate issue after part-dup-b import");
+    assert.equal(issuesB.rows.length, 1, "part-dup-b should have a duplicate_candidate issue");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies that parts with distinct MPNs do not produce duplicate_candidate issues.
+ */
+test("persistNormalizedPartRows does not create duplicate_candidate issues for distinct MPNs", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildDuplicateTestPart("part-unique-a", "unique-provider-a", "UNIQUE-A", "UNIQUE-MPN-A"));
+    await persistNormalizedPartRows(client, buildDuplicateTestPart("part-unique-b", "unique-provider-b", "UNIQUE-B", "UNIQUE-MPN-B"));
+
+    const issuesA = await client.query<{ issue_code: string }>(
+      "SELECT issue_code FROM part_issues WHERE part_id = 'part-unique-a' AND issue_code = 'duplicate_candidate'"
+    );
+    const issuesB = await client.query<{ issue_code: string }>(
+      "SELECT issue_code FROM part_issues WHERE part_id = 'part-unique-b' AND issue_code = 'duplicate_candidate'"
+    );
+
+    assert.equal(issuesA.rows.length, 0, "part-unique-a should have no duplicate_candidate issue");
+    assert.equal(issuesB.rows.length, 0, "part-unique-b should have no duplicate_candidate issue");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies every successful import writes a part_readiness_summaries row with a fresh last_evaluated_at,
+ * and that re-running the bulk recompute keeps the row populated and current. This guards against the
+ * stale-summary failure mode P0-4 calls out: changes to derivePartProjection that never propagate to
+ * existing parts because no recompute path runs.
+ */
+test("persistNormalizedPartRows writes a fresh part_readiness_summaries row on every import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const firstImportAt = "2026-04-12T00:00:00.000Z";
+    const secondImportAt = "2026-04-12T05:00:00.000Z";
+
+    await persistNormalizedPartRows(client, buildMinimalImportPart(firstImportAt, 0.6));
+
+    const afterFirstImport = await client.query<{ last_evaluated_at: Date | string | null; readiness_status: string | null }>(
+      "SELECT readiness_status, last_evaluated_at FROM part_readiness_summaries WHERE part_id = 'part-repeat-c1'"
+    );
+
+    assert.equal(afterFirstImport.rows.length, 1, "expected a readiness summary row after the first import");
+    assert.ok(afterFirstImport.rows[0]?.last_evaluated_at, "expected non-null last_evaluated_at on first import");
+    assert.ok(afterFirstImport.rows[0]?.readiness_status, "expected a readiness_status value on first import");
+
+    await persistNormalizedPartRows(client, buildMinimalImportPart(secondImportAt, 0.85));
+
+    const afterSecondImport = await client.query<{ last_evaluated_at: Date | string | null; readiness_status: string | null }>(
+      "SELECT readiness_status, last_evaluated_at FROM part_readiness_summaries WHERE part_id = 'part-repeat-c1'"
+    );
+
+    assert.equal(afterSecondImport.rows.length, 1, "readiness summary should be upserted, not duplicated");
+
+    const firstEvaluation = new Date(afterFirstImport.rows[0]?.last_evaluated_at ?? 0).getTime();
+    const secondEvaluation = new Date(afterSecondImport.rows[0]?.last_evaluated_at ?? 0).getTime();
+
+    assert.ok(secondEvaluation >= firstEvaluation, "subsequent imports must not move last_evaluated_at backwards");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
  * Finds the first query call that writes to a table.
  */
 function tableCallIndex(calls: QueryCall[], tableName: string): number {
   return calls.findIndex((call) => call.text.includes(`INSERT INTO ${tableName}`));
+}
+
+/**
+ * Builds a minimal part payload for duplicate candidate detection tests.
+ */
+function buildDuplicateTestPart(
+  partId: string,
+  providerId: string,
+  providerPartKey: string,
+  mpn = "DUP-REG-100"
+): NormalizedProviderPart {
+  return {
+    accessoryRequirements: [],
+    assets: [],
+    cableCompatibilities: [],
+    companionRecommendations: [],
+    connectorFamily: null,
+    connectorFamilyConflicts: [],
+    datasheetRevisions: [],
+    extractionSignals: [],
+    generationWorkflows: [],
+    manufacturer: {
+      aliases: [],
+      id: "mfr-dup-test",
+      name: "Duplicate Test Manufacturer",
+      website: null
+    },
+    mateRelations: [],
+    metrics: [],
+    package: {
+      bodyHeightMm: null,
+      bodyLengthMm: null,
+      bodyWidthMm: null,
+      id: "pkg-dup-sot23",
+      packageName: "SOT-23",
+      pinCount: 3,
+      pitchMm: null
+    },
+    part: {
+      category: "Linear Regulators",
+      connectorFamilyId: null,
+      description: "LDO Regulator",
+      id: partId,
+      lastUpdatedAt: "2026-04-20T00:00:00.000Z",
+      lifecycleStatus: "active",
+      manufacturerId: "mfr-dup-test",
+      mpn,
+      packageId: "pkg-dup-sot23",
+      trustScore: 0.85
+    },
+    promotionAudits: [],
+    reviewRecords: [],
+    similarPartRelations: [],
+    sourceRecord: {
+      fetchedAt: "2026-04-20T00:00:00.000Z",
+      id: `source-${providerId}-${providerPartKey.toLowerCase()}`,
+      importErrorDetails: null,
+      importStatus: "imported",
+      lastUpdatedAt: "2026-04-20T00:00:00.000Z",
+      normalizedAt: "2026-04-20T00:00:00.000Z",
+      partId,
+      providerId,
+      providerPartKey,
+      rawPayload: {},
+      sourceLastImportedAt: "2026-04-20T00:00:00.000Z",
+      sourceLastSeenAt: "2026-04-20T00:00:00.000Z",
+      sourceUrl: null
+    },
+    validationRecords: []
+  };
 }

@@ -14,7 +14,7 @@ import type { Pool } from "pg";
 test("POST /provider-lookups returns exact candidates with importAllowed false for anonymous requests", async () => {
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
-  process.env.AUTH_SECRET = "lookup-test-secret";
+  process.env.AUTH_SECRET = "lookup-test-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(createConnectedPoolStub());
   setProviderPartLookupRunnerForTests(async () => [
@@ -52,7 +52,7 @@ test("POST /provider-lookups returns exact candidates with importAllowed false f
 test("POST /provider-lookups returns importAllowed true for authenticated admin requests", async () => {
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
-  process.env.AUTH_SECRET = "lookup-test-secret";
+  process.env.AUTH_SECRET = "lookup-test-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(createConnectedPoolStub());
   setProviderPartLookupRunnerForTests(async () => [
@@ -74,7 +74,7 @@ test("POST /provider-lookups returns importAllowed true for authenticated admin 
       "/provider-lookups",
       { query: "TPS7A02DBVR" },
       handleRequest,
-      { authorization: await createBearerToken("lookup-test-secret", "admin") }
+      { authorization: await createBearerToken("lookup-test-secret-padded-to-thirty-two-bytes-min", "admin") }
     );
 
     assert.equal(result.statusCode, 200);

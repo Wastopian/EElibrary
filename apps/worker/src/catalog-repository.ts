@@ -651,6 +651,61 @@ export async function captureReferencedDatasheetEvidenceForPart(
   };
 }
 
+/** DownloadedDatasheetInput carries file evidence to persist after a successful datasheet download. */
+export interface DownloadedDatasheetInput {
+  /** Canonical part id whose datasheet asset should be advanced to downloaded state. */
+  partId: string;
+  /** Storage key under which the file was written. */
+  storageKey: string;
+  /** Hex-encoded SHA-256 hash of the downloaded bytes. */
+  fileHash: string;
+  /** Official provider URL the file was fetched from. */
+  sourceUrl: string;
+  /** Timestamp of the download completion. */
+  updatedAt: string;
+}
+
+/** DownloadedDatasheetResult reports the asset id after persisting the downloaded state. */
+export interface DownloadedDatasheetResult {
+  /** Id of the datasheet asset that was advanced to downloaded state. */
+  assetId: string;
+}
+
+/**
+ * Advances an existing datasheet asset to downloaded state with stored file evidence.
+ * Throws when no datasheet asset exists for the part — acquisition must run first.
+ */
+export async function markDatasheetAssetAsDownloaded(
+  client: PoolClient,
+  input: DownloadedDatasheetInput
+): Promise<DownloadedDatasheetResult> {
+  const existingAsset = await readLatestDatasheetAssetRow(client, input.partId);
+
+  if (!existingAsset) {
+    throw new Error(
+      `No datasheet asset found for part ${input.partId} — acquisition must run before download enrichment.`
+    );
+  }
+
+  await client.query(
+    `
+      UPDATE assets
+      SET
+        storage_key = $1,
+        file_hash = $2,
+        source_url = $3,
+        availability_status = 'downloaded',
+        asset_status = 'downloaded',
+        asset_state = 'downloaded',
+        last_updated_at = $4
+      WHERE id = $5
+    `,
+    [input.storageKey, input.fileHash, input.sourceUrl, input.updatedAt, existingAsset.id]
+  );
+
+  return { assetId: existingAsset.id };
+}
+
 /**
  * Reads the current import status for a pending provider + part key, or null when no row exists.
  */
@@ -676,6 +731,113 @@ export async function assertDatabaseReady(): Promise<void> {
  */
 export function getWorkerDatabasePool(): Pool {
   return getDatabasePool();
+}
+
+/** ReadinessRecomputeSummary reports the outcome of a bulk readiness recompute run. */
+export interface ReadinessRecomputeSummary {
+  processedCount: number;
+  succeededCount: number;
+  failedCount: number;
+  failedPartIds: string[];
+  batchCount: number;
+}
+
+/** PartRecomputeHandler is the per-part refresh function, injectable for tests. */
+type PartRecomputeHandler = (client: PoolClient, partId: string) => Promise<void>;
+
+let partRecomputeHandler: PartRecomputeHandler = (client, partId) =>
+  refreshStoredPartProjectionRows(client, partId);
+
+/**
+ * Replaces the per-part recompute handler for tests that do not need the full schema.
+ */
+export function setPartRecomputeHandlerForTests(handler: PartRecomputeHandler | null): void {
+  partRecomputeHandler = handler ?? ((client, partId) => refreshStoredPartProjectionRows(client, partId));
+}
+
+/**
+ * Pages through all parts and refreshes each stored readiness projection row.
+ * Continues on per-part errors, accumulating failed part IDs for the caller.
+ */
+export async function recomputeReadinessForAllParts(
+  batchSize: number,
+  since?: string,
+  onBatchProgress?: (progress: Omit<ReadinessRecomputeSummary, "failedPartIds">) => void
+): Promise<ReadinessRecomputeSummary> {
+  const databasePool = getDatabasePool();
+  let cursorLastUpdatedAt: string | null = null;
+  let cursorId: string | null = null;
+  let processedCount = 0;
+  let succeededCount = 0;
+  let failedCount = 0;
+  const failedPartIds: string[] = [];
+  let batchCount = 0;
+
+  for (;;) {
+    const rows = await listPartIdsForRecompute(databasePool, batchSize, since ?? null, cursorLastUpdatedAt, cursorId);
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    batchCount += 1;
+
+    for (const row of rows) {
+      const client = await databasePool.connect();
+
+      try {
+        await partRecomputeHandler(client, row.id);
+        succeededCount += 1;
+      } catch {
+        failedCount += 1;
+        failedPartIds.push(row.id);
+      } finally {
+        client.release();
+        processedCount += 1;
+      }
+    }
+
+    const lastRow = rows[rows.length - 1];
+    cursorLastUpdatedAt = lastRow?.lastUpdatedAt ?? null;
+    cursorId = lastRow?.id ?? null;
+
+    onBatchProgress?.({ batchCount, failedCount, processedCount, succeededCount });
+
+    if (rows.length < batchSize) {
+      break;
+    }
+  }
+
+  return { batchCount, failedCount, failedPartIds, processedCount, succeededCount };
+}
+
+async function listPartIdsForRecompute(
+  databasePool: Pool,
+  limit: number,
+  since: string | null,
+  cursorLastUpdatedAt: string | null,
+  cursorId: string | null
+): Promise<{ id: string; lastUpdatedAt: string }[]> {
+  const result = await databasePool.query<{ id: string; last_updated_at: string }>(
+    `
+      SELECT id, last_updated_at
+      FROM parts
+      WHERE ($1::timestamptz IS NULL OR last_updated_at >= $1::timestamptz)
+        AND (
+          $2::timestamptz IS NULL
+          OR last_updated_at > $2::timestamptz
+          OR (last_updated_at = $2::timestamptz AND id > $3::text)
+        )
+      ORDER BY last_updated_at ASC, id ASC
+      LIMIT $4
+    `,
+    [since, cursorLastUpdatedAt, cursorId, limit]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    lastUpdatedAt: row.last_updated_at instanceof Date ? row.last_updated_at.toISOString() : String(row.last_updated_at)
+  }));
 }
 
 /**

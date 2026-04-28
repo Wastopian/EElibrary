@@ -21,7 +21,7 @@ test("POST /provider-acquisition-jobs requires admin auth outside the test-sessi
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
   const pool = createProviderAcquisitionPool();
-  process.env.AUTH_SECRET = "acquisition-route-secret";
+  process.env.AUTH_SECRET = "acquisition-route-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(pool);
 
@@ -43,7 +43,7 @@ test("GET /provider-acquisition-jobs/:jobId requires admin auth outside the test
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
   const pool = createProviderAcquisitionPool();
-  process.env.AUTH_SECRET = "acquisition-route-secret";
+  process.env.AUTH_SECRET = "acquisition-route-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(pool);
 
@@ -64,7 +64,7 @@ test("GET /provider-acquisition-jobs/:jobId requires admin auth outside the test
 test("POST /provider-acquisition-jobs returns DB_NOT_CONFIGURED honestly", async () => {
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
-  process.env.AUTH_SECRET = "acquisition-route-secret";
+  process.env.AUTH_SECRET = "acquisition-route-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(null);
 
@@ -76,7 +76,7 @@ test("POST /provider-acquisition-jobs returns DB_NOT_CONFIGURED honestly", async
       "POST",
       buildProviderAcquisitionBody(),
       handleRequest,
-      { authorization: await createBearerToken("acquisition-route-secret", "admin") }
+      { authorization: await createBearerToken("acquisition-route-secret-padded-to-thirty-two-bytes-min", "admin") }
     );
 
     assert.equal(result.statusCode, 503);
@@ -90,7 +90,7 @@ test("POST /provider-acquisition-jobs persists one queued job and queued event",
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
   const pool = createProviderAcquisitionPool();
-  process.env.AUTH_SECRET = "acquisition-route-secret";
+  process.env.AUTH_SECRET = "acquisition-route-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(pool);
 
@@ -102,7 +102,7 @@ test("POST /provider-acquisition-jobs persists one queued job and queued event",
       "POST",
       buildProviderAcquisitionBody(),
       handleRequest,
-      { authorization: await createBearerToken("acquisition-route-secret", "admin") }
+      { authorization: await createBearerToken("acquisition-route-secret-padded-to-thirty-two-bytes-min", "admin") }
     );
     const jobRows = await pool.query<{ count: string }>("SELECT count(*)::text AS count FROM provider_acquisition_jobs");
     const eventRows = await pool.query<{ count: string }>("SELECT count(*)::text AS count FROM provider_acquisition_job_events");
@@ -125,14 +125,14 @@ test("POST /provider-acquisition-jobs dedupes active jobs for the same provider 
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
   const pool = createProviderAcquisitionPool();
-  process.env.AUTH_SECRET = "acquisition-route-secret";
+  process.env.AUTH_SECRET = "acquisition-route-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(pool);
 
   try {
     const { handleRequest } = await import("./index");
     process.env.NODE_ENV = "production";
-    const headers = { authorization: await createBearerToken("acquisition-route-secret", "admin") };
+    const headers = { authorization: await createBearerToken("acquisition-route-secret-padded-to-thirty-two-bytes-min", "admin") };
     const first = await invokeApiRequest("/provider-acquisition-jobs", "POST", buildProviderAcquisitionBody(), handleRequest, headers);
     const second = await invokeApiRequest("/provider-acquisition-jobs", "POST", buildProviderAcquisitionBody(), handleRequest, headers);
     const jobRows = await pool.query<{ count: string }>("SELECT count(*)::text AS count FROM provider_acquisition_jobs");
@@ -152,14 +152,14 @@ test("GET /provider-acquisition-jobs/:jobId returns the job and events", async (
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
   const pool = createProviderAcquisitionPool();
-  process.env.AUTH_SECRET = "acquisition-route-secret";
+  process.env.AUTH_SECRET = "acquisition-route-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(pool);
 
   try {
     const { handleRequest } = await import("./index");
     process.env.NODE_ENV = "production";
-    const headers = { authorization: await createBearerToken("acquisition-route-secret", "admin") };
+    const headers = { authorization: await createBearerToken("acquisition-route-secret-padded-to-thirty-two-bytes-min", "admin") };
     const created = await invokeApiRequest("/provider-acquisition-jobs", "POST", buildProviderAcquisitionBody(), handleRequest, headers);
     const jobId = created.body.data.job.id as string;
     const read = await invokeApiRequest(`/provider-acquisition-jobs/${jobId}`, "GET", undefined, handleRequest, headers);

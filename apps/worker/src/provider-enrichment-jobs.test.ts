@@ -3,6 +3,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { setWorkerRepositoryPoolForTests } from "./catalog-repository";
@@ -10,9 +11,12 @@ import {
   enqueueProviderEnrichmentJobsForPart,
   processNextProviderEnrichmentJob,
   processProviderEnrichmentJobs,
+  setDatasheetFetcherForTests,
   setProviderEnrichmentDatasheetCaptureHandlerForTests,
   setProviderEnrichmentJobBeforeInsertHookForTests
 } from "./provider-enrichment-jobs";
+import { setWorkerStorageClientForTests } from "./file-storage";
+import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import type { Pool } from "pg";
 
 /** TestPool is the pg-mem pool shape used by provider enrichment worker tests. */
@@ -29,50 +33,22 @@ test("enqueueProviderEnrichmentJobsForPart only queues datasheet capture when da
   await pool.query(
     `
       INSERT INTO assets (
-        id,
-        part_id,
-        asset_type,
-        file_format,
-        storage_key,
-        file_hash,
-        provider_id,
-        license_mode,
-        provenance,
-        availability_status,
-        review_status,
-        export_status,
-        asset_status,
-        generation_method,
-        generation_source_asset_id,
-        validation_status,
-        preview_status,
-        asset_state,
-        source_url,
-        source_record_id,
-        last_updated_at
+        id, part_id, asset_type, file_format,
+        storage_key, file_hash,
+        provider_id, license_mode, provenance,
+        availability_status, review_status, export_status,
+        asset_status, generation_method, generation_source_asset_id,
+        validation_status, preview_status, asset_state,
+        source_url, source_record_id, last_updated_at
       )
       VALUES (
-        'asset-existing-datasheet',
-        'part-has-datasheet',
-        'datasheet',
-        'pdf',
-        NULL,
-        NULL,
-        'jlcparts',
-        'metadata_only',
-        'trusted_external',
-        'referenced',
-        'not_reviewed',
-        'not_exportable',
-        'referenced',
-        NULL,
-        NULL,
-        'not_validated',
-        'not_available',
-        'referenced',
-        'https://example.test/datasheet.pdf',
-        NULL,
-        '2026-04-24T12:00:00.000Z'
+        'asset-existing-datasheet', 'part-has-datasheet', 'datasheet', 'pdf',
+        'datasheets/part-has-datasheet.pdf', 'abc123hashvalue',
+        'jlcparts', 'metadata_only', 'trusted_external',
+        'downloaded', 'not_reviewed', 'not_exportable',
+        'downloaded', NULL, NULL,
+        'not_validated', 'not_available', 'downloaded',
+        'https://example.test/datasheet.pdf', NULL, '2026-04-24T12:00:00.000Z'
       )
     `
   );
@@ -269,50 +245,22 @@ test("provider enrichment worker succeeds as a no-op when datasheet evidence alr
   await pool.query(
     `
       INSERT INTO assets (
-        id,
-        part_id,
-        asset_type,
-        file_format,
-        storage_key,
-        file_hash,
-        provider_id,
-        license_mode,
-        provenance,
-        availability_status,
-        review_status,
-        export_status,
-        asset_status,
-        generation_method,
-        generation_source_asset_id,
-        validation_status,
-        preview_status,
-        asset_state,
-        source_url,
-        source_record_id,
-        last_updated_at
+        id, part_id, asset_type, file_format,
+        storage_key, file_hash,
+        provider_id, license_mode, provenance,
+        availability_status, review_status, export_status,
+        asset_status, generation_method, generation_source_asset_id,
+        validation_status, preview_status, asset_state,
+        source_url, source_record_id, last_updated_at
       )
       VALUES (
-        'asset-noop-datasheet',
-        'part-noop',
-        'datasheet',
-        'pdf',
-        NULL,
-        NULL,
-        'jlcparts',
-        'metadata_only',
-        'trusted_external',
-        'referenced',
-        'not_reviewed',
-        'not_exportable',
-        'referenced',
-        NULL,
-        NULL,
-        'not_validated',
-        'not_available',
-        'referenced',
-        'https://example.test/datasheet.pdf',
-        NULL,
-        '2026-04-24T12:00:00.000Z'
+        'asset-noop-datasheet', 'part-noop', 'datasheet', 'pdf',
+        'datasheets/part-noop.pdf', 'alreadyhashednoop',
+        'jlcparts', 'metadata_only', 'trusted_external',
+        'downloaded', 'not_reviewed', 'not_exportable',
+        'downloaded', NULL, NULL,
+        'not_validated', 'not_available', 'downloaded',
+        'https://example.test/datasheet.pdf', NULL, '2026-04-24T12:00:00.000Z'
       )
     `
   );
@@ -337,7 +285,7 @@ test("provider enrichment worker succeeds as a no-op when datasheet evidence alr
     assert.equal(succeededJob.rows[0]?.error_code, null);
     assert.match(
       succeededEvent.rows[0]?.message ?? "",
-      /datasheet evidence already exists/i
+      /already downloaded/i
     );
   } finally {
     setProviderEnrichmentDatasheetCaptureHandlerForTests(null);
@@ -431,6 +379,152 @@ test("provider enrichment worker no-ops cleanly when no queued jobs exist", asyn
     assert.deepEqual(summary.processed, []);
   } finally {
     setProviderEnrichmentDatasheetCaptureHandlerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("provider enrichment worker downloads datasheet and advances asset to downloaded state", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartAndAcquisition(pool, "part-dl", "acqjob-dl");
+  await seedQueuedEnrichmentJob(pool, "enrichjob-dl", "part-dl", "acqjob-dl", "2026-04-24T12:00:00.000Z");
+
+  await pool.query(
+    `INSERT INTO source_records (
+       id, provider_id, provider_part_key, part_id, source_url, fetched_at,
+       raw_payload, normalized_at, source_last_seen_at, source_last_imported_at,
+       import_status, import_error_details, last_updated_at
+     ) VALUES (
+       'source-dl', 'jlcparts', 'C9999', 'part-dl',
+       'https://lcsc.com/product-detail/example', '2026-04-24T12:00:00.000Z',
+       $1::jsonb,
+       '2026-04-24T12:00:00.000Z', '2026-04-24T12:00:00.000Z', '2026-04-24T12:00:00.000Z',
+       'imported', NULL, '2026-04-24T12:00:00.000Z'
+     )`,
+    [JSON.stringify({ component: { lcsc: "C9999", datasheet: "https://example.test/C9999.pdf" } })]
+  );
+
+  await pool.query(
+    `INSERT INTO assets (
+       id, part_id, asset_type, file_format,
+       storage_key, file_hash,
+       provider_id, license_mode, provenance,
+       availability_status, review_status, export_status,
+       asset_status, generation_method, generation_source_asset_id,
+       validation_status, preview_status, asset_state,
+       source_url, source_record_id, last_updated_at
+     ) VALUES (
+       'asset-dl', 'part-dl', 'datasheet', 'pdf',
+       NULL, NULL,
+       'jlcparts', 'metadata_only', 'trusted_external',
+       'referenced', 'not_reviewed', 'not_exportable',
+       'referenced', NULL, NULL,
+       'not_validated', 'not_available', 'referenced',
+       'https://example.test/C9999.pdf', 'source-dl', '2026-04-24T12:00:00.000Z'
+     )`
+  );
+
+  const pdfBytes = Buffer.from("%PDF-1.4 test datasheet content for C9999");
+  const expectedHash = createHash("sha256").update(pdfBytes).digest("hex");
+  const writtenFiles: Array<{ key: string; bytes: Buffer }> = [];
+
+  setDatasheetFetcherForTests(async () => new Response(pdfBytes));
+  setWorkerStorageClientForTests({
+    backend: "local",
+    getDownloadUrl: async () => null,
+    write: async (key, bytes) => { writtenFiles.push({ bytes, key }); }
+  } as FileStorageClient);
+
+  try {
+    const result = await processNextProviderEnrichmentJob();
+    const assetRow = await pool.query<{
+      availability_status: string;
+      storage_key: string | null;
+      file_hash: string | null;
+    }>("SELECT availability_status, storage_key, file_hash FROM assets WHERE id = 'asset-dl'");
+
+    assert.deepEqual(result, {
+      errorCode: null,
+      jobId: "enrichjob-dl",
+      jobType: "datasheet_capture",
+      partId: "part-dl",
+      status: "succeeded"
+    });
+    assert.equal(assetRow.rows[0]?.availability_status, "downloaded");
+    assert.equal(assetRow.rows[0]?.storage_key, "datasheets/part-dl.pdf");
+    assert.equal(assetRow.rows[0]?.file_hash, expectedHash);
+    assert.equal(writtenFiles.length, 1);
+    assert.equal(writtenFiles[0]?.key, "datasheets/part-dl.pdf");
+  } finally {
+    setDatasheetFetcherForTests(null);
+    setWorkerStorageClientForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("provider enrichment worker fails job with DATASHEET_FETCH_FAILED when HTTP fetch throws", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartAndAcquisition(pool, "part-fetchfail", "acqjob-fetchfail");
+  await seedQueuedEnrichmentJob(
+    pool, "enrichjob-fetchfail", "part-fetchfail", "acqjob-fetchfail", "2026-04-24T12:00:00.000Z"
+  );
+
+  await pool.query(
+    `INSERT INTO source_records (
+       id, provider_id, provider_part_key, part_id, source_url, fetched_at,
+       raw_payload, normalized_at, source_last_seen_at, source_last_imported_at,
+       import_status, import_error_details, last_updated_at
+     ) VALUES (
+       'source-fetchfail', 'jlcparts', 'C8888', 'part-fetchfail',
+       'https://lcsc.com/product-detail/example', '2026-04-24T12:00:00.000Z',
+       $1::jsonb,
+       '2026-04-24T12:00:00.000Z', '2026-04-24T12:00:00.000Z', '2026-04-24T12:00:00.000Z',
+       'imported', NULL, '2026-04-24T12:00:00.000Z'
+     )`,
+    [JSON.stringify({ component: { lcsc: "C8888", datasheet: "https://example.test/C8888.pdf" } })]
+  );
+
+  await pool.query(
+    `INSERT INTO assets (
+       id, part_id, asset_type, file_format,
+       storage_key, file_hash,
+       provider_id, license_mode, provenance,
+       availability_status, review_status, export_status,
+       asset_status, generation_method, generation_source_asset_id,
+       validation_status, preview_status, asset_state,
+       source_url, source_record_id, last_updated_at
+     ) VALUES (
+       'asset-fetchfail', 'part-fetchfail', 'datasheet', 'pdf',
+       NULL, NULL,
+       'jlcparts', 'metadata_only', 'trusted_external',
+       'referenced', 'not_reviewed', 'not_exportable',
+       'referenced', NULL, NULL,
+       'not_validated', 'not_available', 'referenced',
+       'https://example.test/C8888.pdf', 'source-fetchfail', '2026-04-24T12:00:00.000Z'
+     )`
+  );
+
+  setDatasheetFetcherForTests(async () => { throw new Error("Connection refused"); });
+
+  try {
+    const result = await processNextProviderEnrichmentJob();
+    const assetRow = await pool.query<{ availability_status: string }>(
+      "SELECT availability_status FROM assets WHERE id = 'asset-fetchfail'"
+    );
+
+    assert.deepEqual(result, {
+      errorCode: "DATASHEET_FETCH_FAILED",
+      jobId: "enrichjob-fetchfail",
+      jobType: "datasheet_capture",
+      partId: "part-fetchfail",
+      status: "failed"
+    });
+    assert.equal(assetRow.rows[0]?.availability_status, "referenced");
+  } finally {
+    setDatasheetFetcherForTests(null);
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
   }

@@ -132,10 +132,98 @@ test("jlcparts provider returns exact candidate rows for supported lookups", asy
   }
 });
 
+test("jlcparts provider extracts numeric pitch and body dimensions from structured attributes", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload({
+    "Pitch": buildNumberAttribute(0.5),
+    "Body Length": buildNumberAttribute(3.2),
+    "Body Width": buildNumberAttribute(1.6),
+    "Height (Max)": buildNumberAttribute(0.35)
+  }));
+
+  assert.equal(normalized.package.pitchMm, 0.5);
+  assert.equal(normalized.package.bodyLengthMm, 3.2);
+  assert.equal(normalized.package.bodyWidthMm, 1.6);
+  assert.equal(normalized.package.bodyHeightMm, 0.35);
+});
+
+test("jlcparts provider extracts string mm dimensions from structured attributes", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload({
+    "Pitch": buildStringAttribute("0.5mm"),
+    "Body Length": buildStringAttribute("3.2mm"),
+    "Body Width": buildStringAttribute("1.6mm"),
+    "Height (Max)": buildStringAttribute("0.35mm")
+  }));
+
+  assert.equal(normalized.package.pitchMm, 0.5);
+  assert.equal(normalized.package.bodyLengthMm, 3.2);
+  assert.equal(normalized.package.bodyWidthMm, 1.6);
+  assert.equal(normalized.package.bodyHeightMm, 0.35);
+});
+
+test("jlcparts provider converts mil and inch dimension strings to mm", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload({
+    "Pitch": buildStringAttribute("19.685mil"),
+    "Body Length": buildStringAttribute("0.126in"),
+    "Body Width": buildStringAttribute("0.063in")
+  }));
+
+  assert.ok(Math.abs((normalized.package.pitchMm ?? 0) - 0.5) < 0.001, `expected ~0.5mm pitch, got ${normalized.package.pitchMm}`);
+  assert.ok(Math.abs((normalized.package.bodyLengthMm ?? 0) - 3.2) < 0.1, `expected ~3.2mm length, got ${normalized.package.bodyLengthMm}`);
+  assert.ok(Math.abs((normalized.package.bodyWidthMm ?? 0) - 1.6) < 0.1, `expected ~1.6mm width, got ${normalized.package.bodyWidthMm}`);
+});
+
+test("jlcparts provider falls back to Body Height when Height (Max) is absent", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload({
+    "Body Height": buildNumberAttribute(1.2)
+  }));
+
+  assert.equal(normalized.package.bodyHeightMm, 1.2);
+});
+
+test("jlcparts provider returns null dimensions when attributes are absent", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload({}));
+
+  assert.equal(normalized.package.pitchMm, null);
+  assert.equal(normalized.package.bodyLengthMm, null);
+  assert.equal(normalized.package.bodyWidthMm, null);
+  assert.equal(normalized.package.bodyHeightMm, null);
+});
+
+test("jlcparts provider builds a normalized description from category, key attributes, and package", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(buildRawPayload());
+
+  assert.equal(normalized.part.description, "Resistors 30Ω (0402)");
+});
+
+test("jlcparts provider includes tolerance and power in the normalized description when available", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(
+    buildRawPayload({
+      Tolerance: buildStringAttribute("±1%"),
+      Power: buildStringAttribute("0.1W")
+    })
+  );
+
+  assert.equal(normalized.part.description, "Resistors 30Ω 1% 0.1W (0402)");
+});
+
+test("jlcparts provider falls back to MPN in the description when engineering attributes are sparse", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(
+    buildSparsePayload({
+      categoryName: "Linear Regulators",
+      subcategoryName: "Linear Regulators",
+      mfr: "TPS7A02DBVR",
+      packageName: "SOT-23-5"
+    })
+  );
+
+  assert.equal(normalized.part.description, "Linear Regulators TPS7A02DBVR (SOT-23-5)");
+});
+
 /**
  * Builds a raw payload using the public jlcparts category-row schema for C1091.
+ * Extra attributes are merged on top of the base component attributes.
  */
-function buildRawPayload(): RawProviderPayload {
+function buildRawPayload(extraAttributes: Record<string, unknown> = {}): RawProviderPayload {
   return {
     fetchedAt: "2026-04-12T06:57:40.000Z",
     payload: {
@@ -156,7 +244,8 @@ function buildRawPayload(): RawProviderPayload {
             }
           },
           Status: buildStringAttribute("Active"),
-          Type: buildStringAttribute("Thick Film Resistors")
+          Type: buildStringAttribute("Thick Film Resistors"),
+          ...extraAttributes
         },
         datasheet: "https://www.lcsc.com/datasheet/lcsc_datasheet_2411121005_FH--Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.pdf",
         description: "-55℃~+155℃ 30Ω 50V 62.5mW Thick Film Resistor ±200ppm/℃ ±5% 0402 Chip Resistor - Surface Mount ROHS",
@@ -184,6 +273,61 @@ function buildStringAttribute(value: string) {
     values: {
       default: [value, "string"]
     }
+  };
+}
+
+/**
+ * Builds the common provider attribute envelope for a numeric value (e.g. length in mm).
+ */
+function buildNumberAttribute(value: number) {
+  return {
+    format: "${default}",
+    primary: "default",
+    values: {
+      default: [value, "length"]
+    }
+  };
+}
+
+/**
+ * Builds a raw payload with no engineering attributes so description synthesis
+ * exercises the MPN-fallback path used by ICs and parts with sparse provider data.
+ */
+function buildSparsePayload({
+  categoryName,
+  subcategoryName,
+  mfr,
+  packageName
+}: {
+  categoryName: string;
+  subcategoryName: string;
+  mfr: string;
+  packageName: string;
+}): RawProviderPayload {
+  return {
+    fetchedAt: "2026-04-12T06:57:40.000Z",
+    payload: {
+      categoryName,
+      categorySourceName: "Sparse_Fixture",
+      component: {
+        attributes: {
+          Manufacturer: buildStringAttribute("Texas Instruments"),
+          Package: buildStringAttribute(packageName),
+          Status: buildStringAttribute("Active")
+        },
+        datasheet: null,
+        description: "Sparse provider description used only as a fallback.",
+        img: null,
+        joints: 5,
+        lcsc: "C-SPARSE-1",
+        mfr,
+        price: [],
+        url: null
+      },
+      indexCreatedAt: "2026-04-12T06:57:40+00:00",
+      subcategoryName
+    },
+    providerId: "jlcparts"
   };
 }
 
