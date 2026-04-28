@@ -2,6 +2,7 @@
  * File header: Defines reusable dark-mode UI primitives without provider-specific logic.
  */
 
+import * as React from "react";
 import type { ReactNode } from "react";
 
 /** BadgeTone maps domain state into visual emphasis without embedding domain rules. */

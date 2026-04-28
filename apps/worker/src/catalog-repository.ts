@@ -11,9 +11,10 @@ let pool: Pool | null = null;
 
 /**
  * Persists a normalized provider part into canonical Postgres tables.
+ * The optional pool argument allows tests and direct-import callers to share a connection.
  */
-export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart): Promise<void> {
-  const databasePool = getDatabasePool();
+export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart, pool?: Pool): Promise<void> {
+  const databasePool = pool ?? getDatabasePool();
   const client = await databasePool.connect();
 
   try {

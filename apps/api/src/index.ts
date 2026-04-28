@@ -5,6 +5,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { filterPartRecords, getPartDetail, getSearchFacets, getSearchFacetsFromRecords, searchParts } from "@ee-library/shared";
 import { getCatalogStoreStatus, readCatalogRecordsFromDatabase } from "./catalog-store";
+import { handleImportRequest } from "./import-route";
+import { buildSystemHealth } from "./system-health";
 import type { CadAvailabilityFilter, PartSearchFilters, PartSearchRecord } from "@ee-library/shared";
 
 /** API_PORT is read from the environment so local runs do not hard-code deployment details. */
@@ -19,12 +21,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  if (request.method !== "GET") {
-    sendJson(response, 405, { error: "Only GET is enabled for the catalog API" });
+  const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+
+  if (request.method === "POST" && url.pathname === "/parts/import") {
+    const rawBody = await readJsonBody(request);
+    if (rawBody.kind === "invalid") {
+      sendJson(response, 400, { error: rawBody.message });
+      return;
+    }
+    const outcome = await handleImportRequest(rawBody.value);
+    sendJson(response, outcome.statusCode, outcome.body);
     return;
   }
 
-  const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+  if (request.method !== "GET") {
+    sendJson(response, 405, { error: "Method not allowed for this route" });
+    return;
+  }
 
   if (url.pathname === "/health") {
     const database = await getCatalogStoreStatus();
@@ -38,6 +51,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       service: "api",
       status: "ok"
     });
+    return;
+  }
+
+  if (url.pathname === "/system/health") {
+    const health = await buildSystemHealth();
+    sendJson(response, 200, health);
     return;
   }
 
@@ -139,6 +158,37 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
     "Content-Type": "application/json; charset=utf-8"
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+/** ReadJsonBodyResult preserves either the parsed JSON or a structured invalid-body error. */
+type ReadJsonBodyResult = { kind: "ok"; value: unknown } | { kind: "invalid"; message: string };
+
+/**
+ * Reads up to 1 MiB of body bytes and parses them as JSON. Used by mutating endpoints.
+ */
+async function readJsonBody(request: IncomingMessage): Promise<ReadJsonBodyResult> {
+  const maxBytes = 1024 * 1024;
+  const chunks: Buffer[] = [];
+  let received = 0;
+
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    received += buffer.length;
+    if (received > maxBytes) {
+      return { kind: "invalid", message: "Request body exceeds 1 MiB limit" };
+    }
+    chunks.push(buffer);
+  }
+
+  if (received === 0) {
+    return { kind: "ok", value: {} };
+  }
+
+  try {
+    return { kind: "ok", value: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+  } catch {
+    return { kind: "invalid", message: "Request body is not valid JSON" };
+  }
 }
 
 /** server starts the provider-neutral API process. */
