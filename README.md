@@ -46,17 +46,56 @@ That gets you to something useful instead of a massive half-built cathedral.
 - Export actions require validated downloadable assets with storage and hash evidence. Referenced URLs do not count as downloaded files.
 
 ## Local workflow
+
+The fast path on a clean clone:
+
 ```bash
 npm install
-npm run typecheck
-npm run build
+npm run setup:dev
 npm run dev
+```
+
+`npm run setup:dev` is idempotent and does the full local bootstrap:
+1. Copies `.env.example` to `.env` if missing.
+2. Generates `AUTH_SECRET` if missing.
+3. Starts the Docker services in `compose.yaml` (Postgres, Redis, MinIO).
+4. Waits for Postgres to accept connections.
+5. Applies all migrations in `infra/postgres/`.
+6. Seeds a local admin user (`admin@ee-library.local` / `localdev-admin`).
+7. Seeds a few demo parts so search returns results immediately.
+8. Prints the web/API URLs and follow-up commands.
+
+After setup, the day-to-day commands:
+
+```bash
+npm run dev            # web + api together
 npm run dev:web
 npm run dev:api
 npm run dev:worker
 npm run ingest:local
+
+npm run db:status      # show applied/pending migrations
+npm run db:migrate     # apply pending migrations
+npm run db:reset       # drop + re-apply schema (localhost DATABASE_URL only; pass -- --force otherwise)
+
+npm run seed:admin                         # create admin if missing (no-op when present)
+npm run seed:admin -- --reset-password     # rotate the admin password to the default
+npm run seed:admin -- --email me@x.dev --password chang3me!   # custom credentials
+npm run seed:parts                         # re-run the demo catalog seed (idempotent)
+
+npm run typecheck
+npm run build
+npm test
 ```
 
-For DB-backed local ingestion, start Postgres and set `DATABASE_URL` before running `npm run ingest:local`.
 The current seed data is intentionally metadata-only for assets. Export actions stay disabled until validated downloadable assets exist.
 The web app reads search and detail data through `apps/api`; run `npm run dev` for both services together.
+
+### Manual verification path
+
+After a fresh `git clone`:
+1. `npm install`
+2. `npm run setup:dev`
+3. `npm run dev`
+4. Open the printed Web URL, search for `TPS7A02DBVR`, and confirm the seeded part appears.
+5. The admin login (`admin@ee-library.local` / `localdev-admin`) is printed at the end of `setup:dev` for use by future protected admin/import flows.

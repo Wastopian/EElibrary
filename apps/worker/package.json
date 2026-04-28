@@ -3,11 +3,31 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./direct-import": {
+      "types": "./src/direct-import.ts",
+      "default": "./src/direct-import.ts"
+    },
+    "./heartbeat": {
+      "types": "./src/heartbeat.ts",
+      "default": "./src/heartbeat.ts"
+    },
+    "./provider-adapters": {
+      "types": "./src/provider-adapters.ts",
+      "default": "./src/provider-adapters.ts"
+    },
+    "./catalog-repository": {
+      "types": "./src/catalog-repository.ts",
+      "default": "./src/catalog-repository.ts"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx src/index.ts status",
+    "dev": "tsx src/index.ts daemon",
+    "heartbeat": "tsx src/index.ts heartbeat",
     "ingest": "tsx src/index.ts ingest",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/direct-import.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

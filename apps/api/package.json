@@ -7,10 +7,12 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/system-health.test.ts src/import-route.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@ee-library/shared": "*",
+    "@ee-library/worker": "*",
     "pg": "^8.20.0"
   }
 }

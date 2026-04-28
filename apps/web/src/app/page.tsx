@@ -4,8 +4,10 @@
 
 import Link from "next/link";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
-import { isValidatedDownloadableAsset } from "@ee-library/shared";
-import { fetchPartSearch, fetchSearchFacets } from "../lib/api-client";
+import { isValidatedDownloadableAsset, normalizeExactMpn } from "@ee-library/shared";
+import { fetchPartSearch, fetchSearchFacets, fetchSystemHealth } from "../lib/api-client";
+import { ImportExactMpnCta } from "../components/ImportExactMpnCta";
+import { WorkerStatusBanner } from "../components/WorkerStatusBanner";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CadAvailabilityFilter, LifecycleStatus, PartSearchFilters } from "@ee-library/shared";
 
@@ -47,10 +49,19 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     packageId,
     query
   };
-  const [facets, results] = await Promise.all([fetchSearchFacets(), fetchPartSearch(filters)]);
+  const [facets, results, systemHealth] = await Promise.all([
+    fetchSearchFacets(),
+    fetchPartSearch(filters),
+    fetchSystemHealth()
+  ]);
+  const exactMpn = normalizeExactMpn(query);
+  const apiBaseUrl = process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000";
+  const isLocalDev = (process.env.LOCAL_DEV ?? "").toLowerCase() !== "false" && process.env.NODE_ENV !== "production";
+  const databaseUrlConfigured = Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.trim());
 
   return (
     <main className="search-layout">
+      <WorkerStatusBanner apiBaseUrl={apiBaseUrl} databaseUrlConfigured={databaseUrlConfigured} health={systemHealth} isLocalDev={isLocalDev} />
       <section className="search-hero">
         <div>
           <p className="app-kicker">Phase 2 foundation</p>
@@ -168,6 +179,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 );
               })}
             </div>
+          ) : exactMpn ? (
+            <ImportExactMpnCta mpn={exactMpn} />
           ) : (
             <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD availability filter." title="No matching parts" />
           )}
