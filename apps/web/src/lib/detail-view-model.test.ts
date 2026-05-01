@@ -6,9 +6,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getPartDetail } from "@ee-library/shared/search";
-import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
+import { assetTrustStageTone, formatAssetPromotionBlockers, formatAssetPromotionHistory, formatAssetSourceLabel, formatAssetTrustStageLabel, formatAssetValidationEvidence, formatDatasheetParseConfidence, formatGenerationWorkflowLabel, formatReviewStateLabel, getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness, reviewStateTone, shouldRenderAssetPromotionAction, shouldRenderConnectorSections, shouldRenderGenerationOptions, shouldRenderReviewActions } from "./detail-view-model";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
-import type { Asset, AssetValidationRecord } from "@ee-library/shared/types";
+import type { Asset, AssetValidationRecord, PartIssueCode } from "@ee-library/shared/types";
 
 /**
  * Verifies connector section visibility follows connector data presence.
@@ -249,6 +249,49 @@ test("quick readiness summary explains blockers without inventing approval state
   assert.equal(regulatorSummary.headline, "Blocked");
   assert.ok(regulatorSummary.actions.some((action) => action.label.includes("file-backed CAD before export")));
   assert.ok(regulatorSummary.actions.some((action) => action.label.includes("review and approval")));
+});
+
+/**
+ * Verifies every backend readiness issue gets an honest next action.
+ */
+test("part next actions cover every readiness issue code", () => {
+  const baseRecord = getSeedRecord("part-tps7a02dbvr");
+  const issueCodes: PartIssueCode[] = [
+    "low_confidence_identity",
+    "pending_approval",
+    "missing_verified_cad",
+    "missing_datasheet",
+    "missing_connector_mate",
+    "missing_connector_accessories",
+    "connector_low_confidence",
+    "lifecycle_risk",
+    "source_conflict",
+    "duplicate_candidate"
+  ];
+  const record = {
+    ...baseRecord,
+    issues: issueCodes.map((code, index) => ({
+      assignedTo: null,
+      code,
+      detail: `Detail for ${code}.`,
+      id: `issue-${code}`,
+      lastUpdatedAt: "2026-04-29T00:00:00.000Z",
+      partId: baseRecord.part.id,
+      resolutionNotes: null,
+      resolvedAt: null,
+      severity: index % 2 === 0 ? "error" as const : "warning" as const,
+      source: "test",
+      status: "open" as const,
+      summary: `Summary for ${code}.`
+    }))
+  };
+  const actions = getPartNextActions(record);
+
+  assert.deepEqual(actions.map((action) => action.id), issueCodes);
+  assert.equal(actions[0]?.priority, "primary");
+  assert.ok(actions.every((action) => action.label.length > 0));
+  assert.ok(actions.every((action) => action.href.length > 0));
+  assert.ok(actions.every((action) => action.available === true));
 });
 
 /**

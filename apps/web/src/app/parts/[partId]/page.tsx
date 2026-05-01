@@ -29,6 +29,7 @@ import {
   getPartCompletenessChecklist,
   getPartEnrichmentStateLabel,
   getPartEnrichmentStatusItems,
+  getPartNextActions,
   getQuickReadinessSummary,
   getRecoveryWorkflowSummary,
   getReviewWorkflowSummary,
@@ -39,7 +40,7 @@ import {
   shouldRenderReviewActions
 } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
-import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, ViewTone } from "../../../lib/detail-view-model";
+import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
 import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -89,6 +90,8 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const enrichmentBoundaryCopy = getEnrichmentBoundaryCopy(detail.enrichmentSummary);
   const enrichmentStatusItems = getPartEnrichmentStatusItems(detail.enrichmentSummary);
   const completenessChecklist = getPartCompletenessChecklist(record, assetGroups, bundleReadiness, generationOptions, reviewWorkflowSummary);
+  const nextActions = getPartNextActions(record);
+  const primaryNextAction = nextActions[0];
   const latestSource = record.sources[0];
   const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
     label: formatMetricLabel(metric.metricKey),
@@ -201,6 +204,13 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </div>
           <div className="detail-hero__status">
             <TrustMeter label="Catalog trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+            <DetailUseDecision
+              assetTruthSummary={assetTruthSummary}
+              datasheetAsset={datasheetAsset}
+              latestSource={latestSource}
+              nextAction={primaryNextAction}
+              record={record}
+            />
             <DetailHeroWorkbench approval={record.approval} bundleReadiness={bundleReadiness} connectorOrRecoverySummary={connectorSummary ?? recoverySummary} reviewWorkflowSummary={reviewWorkflowSummary} />
           </div>
         </section>
@@ -225,15 +235,6 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           reviewWorkflowSummary={reviewWorkflowSummary}
         />
 
-        <div className="detail-two-col">
-          <SectionPanel description="Where this part came from and whether the current detail page has job-backed acquisition provenance." title="Acquisition summary">
-            <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
-          </SectionPanel>
-          <SectionPanel description="Background enrichment progress stays separate from approval, parsing, and export truth." title="Enrichment status">
-            <DetailEnrichmentSummary boundaryCopy={enrichmentBoundaryCopy} items={enrichmentStatusItems} summary={detail.enrichmentSummary} summarySignal={enrichmentSummarySignal} />
-          </SectionPanel>
-        </div>
-
         <SectionPanel description="Compact engineering-readiness checkpoints derived from the existing detail truth." title="Completeness checklist">
           <DetailCompletenessChecklist items={completenessChecklist} />
         </SectionPanel>
@@ -247,7 +248,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             record={record}
             relatedPartSummaries={relatedPartSummaries}
           />
-          <DetailActionRail approval={record.approval} bundleReadiness={bundleReadiness} issues={record.issues} riskFlags={record.riskFlags} reviewWorkflowSummary={reviewWorkflowSummary} />
+          <DetailActionRail approval={record.approval} bundleReadiness={bundleReadiness} issues={record.issues} nextActions={nextActions} riskFlags={record.riskFlags} reviewWorkflowSummary={reviewWorkflowSummary} />
         </div>
 
         <div className="detail-two-col">
@@ -280,6 +281,18 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </div>
           </div>
         </SectionPanel>
+
+        <details className="audit-disclosure detail-audit-disclosure">
+          <summary>Acquisition and enrichment audit</summary>
+          <div className="detail-audit-disclosure__grid">
+            <SectionPanel description="Where this part came from and whether the current detail page has job-backed acquisition provenance." title="Acquisition summary">
+              <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
+            </SectionPanel>
+            <SectionPanel description="Background enrichment progress stays separate from approval, parsing, and export truth." title="Enrichment status">
+              <DetailEnrichmentSummary boundaryCopy={enrichmentBoundaryCopy} items={enrichmentStatusItems} summary={detail.enrichmentSummary} summarySignal={enrichmentSummarySignal} />
+            </SectionPanel>
+          </div>
+        </details>
 
         <details className="audit-disclosure">
           <summary>Source rows and import audit</summary>
@@ -566,6 +579,57 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
       </section>
     </main>
+  );
+}
+
+/**
+ * Renders the answer-first decision card above the audit-heavy detail sections.
+ */
+function DetailUseDecision({
+  assetTruthSummary,
+  datasheetAsset,
+  latestSource,
+  nextAction,
+  record
+}: {
+  assetTruthSummary: ReturnType<typeof getAssetTruthSummary>;
+  datasheetAsset: Asset | undefined;
+  latestSource: PartDetailPageRecord["sources"][number] | undefined;
+  nextAction: PartNextAction | undefined;
+  record: PartDetailPageRecord;
+}) {
+  const decision = buildUseDecision(record);
+
+  return (
+    <section aria-label="Use decision" className="detail-use-decision">
+      <div className="detail-use-decision__header">
+        <span>Use decision</span>
+        <StatusBadge label={decision.label} tone={decision.tone} />
+      </div>
+      <strong>{decision.headline}</strong>
+      <p>{decision.detail}</p>
+
+      <dl className="detail-use-decision__facts">
+        <div>
+          <dt>Datasheet</dt>
+          <dd>{datasheetAssetLabel(datasheetAsset)}</dd>
+        </div>
+        <div>
+          <dt>CAD/export</dt>
+          <dd>{assetTruthSummary.label}</dd>
+        </div>
+        <div>
+          <dt>Provenance</dt>
+          <dd>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source row"}</dd>
+        </div>
+      </dl>
+
+      {nextAction ? (
+        <a className={`button-link ${nextAction.available ? "" : "button-link--quiet"}`} href={nextAction.href}>
+          {nextAction.label}
+        </a>
+      ) : null}
+    </section>
   );
 }
 
@@ -1038,17 +1102,36 @@ function DetailActionRail({
   approval,
   bundleReadiness,
   issues,
+  nextActions,
   riskFlags,
   reviewWorkflowSummary,
 }: {
   approval: PartDetailPageRecord["approval"];
   bundleReadiness: { label: string; reason: string; state: BundleReadinessState };
   issues: PartDetailPageRecord["issues"];
+  nextActions: PartNextAction[];
   riskFlags: PartDetailPageRecord["riskFlags"];
   reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
     <aside className="detail-action-rail" aria-label="Readiness blockers and next actions">
+      <div className="detail-action-rail__card">
+        <span>Next action</span>
+        {nextActions.length > 0 ? (
+          <ul>
+            {nextActions.slice(0, 4).map((action) => (
+              <li key={action.id}>
+                <strong>{action.priority}</strong>
+                <p>{action.label}</p>
+                <p>{action.detail}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No next action is currently derived for this record.</p>
+        )}
+      </div>
+
       <div className="detail-action-rail__card">
         <span>Top blockers</span>
         {issues.length > 0 ? (
@@ -1565,6 +1648,45 @@ function formatDateTime(value: string): string {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+/**
+ * Builds the concise answer to "can I use this part?" from stored readiness truth.
+ */
+function buildUseDecision(record: PartDetailPageRecord): { detail: string; headline: string; label: string; tone: BadgeTone } {
+  if (record.readinessSummary.status === "ready_for_export_review") {
+    return {
+      detail: "Core evidence is strong enough to review for use. Still inspect export assets before committing CAD to a design.",
+      headline: "Usable after export review",
+      label: "Review-ready",
+      tone: "verified"
+    };
+  }
+
+  if (record.readinessSummary.status === "blocked") {
+    return {
+      detail: record.readinessSummary.detail,
+      headline: "Do not use yet",
+      label: "Blocked",
+      tone: "danger"
+    };
+  }
+
+  if (record.readinessSummary.status === "needs_attention") {
+    return {
+      detail: record.readinessSummary.detail,
+      headline: "Use only after follow-up",
+      label: "Needs attention",
+      tone: "review"
+    };
+  }
+
+  return {
+    detail: "Readiness evidence is incomplete, so this record needs inspection before design use.",
+    headline: "Evidence incomplete",
+    label: "Unknown",
+    tone: "neutral"
+  };
 }
 
 /**

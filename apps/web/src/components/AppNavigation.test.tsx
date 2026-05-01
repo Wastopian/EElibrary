@@ -14,11 +14,11 @@ import { AppNavigationLinks } from "./AppNavigation";
 test("app navigation marks the catalog workspace as active on the homepage", () => {
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/" />);
 
-  assert.match(html, /Catalog workspace/u);
+  assert.match(html, /Catalog/u);
   assert.match(html, /app-nav__link--active/u);
-  assert.match(html, /Connector coverage/u);
-  assert.match(html, /Missing verified CAD/u);
-  assert.match(html, /Pending approval/u);
+  assert.match(html, /Connectors/u);
+  assert.match(html, /Missing CAD/u);
+  assert.match(html, /Pending review/u);
 });
 
 /**
@@ -27,7 +27,18 @@ test("app navigation marks the catalog workspace as active on the homepage", () 
 test("app navigation marks the admin route as active inside admin pages", () => {
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/admin" />);
 
-  assert.match(html, /Admin review queue/u);
+  assert.match(html, /Admin/u);
+  assert.match(html, /aria-current="page"/u);
+});
+
+/**
+ * Verifies the project-memory route is visible and active inside project pages.
+ */
+test("app navigation marks the projects route as active inside project memory pages", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/projects/project-alpha" />);
+
+  assert.match(html, /Projects/u);
+  assert.match(html, /Open internal project memory and persisted BOM usage/u);
   assert.match(html, /aria-current="page"/u);
 });
 
@@ -37,6 +48,6 @@ test("app navigation marks the admin route as active inside admin pages", () => 
 test("app navigation marks the pending approval view as active when its filter is applied", () => {
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/?approvalStatus=pending_review" />);
 
-  assert.match(html, /Pending approval/u);
+  assert.match(html, /Pending review/u);
   assert.match(html, /aria-current="page"/u);
 });

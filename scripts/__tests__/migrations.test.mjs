@@ -27,3 +27,21 @@ test("discoverMigrations includes the worker heartbeats migration", async () => 
   );
   assert.ok(MIGRATIONS_DIR.endsWith("postgres"));
 });
+
+test("discoverMigrations includes the auth users migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("auth_users.sql")),
+    `expected a *_auth_users.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the project and BOM memory migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("project_bom_memory.sql")),
+    `expected a *_project_bom_memory.sql migration in ${files.join(", ")}`
+  );
+});

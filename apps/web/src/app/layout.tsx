@@ -15,7 +15,7 @@ const dmMono = DM_Mono({ subsets: ["latin"], variable: "--font-dm-mono", weight:
 
 /** Metadata describes the engineering workspace in browser chrome. */
 export const metadata: Metadata = {
-  description: "Normalized component search, connector build sets, and file-honest CAD export readiness.",
+  description: "Private engineering memory for parts, projects, evidence, connector sets, and export readiness.",
   title: "EE Library"
 };
 
@@ -34,15 +34,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <Link className="app-sidebar__brand-link" href="/">
               <div className="app-sidebar__brand">
                 <p className="app-kicker">EE Library</p>
-                <p className="app-sidebar__title">Engineering readiness workspace</p>
-                <p className="app-sidebar__subtitle">Search, inspect, trust, and export with explicit blocker visibility, connector intelligence, and asset truth.</p>
+                <p className="app-sidebar__title">Engineering memory</p>
+                <p className="app-sidebar__subtitle">Projects - parts - evidence - reuse.</p>
               </div>
             </Link>
             <AppNavigation />
             <section aria-label="Trust boundary guidance" className="app-sidebar__note">
               <span>Trust boundary</span>
-              <strong>Generated, approved, and export-ready stay separate.</strong>
-              <p>The shell keeps the core workflow visible without collapsing review truth, connector uncertainty, or verified file-backed export evidence into one vague status.</p>
+              <strong>No export claim without verified files.</strong>
+              <p>Generated, approved, and export-ready remain separate states.</p>
             </section>
           </aside>
           <div className="app-main">

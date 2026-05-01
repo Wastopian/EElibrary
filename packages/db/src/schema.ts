@@ -1,3 +1,7 @@
+/**
+ * File header: Defines Drizzle table mappings for EE Library canonical and planned engineering-memory persistence.
+ */
+
 import { sql } from "drizzle-orm";
 import {
   check,
@@ -910,6 +914,170 @@ export const partRiskFlags = pgTable(
       literalCheck(`risk_code IN ('lifecycle_not_active', 'generated_assets_present', 'source_conflict', 'connector_low_confidence', 'partial_readiness_data')`)
     ),
     check("part_risk_flags_tone_check", literalCheck(`tone IN ('review', 'danger')`)),
+  ]
+);
+
+/** projects stores planned project-memory roots without implying BOM workflows are complete. */
+export const projects = pgTable(
+  "projects",
+  {
+    id: text("id").primaryKey(),
+    projectKey: text("project_key").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    owner: text("owner"),
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uq_projects_project_key").on(t.projectKey),
+    index("idx_projects_status_updated_at").on(t.status, t.updatedAt),
+    check(
+      "projects_status_check",
+      literalCheck(`status IN ('active', 'archived', 'prototype', 'production', 'deprecated')`)
+    ),
+  ]
+);
+
+/** projectRevisions stores project revision context for planned BOM and where-used memory. */
+export const projectRevisions = pgTable(
+  "project_revisions",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    revisionLabel: text("revision_label").notNull(),
+    revisionStatus: text("revision_status").notNull().default("draft"),
+    sourceReference: text("source_reference"),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.projectId, t.revisionLabel),
+    index("idx_project_revisions_project_status").on(t.projectId, t.revisionStatus, t.updatedAt),
+    check(
+      "project_revisions_status_check",
+      literalCheck(`revision_status IN ('draft', 'in_review', 'released', 'superseded', 'archived')`)
+    ),
+  ]
+);
+
+/** bomImports preserves BOM file and column-mapping provenance before any row matching happens. */
+export const bomImports = pgTable(
+  "bom_imports",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    projectRevisionId: text("project_revision_id")
+      .notNull()
+      .references(() => projectRevisions.id),
+    sourceFilename: text("source_filename").notNull(),
+    sourceFormat: text("source_format").notNull().default("csv"),
+    storageKey: text("storage_key"),
+    importStatus: text("import_status").notNull().default("uploaded"),
+    columnMapping: jsonb("column_mapping").notNull().default({}),
+    importSummary: jsonb("import_summary").notNull().default({}),
+    importedBy: text("imported_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_bom_imports_project_revision").on(t.projectId, t.projectRevisionId, t.createdAt),
+    index("idx_bom_imports_status").on(t.importStatus, t.updatedAt),
+    check(
+      "bom_imports_source_format_check",
+      literalCheck(`source_format IN ('csv', 'xlsx', 'json', 'eda_export', 'manual')`)
+    ),
+    check(
+      "bom_imports_status_check",
+      literalCheck(`import_status IN ('uploaded', 'mapping_required', 'mapped', 'processing', 'processed', 'failed')`)
+    ),
+  ]
+);
+
+/** bomLines stores original and mapped BOM row data while keeping weak matches explicit. */
+export const bomLines = pgTable(
+  "bom_lines",
+  {
+    id: text("id").primaryKey(),
+    bomImportId: text("bom_import_id")
+      .notNull()
+      .references(() => bomImports.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    projectRevisionId: text("project_revision_id")
+      .notNull()
+      .references(() => projectRevisions.id),
+    rowNumber: integer("row_number").notNull(),
+    designators: text("designators").array().notNull().default([]),
+    quantity: numeric("quantity"),
+    rawMpn: text("raw_mpn"),
+    rawManufacturer: text("raw_manufacturer"),
+    rawDescription: text("raw_description"),
+    rawSupplierReference: text("raw_supplier_reference"),
+    rawNotes: text("raw_notes"),
+    rawRowPayload: jsonb("raw_row_payload").notNull().default({}),
+    matchedPartId: text("matched_part_id").references(() => parts.id),
+    matchStatus: text("match_status").notNull().default("unmatched"),
+    matchConfidenceScore: numeric("match_confidence_score"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.bomImportId, t.rowNumber),
+    index("idx_bom_lines_import_status").on(t.bomImportId, t.matchStatus, t.rowNumber),
+    index("idx_bom_lines_project_revision").on(t.projectId, t.projectRevisionId, t.rowNumber),
+    index("idx_bom_lines_matched_part").on(t.matchedPartId, t.projectId, t.projectRevisionId),
+    check("bom_lines_row_number_check", literalCheck(`row_number > 0`)),
+    check(
+      "bom_lines_match_status_check",
+      literalCheck(`match_status IN ('unmatched', 'matched', 'ambiguous', 'weak_match', 'ignored')`)
+    ),
+    check(
+      "bom_lines_match_confidence_score_check",
+      literalCheck(`match_confidence_score IS NULL OR (match_confidence_score >= 0 AND match_confidence_score <= 1)`)
+    ),
+  ]
+);
+
+/** projectPartUsages records confirmed part use for planned where-used history. */
+export const projectPartUsages = pgTable(
+  "project_part_usages",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    projectRevisionId: text("project_revision_id")
+      .notNull()
+      .references(() => projectRevisions.id),
+    bomLineId: text("bom_line_id").references(() => bomLines.id),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    usageContext: text("usage_context"),
+    designators: text("designators").array().notNull().default([]),
+    quantity: numeric("quantity"),
+    usageStatus: text("usage_status").notNull().default("proposed"),
+    approvalSnapshot: jsonb("approval_snapshot").notNull().default({}),
+    readinessSnapshot: jsonb("readiness_snapshot").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_project_part_usages_part").on(t.partId, t.usageStatus, t.updatedAt),
+    index("idx_project_part_usages_project_revision").on(t.projectId, t.projectRevisionId, t.usageStatus),
+    index("idx_project_part_usages_bom_line").on(t.bomLineId),
+    check(
+      "project_part_usages_status_check",
+      literalCheck(`usage_status IN ('proposed', 'in_review', 'used', 'released', 'deprecated')`)
+    ),
   ]
 );
 

@@ -7,6 +7,10 @@ import type {
   ApiErrorEnvelope,
   AssetPromotionInput,
   AssetPromotionResponse,
+  BomImportCreateInput,
+  BomImportCreateResponse,
+  BomImportPreviewInput,
+  BomImportPreviewResponse,
   GenerationRequestCreateInput,
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
@@ -14,6 +18,10 @@ import type {
   PartIssueCode,
   PartIssueWorkflowUpdateInput,
   PartIssueWorkflowUpdateResponse,
+  ProjectDetailResponse,
+  ProjectCreateInput,
+  ProjectCreateResponse,
+  ProjectListResponse,
   PartSearchFilters,
   PartSearchRecord,
   ProviderAcquisitionJobCreateInput,
@@ -162,6 +170,103 @@ export async function fetchSystemHealth(): Promise<SystemHealthResponse | null> 
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetches the read-only project-memory list envelope so pages can render source state honestly.
+ */
+export async function fetchProjectListEnvelope(): Promise<ApiEnvelope<ProjectListResponse>> {
+  return fetchApi<ApiEnvelope<ProjectListResponse>>("/projects");
+}
+
+/**
+ * Fetches the read-only project-memory list without hiding planned capability states.
+ */
+export async function fetchProjectList(): Promise<ProjectListResponse> {
+  const envelope = await fetchProjectListEnvelope();
+
+  return envelope.data;
+}
+
+/**
+ * Creates a DB-backed project memory root and first revision.
+ */
+export async function createProject(input: ProjectCreateInput): Promise<ProjectCreateResponse> {
+  const response = await fetch(buildApiUrl("/projects"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches one project-memory detail record from the API boundary.
+ */
+export async function fetchProjectDetail(projectId: string): Promise<ProjectDetailResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project detail request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Parses a CSV BOM through the API without creating database records.
+ */
+export async function previewBomImport(input: BomImportPreviewInput): Promise<BomImportPreviewResponse> {
+  const response = await fetch(buildApiUrl("/bom-imports/preview"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import preview");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportPreviewResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Persists a mapped CSV BOM into one project without running part matching.
+ */
+export async function createBomImport(projectId: string, input: BomImportCreateInput): Promise<BomImportCreateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-imports`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportCreateResponse>;
+
+  return envelope.data;
 }
 
 /**

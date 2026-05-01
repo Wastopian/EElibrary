@@ -16,10 +16,14 @@ export type CatalogResultRowViewModel = {
   assetTruthDetail: string;
   assetTruthLabel: string;
   category: string;
+  cadExportLabel: string;
+  cadExportTone: BadgeTone;
   description: string;
   connectorSignalDetail: string;
   connectorSignalLabel: string;
   connectorSignalTitle: string;
+  datasheetLabel: string;
+  datasheetTone: BadgeTone;
   connectorTitle: string;
   exportLabel: string;
   exportTone: BadgeTone;
@@ -29,6 +33,8 @@ export type CatalogResultRowViewModel = {
   manufacturerName: string;
   mpn: string;
   packageName: string;
+  nextActionDetail: string;
+  nextActionLabel: string;
   riskLabel: string;
   readinessDetail: string;
   readinessHeadline: string;
@@ -53,7 +59,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
   return (
     <div className="catalog-results-presentation">
       <div className="results-panel__toolbar">
-        <p>Use list mode for explanation-first review or table mode for faster dense scanning.</p>
+        <p>Table mode is the default engineering scan view; list mode keeps the older explanation-first cards available.</p>
         <div className="results-panel__mode" aria-label="Catalog results presentation mode">
           <button aria-pressed={mode === "list"} onClick={() => setMode("list")} type="button">
             List
@@ -73,8 +79,8 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
       ) : (
         <div className="catalog-results-table-view">
           <div className="catalog-results-table-view__intro">
-            <strong>{rows.length} backend-backed rows</strong>
-            <p>Dense mode keeps readiness, export, and blocker truth visible without opening every record.</p>
+            <strong>{rows.length} visible rows</strong>
+            <p>Scan identity, datasheet, CAD/export state, readiness, and the next action before opening a record.</p>
           </div>
           <div className="admin-table-wrap">
             <table className="admin-table admin-table--dense catalog-results-table">
@@ -82,12 +88,13 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                 <tr>
                   <th>MPN</th>
                   <th>Manufacturer</th>
-                  <th>Category / package</th>
+                  <th>Description</th>
+                  <th>Package</th>
+                  <th>Lifecycle</th>
+                  <th>Datasheet</th>
+                  <th>CAD/export</th>
                   <th>Readiness</th>
-                  <th>Approval</th>
-                  <th>Export</th>
-                  <th>Top blocker</th>
-                  <th>Trust</th>
+                  <th>Next action</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -101,22 +108,24 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                     </td>
                     <td>{row.manufacturerName}</td>
                     <td>
-                      <div>{row.category}</div>
-                      <div className="muted-copy ui-mono">{row.packageName}</div>
+                      <div>{row.description || row.category}</div>
+                      <div className="muted-copy">{row.category}</div>
+                    </td>
+                    <td className="ui-mono">{row.packageName}</td>
+                    <td>{row.lifecycleLabel.replace(/^Lifecycle: /u, "")}</td>
+                    <td>
+                      <StatusBadge label={row.datasheetLabel} tone={row.datasheetTone} />
+                    </td>
+                    <td>
+                      <StatusBadge label={row.cadExportLabel} tone={row.cadExportTone} />
                     </td>
                     <td>
                       <strong>{row.readinessHeadline}</strong>
                       <div className="muted-copy">{row.readinessSubhead}</div>
                     </td>
                     <td>
-                      <StatusBadge label={row.approvalLabel} tone={row.approvalTone} />
-                    </td>
-                    <td>
-                      <StatusBadge label={row.exportLabel} tone={row.exportTone} />
-                    </td>
-                    <td>{row.topBlocker}</td>
-                    <td className="catalog-results-table__trust">
-                      <TrustMeter label="Trust" score={row.trustScore} tone={row.trustTone} />
+                      <strong>{row.nextActionLabel}</strong>
+                      <div className="muted-copy">{row.nextActionDetail}</div>
                     </td>
                     <td>
                       <a className="button-link button-link--quiet" href={row.href}>

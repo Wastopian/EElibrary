@@ -2,9 +2,11 @@
 
 This document captures the intended system shape. For current shipped behavior, use `docs/IMPLEMENTATION_STATUS.md`.
 
-EE Library is a provider-neutral **engineering part onboarding and readiness platform**, not a distributor clone and not a passive CAD file mirror.
+EE Library is a provider-neutral **private engineering memory system for hardware teams**, not a distributor clone and not a passive CAD file mirror.
 
-The architecture is designed around six core goals:
+Provider/catalog data is input. The product center is internal engineering truth around parts, BOMs, connectors, reusable circuit blocks, evidence, approvals, and risk over time.
+
+The architecture is designed around eight core goals:
 
 1. maintain a canonical engineering record for each part
 2. model connector compatibility and buildable relationships explicitly
@@ -12,8 +14,10 @@ The architecture is designed around six core goals:
 4. support missing-CAD recovery through typed workflows
 5. determine and expose **part readiness** for engineering use
 6. allow export only when assets are truly ready and appropriately reviewed
+7. support planned project/BOM memory and where-used history
+8. support planned evidence-backed circuit reuse and BOM health/risk review
 
-The system is built to help users move from a raw manufacturer part number to an **engineer-ready internal part record** with explicit trust, compatibility, CAD readiness, risk visibility, and approval state.
+The shipped foundation helps users move from a raw manufacturer part number to an **engineer-ready internal part record** with explicit trust, compatibility, CAD readiness, risk visibility, and approval state. The planned project-memory expansion will let teams import BOMs, preserve usage history, review BOM risk, and reuse known-good evidence across projects.
 
 ---
 
@@ -54,12 +58,25 @@ The architecture must support answering:
 
 This must be represented consistently across data model, worker pipelines, API projections, and UI surfaces.
 
-### 5. Request-time behavior must stay deterministic
+### 5. Project memory is a planned first-class concern
+The architecture must support planned project/BOM concepts without treating them as shipped before implementation.
+
+Future project memory must preserve:
+
+- project and revision context
+- BOM import provenance and original row data
+- part-to-project usage history
+- where-used search inputs
+- evidence attachments
+- reusable circuit block dependencies
+- BOM health and risk findings
+
+### 6. Request-time behavior must stay deterministic
 Search, readiness summaries, detail views, connector intelligence, risk flags, issue queues, and asset status must be served from internal state.
 
-Long-running work such as ingestion, extraction, generation, validation, approval updates, and export bundling must happen asynchronously through worker pipelines.
+Long-running work such as ingestion, BOM normalization, part matching, extraction, generation, validation, approval updates, risk recomputation, and export bundling must happen asynchronously through worker pipelines.
 
-### 6. Runtime paths must remain seed-free
+### 7. Runtime paths must remain seed-free
 Seed data may exist for controlled local development, but runtime shared logic, API reads, and worker paths must not depend on seed imports except through explicit local fallback modes.
 
 ---
@@ -101,6 +118,12 @@ Responsibilities:
 - approval and workflow state presentation
 - admin / review queue tools
 - compare and future engineering tools
+- planned project views
+- planned BOM upload and column mapping
+- planned BOM health dashboards
+- planned where-used views
+- planned circuit block views
+- planned evidence and risk review panels
 
 The web layer must remain:
 - provider-neutral
@@ -121,6 +144,14 @@ The web layer must remain:
 - Approval Summary
 - Audit / Provenance Summary
 - Admin / review queue tools
+- Planned Projects Dashboard
+- Planned Project Detail
+- Planned BOM Import / Mapping
+- Planned BOM Health Dashboard
+- Planned Where-Used View
+- Planned Circuit Block Library
+- Planned Evidence Panel
+- Planned Risk / Next-Action Queue
 
 ---
 
@@ -144,6 +175,9 @@ Responsibilities:
 - approval status exposure
 - export request handling
 - admin and review actions
+- planned project, revision, BOM, usage, evidence, risk, and circuit-block endpoints
+- planned BOM import/mapping and where-used projections
+- planned BOM health and project risk summaries
 
 The API must:
 - return typed, deterministic responses
@@ -164,6 +198,12 @@ The API must:
 - ExportReadiness
 - OpenIssueSummary
 - RiskFlagSummary
+- Planned ProjectSummary
+- Planned BomImportSummary
+- Planned WhereUsedSummary
+- Planned BomHealthSummary
+- Planned CircuitBlockSummary
+- Planned RiskFindingSummary
 
 ---
 
@@ -175,6 +215,9 @@ Responsibilities:
 - provider sync
 - raw payload capture
 - normalization
+- planned BOM normalization
+- planned BOM row parsing and column-mapping support
+- planned part matching for BOM rows
 - connector relationship mapping
 - source conflict handling
 - datasheet acquisition
@@ -186,6 +229,9 @@ Responsibilities:
 - readiness recomputation
 - issue detection and refresh
 - risk flag derivation
+- planned project/BOM risk derivation
+- planned where-used summary recomputation
+- planned circuit block readiness recomputation
 - approval workflow support
 - export bundle creation
 
@@ -197,6 +243,8 @@ The worker layer is the correct home for:
 - readiness evaluation
 - issue generation
 - generation orchestration
+- BOM normalization and matching
+- risk recomputation
 
 The worker layer must not push provider-specific assumptions into the API or UI.
 
@@ -219,6 +267,12 @@ Core responsibilities:
 - issue state
 - risk flags
 - internal notes and usage history
+- planned project and project revision records
+- planned BOM import and BOM line records
+- planned part-to-project usage records
+- planned evidence attachment records
+- planned circuit block records
+- planned BOM health and risk finding records
 - export trust state
 
 This layer is what allows the platform to answer engineering questions consistently even when source systems are incomplete, conflicting, ambiguous, or temporarily unavailable.
@@ -446,6 +500,48 @@ Rules:
 
 ---
 
+## Planned Project/BOM Memory Subsystem
+
+This planned subsystem turns the part-readiness foundation into project-level engineering memory. It is not fully shipped today.
+
+Responsibilities:
+- store project and project revision records
+- ingest BOM files and preserve original row context
+- support BOM column mapping
+- match BOM rows to canonical parts without hiding weak or ambiguous matches
+- create project part usage history
+- expose where-used search across parts, connector sets, assets, and circuit blocks
+- derive BOM health summaries
+- create risk findings and next actions for unresolved project/BOM issues
+
+Rules:
+- provider/catalog data remains input, not the product itself
+- BOM import does not imply rows are confirmed parts
+- weak or ambiguous BOM matches must stay visible
+- where-used claims must be backed by project usage records
+- BOM health must be explainable through evidence and risk findings
+
+---
+
+## Planned Evidence and Circuit Reuse Subsystem
+
+This planned subsystem preserves engineering decisions that do not fit cleanly into public catalog records. It is not fully shipped today.
+
+Responsibilities:
+- attach evidence to projects, BOM rows, parts, assets, circuit blocks, and risk findings
+- store reusable circuit block records
+- connect circuit blocks to required and optional parts
+- track design constraints, allowed reuse scope, and known risks
+- recompute circuit block readiness when dependent parts or evidence change
+- expose evidence and circuit reuse context in project, part, and where-used views
+
+Rules:
+- evidence attachments do not automatically imply validation, approval, or export readiness
+- reusable circuit blocks are structured engineering knowledge, not loose notes
+- circuit reuse must remain tied to approval, evidence, constraints, and risk state
+
+---
+
 ## Export Subsystem
 
 This subsystem produces user-facing engineering bundles for supported tools.
@@ -551,6 +647,23 @@ Typical user request flow:
 4. worker refreshes readiness and issue state if needed
 5. API and UI expose updated readiness and approval projections
 
+### Planned BOM import and mapping
+1. user creates or opens a project revision
+2. user uploads a BOM source file
+3. API stores the import record and original file reference
+4. web presents column mapping for MPN, manufacturer, quantity, designators, notes, and supplier references
+5. worker normalizes rows and preserves raw row payloads
+6. worker attempts part matching and marks rows as matched, unmatched, ambiguous, or weak
+7. worker creates project part usage records for confirmed matches
+8. worker derives BOM health and risk findings
+9. web renders mapping diagnostics, BOM health, and next actions
+
+### Planned where-used search
+1. user searches for a part, connector set, asset, or circuit block
+2. API reads project usage and circuit block records
+3. API returns usage grouped by project, revision, status, and risk
+4. web renders project history without implying unverified usage is approved reuse
+
 ---
 
 ## Storage strategy
@@ -571,6 +684,12 @@ Use PostgreSQL for:
 - risk flags
 - issue records
 - internal usage and notes
+- planned project and revision records
+- planned BOM import and BOM line records
+- planned project part usage records
+- planned circuit block and circuit block part records
+- planned evidence attachment records
+- planned risk finding records
 - export state
 - readiness summaries or materialized projections where useful
 
@@ -587,6 +706,8 @@ Use object storage for:
 - generated assets
 - preview files
 - export bundles
+- planned BOM source files
+- planned evidence attachments
 
 ---
 
@@ -616,6 +737,12 @@ Do not let seed data mask DB-backed failures except in explicit local fallback m
 ### Rule 8
 Do not hide readiness blockers inside opaque scores or background-only logic.
 
+### Rule 9
+Do not present planned project/BOM, where-used, circuit block, evidence vault, or BOM health workflows as shipped behavior until the repo implements them.
+
+### Rule 10
+Do not let evidence attachments, project usage, or circuit block membership imply approval, validation, or verified export state by themselves.
+
 ---
 
 ## Long-term architectural direction
@@ -626,9 +753,14 @@ The long-term goal is to build a platform that can reliably answer:
 
 - what the correct part is
 - whether the identity is trustworthy
+- where the part has been used before
+- which project or BOM introduced a decision
 - what mates with it
 - what else is required
 - which assets are trustworthy
+- which evidence supports reuse
+- which reusable circuit blocks depend on it
+- what risks exist across the BOM
 - what can be recovered when files are missing
 - what risks or blockers remain
 - whether the part is approved for design use

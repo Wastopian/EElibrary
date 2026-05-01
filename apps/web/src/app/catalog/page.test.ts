@@ -35,7 +35,7 @@ test("catalog page renders setup guidance when API returns DB_NOT_CONFIGURED", a
   }
 });
 
-test("catalog page renders filter rail and results panel for mocked DB-backed response", async () => {
+test("catalog page renders compact filter bar and dense results table for mocked DB-backed response", async () => {
   const records = getAllPartRecords();
   const record = records[0];
 
@@ -46,11 +46,14 @@ test("catalog page renders filter rail and results panel for mocked DB-backed re
   try {
     const html = renderToStaticMarkup(await SearchPage({ searchParams: Promise.resolve({}) }));
 
-    assert.match(html, /Filter the readiness catalog/u);
+    assert.match(html, /Refine results/u);
     assert.match(html, /Search results/u);
     assert.match(html, /1 matches/u);
     assert.match(html, /DB-backed catalog/u);
-    assert.match(html, /Part readiness check/u);
+    assert.match(html, /Catalog workbench/u);
+    assert.match(html, /Datasheet/u);
+    assert.match(html, /CAD\/export/u);
+    assert.match(html, /Next action/u);
   } finally {
     restoreFetch();
   }
@@ -190,7 +193,8 @@ test("catalog page shows no-match state with provider lookup panel for concrete 
 
     assert.match(html, /Part not found/u);
     assert.match(html, /TPS7A02DBVR/u);
-    assert.match(html, /Search supported providers/u);
+    assert.match(html, /Import exact MPN/u);
+    assert.match(html, /Import this exact MPN/u);
   } finally {
     restoreFetch();
   }
@@ -216,7 +220,7 @@ test("catalog page shows no-match state without provider lookup for generic keyw
 
     assert.match(html, /Part not found/u);
     assert.match(html, /Catalog acquisition is unavailable here/u);
-    assert.doesNotMatch(html, /Search supported providers/u);
+    assert.doesNotMatch(html, /Import exact MPN/u);
   } finally {
     restoreFetch();
   }

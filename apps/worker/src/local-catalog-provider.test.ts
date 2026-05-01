@@ -21,3 +21,20 @@ test("local-catalog provider returns exact candidate rows for supported part loo
     sourceUrl: "https://www.ti.com/product/TPS7A02"
   });
 });
+
+test("local-catalog provider enumerates several described sample parts for setup bootstrap", async () => {
+  const requests = await localCatalogProviderAdapter.listAvailablePartRequests();
+  const mpns = requests.map((request) => request.mpn).sort();
+
+  assert.ok(mpns.includes("GRM188R71C104KA01D"));
+  assert.ok(mpns.includes("STM32G031K8T6"));
+  assert.ok(mpns.includes("TPS7A02DBVR"));
+  assert.ok(mpns.length >= 3);
+});
+
+test("local-catalog provider normalizes sample descriptions for database inserts", async () => {
+  const rawPayload = await localCatalogProviderAdapter.fetchRawPart({ mpn: "GRM188R71C104KA01D" });
+  const normalized = localCatalogProviderAdapter.normalizeRawPart(rawPayload);
+
+  assert.match(normalized.part.description, /ceramic capacitor/u);
+});

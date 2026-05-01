@@ -284,8 +284,8 @@ export function ImportByMpnPanel({
     <div className={`import-by-mpn-panel ${isCompact ? "import-by-mpn-panel--compact" : ""}`} id={anchorId}>
       <p className="import-by-mpn-panel__intro muted-copy">
         {isCompact
-          ? `${importUiCopy.catalogAcquisitionLead} ${importUiCopy.catalogAcquisitionNote} This still uses the same provider import path as the worker CLI and only supports the currently registered providers.`
-          : "Bring one part into your Postgres-backed catalog using the same import path as the worker CLI. This fetches provider metadata; it does not verify CAD files or export bundles."}
+          ? `${importUiCopy.catalogAcquisitionLead} ${importUiCopy.catalogAcquisitionNote}`
+          : "Import one exact MPN into your Postgres-backed catalog from a configured provider. This fetches provider metadata; it does not verify CAD files or export bundles."}
       </p>
 
       <form className="import-by-mpn-panel__form" onSubmit={onSubmit}>

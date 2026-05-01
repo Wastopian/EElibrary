@@ -33,6 +33,12 @@ test("part detail renders readiness record summary from detail response", async 
     const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
 
     assert.match(html, /Readiness record/u);
+    assert.match(html, /Use decision/u);
+    assert.match(html, /Do not use yet/u);
+    assert.match(html, /CAD\/export/u);
+    assert.match(html, /Provenance/u);
+    assert.match(html, /Next action/u);
+    assert.match(html, /Resolve CAD\/export assets/u);
     assert.match(html, /Blocked/u);
     assert.match(html, /Source rows/u);
     assert.match(html, /Asset rows/u);

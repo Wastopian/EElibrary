@@ -2,57 +2,84 @@
 
 This document captures target product intent. For shipped-vs-planned status, use `docs/IMPLEMENTATION_STATUS.md`.
 
-## Product thesis
+## Product Thesis
 
-EE Library is an **engineering part onboarding and readiness platform** for electrical and hardware engineers.
+EE Library is a **private engineering memory system for hardware teams**.
 
-It is built to solve a specific class of problems that common part search sites, distributor catalogs, and CAD library tools do not solve well:
+It preserves internal engineering truth around parts, BOMs, connectors, reusable circuit blocks, evidence, approvals, and risk over time. Public provider and catalog data are useful input, but they are not the product itself. The product is the team-owned record of what was used, why it was trusted, what evidence supported it, what risks remained, and where that decision should be reused.
 
-- finding the correct part is not enough
-- finding a file is not enough
-- knowing a connector name is not enough
-- a successful import is not enough
+The first implemented slice is a part readiness loop:
 
-The platform must help engineers answer the full practical question:
+```txt
+search -> import exact MPN when needed -> inspect -> trust -> export
+```
 
-- What is the right part?
-- Is the identity verified or ambiguous?
-- What mates with it?
-- What else is required to build with it?
-- Which engineering assets actually exist?
-- How trustworthy are those assets?
-- Can missing assets be recovered from source material?
-- Are there near-match or family-confusion risks?
-- Is this part approved for design use?
-- Is this part truly ready for export into ECAD and MCAD workflows?
+The broader target loop is:
 
-EE Library should feel like an **engineering workspace**, not a generic distributor clone, not a passive footprint download site, and not a pretty wrapper around provider imports.
+```txt
+project/BOM intake -> find prior use -> assess readiness and risk -> reuse known-good evidence -> approve/export or create follow-up work
+```
 
-The product is especially valuable for **connectors and electromechanical parts**, where practical engineering readiness depends on more than basic catalog data.
+EE Library should feel like an **engineering workspace**, not a distributor clone, passive footprint download site, or pretty wrapper around provider imports.
 
 ---
 
-## Core product pillars
+## Core Product Pillars
 
-### 1. Part readiness
+### 1. Project/BOM Import and Where-Used History
+
+The product must become project-aware. A hardware team should be able to import a BOM, preserve original row context, associate parts with projects, and later answer where a part, connector set, asset, or circuit block has been used before.
+
+Target capabilities:
+
+- project records
+- CSV BOM upload/import foundation
+- BOM column mapping foundation
+- original row, designator, quantity, and note preservation
+- part-to-project usage history
+- where-used search across parts, connectors, assets, and reusable circuit blocks
+
+Project records plus CSV BOM upload and column mapping now have a first shipped foundation. Part matching, usage creation, where-used search, and broader BOM intelligence remain planned and are not fully implemented today.
+
+### 2. Part Readiness, Approval, and Internal Reuse
+
 The product centers on **part readiness**, not just part existence.
 
-A part is not considered useful merely because it appears in a source catalog or has some metadata attached to it.  
-The system must help users determine whether a part is actually ready to use in design work.
+A part is not considered useful merely because it appears in a source catalog or has some metadata attached to it. The system must help users determine whether a part is actually ready to use in design work and whether it is trusted for internal reuse.
 
 This includes:
+
 - identity confidence
 - normalized technical data
+- datasheet evidence
 - mate and accessory completeness
 - CAD asset readiness
 - sourcing and lifecycle visibility
 - approval state
 - explicit blockers and warnings
 
-### 2. Connector intelligence
+### 3. Evidence-Based Validation and Asset Trust
+
+Engineering assets and decisions must be backed by durable evidence.
+
+The platform must track:
+
+- what exists
+- what is only referenced
+- what has been downloaded
+- what has been validated
+- what has been reviewed
+- what is truly verified for export
+- which evidence supported each decision
+
+The platform must not imply that a part is export-ready unless the underlying assets actually support that claim.
+
+### 4. Connector Buildability and Known-Good Connector Sets
+
 For connectors, the platform must do more than list a part number.
 
 It must help users understand:
+
 - best mate
 - alternate mates
 - required accessories
@@ -62,61 +89,42 @@ It must help users understand:
 - whether the connector set is actually buildable
 - whether there are near-match or family-confusion risks
 
-Connector intelligence is one of the primary differentiators of the product.
+Connector intelligence is one of the primary differentiators of the product because connector readiness depends on known-good sets, not isolated catalog rows.
 
-### 3. Engineering asset truth
-Engineering assets must be treated as first-class objects, with explicit truth about:
+### 5. Reusable Circuit Blocks
 
-- what exists
-- what is only referenced
-- what has been downloaded
-- what has been validated
-- what has been reviewed
-- what is truly verified for export
+Reusable circuits must be treated as structured engineering knowledge, not loose notes.
 
-The platform must not imply that a part is export-ready unless the underlying assets actually support that claim.
+Target capabilities:
 
-### 4. Missing-CAD recovery
-When symbol, footprint, or 3D assets do not exist, the platform must provide a typed recovery path based on available source material such as:
+- circuit block records
+- approved parts attached to a block
+- evidence and validation context
+- design constraints and usage notes
+- known risks and allowed reuse scope
+- project usage history
 
-- datasheets
-- pin/function tables
-- mechanical drawings
-- package/mechanical dimensions
-- structured provider metadata where applicable
+These capabilities are planned and are not fully implemented today.
 
-Generated assets must always remain visibly marked as generated unless they are later reviewed and approved through explicit workflow.
+### 6. BOM Health and Risk Review
 
-### 5. Approval and trust
-The platform must separate:
-- source ingestion
-- asset review
-- export validation
-- part approval for engineering use
+The product must help teams review risk across an entire project BOM, not only one part at a time.
 
-The product must preserve trust boundaries clearly so a user can understand what is:
-- imported
-- inferred
-- generated
-- reviewed
-- approved
-- blocked
+Target risk dimensions:
 
-### 6. Buildable engineering workflows
-The platform must help users move from “I found a part” to “I can actually use this in a design.”
+- lifecycle and sourcing risk
+- approval gaps
+- missing or untrusted evidence
+- missing verified CAD/export assets
+- connector buildability gaps
+- unresolved duplicate or source-conflict issues
+- internal reuse and where-used context
 
-This includes:
-- readiness summaries
-- buildable mating sets
-- companion part guidance
-- explicit warnings and blockers
-- honest export readiness
-- review and approval workflows
-- admin queues for unresolved part issues
+The BOM health dashboard is planned and is not fully implemented today.
 
 ---
 
-## Core user problem
+## Core User Problem
 
 Electrical and hardware engineers routinely waste time on work that should not be this painful:
 
@@ -127,32 +135,36 @@ Electrical and hardware engineers routinely waste time on work that should not b
 - searching for trustworthy symbols, footprints, and 3D models
 - discovering that an available file is incomplete, outdated, or misleading
 - repeating the same comparison work for similar parts
+- rediscovering decisions that already happened on earlier projects
+- losing the reason a part, connector set, or circuit pattern was approved
 - discovering late that a part family has subtle but critical variant differences
 - struggling to move part data cleanly into ECAD and MCAD tools
-- lacking a trustworthy internal record of what is actually approved and ready
+- lacking a trustworthy internal record of what is approved, reusable, risky, or ready
 
-The product must reduce this friction by centralizing engineering truth, compatibility, readiness, and trust in one place.
+The product must reduce this friction by centralizing internal engineering truth, compatibility, readiness, evidence, approval, and project memory in one place.
 
 ---
 
-## Primary user outcomes
+## Primary User Outcomes
 
 A successful product allows a user to:
 
-1. enter a raw MPN and quickly resolve the intended part
-2. understand the part’s normalized engineering data
-3. determine whether identity is verified or ambiguous
+1. import or search for an MPN and quickly resolve the intended part
+2. understand normalized engineering data and provenance
+3. determine whether identity is verified, ambiguous, or conflicted
 4. see which assets exist and how trustworthy they are
 5. resolve the best connector mate and required accessories
-6. understand whether the part is buildable in a real design context
-7. see risk flags such as family confusion, near-match variants, or incomplete dependencies
-8. request recovery of missing CAD assets when source material allows it
-9. understand whether the part is approved for engineering use
-10. export only when the asset bundle is truly ready
+6. understand whether the part or connector set is buildable in a real design context
+7. see risk flags such as family confusion, near-match variants, incomplete dependencies, or lifecycle exposure
+8. understand whether the part is approved for engineering use
+9. export only when the asset bundle is truly ready
+10. see where a part or known-good set has been used before once project memory is implemented
+11. review BOM health and create follow-up work once BOM workflows are implemented
+12. reuse circuit blocks only when evidence and constraints support reuse
 
 ---
 
-## Primary users
+## Primary Users
 
 The product is designed primarily for:
 
@@ -162,19 +174,24 @@ The product is designed primarily for:
 - integration and test engineers
 - procurement-adjacent technical users
 - technical admins reviewing part readiness and asset workflows
+- hardware leads reviewing BOM risk and internal reuse decisions
 
-There are two major user modes:
+There are three major user modes:
 
-### Quick engineering user
+### Quick Engineering User
+
 A user who wants a fast answer to:
+
 - what is this part
 - is it ready
 - what mates with it
 - what files exist
 - what am I missing
 
-### Technical admin / librarian user
+### Technical Admin / Librarian User
+
 A user who needs to:
+
 - review unresolved issues
 - manage provider imports
 - approve parts
@@ -182,11 +199,40 @@ A user who needs to:
 - resolve duplicates, conflicts, and missing data
 - manage workflows for recovery and promotion
 
+### Project / BOM Reviewer
+
+A user who needs to:
+
+- import or review a project BOM
+- identify risky or unapproved rows
+- find prior project usage
+- reuse known-good parts, connectors, and circuit blocks
+- assign follow-up work for evidence or asset gaps
+
+Project/BOM reviewer workflows are planned and should not be treated as fully shipped today.
+
 ---
 
-## MVP scope
+## Current Implemented Slice
+
+The current working product is the part-readiness foundation:
+
+- MPN-driven catalog workbench
+- exact-MPN provider import for configured providers
+- part detail workspace with readiness, evidence, provenance, CAD/export state, and next action
+- connector buildable-set projection
+- asset truth, validation evidence, review, and verified-for-export promotion separation
+- admin surfaces for review, promotion, failed import, validation, and issue-driven operations queues
+- system health reporting for API, database, storage, worker heartbeat, and async queue state
+
+This slice is intentionally narrower than the full engineering-memory mission.
+
+---
+
+## Functional Requirements
 
 ### 1. Quick Part Readiness Check
+
 The platform must support a primary intake flow where a user can provide:
 
 - MPN
@@ -196,6 +242,7 @@ The platform must support a primary intake flow where a user can provide:
 - optional datasheet URL
 
 The result must provide a readiness-oriented summary that includes:
+
 - identity status
 - category / package summary
 - readiness summary
@@ -206,7 +253,8 @@ The result must provide a readiness-oriented summary that includes:
 
 This flow should feel like a practical engineering tool, not a shopping catalog.
 
-### 2. Search and discovery
+### 2. Search and Discovery
+
 The platform must support:
 
 - MPN search
@@ -216,33 +264,37 @@ The platform must support:
 - lifecycle filters
 - readiness filters
 - CAD availability filters
+- approval filters
 - connector class filters such as connector, accessory, tooling, cable, and non-connector
 
 The search experience should support engineering triage and part selection, not ecommerce-style browsing.
 
-### 3. Part detail / readiness workspace
+### 3. Part Detail / Readiness Workspace
+
 Each part must have a detail page that acts as the core engineering workspace.
 
 Minimum requirements:
-- hero summary
+
+- identity and key specs
+- use decision
 - readiness summary
 - normalized specs
 - package dimensions
-- datasheet panel
-- Engineering Assets panel
+- datasheet state
+- engineering assets
 - bundle readiness summary
-- mates and accessories panel for connectors
-- Similar Parts panel
-- Typical Companion Parts panel
+- mates and accessories for connectors
+- similar and companion part context where available
 - risk / warning panel
 - approval summary
-- fallback generation actions for missing CAD assets
+- recovery actions for missing CAD assets when source material allows it
 - export actions that reflect real file availability and trust state
 - provenance or audit summary
 
-This page should answer “Can I use this part?” not just “What metadata do we have?”
+This page should answer "Can I use this part?" before showing audit depth.
 
-### 4. Engineering assets
+### 4. Engineering Assets
+
 The platform must treat these as first-class asset types:
 
 - symbol
@@ -252,6 +304,7 @@ The platform must treat these as first-class asset types:
 - mechanical drawing
 
 For each asset, the system must track:
+
 - provenance type
 - availability state
 - validation state
@@ -260,6 +313,7 @@ For each asset, the system must track:
 - preview readiness
 
 Allowed provenance types:
+
 - official
 - trusted_external
 - generated
@@ -267,8 +321,10 @@ Allowed provenance types:
 
 Generated assets must never be presented as official.
 
-### 5. Connector intelligence
+### 5. Connector Intelligence
+
 Connector relationships must support:
+
 - best mate
 - alternate mates
 - requires accessory
@@ -277,6 +333,7 @@ Connector relationships must support:
 - tooling requirement
 
 The product must also resolve a **Buildable Mating Set** that surfaces:
+
 - the selected connector
 - the best mate
 - required accessories
@@ -284,29 +341,35 @@ The product must also resolve a **Buildable Mating Set** that surfaces:
 - compatible cable option where applicable
 
 Connector views must also support:
+
 - compatibility confidence
 - uncertainty labeling
 - family-confusion warnings where relevant
+- known-good set context once project memory is implemented
 
-This is one of the core differentiators of the platform.
+### 6. Similar Parts, Companion Parts, and Risk Warnings
 
-### 6. Similar parts, companion parts, and risk warnings
 The system must clearly distinguish between:
 
 #### Similar Parts
+
 Alternates or near-equivalents that may substitute for the selected part.
 
 #### Typical Companion Parts
+
 Parts commonly used alongside the selected part in real circuits or assemblies.
 
 Examples:
+
 - LDO + capacitors
 - MCU + crystal + decoupling
 - transceiver + termination + TVS
 - connector + contacts + backshell + cable
 
 #### Risk Flags / Warnings
+
 Warnings that help prevent engineering mistakes, such as:
+
 - near-match variant confusion
 - family ambiguity
 - mounting mismatch
@@ -317,7 +380,8 @@ Warnings that help prevent engineering mistakes, such as:
 
 The product must not blur these concepts together.
 
-### 7. Datasheet-driven generation workflow
+### 7. Datasheet-Driven Generation Workflow
+
 When file-backed CAD assets are missing, the product must support typed recovery workflows such as:
 
 - generate footprint from datasheet or package/mechanical dimensions
@@ -325,6 +389,7 @@ When file-backed CAD assets are missing, the product must support typed recovery
 - generate 3D model from mechanical drawing geometry
 
 The workflow must preserve:
+
 - provenance
 - readiness status
 - confidence metadata
@@ -332,10 +397,12 @@ The workflow must preserve:
 
 The product must be explicit when generation is unavailable due to insufficient source data.
 
-### 8. Approval workflow
+### 8. Approval Workflow
+
 The platform must support a part-level approval model that is separate from import success and separate from asset review.
 
 A part should be able to move through states such as:
+
 - draft
 - pending review
 - approved for design
@@ -343,15 +410,18 @@ A part should be able to move through states such as:
 - rejected
 
 Approval workflows must make it clear:
+
 - who reviewed a part
 - why a decision was made
 - what blockers remain
 - what scope of use is approved
 
-### 9. Admin review queue
+### 9. Admin Review Queue
+
 The platform must provide an operational review queue for unresolved readiness issues.
 
 Minimum queue categories:
+
 - failed intake or import
 - low-confidence identity
 - missing mates
@@ -367,46 +437,77 @@ Minimum queue categories:
 The admin queue should support triage, assignment, review, and resolution.
 
 ### 10. Export
+
 The platform must support:
+
 - Altium bundle
 - SolidWorks bundle
 - neutral STEP/CAD package
 - manifest and warnings output
 
-Exports may only include assets that are truly available and appropriately verified.
-Referenced URLs alone do not count as export-ready files.
+Exports may only include assets that are truly available and appropriately verified. Referenced URLs alone do not count as export-ready files.
+
+### 11. Project/BOM Memory
+
+The platform must add project memory as the next major product direction.
+
+Foundation now shipped:
+
+- project records
+- CSV BOM upload/import
+- BOM column mapping
+- original BOM row preservation
+
+Planned requirements:
+
+- BOM row matching
+- part-to-project usage history
+- where-used search
+- evidence attachments
+- reusable circuit block records
+- BOM health dashboard
+
+These requirements are target behavior, not shipped behavior unless `docs/IMPLEMENTATION_STATUS.md` says otherwise.
 
 ---
 
-## Trust and honesty requirements
+## Trust and Honesty Requirements
 
 The platform must be strict about engineering truth.
 
 ### The system must never:
+
 - imply a file exists when it does not
 - imply a referenced asset is the same as a downloaded asset
 - imply a generated asset is official
 - imply a reviewed asset is automatically verified for export
 - imply a connector set is buildable if required relationships are incomplete
 - imply a successful import means a part is approved for design use
+- imply approval means export readiness
+- present planned matching, where-used, circuit block, evidence vault, or BOM health workflows as shipped behavior
 - hide blockers behind vague readiness labels
 
 ### The system must always:
+
 - preserve provenance
 - preserve workflow state
 - preserve confidence and uncertainty where applicable
 - make trust boundaries visible to the user
 - explain readiness through explicit warnings, blockers, and state
 - keep asset truth and part approval clearly separated
+- keep review approval, validation evidence, and verified-for-export promotion separate
+- make project history and where-used data first-class product concepts as those features are implemented
 
 ---
 
-## UX and interaction requirements
+## UX and Interaction Requirements
 
 The product should feel like an **engineering work surface**.
 
 ### The UI must prioritize:
+
 - fast MPN-driven workflows
+- project/BOM context as the product expands
 - structured data presentation
 - clear status communication
 - readable technical density
@@ -414,6 +515,7 @@ The product should feel like an **engineering work surface**.
 - calm, explicit error and warning states
 
 ### The UI should avoid:
+
 - marketing-site hero layouts
 - decorative emptiness
 - vague status language
@@ -421,19 +523,24 @@ The product should feel like an **engineering work surface**.
 - hiding technical truth behind oversimplified polish
 
 ### Key user-facing concepts that must be legible:
+
 - readiness
 - blockers
 - confidence
 - provenance
 - approval
 - export truth
+- validation evidence
+- where-used history
+- project/BOM risk
 - compatibility confidence
 
 ---
 
-## Non-goals for the MVP
+## Non-Goals for the MVP
 
 The MVP should not attempt to:
+
 - scrape the entire internet in real time
 - support every CAD tool immediately
 - auto-generate perfect CAD assets for arbitrary parts
@@ -441,44 +548,11 @@ The MVP should not attempt to:
 - become a distributor marketplace
 - replace formal engineering review for production-critical designs
 - claim universal connector compatibility across every vendor family without evidence
+- claim project/BOM import, where-used search, circuit blocks, evidence vault, or BOM health dashboard are already complete
 
 ---
 
-## Valuable later features
-
-### Comparison and selection
-- side-by-side compare
-- alternate ranking
-- package risk warnings
-- lifecycle and sourcing risk overlays
-- variant confusion diff views
-
-### Workflow and productivity
-- BOM ingestion
-- approved parts vault
-- project-aware part recommendations
-- richer internal review queue
-- validation and trust automation for generated assets
-- issue assignment and workflow automation
-
-### Engineering utilities
-- EE calculators
-- reference circuit patterns
-- package and footprint validation helpers
-- cable and connector assembly guidance
-- compatibility explanation tools
-
-### Data and ingestion
-- real provider integrations
-- richer source conflict resolution
-- datasheet extraction pipeline
-- automated asset generation pipeline
-- freshness tracking and sync scheduling
-- broader internal knowledge capture
-
----
-
-## Success criteria
+## Success Criteria
 
 The product is succeeding when a user can say:
 
@@ -491,5 +565,7 @@ The product is succeeding when a user can say:
 - I know what can be exported now.
 - I know what can be recovered when files are missing.
 - I know what is blocking readiness if the part is not ready.
+- I know where this part or known-good set has been used before.
+- I know which BOM rows carry risk and which decisions need follow-up.
 
 That is the standard.

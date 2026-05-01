@@ -5,6 +5,7 @@
  */
 
 import type { SystemHealthResponse } from "@ee-library/shared";
+import React from "react";
 
 /** WorkerStatusBannerProps accepts the health payload (or null when fetch failed). */
 export interface WorkerStatusBannerProps {
@@ -64,7 +65,7 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
         {isLocalDev ? (
           <ul className="status-banner__list">
             <li>Run <code>npm run setup:dev</code> to write .env, OR</li>
-            <li>Restart the dev stack via <code>npm run dev</code> so .env is reloaded ({databaseUrlConfigured ? "the web process can see DATABASE_URL but the API process cannot — restart the API" : "neither web nor API can see DATABASE_URL"}).</li>
+            <li>Restart the dev stack via <code>npm run dev</code> so .env is reloaded ({databaseUrlConfigured ? "the web process can see DATABASE_URL but the API process cannot - restart the API" : "neither web nor API can see DATABASE_URL"}).</li>
             <li>Search is currently using the seed-fallback dataset only.</li>
           </ul>
         ) : (
@@ -74,6 +75,8 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
     );
   }
 
+  const queueSummary = summarizeQueues(health);
+
   if (health.worker.status === "offline") {
     return (
       <div className="status-banner status-banner--warning" data-testid="banner-worker-offline" role="status">
@@ -82,12 +85,77 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
           Direct MPN imports still work. Bulk acquisition and queued enrichment will not run until you start{" "}
           <code>npm run dev:worker</code>
           {health.worker.lastSeenAt ? ` (last heartbeat ${formatRelative(health.worker.lastSeenAt)})` : " (no heartbeat ever recorded)"}.
+          {queueSummary.totalPending > 0 ? ` ${formatQueueSummary(queueSummary)} waiting for a worker.` : ""}
+        </span>
+      </div>
+    );
+  }
+
+  if (queueSummary.totalFailed > 0) {
+    return (
+      <div className="status-banner status-banner--warning" data-testid="banner-queue-failures" role="status">
+        <strong>Queued provider work has failures.</strong>
+        <span>
+          {formatQueueSummary(queueSummary)} Check <code>npm run operations:worker</code> or the admin queue before trusting async acquisition results.
+        </span>
+      </div>
+    );
+  }
+
+  if (queueSummary.totalPending > 0) {
+    return (
+      <div className="status-banner status-banner--warning" data-testid="banner-queue-pending" role="status">
+        <strong>Queued provider work is active.</strong>
+        <span>
+          {formatQueueSummary(queueSummary)} The worker is online, so queued acquisition and enrichment should continue moving.
         </span>
       </div>
     );
   }
 
   return null;
+}
+
+/** QueueSummary is a compact view of async provider work from /system/health. */
+interface QueueSummary {
+  /** Pending or running acquisition jobs. */
+  acquisitionPending: number;
+  /** Failed acquisition jobs. */
+  acquisitionFailed: number;
+  /** Pending or running enrichment jobs. */
+  enrichmentPending: number;
+  /** Failed enrichment jobs. */
+  enrichmentFailed: number;
+  /** All pending or running jobs. */
+  totalPending: number;
+  /** All failed jobs. */
+  totalFailed: number;
+}
+
+/**
+ * Collapses acquisition and enrichment counts into totals plus per-queue fields.
+ */
+function summarizeQueues(health: SystemHealthResponse): QueueSummary {
+  const acquisitionPending = health.queues.acquisition.pending;
+  const acquisitionFailed = health.queues.acquisition.failed;
+  const enrichmentPending = health.queues.enrichment.pending;
+  const enrichmentFailed = health.queues.enrichment.failed;
+
+  return {
+    acquisitionFailed,
+    acquisitionPending,
+    enrichmentFailed,
+    enrichmentPending,
+    totalFailed: acquisitionFailed + enrichmentFailed,
+    totalPending: acquisitionPending + enrichmentPending
+  };
+}
+
+/**
+ * Formats queue counts for the status banner without hiding which queue needs attention.
+ */
+function formatQueueSummary(summary: QueueSummary): string {
+  return `Acquisition: ${summary.acquisitionPending} pending, ${summary.acquisitionFailed} failed. Enrichment: ${summary.enrichmentPending} pending, ${summary.enrichmentFailed} failed.`;
 }
 
 /**

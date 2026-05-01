@@ -167,6 +167,24 @@ export type PartEnrichmentSummaryState = "available" | "not_recorded" | "unavail
 /** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
 export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
 
+/** ProjectStatus names planned project-memory lifecycle states without implying BOM workflows are shipped. */
+export type ProjectStatus = "active" | "archived" | "prototype" | "production" | "deprecated";
+
+/** ProjectRevisionStatus keeps released and in-review project revisions distinct for future where-used views. */
+export type ProjectRevisionStatus = "draft" | "in_review" | "released" | "superseded" | "archived";
+
+/** BomSourceFormat records the source file family for a planned BOM import. */
+export type BomSourceFormat = "csv" | "xlsx" | "json" | "eda_export" | "manual";
+
+/** BomImportStatus tracks intake progress before matching rows to confirmed internal parts. */
+export type BomImportStatus = "uploaded" | "mapping_required" | "mapped" | "processing" | "processed" | "failed";
+
+/** BomLineMatchStatus prevents weak or ambiguous BOM rows from becoming confirmed usage. */
+export type BomLineMatchStatus = "unmatched" | "matched" | "ambiguous" | "weak_match" | "ignored";
+
+/** ProjectPartUsageStatus distinguishes historical context from released, reusable project usage. */
+export type ProjectPartUsageStatus = "proposed" | "in_review" | "used" | "released" | "deprecated";
+
 /** SourceExtractionSignalType names explicit source material extracted for CAD recovery. */
 export type SourceExtractionSignalType = "package_mechanical_dimensions" | "pin_table" | "mechanical_drawing";
 
@@ -262,6 +280,230 @@ export interface SourceExtractionSignal {
   extractionSource: SourceExtractionSource;
   notes: string | null;
   lastUpdatedAt: string;
+}
+
+/** Project is the planned top-level project-memory root for BOM and where-used history. */
+export interface Project {
+  id: string;
+  projectKey: string;
+  name: string;
+  description: string;
+  owner: string | null;
+  status: ProjectStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ProjectRevision scopes BOM imports and usage records to a concrete project revision. */
+export interface ProjectRevision {
+  id: string;
+  projectId: string;
+  revisionLabel: string;
+  revisionStatus: ProjectRevisionStatus;
+  sourceReference: string | null;
+  releasedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** BomImport stores upload and mapping provenance before any row is treated as matched. */
+export interface BomImport {
+  id: string;
+  projectId: string;
+  projectRevisionId: string;
+  sourceFilename: string;
+  sourceFormat: BomSourceFormat;
+  storageKey: string | null;
+  importStatus: BomImportStatus;
+  columnMapping: Record<string, unknown>;
+  importSummary: Record<string, unknown>;
+  importedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** BomLine preserves raw and mapped BOM row evidence with explicit match state. */
+export interface BomLine {
+  id: string;
+  bomImportId: string;
+  projectId: string;
+  projectRevisionId: string;
+  rowNumber: number;
+  designators: string[];
+  quantity: number | null;
+  rawMpn: string | null;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  rawSupplierReference: string | null;
+  rawNotes: string | null;
+  rawRowPayload: Record<string, unknown>;
+  matchedPartId: string | null;
+  matchStatus: BomLineMatchStatus;
+  matchConfidenceScore: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ProjectPartUsage records confirmed internal usage for future where-used search. */
+export interface ProjectPartUsage {
+  id: string;
+  projectId: string;
+  projectRevisionId: string;
+  bomLineId: string | null;
+  partId: string;
+  usageContext: string | null;
+  designators: string[];
+  quantity: number | null;
+  usageStatus: ProjectPartUsageStatus;
+  approvalSnapshot: Record<string, unknown>;
+  readinessSnapshot: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ProjectCreateInput is the first write path for project-memory records from the web app. */
+export interface ProjectCreateInput {
+  projectKey: string;
+  name: string;
+  description?: string | null;
+  owner?: string | null;
+  status?: ProjectStatus;
+  initialRevisionLabel?: string | null;
+}
+
+/** ProjectCreateResponse returns the created project and its first revision. */
+export interface ProjectCreateResponse {
+  project: Project;
+  initialRevision: ProjectRevision;
+  detail: ProjectDetailResponse;
+}
+
+/** BomColumnMapping maps source CSV headers into canonical BOM line fields. */
+export interface BomColumnMapping {
+  mpn?: string | null;
+  manufacturer?: string | null;
+  quantity?: string | null;
+  designators?: string | null;
+  description?: string | null;
+  notes?: string | null;
+  supplierReference?: string | null;
+}
+
+/** BomImportPreviewRow preserves one parsed CSV row before any database writes happen. */
+export interface BomImportPreviewRow {
+  rowNumber: number;
+  values: Record<string, string>;
+}
+
+/** BomImportPreviewInput carries raw CSV text for a no-write preview parse. */
+export interface BomImportPreviewInput {
+  sourceFilename: string;
+  sourceFormat: "csv";
+  rawContent: string;
+}
+
+/** BomImportPreviewResponse returns headers, preview rows, and suggested mapping without persistence. */
+export interface BomImportPreviewResponse {
+  sourceFilename: string;
+  sourceFormat: "csv";
+  headers: string[];
+  rowsPreview: BomImportPreviewRow[];
+  rowCount: number;
+  skippedBlankRowCount: number;
+  suggestedMapping: BomColumnMapping;
+  warnings: string[];
+}
+
+/** BomImportCreateInput persists a parsed and mapped CSV BOM into project memory. */
+export interface BomImportCreateInput extends BomImportPreviewInput {
+  projectRevisionId?: string | null;
+  revisionLabel?: string | null;
+  columnMapping: BomColumnMapping;
+}
+
+/** BomImportPersistSummary reports saved BOM rows without implying part matching has run. */
+export interface BomImportPersistSummary {
+  persistedLineCount: number;
+  skippedBlankRowCount: number;
+  mappedFieldCount: number;
+  matchStatus: "unmatched";
+}
+
+/** BomImportCreateResponse returns saved import metadata plus a bounded preview of saved lines. */
+export interface BomImportCreateResponse {
+  bomImport: BomImport;
+  lineCount: number;
+  linesPreview: BomLine[];
+  summary: BomImportPersistSummary;
+}
+
+/** ProjectMemoryReadState distinguishes populated reads from configured-but-empty project memory. */
+export type ProjectMemoryReadState = "available" | "empty";
+
+/** ProjectMemoryCapabilityState labels foundations and planned workflows without presenting plans as shipped. */
+export type ProjectMemoryCapabilityState = "foundation" | "planned";
+
+/** ProjectMemoryCapability names one project-memory capability and whether it is foundation-only or planned. */
+export interface ProjectMemoryCapability {
+  id: "project_records" | "bom_import_records" | "bom_upload" | "bom_matching" | "where_used" | "bom_health" | "evidence_vault" | "circuit_blocks";
+  label: string;
+  state: ProjectMemoryCapabilityState;
+  detail: string;
+}
+
+/** ProjectSummary is the compact project row used by project-list API reads. */
+export interface ProjectSummary {
+  project: Project;
+  revisionCount: number;
+  bomImportCount: number;
+  usageCount: number;
+  latestActivityAt: string;
+}
+
+/** ProjectListResponse is the read-only project-memory list contract. */
+export interface ProjectListResponse {
+  state: ProjectMemoryReadState;
+  projects: ProjectSummary[];
+  capabilities: ProjectMemoryCapability[];
+}
+
+/** ProjectDetailResponse is the read-only project-memory detail contract. */
+export interface ProjectDetailResponse {
+  state: "available";
+  project: Project;
+  summary: ProjectSummary;
+  revisions: ProjectRevision[];
+  bomImports: BomImport[];
+  usages: ProjectPartUsage[];
+  capabilities: ProjectMemoryCapability[];
+}
+
+/** ProjectRevisionsResponse returns persisted revisions for one project. */
+export interface ProjectRevisionsResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  revisions: ProjectRevision[];
+}
+
+/** ProjectBomImportsResponse returns persisted BOM import records for one project. */
+export interface ProjectBomImportsResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  bomImports: BomImport[];
+}
+
+/** BomImportLinesResponse returns raw and mapped BOM rows for one persisted BOM import. */
+export interface BomImportLinesResponse {
+  state: ProjectMemoryReadState;
+  bomImportId: string;
+  lines: BomLine[];
+}
+
+/** ProjectPartUsagesResponse returns confirmed persisted usage records for one project. */
+export interface ProjectPartUsagesResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  usages: ProjectPartUsage[];
 }
 
 /** PartMetric stores one normalized datasheet metric with confidence and provenance. */

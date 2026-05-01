@@ -818,7 +818,7 @@ async function listPartIdsForRecompute(
   cursorLastUpdatedAt: string | null,
   cursorId: string | null
 ): Promise<{ id: string; lastUpdatedAt: string }[]> {
-  const result = await databasePool.query<{ id: string; last_updated_at: string }>(
+  const result = await databasePool.query<{ id: string; last_updated_at: string | Date }>(
     `
       SELECT id, last_updated_at
       FROM parts

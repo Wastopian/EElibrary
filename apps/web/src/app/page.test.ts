@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { getAllPartRecords } from "@ee-library/shared/search";
 import { importUiCopy } from "../lib/import-ui-copy";
-import SearchPage from "./catalog/page";
+import RootPage from "./page";
 
 /**
  * Verifies the homepage renders setup instructions instead of crashing when DB is missing.
@@ -96,16 +96,15 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     assert.match(html, /not DB-backed catalog data/u);
 
     // Core quick-check workspace surfaces stay visible even when DB is missing.
-    assert.match(html, /Quick part readiness check/u);
-    assert.match(html, /MPN or keyword/u);
-    assert.match(html, /Manufacturer context/u);
-    assert.match(html, /Category filter/u);
+    assert.match(html, /Catalog workbench/u);
+    assert.match(html, /MPN, manufacturer, provider id, or keyword/u);
+    assert.match(html, /Provider or datasheet lookup context/u);
     assert.match(html, /Provider part reference/u);
     assert.match(html, /Provider URL/u);
     assert.match(html, /0430250200/u);
 
     // Filter rail, results panel, and catalog presentation modes render in seed mode.
-    assert.match(html, /Filter the readiness catalog/u);
+    assert.match(html, /Refine results/u);
     assert.match(html, /Import by MPN/u);
     assert.match(html, /CAD files for export/u);
     assert.match(html, /List/u);
@@ -351,7 +350,7 @@ test("homepage renders partial readiness data state from incomplete record", asy
 /**
  * Verifies no-match state remains explicit and does not fabricate readiness.
  */
-test("homepage renders explicit provider lookup CTA for DB-backed concrete no-match queries", async () => {
+test("homepage renders direct exact-MPN import CTA for DB-backed concrete no-match queries", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const restoreFetch = mockFetch((url) => {
@@ -389,10 +388,10 @@ test("homepage renders explicit provider lookup CTA for DB-backed concrete no-ma
 
     assert.match(html, /Part not found/u);
     assert.match(html, /will not create a readiness answer without backend data/u);
-    assert.match(html, new RegExp(importUiCopy.providerLookupLead, "u"));
-    assert.match(html, new RegExp(importUiCopy.providerLookupExactNote, "u"));
-    assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
-    assert.doesNotMatch(html, /Try importing this part/u);
+    assert.match(html, new RegExp(importUiCopy.catalogAcquisitionLead, "u"));
+    assert.match(html, new RegExp(importUiCopy.catalogAcquisitionNote, "u"));
+    assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
     assert.doesNotMatch(html, /Readiness Checks/u);
   } finally {
     restoreFetch();
@@ -400,9 +399,9 @@ test("homepage renders explicit provider lookup CTA for DB-backed concrete no-ma
 });
 
 /**
- * Verifies numeric-only MPN lookups still expose no-match acquisition when the catalog has no row yet.
+ * Verifies numeric-only MPN lookups still expose direct no-match acquisition when the catalog has no row yet.
  */
-test("homepage shows provider lookup CTA for numeric-only no-match lookups", async () => {
+test("homepage shows direct import CTA for numeric-only no-match lookups", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const restoreFetch = mockFetch((url) => {
@@ -439,8 +438,8 @@ test("homepage shows provider lookup CTA for numeric-only no-match lookups", asy
     const html = await renderHomepage({ q: "0430250200" });
 
     assert.match(html, /Part not found/u);
-    assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
-    assert.doesNotMatch(html, /Try importing this part/u);
+    assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
   } finally {
     restoreFetch();
   }
@@ -488,16 +487,16 @@ test("homepage keeps catalog acquisition unavailable for package-style no-match 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
     assert.match(html, /does not run live provider search for generic keywords/u);
-    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   } finally {
     restoreFetch();
   }
 });
 
 /**
- * Verifies normal homepage search does not auto-run provider lookup during server render.
+ * Verifies normal homepage search does not auto-run provider lookup or provider import during server render.
  */
-test("homepage does not automatically call provider lookup during normal catalog search", async () => {
+test("homepage does not automatically call provider lookup or import during normal catalog search", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const requestedPaths: string[] = [];
@@ -506,6 +505,10 @@ test("homepage does not automatically call provider lookup during normal catalog
 
     if (url.pathname === "/provider-lookups") {
       throw new Error("provider lookup should not run during initial search render");
+    }
+
+    if (url.pathname === "/imports/provider") {
+      throw new Error("provider import should not run during initial search render");
     }
 
     if (url.pathname === "/health") {
@@ -594,7 +597,7 @@ test("homepage keeps catalog acquisition unavailable when no-match runs in seed 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
     assert.match(html, /local seed examples/u);
-    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   } finally {
     restoreFetch();
   }
@@ -604,7 +607,7 @@ test("homepage keeps catalog acquisition unavailable when no-match runs in seed 
  * Renders the server component with empty search params.
  */
 async function renderHomepage(searchParams: Record<string, string> = {}): Promise<string> {
-  return renderToStaticMarkup(await SearchPage({ searchParams: Promise.resolve(searchParams) }));
+  return renderToStaticMarkup(await RootPage({ searchParams: Promise.resolve(searchParams) }));
 }
 
 /**

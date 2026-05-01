@@ -72,15 +72,21 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
     {
       items: [
         {
-          description: "Quick readiness checks, recent records, and engineering-first search filters.",
+          description: "Search parts, import exact MPNs, and scan readiness.",
           href: "/catalog",
-          label: "Catalog workspace",
+          label: "Catalog",
           match: { path: "/catalog", type: "path" }
         },
         {
-          description: "Issue operations, review queues, import history, and promotion workflow.",
+          description: "Open internal project memory and persisted BOM usage.",
+          href: "/projects",
+          label: "Projects",
+          match: { path: "/projects", type: "path" }
+        },
+        {
+          description: "Review, promotion, failed import, and follow-up queues.",
           href: "/admin",
-          label: "Admin review queue",
+          label: "Admin",
           match: { path: "/admin", type: "path" }
         }
       ],
@@ -89,21 +95,21 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
     {
       items: [
         {
-          description: "Connector records with mates, accessories, cable assumptions, and family warnings in view.",
+          description: "Filtered view for mates, accessories, and warnings.",
           href: "/catalog?category=Connector",
-          label: "Connector coverage",
+          label: "Connectors",
           match: { name: "category", type: "query", value: "Connector" }
         },
         {
-          description: "Records missing verified file-backed CAD for export workflows.",
+          description: "Filtered view for parts missing verified file-backed CAD.",
           href: "/catalog?cad=unavailable",
-          label: "Missing verified CAD",
+          label: "Missing CAD",
           match: { name: "cad", type: "query", value: "unavailable" }
         },
         {
-          description: "Parts still waiting on a design-use approval decision.",
+          description: "Filtered view for parts waiting on a review decision.",
           href: "/catalog?approvalStatus=pending_review",
-          label: "Pending approval",
+          label: "Pending review",
           match: { name: "approvalStatus", type: "query", value: "pending_review" }
         }
       ],
@@ -121,9 +127,8 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
               const isActive = isNavigationItemActive(item, currentLocation);
 
               return (
-                <a aria-current={isActive ? "page" : undefined} className={isActive ? "app-nav__link app-nav__link--active" : "app-nav__link"} href={item.href} key={item.href}>
+                <a aria-current={isActive ? "page" : undefined} aria-label={`${item.label}: ${item.description}`} className={isActive ? "app-nav__link app-nav__link--active" : "app-nav__link"} href={item.href} key={item.href}>
                   <span className="app-nav__link-label">{item.label}</span>
-                  <span className="app-nav__link-description">{item.description}</span>
                 </a>
               );
             })}
@@ -142,7 +147,7 @@ function isNavigationItemActive(item: NavigationItem, currentLocation: string): 
 
   if (item.match.type === "path") {
     if (item.match.path === "/catalog") {
-      return pathname === "/catalog" || pathname.startsWith("/parts/");
+      return pathname === "/" || pathname === "/catalog" || pathname.startsWith("/parts/");
     }
 
     return pathname.startsWith(item.match.path);

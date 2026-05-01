@@ -27,9 +27,10 @@ test("catalog results presentation renders list mode by default", () => {
 test("catalog results presentation renders dense table mode", () => {
   const html = renderToStaticMarkup(<CatalogResultsPresentation initialMode="table" rows={[buildRow()]} />);
 
-  assert.match(html, /backend-backed rows/u);
-  assert.match(html, /Category \/ package/u);
-  assert.match(html, /Export/u);
+  assert.match(html, /visible rows/u);
+  assert.match(html, /Description/u);
+  assert.match(html, /CAD\/export/u);
+  assert.match(html, /Next action/u);
   assert.match(html, /Open/u);
   assert.match(html, /215079-8/u);
 });
@@ -44,12 +45,16 @@ function buildRow() {
     approvalTone: "info" as const,
     assetTruthDetail: "One generated asset still needs review.",
     assetTruthLabel: "Generated CAD present",
+    cadExportLabel: "Export bundle: partial bundle",
+    cadExportTone: "review" as const,
     category: "Connector",
     description: "",
     connectorSignalDetail: "Mating set exists, but one accessory relationship still needs review.",
     connectorSignalLabel: "Mapped with follow-up",
     connectorSignalTitle: "Connector intelligence",
     connectorTitle: "Micro-Fit connector family",
+    datasheetLabel: "File stored",
+    datasheetTone: "verified" as const,
     exportLabel: "Export bundle: partial bundle",
     exportTone: "review" as const,
     href: "/parts/part-1",
@@ -57,6 +62,8 @@ function buildRow() {
     lifecycleLabel: "Lifecycle: active",
     manufacturerName: "TE Connectivity",
     mpn: "215079-8",
+    nextActionDetail: "Review generated footprint before export.",
+    nextActionLabel: "Review CAD",
     packageName: "Plug housing",
     riskLabel: "Top blocker",
     readinessDetail: "Identity is confirmed, but export still waits on verified file-backed assets.",

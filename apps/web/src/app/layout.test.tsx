@@ -9,24 +9,25 @@ import { renderToStaticMarkup } from "react-dom/server";
 import RootLayout from "./layout";
 
 /**
- * Verifies the shared shell reflects the readiness-workspace framing instead of a generic catalog title.
+ * Verifies the shared shell reflects the engineering-memory framing instead of a generic catalog title.
  */
-test("root layout renders the engineering readiness workspace shell", () => {
+test("root layout renders the engineering memory workspace shell", () => {
   const html = renderToStaticMarkup(
     <RootLayout>
       <main>Child content</main>
     </RootLayout>
   );
 
-  assert.match(html, /Engineering readiness workspace/u);
-  assert.match(html, /Search, inspect, trust, and export/u);
+  assert.match(html, /Engineering memory/u);
+  assert.match(html, /Projects - parts - evidence - reuse/u);
   assert.match(html, /Skip to main content/u);
-  assert.match(html, /Catalog workspace/u);
-  assert.match(html, /Admin review queue/u);
+  assert.match(html, /Catalog/u);
+  assert.match(html, /Projects/u);
+  assert.match(html, /Admin/u);
   assert.match(html, /Library views/u);
-  assert.match(html, /Connector coverage/u);
-  assert.match(html, /Pending approval/u);
+  assert.match(html, /Connectors/u);
+  assert.match(html, /Pending review/u);
   assert.match(html, /app-nav__link/u);
   assert.match(html, /app-sidebar/u);
-  assert.match(html, /app-main-header/u);
+  assert.doesNotMatch(html, /app-main-header/u);
 });

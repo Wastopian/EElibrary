@@ -15,13 +15,13 @@ export const importUiCopy = {
   /** Shown when the current page context cannot safely offer catalog acquisition. */
   unavailableLead: "Catalog acquisition is unavailable here.",
   /** Shown when the compact no-match acquisition flow is ready to try one exact provider import. */
-  catalogAcquisitionLead: "Try a one-part catalog acquisition using the existing provider import path.",
+  catalogAcquisitionLead: "Import this exact MPN from a configured provider.",
   /** Client-side validation when both fields are empty. */
   validationNeedLookup: "Enter an MPN or a provider part id.",
   /** Primary submit action label. */
   buttonSubmit: "Import into catalog",
   /** Primary no-match acquisition action label. */
-  buttonAcquireNoMatch: "Try importing this part",
+  buttonAcquireNoMatch: "Import exact MPN",
   /** Explicit action that runs supported-provider exact lookup from a catalog no-match state. */
   buttonSearchProviders: "Search supported providers",
   /** Action that starts import from one selected provider candidate. */
@@ -35,7 +35,7 @@ export const importUiCopy = {
   /** Link used when search results must be rerun after a successful import. */
   linkRefreshSearch: "Refresh search results",
   /** Clarifies that no-match acquisition is still catalog ingestion, not a global live search. */
-  catalogAcquisitionNote: "Catalog acquisition from no-match only. This is not live global search.",
+  catalogAcquisitionNote: "Exact-MPN import only. Supported providers are Local Catalog and JLC/LCSC.",
   /** Introduces the explicit provider lookup step from a DB-backed no-match state. */
   providerLookupLead: "Search supported providers for exact matches before deciding whether to import.",
   /** Clarifies that provider lookup remains explicit and exact-match only. */
@@ -69,7 +69,7 @@ export const importUiCopy = {
   /** Explains why no-match acquisition is hidden in local seed mode. */
   catalogAcquisitionUnavailableSeed: "Catalog acquisition is unavailable while the page is using local seed examples. Seed mode does not imply DB-backed import availability.",
   /** Explains why generic keyword misses do not become live provider lookups. */
-  catalogAcquisitionUnavailableLookup: "Catalog acquisition from no-match only supports concrete MPN-style lookups from the main search field. It does not run live provider search for generic keywords.",
+  catalogAcquisitionUnavailableLookup: "Exact import only supports concrete MPN-style lookups from the main search field. It does not run live provider search for generic keywords.",
   /** Explains why an unauthenticated or non-admin session cannot run the import path. */
   catalogAcquisitionUnavailableSession: "Catalog acquisition is unavailable for this session. An admin session is required for provider import.",
   /** Explains why import cannot continue when the backing catalog database is absent. */

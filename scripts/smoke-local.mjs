@@ -142,9 +142,9 @@ function printSummary() {
 
   console.log("");
   console.log(`smoke:local results: ${passed.length} pass, ${warned.length} warn, ${failed.length} fail`);
-  console.log("─".repeat(60));
+  console.log("-".repeat(60));
   for (const entry of checks) {
-    const symbol = entry.status === "pass" ? "✓" : entry.status === "warn" ? "!" : "✗";
+    const symbol = entry.status === "pass" ? "PASS" : entry.status === "warn" ? "WARN" : "FAIL";
     console.log(`  ${symbol} ${entry.name}: ${entry.detail}`);
   }
   console.log("");

@@ -7,6 +7,7 @@ import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, basename } from "node:path";
 import { performance } from "node:perf_hooks";
+import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
 import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
@@ -20,10 +21,13 @@ import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient, setStorageClientForTests } from "./file-storage";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
+import { createBomImportInDatabase, createProjectInDatabase, readBomImportLinesFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
   AssetPromotionInput,
+  BomImportCreateInput,
+  BomImportPreviewInput,
   CadAvailabilityFilter,
   CatalogDataSource,
   ConnectorClass,
@@ -39,6 +43,8 @@ import type {
   PartSearchRecord,
   PartReadinessStatus,
   PartSearchSort,
+  ProjectCreateInput,
+  ProjectStatus,
   ProviderImportCreateResponse,
   ReviewActionInput,
   ReviewOutcome,
@@ -50,6 +56,9 @@ import type {
 
 /** port is the local HTTP port for the API process. */
 const port = Number(process.env.API_PORT ?? 4000);
+
+/** maxBomCsvBytes bounds MVP JSON upload size before row matching moves into worker-backed intake. */
+const maxBomCsvBytes = 2 * 1024 * 1024;
 
 /** RouteTiming stores one measured operation for headers and local logs. */
 interface RouteTiming {
@@ -96,10 +105,36 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
   const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(url.pathname);
+  const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(url.pathname);
+  const projectBomImportsMatch = /^\/projects\/([^/]+)\/bom-imports$/u.exec(url.pathname);
+  const projectUsagesMatch = /^\/projects\/([^/]+)\/usages$/u.exec(url.pathname);
+  const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
+  const bomImportLinesMatch = /^\/bom-imports\/([^/]+)\/lines$/u.exec(url.pathname);
   const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
 
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
     await handleProviderLookupCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/projects") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/bom-imports/preview") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleBomImportPreview(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && projectBomImportsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectBomImportCreate(request, response, decodeURIComponent(projectBomImportsMatch[1]), session.sub);
     return;
   }
 
@@ -161,7 +196,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
+      error: "Only GET, project POST, BOM preview/import POST, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -190,6 +225,36 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     );
 
     sendJson(response, 200, health);
+    return;
+  }
+
+  if (url.pathname === "/projects") {
+    await handleProjectListRead(response);
+    return;
+  }
+
+  if (projectRevisionsMatch?.[1]) {
+    await handleProjectRevisionsRead(response, decodeURIComponent(projectRevisionsMatch[1]));
+    return;
+  }
+
+  if (projectBomImportsMatch?.[1]) {
+    await handleProjectBomImportsRead(response, decodeURIComponent(projectBomImportsMatch[1]));
+    return;
+  }
+
+  if (projectUsagesMatch?.[1]) {
+    await handleProjectPartUsagesRead(response, decodeURIComponent(projectUsagesMatch[1]));
+    return;
+  }
+
+  if (projectDetailMatch?.[1]) {
+    await handleProjectDetailRead(response, decodeURIComponent(projectDetailMatch[1]));
+    return;
+  }
+
+  if (bomImportLinesMatch?.[1]) {
+    await handleBomImportLinesRead(response, decodeURIComponent(bomImportLinesMatch[1]));
     return;
   }
 
@@ -504,6 +569,289 @@ async function handleProviderAcquisitionJobRead(response: ServerResponse, jobId:
           message: "Provider acquisition job not found."
         }
       });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles project creation so the web app can open a real project-memory workspace.
+ */
+async function handleProjectCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<ProjectCreateInput>(request);
+
+  if (!body || !isProjectCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_CREATE_REQUEST",
+        message: "Project creation requires projectKey and name."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "project-create", () => createProjectInDatabase(body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "conflict") {
+      sendJson(response, 409, {
+        error: {
+          code: "PROJECT_KEY_CONFLICT",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles no-write BOM CSV preview requests for the mapping UI.
+ */
+async function handleBomImportPreview(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<BomImportPreviewInput>(request);
+
+  if (!body || !isBomImportPreviewInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_BOM_PREVIEW_REQUEST",
+        message: "BOM preview requires a CSV filename and rawContent."
+      }
+    });
+    return;
+  }
+
+  try {
+    const preview = timeSyncRouteOperation(response, "bom-import-preview", () => buildBomImportPreview(body), (value) => `${value.rowCount} rows`);
+
+    sendCatalogJson(response, preview, "database");
+  } catch (error) {
+    if (error instanceof BomCsvParseError) {
+      sendJson(response, 400, {
+        error: {
+          code: error.code,
+          message: error.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles mapped BOM CSV persistence for one project without running part matching.
+ */
+async function handleProjectBomImportCreate(request: IncomingMessage, response: ServerResponse, projectId: string, importedBy: string): Promise<void> {
+  const body = await readJsonBody<BomImportCreateInput>(request);
+
+  if (!body || !isBomImportCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_BOM_IMPORT_REQUEST",
+        message: "BOM import requires a CSV filename, rawContent, and columnMapping."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "bom-import-create", () => createBomImportInDatabase(projectId, body, importedBy), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project-memory list requests.
+ */
+async function handleProjectListRead(response: ServerResponse): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-list-read",
+      () => readProjectsFromDatabase(),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project detail requests.
+ */
+async function handleProjectDetailRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-detail-read",
+      () => readProjectDetailFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project revision collection requests.
+ */
+async function handleProjectRevisionsRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-revisions-read",
+      () => readProjectRevisionsFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project BOM import collection requests.
+ */
+async function handleProjectBomImportsRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-bom-imports-read",
+      () => readProjectBomImportsFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only BOM line collection requests.
+ */
+async function handleBomImportLinesRead(response: ServerResponse, bomImportId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "bom-import-lines-read",
+      () => readBomImportLinesFromDatabase(bomImportId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "BOM_IMPORT_NOT_FOUND", "BOM import not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only confirmed project usage collection requests.
+ */
+async function handleProjectPartUsagesRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-part-usages-read",
+      () => readProjectPartUsagesFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
       return;
     }
 
@@ -1136,6 +1484,73 @@ function isSourceReconciliationStatus(value: unknown): value is SourceReconcilia
 }
 
 /**
+ * Checks project status values without trusting JSON bodies.
+ */
+function isProjectStatus(value: unknown): value is ProjectStatus {
+  return value === "active" || value === "archived" || value === "prototype" || value === "production" || value === "deprecated";
+}
+
+/**
+ * Checks project-create request shape before hitting persistence.
+ */
+function isProjectCreateInput(value: unknown): value is ProjectCreateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<ProjectCreateInput>;
+
+  return typeof body.projectKey === "string" &&
+    body.projectKey.trim().length > 0 &&
+    typeof body.name === "string" &&
+    body.name.trim().length > 0 &&
+    isOptionalBodyString(body.description) &&
+    isOptionalBodyString(body.owner) &&
+    isOptionalBodyString(body.initialRevisionLabel) &&
+    (body.status === undefined || isProjectStatus(body.status));
+}
+
+/**
+ * Checks no-write BOM preview request shape.
+ */
+function isBomImportPreviewInput(value: unknown): value is BomImportPreviewInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<BomImportPreviewInput>;
+
+  return body.sourceFormat === "csv" &&
+    typeof body.sourceFilename === "string" &&
+    body.sourceFilename.trim().length > 0 &&
+    typeof body.rawContent === "string" &&
+    Buffer.byteLength(body.rawContent, "utf8") <= maxBomCsvBytes;
+}
+
+/**
+ * Checks mapped BOM import request shape before parsing and persistence.
+ */
+function isBomImportCreateInput(value: unknown): value is BomImportCreateInput {
+  if (!isBomImportPreviewInput(value)) {
+    return false;
+  }
+
+  const body = value as Partial<BomImportCreateInput>;
+
+  return isOptionalBodyString(body.projectRevisionId) &&
+    isOptionalBodyString(body.revisionLabel) &&
+    Boolean(body.columnMapping) &&
+    typeof body.columnMapping === "object" &&
+    isOptionalBodyString(body.columnMapping.mpn) &&
+    isOptionalBodyString(body.columnMapping.manufacturer) &&
+    isOptionalBodyString(body.columnMapping.quantity) &&
+    isOptionalBodyString(body.columnMapping.designators) &&
+    isOptionalBodyString(body.columnMapping.description) &&
+    isOptionalBodyString(body.columnMapping.notes) &&
+    isOptionalBodyString(body.columnMapping.supplierReference);
+}
+
+/**
  * Checks optional body strings so routes can reject unexpected object or array values.
  */
 function isOptionalBodyString(value: unknown): value is string | null | undefined {
@@ -1277,6 +1692,15 @@ function buildTelemetryHeaders(response: ServerResponse, statusCode: number): Re
 function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts") return "api-search";
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
+  if (method === "GET" && pathname === "/projects") return "api-project-list";
+  if (method === "POST" && pathname === "/projects") return "api-project-create";
+  if (method === "GET" && /^\/projects\/[^/]+\/revisions$/u.test(pathname)) return "api-project-revisions";
+  if (method === "GET" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-project-bom-imports";
+  if (method === "POST" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-bom-import-create";
+  if (method === "GET" && /^\/projects\/[^/]+\/usages$/u.test(pathname)) return "api-project-usages";
+  if (method === "GET" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-detail";
+  if (method === "GET" && /^\/bom-imports\/[^/]+\/lines$/u.test(pathname)) return "api-bom-import-lines";
+  if (method === "POST" && pathname === "/bom-imports/preview") return "api-bom-import-preview";
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
   if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
@@ -1356,6 +1780,30 @@ function sendCatalogJsonWithStatus<TData>(
   };
 
   sendJson(response, statusCode, payload);
+}
+
+/**
+ * Sends the standard project-memory not-configured response without seed fallback.
+ */
+function sendProjectMemoryNotConfigured(response: ServerResponse): void {
+  sendJson(response, 503, {
+    error: {
+      code: "DB_NOT_CONFIGURED",
+      message: "Project memory reads require a configured database so project, BOM, and usage state can be read."
+    }
+  });
+}
+
+/**
+ * Sends a standard project-memory 404 response for scoped project/BOM reads.
+ */
+function sendProjectMemoryNotFound(response: ServerResponse, code: string, message: string): void {
+  sendJson(response, 404, {
+    error: {
+      code,
+      message
+    }
+  });
 }
 
 /**

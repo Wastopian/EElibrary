@@ -24,7 +24,7 @@ export interface SystemHealthResponse {
     /** Seconds the heartbeat may be stale before the worker is treated as offline. */
     staleAfterSeconds: number;
   };
-  /** Pending and failed counts per logical queue. Zero when the queue is not wired up yet. */
+  /** Pending/running and failed counts per logical queue. Zero when the queue table is unavailable. */
   queues: {
     acquisition: { pending: number; failed: number };
     enrichment: { pending: number; failed: number };

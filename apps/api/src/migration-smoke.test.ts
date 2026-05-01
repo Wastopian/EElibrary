@@ -64,6 +64,9 @@ const partDescriptionMigrationSql = readFileSync(new URL("../../../infra/postgre
 /** searchJoinIndexesMigrationSql loads the migration 021 join-index migration under test. */
 const searchJoinIndexesMigrationSql = readFileSync(new URL("../../../infra/postgres/021_search_join_indexes.sql", import.meta.url), "utf8");
 
+/** projectBomMemoryMigrationSql loads the migration 024 project and BOM memory migration under test. */
+const projectBomMemoryMigrationSql = readFileSync(new URL("../../../infra/postgres/024_project_bom_memory.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -310,6 +313,135 @@ test("migrations 019/020/021 apply on top of legacy schemas and stay idempotent"
 
   const idempotentPart = db.public.one(`SELECT description FROM parts WHERE id = 'part-mig-post020'`);
   assert.equal(idempotentPart.description, "Resistors 1kΩ (0402)", "repeat migration 020 must not zero out existing data");
+});
+
+/**
+ * Verifies the project/BOM memory migration creates durable project, BOM row,
+ * and confirmed-usage tables while keeping weak rows out of usage history.
+ */
+test("project/BOM memory migration preserves row truth and confirmed usage only", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-memory', 'Memory Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-memory', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-memory-ldo', 'TPS7A02DBVR', 'mfr-memory', 'Power management', 'active', 'pkg-memory', 0.8);
+  `);
+
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+
+  db.public.none(`
+    INSERT INTO projects (id, project_key, name, description, owner, status)
+    VALUES ('project-alpha', 'ALPHA', 'Alpha Controller', 'Memory migration smoke project', 'hardware', 'active');
+
+    INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference)
+    VALUES ('rev-alpha-a', 'project-alpha', 'A', 'draft', 'alpha-a');
+
+    INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by)
+    VALUES (
+      'bom-alpha-a',
+      'project-alpha',
+      'rev-alpha-a',
+      'alpha-bom.csv',
+      'csv',
+      'mapped',
+      '{"mpn":"Manufacturer Part Number","quantity":"Qty"}'::jsonb,
+      '{"rowCount":2}'::jsonb,
+      'smoke-test'
+    );
+
+    INSERT INTO bom_lines (
+      id,
+      bom_import_id,
+      project_id,
+      project_revision_id,
+      row_number,
+      designators,
+      quantity,
+      raw_mpn,
+      raw_manufacturer,
+      raw_description,
+      raw_row_payload,
+      matched_part_id,
+      match_status,
+      match_confidence_score
+    )
+    VALUES
+      ('line-alpha-1', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 1, '{"U1"}', 1, 'TPS7A02DBVR', 'Texas Instruments', 'LDO regulator', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1),
+      ('line-alpha-2', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 2, '{"R1"}', 1, 'RC-UNKNOWN', 'Unknown', 'Weak resistor row', '{"row":2}'::jsonb, NULL, 'weak_match', 0.4);
+
+    INSERT INTO project_part_usages (
+      id,
+      project_id,
+      project_revision_id,
+      bom_line_id,
+      part_id,
+      usage_context,
+      designators,
+      quantity,
+      usage_status,
+      approval_snapshot,
+      readiness_snapshot
+    )
+    VALUES (
+      'usage-alpha-u1',
+      'project-alpha',
+      'rev-alpha-a',
+      'line-alpha-1',
+      'part-memory-ldo',
+      'Main rail regulator',
+      '{"U1"}',
+      1,
+      'proposed',
+      '{"approvalStatus":"not_requested"}'::jsonb,
+      '{"readinessStatus":"blocked"}'::jsonb
+    );
+  `);
+
+  const lineCounts = db.public.one(`
+    SELECT
+      COUNT(*)::int AS total_lines,
+      SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END)::int AS matched_lines,
+      SUM(CASE WHEN match_status = 'weak_match' THEN 1 ELSE 0 END)::int AS weak_lines
+    FROM bom_lines
+  `);
+  const usage = db.public.one(`
+    SELECT
+      p.project_key,
+      pr.revision_label,
+      u.part_id,
+      u.designators,
+      u.usage_status
+    FROM project_part_usages u
+    JOIN projects p ON p.id = u.project_id
+    JOIN project_revisions pr ON pr.id = u.project_revision_id
+    WHERE u.id = 'usage-alpha-u1'
+  `);
+
+  assert.deepEqual(lineCounts, { matched_lines: 1, total_lines: 2, weak_lines: 1 });
+  assert.deepEqual(usage, {
+    designators: ["U1"],
+    part_id: "part-memory-ldo",
+    project_key: "ALPHA",
+    revision_label: "A",
+    usage_status: "proposed",
+  });
+
+  assert.throws(
+    () => db.public.none(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, match_status) VALUES ('line-bad-status', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 3, 'confirmed_guess')`),
+    /check/i
+  );
+
+  assert.match(projectBomMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS projects/u);
+  assert.match(projectBomMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS project_revisions/u);
+  assert.match(projectBomMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS bom_imports/u);
+  assert.match(projectBomMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS bom_lines/u);
+  assert.match(projectBomMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS project_part_usages/u);
+  assert.match(projectBomMemoryMigrationSql, /CREATE INDEX IF NOT EXISTS idx_project_part_usages_part/u);
+
+  const idempotentUsageCount = db.public.one(`SELECT COUNT(*)::int AS usage_count FROM project_part_usages`);
+  assert.equal(idempotentUsageCount.usage_count, 1);
 });
 
 /**

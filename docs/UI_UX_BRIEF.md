@@ -4,7 +4,7 @@ This document describes the target UX direction. For current shipped surfaces an
 
 ## UI thesis
 
-EE Library should feel like a serious **engineering part readiness workspace**.
+EE Library should feel like a serious **private engineering memory system for hardware teams**.
 
 It should not feel like:
 - a distributor storefront
@@ -17,15 +17,19 @@ The interface should help engineers answer practical questions fast:
 
 - What part is this?
 - Is the identity verified or ambiguous?
+- Where has this part, connector set, or circuit block been used before?
+- Which project or BOM introduced this decision?
 - Can I actually use this part in a design yet?
 - What mates with it?
 - What else do I need?
 - Which assets exist?
 - Which assets are trustworthy?
+- Which evidence supports this decision?
 - What blockers or risks remain?
 - Is it approved for design use?
 - What can I export now?
 - What can I recover if files are missing?
+- What is risky across this project BOM?
 
 The product should feel **precise, trustworthy, efficient, and operational**.
 
@@ -47,6 +51,7 @@ The product should feel **precise, trustworthy, efficient, and operational**.
 ### Experience goals
 - engineers should be able to understand part readiness in seconds
 - trust boundaries should be visible without reading paragraphs
+- project and BOM context should make prior decisions easy to reuse
 - important actions should feel deliberate, not vague
 - dense data should feel organized, not buried
 - blockers should be obvious
@@ -121,16 +126,18 @@ Typography should do real work, not just decorate.
 
 The UI should consistently prioritize the following in this order:
 
-1. part identity
-2. readiness state
-3. blockers and warnings
-4. buildability / compatibility
-5. engineering asset truth
-6. critical specs
-7. approval and trust state
-8. package / mechanical detail
-9. export readiness
-10. fallback or recovery actions
+1. current task context: part, project, BOM, or circuit block
+2. identity and matching confidence
+3. readiness state
+4. blockers and warnings
+5. buildability / compatibility
+6. engineering asset truth
+7. evidence and provenance
+8. approval and trust state
+9. where-used and reuse context when available
+10. package / mechanical detail
+11. export readiness
+12. fallback or recovery actions
 
 The product should not bury the important truth under decorative cards.
 
@@ -142,7 +149,11 @@ The UI should revolve around this product promise:
 
 > Raw MPN in, engineer-ready part record out.
 
-That means the primary UX is not just “search and browse.”
+The shipped foundation supports that part-readiness loop. The planned product direction expands the promise to:
+
+> Project BOM in, reusable engineering memory out.
+
+That means the UX is not just "search and browse."
 It is:
 
 - intake
@@ -152,6 +163,10 @@ It is:
 - asset truth
 - approval / trust
 - recovery and next actions
+- planned project/BOM memory
+- planned where-used history
+- planned evidence-backed circuit reuse
+- planned BOM health and risk review
 
 The UI should make it obvious what the user knows, what the system knows, and what still needs work.
 
@@ -426,6 +441,106 @@ Notes:
 
 ---
 
+## Planned Project Memory Screens
+
+The screens in this section are planned/future. They should not be presented as shipped until implementation status confirms them.
+
+### Projects Dashboard
+Purpose:
+- show active projects, recent BOM imports, unresolved project risks, and where engineering follow-up is needed
+
+Required modules:
+- project list with status and owner
+- latest revision or BOM import state
+- high-level BOM health signal
+- unresolved risk count
+- recent activity and follow-up actions
+
+### Project Detail
+Purpose:
+- provide the project-level workspace for revisions, BOMs, part usage, evidence, and risks
+
+Required modules:
+- project identity and revision selector
+- BOM import history
+- part usage summary
+- unresolved risk findings
+- evidence and source file references
+- links to BOM health and where-used views
+
+### BOM Import / Mapping Flow
+Purpose:
+- let users upload a BOM, map columns, preserve original row context, and create follow-up work for weak rows
+
+Required modules:
+- file upload
+- column mapping for MPN, manufacturer, quantity, designator, description, notes, and supplier references
+- row preview with raw values
+- match diagnostics for unmatched, ambiguous, and weak rows
+- import summary before committing usage records
+
+### BOM Health Dashboard
+Purpose:
+- review risk across a whole project BOM without opening every part one by one
+
+Required modules:
+- matched and unmatched row counts
+- approval gaps
+- lifecycle and sourcing risk
+- missing evidence
+- missing verified CAD/export assets
+- connector buildability gaps
+- source-conflict and duplicate warnings
+- recommended next actions
+
+### Where-Used View
+Purpose:
+- answer where a part, connector set, asset, or circuit block has appeared before
+
+Required modules:
+- project and revision usage table
+- designators, quantities, and usage status
+- released vs prototype context
+- related circuit blocks
+- risk findings tied to usage
+
+### Circuit Block Library
+Purpose:
+- treat reusable circuit blocks as structured engineering knowledge, not loose notes
+
+Required modules:
+- block list with status, owner, and reuse scope
+- required and optional parts
+- evidence and validation state
+- constraints and known risks
+- where-used context
+
+### Evidence Panel
+Purpose:
+- show the evidence behind a part, asset, project decision, BOM row, risk finding, or circuit block
+
+Required modules:
+- evidence type
+- provenance
+- file/link state
+- review status
+- attached object context
+- notes and audit metadata
+
+### Risk / Next-Action Queue
+Purpose:
+- make BOM, project, part, connector, asset, and circuit-block risks actionable
+
+Required modules:
+- risk type and severity
+- affected object
+- recommended action
+- assignment and status
+- evidence links
+- resolution notes
+
+---
+
 ## Core interface modules
 
 ### Readiness Summary
@@ -470,6 +585,44 @@ Preferred labels:
 - references only
 - no usable assets
 
+### Planned Where-Used Summary
+This module should make internal reuse visible once project usage history exists.
+
+Must make it clear:
+- which projects and revisions used the item
+- whether usage was prototype, review, released, or deprecated
+- whether usage is approved reuse or only historical context
+- what risks are attached to that usage
+
+### Planned Evidence Panel
+This module should make support for decisions visible without implying more trust than exists.
+
+Must make it clear:
+- what evidence exists
+- where it came from
+- what object it supports
+- whether it was reviewed or validated
+- what it does and does not prove
+
+### Planned BOM Health Summary
+This module should make project-level risk scannable.
+
+Must make it clear:
+- which rows are matched, weak, ambiguous, or unmatched
+- which rows lack approval, evidence, or verified CAD/export assets
+- which connector sets are not buildable
+- what the highest-priority next actions are
+
+### Planned Circuit Block Card
+This module should keep reusable circuits structured.
+
+Must make it clear:
+- block status and owner
+- required parts and optional parts
+- evidence and validation state
+- constraints and reuse scope
+- known risks and where-used context
+
 ---
 
 ## UI behavior rules
@@ -484,6 +637,10 @@ Preferred labels:
 - requestable generation must not appear available unless source-readiness rules support it
 - uncertain connector compatibility must remain visibly uncertain
 - blocked readiness states must explain the blockers directly
+- planned project/BOM, where-used, circuit block, evidence vault, and BOM health screens must be labeled as planned until implemented
+- evidence attachments must not imply validation, approval, or export readiness by themselves
+- project usage history must not imply approved reuse unless approval and risk state support that claim
+- circuit block membership must not hide part-level blockers or constraints
 
 ### Status communication rules
 Use short, precise, engineering-oriented labels.
@@ -545,6 +702,8 @@ unless the status is explicitly proven by the data model.
 - approval state should be visible near readiness state
 - export blockers should be visible where export is attempted
 - issue and warning visibility should not require a separate admin page to discover
+- future BOM row matching should show weak, ambiguous, and unmatched states directly in the import flow
+- future where-used views should preserve project, revision, and usage status context
 
 ---
 
@@ -577,6 +736,8 @@ Claude concepts should show:
 - connector intelligence view
 - admin review / issue queue
 - asset truth and export gating behavior
+- planned project dashboard and BOM health flow where relevant
+- planned where-used and circuit block views where relevant
 
 ---
 
@@ -590,7 +751,11 @@ As the platform grows, the UX should continue moving toward:
 - a recovery path for missing CAD
 - a practical buildability assistant
 - an operational review surface for internal truth maintenance
+- a project/BOM memory surface
+- a where-used and reuse decision system
+- an evidence-backed circuit block library
+- a BOM health and risk review workspace
 
 The goal is not to look impressive for thirty seconds.
 
-The goal is to make engineers faster, more confident, and less likely to waste time chasing bad files, wrong mates, ambiguous variants, or fake readiness.
+The goal is to make engineers faster, more confident, and less likely to waste time chasing bad files, wrong mates, ambiguous variants, forgotten project decisions, risky BOM rows, or fake readiness.

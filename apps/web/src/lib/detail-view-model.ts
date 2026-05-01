@@ -15,6 +15,7 @@ import type {
   GenerationWorkflow,
   PartAcquisitionSummary,
   PartEnrichmentSummary,
+  PartIssueCode,
   PartSearchRecord,
   ReviewState,
   ReviewStatusSummary
@@ -75,6 +76,24 @@ export interface QuickReadinessDataCoverage {
   tone: ViewTone;
   /** True when the quick summary is missing important record families. */
   partial: boolean;
+}
+
+/** PartNextAction is one practical follow-up derived from backend readiness truth. */
+export interface PartNextAction {
+  /** Stable action id used in tests and rendering keys. */
+  id: string;
+  /** Short label suitable for catalog rows and detail hero panels. */
+  label: string;
+  /** Explanation of what the action does and why it is next. */
+  detail: string;
+  /** Route or in-page anchor for the action. */
+  href: string;
+  /** Whether the action points to a currently implemented workflow surface. */
+  available: boolean;
+  /** Visual tone for badge/action styling. */
+  tone: ViewTone;
+  /** Scan-speed ordering for primary and secondary actions. */
+  priority: "primary" | "secondary";
 }
 
 /** DetailCompletenessChecklistItem summarizes one engineering-readiness checkpoint for the part detail page. */
@@ -487,6 +506,42 @@ export function getQuickReadinessDataCoverage(record: PartSearchRecord): QuickRe
     partial: true,
     tone: "review"
   };
+}
+
+/**
+ * Maps current backend issues into concrete workstation actions without inventing capabilities.
+ */
+export function getPartNextActions(record: PartSearchRecord): PartNextAction[] {
+  const openIssues = record.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "ignored");
+  const issueActions = openIssues.map((issue, index) => createIssueNextAction(issue.code, issue.detail || issue.summary, index === 0));
+
+  if (issueActions.length > 0) {
+    return dedupePartNextActions(issueActions);
+  }
+
+  if (record.readinessSummary.recommendedActions.length > 0) {
+    return record.readinessSummary.recommendedActions.map((action, index) => ({
+      available: true,
+      detail: record.readinessSummary.detail,
+      href: "#overview-heading",
+      id: `recommended-${index}`,
+      label: action,
+      priority: index === 0 ? "primary" : "secondary",
+      tone: record.readinessSummary.status === "blocked" ? "danger" : "review"
+    }));
+  }
+
+  return [
+    {
+      available: true,
+      detail: "Open the detail sections below to inspect provenance, datasheet, CAD, and export evidence before design use.",
+      href: "#overview-heading",
+      id: "inspect-detail",
+      label: "Inspect detail evidence",
+      priority: "primary",
+      tone: "info"
+    }
+  ];
 }
 
 /**
@@ -1156,6 +1211,113 @@ function buildRecommendedActions(record: PartSearchRecord): QuickReadinessAction
       priority: index === 0 && record.readinessSummary.status === "blocked" ? "high" : index <= 1 ? "medium" : "low"
     }))
   );
+}
+
+/**
+ * Creates the primary workstation action for one backend issue code.
+ */
+function createIssueNextAction(code: PartIssueCode, issueDetail: string, primary: boolean): PartNextAction {
+  const metadata = issueActionMetadata[code];
+
+  return {
+    available: metadata.available,
+    detail: `${metadata.detail} ${issueDetail}`,
+    href: metadata.href,
+    id: code,
+    label: metadata.label,
+    priority: primary ? "primary" : "secondary",
+    tone: metadata.tone
+  };
+}
+
+/** issueActionMetadata maps every backend issue code to an honest user action. */
+const issueActionMetadata: Record<PartIssueCode, Omit<PartNextAction, "detail" | "id" | "priority"> & { detail: string }> = {
+  connector_low_confidence: {
+    available: true,
+    detail: "Review connector relationship confidence before layout or procurement.",
+    href: "#mates-heading",
+    label: "Review connector confidence",
+    tone: "review"
+  },
+  duplicate_candidate: {
+    available: true,
+    detail: "Open admin reconciliation before trusting identity or merging records.",
+    href: "/admin",
+    label: "Review duplicate candidate",
+    tone: "review"
+  },
+  lifecycle_risk: {
+    available: true,
+    detail: "Inspect lifecycle and sourcing evidence before design use.",
+    href: "#sourcing-heading",
+    label: "Review lifecycle risk",
+    tone: "review"
+  },
+  low_confidence_identity: {
+    available: true,
+    detail: "Inspect provider/source provenance and confirm identity before design use.",
+    href: "#sourcing-heading",
+    label: "Confirm identity evidence",
+    tone: "danger"
+  },
+  missing_connector_accessories: {
+    available: true,
+    detail: "Inspect required accessories and cable/tooling relationships.",
+    href: "#mates-heading",
+    label: "Map connector accessories",
+    tone: "review"
+  },
+  missing_connector_mate: {
+    available: true,
+    detail: "Inspect connector mate mapping before layout decisions.",
+    href: "#mates-heading",
+    label: "Map connector mate",
+    tone: "review"
+  },
+  missing_datasheet: {
+    available: true,
+    detail: "Use sourcing and enrichment evidence to attach or capture a datasheet.",
+    href: "#sourcing-heading",
+    label: "Capture datasheet",
+    tone: "review"
+  },
+  missing_verified_cad: {
+    available: true,
+    detail: "Inspect asset coverage, then request generation or promote verified file-backed CAD.",
+    href: "#files-heading",
+    label: "Resolve CAD/export assets",
+    tone: "danger"
+  },
+  pending_approval: {
+    available: true,
+    detail: "Review generated or sourced assets before treating this part as engineer-ready.",
+    href: "#approval-heading",
+    label: "Review pending approval",
+    tone: "review"
+  },
+  source_conflict: {
+    available: true,
+    detail: "Open admin source reconciliation before trusting mixed provider evidence.",
+    href: "/admin",
+    label: "Resolve source conflict",
+    tone: "danger"
+  }
+};
+
+/**
+ * Keeps duplicate issue actions from crowding compact catalog and detail surfaces.
+ */
+function dedupePartNextActions(actions: PartNextAction[]): PartNextAction[] {
+  const seen = new Set<string>();
+
+  return actions.filter((action) => {
+    if (seen.has(action.id)) {
+      return false;
+    }
+
+    seen.add(action.id);
+    return true;
+  });
 }
 
 /**

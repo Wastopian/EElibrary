@@ -21,6 +21,7 @@
       },
       "part": {
         "category": "Power management",
+        "description": "200 mA low-IQ linear regulator with SOT-23-5 package evidence.",
         "id": "part-tps7a02dbvr",
         "lifecycleStatus": "active",
         "mpn": "TPS7A02DBVR",
@@ -217,6 +218,132 @@
       ]
     },
     {
+      "providerPartKey": "GRM188R71C104KA01D",
+      "sourceUrl": "https://www.murata.com/en-us/products/productdetail?partno=GRM188R71C104KA01D",
+      "manufacturer": {
+        "aliases": ["Murata Manufacturing"],
+        "id": "mfr-murata",
+        "name": "Murata",
+        "website": "https://www.murata.com"
+      },
+      "package": {
+        "bodyHeightMm": 0.8,
+        "bodyLengthMm": 1.6,
+        "bodyWidthMm": 0.8,
+        "id": "pkg-0603",
+        "packageName": "0603",
+        "pinCount": 2,
+        "pitchMm": null
+      },
+      "part": {
+        "category": "Capacitor",
+        "description": "0.1 uF X7R ceramic capacitor with 0603 package evidence.",
+        "id": "part-grm188r71c104ka01d",
+        "lifecycleStatus": "active",
+        "mpn": "GRM188R71C104KA01D",
+        "trustScore": 0.74
+      },
+      "datasheet": {
+        "id": "dsr-grm188-series",
+        "pageCount": 12,
+        "parseConfidence": 0.72,
+        "pinTableStatus": "not_available",
+        "revisionDate": "2023-11-15",
+        "revisionLabel": "Series data"
+      },
+      "metrics": [
+        {
+          "confidenceScore": 0.76,
+          "id": "metric-grm188-capacitance",
+          "key": "capacitance",
+          "unit": "F",
+          "value": 0.0000001
+        },
+        {
+          "confidenceScore": 0.74,
+          "id": "metric-grm188-rated-voltage",
+          "key": "rated_voltage",
+          "unit": "V",
+          "value": 16
+        }
+      ],
+      "assets": [
+        {
+          "assetType": "datasheet",
+          "assetStatus": "referenced",
+          "fileFormat": "pdf",
+          "id": "asset-grm188-datasheet",
+          "licenseMode": "metadata_only",
+          "previewStatus": "not_available",
+          "provenance": "official",
+          "sourceUrl": "https://www.murata.com/en-us/products/productdetail?partno=GRM188R71C104KA01D",
+          "state": "referenced",
+          "validationStatus": "needs_review"
+        },
+        {
+          "assetType": "footprint",
+          "assetStatus": "missing",
+          "fileFormat": "unknown",
+          "id": "asset-grm188-footprint",
+          "licenseMode": "unknown",
+          "previewStatus": "not_available",
+          "provenance": "manual_internal",
+          "sourceUrl": null,
+          "state": "missing",
+          "validationStatus": "not_validated"
+        },
+        {
+          "assetType": "symbol",
+          "assetStatus": "missing",
+          "fileFormat": "unknown",
+          "id": "asset-grm188-symbol",
+          "licenseMode": "unknown",
+          "previewStatus": "not_available",
+          "provenance": "manual_internal",
+          "sourceUrl": null,
+          "state": "missing",
+          "validationStatus": "not_validated"
+        }
+      ],
+      "generationWorkflows": [
+        {
+          "confidenceScore": 0.7,
+          "generationStatus": "available_to_request",
+          "id": "gen-grm188-footprint",
+          "outputAssetId": "asset-grm188-footprint",
+          "partId": "part-grm188r71c104ka01d",
+          "sourceAssetId": "asset-grm188-datasheet",
+          "sourceDatasheetRevisionId": "dsr-grm188-series",
+          "targetAssetType": "footprint"
+        },
+        {
+          "confidenceScore": 0.7,
+          "generationStatus": "available_to_request",
+          "id": "gen-grm188-symbol",
+          "outputAssetId": "asset-grm188-symbol",
+          "partId": "part-grm188r71c104ka01d",
+          "sourceAssetId": "asset-grm188-datasheet",
+          "sourceDatasheetRevisionId": "dsr-grm188-series",
+          "targetAssetType": "symbol"
+        }
+      ],
+      "extractionSignals": [
+        {
+          "assetId": "asset-grm188-datasheet",
+          "confidenceScore": 0.72,
+          "datasheetRevisionId": "dsr-grm188-series",
+          "extractionSource": "datasheet_metadata",
+          "extractionStatus": "available",
+          "id": "sig-grm188-package-mechanical",
+          "lastUpdatedAt": "2026-04-12T00:00:00.000Z",
+          "notes": "0603 package dimensions are normalized from local fixture metadata.",
+          "partId": "part-grm188r71c104ka01d",
+          "signalType": "package_mechanical_dimensions",
+          "sourceRecordId": "source-local-catalog-grm188r71c104ka01d"
+        }
+      ]
+    },
+    {
       "providerPartKey": "STM32G031K8T6",
       "sourceUrl": "https://www.st.com/en/microcontrollers-microprocessors/stm32g031k8.html",
       "manufacturer": {
@@ -236,6 +363,7 @@
       },
       "part": {
         "category": "Microcontroller",
+        "description": "Arm Cortex-M0+ microcontroller with QFN-32 package evidence.",
         "id": "part-stm32g031k8t6",
         "lifecycleStatus": "active",
         "mpn": "STM32G031K8T6",

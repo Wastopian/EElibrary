@@ -11,6 +11,7 @@ import {
   type SystemHealthResponse,
   type WorkerLivenessStatus
 } from "@ee-library/shared";
+import { getStorageClient } from "./file-storage";
 
 /** sharedPool is lazy so health checks can run when DATABASE_URL is unset. */
 let sharedPool: Pool | null = null;
@@ -52,7 +53,7 @@ export async function buildSystemHealth(deps: SystemHealthDeps = {}): Promise<Sy
   return {
     api: { status: "ok" },
     database: { status: databaseStatus },
-    objectStorage: { status: process.env.OBJECT_STORAGE_ENDPOINT ? "connected" : "not_configured" },
+    objectStorage: { status: readObjectStorageStatus() },
     queues: queueCounts,
     worker: {
       lastSeenAt: workerHeartbeat ? workerHeartbeat.toISOString() : null,
@@ -112,12 +113,55 @@ export function computeWorkerLiveness(lastSeenAt: Date | null, nowMs: number, st
 
 /**
  * Reads queue counts when the relevant tables exist. Returns zeroed counts on missing tables.
- * The acquisition and enrichment queues are placeholders for future P0-5 expansion; the schema
- * for them is not yet wired in this scaffold, so we always report zero counts cleanly.
  */
-async function readQueueCounts(_pool: Pool): Promise<SystemHealthResponse["queues"]> {
+async function readQueueCounts(pool: Pool): Promise<SystemHealthResponse["queues"]> {
+  const [acquisition, enrichment] = await Promise.all([
+    readQueueCount(pool, "provider_acquisition_jobs"),
+    readQueueCount(pool, "provider_enrichment_jobs")
+  ]);
+
   return {
-    acquisition: { failed: 0, pending: 0 },
-    enrichment: { failed: 0, pending: 0 }
+    acquisition,
+    enrichment
   };
+}
+
+/**
+ * Reads one queue table's active and failed counts without throwing when the schema is absent.
+ */
+async function readQueueCount(pool: Pool, tableName: "provider_acquisition_jobs" | "provider_enrichment_jobs"): Promise<{ pending: number; failed: number }> {
+  try {
+    const result = await pool.query<{ pending: string | number; failed: string | number }>(
+      `
+        SELECT
+          COUNT(*) FILTER (WHERE job_status IN ('queued', 'running')) AS pending,
+          COUNT(*) FILTER (WHERE job_status = 'failed') AS failed
+        FROM ${tableName}
+      `
+    );
+    const row = result.rows[0];
+
+    return {
+      failed: readCount(row?.failed),
+      pending: readCount(row?.pending)
+    };
+  } catch {
+    return { failed: 0, pending: 0 };
+  }
+}
+
+/**
+ * Maps the active storage backend to the provider-neutral health status vocabulary.
+ */
+function readObjectStorageStatus(): ServiceConnectionStatus {
+  return getStorageClient().backend === "not_configured" ? "not_configured" : "connected";
+}
+
+/**
+ * Converts Postgres count values into finite numbers for JSON health output.
+ */
+function readCount(value: string | number | undefined): number {
+  const parsed = Number(value ?? 0);
+
+  return Number.isFinite(parsed) ? parsed : 0;
 }

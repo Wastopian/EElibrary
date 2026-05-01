@@ -4,20 +4,27 @@ This document describes the canonical target model. For current shipped entities
 
 EE Library is not just a part catalog.
 
-It is an **engineering part onboarding and readiness data system** built to answer these questions clearly:
+It is a **private engineering memory system for hardware teams**. Public provider and catalog data are input; the durable product value is the internal record of parts, BOMs, connectors, reusable circuit blocks, evidence, approvals, and risk over time.
+
+The currently shipped foundation centers on part readiness. The planned model expands that foundation into project/BOM memory so the system can answer these questions clearly:
 
 - What is the correct part?
 - Is the part identity verified or ambiguous?
+- Where has this part or connector set been used before?
+- Which project or BOM introduced this decision?
 - What mates with it?
 - What other parts are required to build with it?
 - Which engineering assets actually exist?
 - How trustworthy are those assets?
 - Can missing assets be recovered from source material?
+- Which evidence supports the decision?
+- Which reusable circuit blocks depend on this part?
+- What risks exist across a full BOM?
 - Are there near-match or family-confusion risks?
 - Is this part approved for design use?
 - Is this part truly ready for export into CAD workflows?
 
-This data model is designed around **truth, provenance, compatibility, recovery, and readiness** rather than naive part scraping.
+This data model is designed around **truth, provenance, compatibility, recovery, readiness, project memory, and risk** rather than naive part scraping.
 
 ---
 
@@ -33,6 +40,9 @@ This data model is designed around **truth, provenance, compatibility, recovery,
 - Part readiness is a **first-class concept**, not an implied side effect of import success.
 - Part approval for engineering use is **separate** from asset review or source ingestion.
 - Import failures must be captured honestly without implying that a canonical part was created.
+- Project and BOM history should become **first-class memory**, not detached notes.
+- Reusable circuit blocks should be **structured engineering knowledge**, not loose text.
+- Planned project/BOM, where-used, circuit-block, evidence-vault, and BOM-health concepts must stay clearly labeled until shipped.
 
 ---
 
@@ -680,6 +690,204 @@ Purpose:
 
 ## Internal engineering memory entities
 
+The entities in this section are planned/future unless `docs/IMPLEMENTATION_STATUS.md` says they are shipped. They support project/BOM memory, where-used search, evidence-based validation, circuit reuse, and BOM health/risk review.
+
+### Project
+Represents a hardware project or product program that owns revisions, BOM imports, usage records, evidence, and risk findings.
+
+Fields:
+- `id`
+- `project_key`
+- `name`
+- `description`
+- `owner`
+- `status` (`active`, `archived`, `prototype`, `production`, `deprecated`)
+- `created_at`
+- `updated_at`
+
+Purpose:
+- makes project history a first-class product concept
+- provides the anchor for BOM imports, usage history, evidence, and risk review
+- supports future project dashboards and project-scoped search
+
+### ProjectRevision
+Represents a specific design, hardware, or BOM revision for a project.
+
+Fields:
+- `id`
+- `project_id`
+- `revision_label`
+- `revision_status` (`draft`, `in_review`, `released`, `superseded`, `archived`)
+- `source_reference`
+- `released_at`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- preserves revision-specific engineering context
+- lets where-used answers distinguish prototype, review, released, and superseded designs
+- supports BOM health over time instead of only current state
+
+### BomImport
+Represents one uploaded or ingested BOM source for a project revision.
+
+Fields:
+- `id`
+- `project_id`
+- `project_revision_id`
+- `source_filename`
+- `source_format` (`csv`, `xlsx`, `json`, `eda_export`, `manual`)
+- `storage_key`
+- `import_status` (`uploaded`, `mapping_required`, `mapped`, `processing`, `processed`, `failed`)
+- `column_mapping`
+- `import_summary`
+- `imported_by`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- preserves BOM intake provenance
+- supports future BOM upload and column-mapping flows
+- keeps import state separate from part readiness or approval
+
+### BomLine
+Represents one normalized row from a BOM import while preserving original row context.
+
+Fields:
+- `id`
+- `bom_import_id`
+- `project_id`
+- `project_revision_id`
+- `row_number`
+- `designators`
+- `quantity`
+- `raw_mpn`
+- `raw_manufacturer`
+- `raw_description`
+- `raw_supplier_reference`
+- `raw_notes`
+- `raw_row_payload`
+- `matched_part_id` (nullable)
+- `match_status` (`unmatched`, `matched`, `ambiguous`, `weak_match`, `ignored`)
+- `match_confidence_score`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- keeps original BOM row evidence intact
+- supports BOM column mapping, part matching, and follow-up work
+- prevents weak or ambiguous BOM rows from becoming confirmed parts silently
+
+### ProjectPartUsage
+Represents a part's use in a project revision, usually derived from one or more BOM lines.
+
+Fields:
+- `id`
+- `project_id`
+- `project_revision_id`
+- `bom_line_id` (nullable)
+- `part_id`
+- `usage_context`
+- `designators`
+- `quantity`
+- `usage_status` (`proposed`, `in_review`, `used`, `released`, `deprecated`)
+- `approval_snapshot`
+- `readiness_snapshot`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- powers future where-used search
+- preserves part-to-project usage history
+- lets teams distinguish internal reuse from new or risky part introduction
+
+### CircuitBlock
+Represents a reusable circuit or subsystem pattern as structured engineering knowledge.
+
+Fields:
+- `id`
+- `block_key`
+- `name`
+- `description`
+- `block_type` (`power`, `mcu_support`, `interface`, `protection`, `connector_set`, `sensor_front_end`, `other`)
+- `owner`
+- `status` (`draft`, `in_review`, `approved`, `restricted`, `deprecated`)
+- `reuse_scope`
+- `constraints`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- treats reusable circuits as first-class engineering memory
+- supports future circuit block libraries and reuse decisions
+- keeps circuit knowledge tied to evidence, constraints, parts, and project history
+
+### CircuitBlockPart
+Represents a part role inside a reusable circuit block.
+
+Fields:
+- `id`
+- `circuit_block_id`
+- `part_id`
+- `role`
+- `quantity`
+- `is_required`
+- `substitution_policy`
+- `notes`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- connects circuit blocks to approved or review-required parts
+- supports reusable circuit risk review when a part changes state
+- enables future where-used answers for circuit block dependencies
+
+### EvidenceAttachment
+Represents a file, link, report, source snapshot, or note used as evidence for a decision.
+
+Fields:
+- `id`
+- `attached_to_type` (`part`, `asset`, `project`, `project_revision`, `bom_import`, `bom_line`, `project_part_usage`, `circuit_block`, `risk_finding`)
+- `attached_to_id`
+- `evidence_type` (`datasheet`, `validation_report`, `review_note`, `source_snapshot`, `test_result`, `photo`, `file_hash`, `other`)
+- `title`
+- `storage_key`
+- `external_url`
+- `file_hash`
+- `provenance`
+- `review_status`
+- `created_by`
+- `created_at`
+- `updated_at`
+
+Purpose:
+- supports a future evidence vault without treating every attachment as an export-ready asset
+- makes validation and review decisions auditable
+- lets evidence attach to projects, BOM rows, circuit blocks, and risks, not only parts
+
+### RiskFinding
+Represents a project, BOM, part, connector, asset, or circuit-level risk that needs review or follow-up.
+
+Fields:
+- `id`
+- `scope_type` (`part`, `project`, `project_revision`, `bom_import`, `bom_line`, `project_part_usage`, `circuit_block`, `asset`, `connector_set`)
+- `scope_id`
+- `risk_type` (`lifecycle`, `sourcing`, `approval_gap`, `missing_evidence`, `missing_verified_cad`, `connector_buildability`, `source_conflict`, `duplicate_candidate`, `reuse_scope`, `other`)
+- `severity` (`low`, `medium`, `high`, `critical`)
+- `status` (`open`, `in_review`, `resolved`, `accepted`, `ignored`)
+- `summary`
+- `detail`
+- `recommended_action`
+- `assigned_to`
+- `source_record_id` (nullable)
+- `created_at`
+- `updated_at`
+
+Purpose:
+- powers future BOM health and risk review dashboards
+- keeps next actions explicit and assignable
+- allows risks to exist at project/BOM/circuit scope, not only part scope
+
 ### PartUsageRecord
 Represents a known internal usage of a part.
 
@@ -696,6 +904,7 @@ Fields:
 Purpose:
 - captures institutional knowledge about where a part has already been used
 - supports engineer trust and internal decision-making
+- should be superseded or normalized into `ProjectPartUsage` as project memory is implemented
 
 ### PartNote
 Represents an internal note associated with a part.
@@ -771,6 +980,53 @@ Purpose:
 - powers quick readiness checks, part detail summaries, and admin queue views
 - provides a stable engineer-facing readiness answer even when the raw source graph is complex
 
+### WhereUsedSummary
+A planned derived summary resolved from project, BOM, usage, and circuit block records.
+
+Includes:
+- project count
+- revision count
+- latest usage
+- released vs prototype usage
+- circuit block dependencies
+- risk findings tied to usage
+
+Purpose:
+- powers future where-used search and part detail usage panels
+- helps distinguish proven internal reuse from unreviewed or obsolete usage
+
+### BomHealthSummary
+A planned derived summary resolved from BOM lines, matched parts, readiness, approval, assets, connector intelligence, and risk findings.
+
+Includes:
+- matched, unmatched, ambiguous, and weak-match row counts
+- approval gaps
+- lifecycle and sourcing risks
+- missing evidence
+- missing verified CAD/export assets
+- connector buildability gaps
+- source-conflict and duplicate warnings
+- recommended next actions
+
+Purpose:
+- powers future BOM health dashboards
+- lets hardware leads review project risk across a full BOM instead of one part at a time
+
+### CircuitBlockReadiness
+A planned derived summary resolved from circuit block parts, evidence, constraints, risk findings, and project usage.
+
+Includes:
+- approval status
+- required part readiness
+- evidence completeness
+- reuse constraints
+- known risks
+- where-used summary
+
+Purpose:
+- keeps reusable circuit blocks honest and evidence-backed
+- prevents circuit blocks from becoming loose notes with hidden part risk
+
 ---
 
 ## Ingestion and generation stages
@@ -787,6 +1043,18 @@ Purpose:
 9. Derive or refresh readiness issues and warnings
 10. Run validation and approval workflow
 11. Publish or update searchable canonical record
+
+### Planned project/BOM memory flow
+1. Create or select project and project revision
+2. Upload or ingest BOM source file
+3. Map columns for MPN, manufacturer, quantity, designator, supplier reference, and notes
+4. Preserve raw BOM rows and original source file context
+5. Match rows to canonical parts or mark them unmatched, ambiguous, or weak
+6. Create project part usage records for matched rows
+7. Attach supporting evidence where available
+8. Derive where-used summaries
+9. Derive BOM health and risk findings
+10. Create follow-up work for unresolved risks
 
 ### Generation recovery flow
 1. Detect missing asset
@@ -832,6 +1100,18 @@ Purpose:
 - connector parts are not considered fully ready if required mates or accessories remain unresolved
 - parts with only referenced CAD remain visible, but not fully export-ready
 - readiness must be explainable through explicit blockers, not opaque scoring alone
+
+---
+
+## Project memory policy
+
+- project/BOM records are planned until implemented in code
+- BOM import must preserve original row context
+- weak BOM matches must not silently create confirmed part usage
+- where-used answers must be backed by project usage records
+- circuit block reuse must remain tied to evidence, constraints, and risk state
+- evidence attachments must not imply validation or export readiness by themselves
+- BOM health must be explainable through risk findings and next actions, not opaque scores alone
 
 ---
 

@@ -86,6 +86,36 @@ test("buildSystemHealth marks worker online when heartbeat is fresh", async () =
   assert.equal(health.worker.status, "online");
 });
 
+test("buildSystemHealth returns acquisition and enrichment queue counts", async () => {
+  const heartbeat = "2026-04-26T00:00:55.000Z";
+  const fakePool = makeFakePool(async (text) => {
+    if (text.trim().startsWith("SELECT 1")) {
+      return { rowCount: 1, rows: [{ "?column?": 1 }] };
+    }
+    if (text.includes("worker_heartbeats")) {
+      return { rowCount: 1, rows: [{ last_seen_at: heartbeat }] };
+    }
+    if (text.includes("provider_acquisition_jobs")) {
+      return { rowCount: 1, rows: [{ failed: "2", pending: "3" }] };
+    }
+    if (text.includes("provider_enrichment_jobs")) {
+      return { rowCount: 1, rows: [{ failed: 1, pending: 4 }] };
+    }
+    return { rowCount: 0, rows: [] };
+  });
+
+  const health = await buildSystemHealth({
+    now: () => new Date("2026-04-26T00:01:00.000Z").getTime(),
+    pool: fakePool as never,
+    staleAfterSeconds: 30
+  });
+
+  assert.deepEqual(health.queues, {
+    acquisition: { failed: 2, pending: 3 },
+    enrichment: { failed: 1, pending: 4 }
+  });
+});
+
 test("buildSystemHealth marks database unavailable when ping fails but stays well-formed", async () => {
   const fakePool = makeFakePool(async () => {
     throw new Error("connection refused");

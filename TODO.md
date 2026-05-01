@@ -1,744 +1,589 @@
-# EE Library — Functionality-First Prioritized TODO
+# EE Library - Engineering Memory TODO
 
-**Branch**: `codex/phase-2-foundation`  
-**Updated**: 2026-04-26  
-**Purpose**: Shift the project from strong governance scaffolding into a usable EE part-library workflow.
+**Updated**: 2026-04-30
+**Working branch**: `codex/fix-catalog-repository-typecheck`
+**Purpose**: Turn the shipped part-readiness foundation into a private engineering memory system for hardware teams.
 
 ---
 
 ## Current Reality
 
-The architecture is solid, but the product still does not feel functional enough because the core user loop is not clean yet.
+The project has successfully moved past "can the stack run?" and most of the first usability rescue.
 
-The next mission is not more polish, more filters, or more governance surfaces.
+What is actually shipped today:
 
-The next mission is:
+- `/` and `/catalog` open into the catalog workbench.
+- Exact-MPN no-match searches can import from configured providers.
+- Search results expose datasheet, CAD/export, readiness, and next action.
+- Part detail pages have an answer-first use decision.
+- Connector buildable-set logic exists.
+- Asset truth, validation evidence, review, and verified-for-export promotion are separate.
+- Admin surfaces exist for review, promotion, failed import, validation, and issue-driven operations queues.
+- Setup, migration, seed-admin, health, worker diagnostics, typecheck, and tests are in good shape.
+- Project/BOM memory persistence, read-only API foundations, `/projects` dashboard/detail skeletons, project creation, and CSV BOM upload/mapping now exist for persisted DB-backed records.
+
+What is **not** shipped yet:
+
+- Project editing UI.
+- BOM row part matching.
+- Part-to-project usage history.
+- Where-used search.
+- Circuit block records.
+- Broad evidence vault.
+- BOM health dashboard.
+
+That means the TODO needs to pivot. The part-readiness loop remains the foundation, but the next major product mission is now:
 
 ```txt
-Search MPN
-→ Find exact part or import it
-→ Open useful part detail
-→ See datasheet/spec/package/lifecycle/source/CAD status
-→ Take the next obvious action
+project/BOM intake
+-> preserve original row context
+-> match rows to internal parts
+-> create usage history
+-> review BOM health and risks
+-> make reuse decisions evidence-backed
 ```
 
-Everything below is ordered to make that loop work.
+Provider data remains input. Internal engineering truth is the product.
 
 ---
 
-## Recommended Next 5 Tasks
+## Project Review Findings
 
-Work these in order. Do not wander into shiny UI shrubs until these are done.
-
-1. **[P0-1] Add real local setup bootstrap**
-   - Create `npm run setup:dev`.
-   - It should generate/copy `.env`, create a valid `AUTH_SECRET`, start Docker services, apply migrations, seed an admin user, seed/import a few known parts, and print the app/API URLs.
-   - This makes the repo usable by you, future contributors, and coding agents without tribal-memory nonsense.
-
-2. **[P0-2] Add explicit DB migration commands**
-   - Add `npm run db:migrate`, `npm run db:reset`, and optionally `npm run db:status`.
-   - Docker init scripts are not enough because they only run against a fresh Postgres volume.
-
-3. **[P0-3] Add admin bootstrap / seed script**
-   - Add `npm run seed:admin` or `npm run create:admin -- --email ... --password ...`.
-   - Without this, protected admin/import/review flows can feel broken immediately.
-
-4. **[P0-4] Make exact-MPN no-match import synchronous for MVP**
-   - On no match, let the user import now from a supported provider.
-   - After successful import, route directly to `/parts/:partId`.
-   - Do not force the user into a queued acquisition job unless the worker is visibly running.
-
-5. **[P1-1] Rework the catalog page into a practical workbench**
-   - Search bar first.
-   - Results table second.
-   - Import CTA only when useful.
-   - Readiness/trust details only after a part is selected or matched.
-   - The current page has too much cockpit energy.
+- The docs now describe Project, ProjectRevision, BomImport, BomLine, ProjectPartUsage, CircuitBlock, CircuitBlockPart, EvidenceAttachment, and RiskFinding as planned/future concepts.
+- Code now has a shipped project/BOM memory foundation for persisted project records, revisions, BOM imports, BOM lines, confirmed usage reads, project creation, and CSV BOM upload/mapping.
+- No shipped automatic matching, where-used search, circuit-block implementation, evidence vault UI, or BOM health dashboard exists yet.
+- Existing readiness, approval, asset, connector, validation, and risk projection code can support BOM health later.
+- Existing migration and test infrastructure is ready for a careful schema-first implementation.
+- The old TODO still prioritized usability cleanup and compare/BOM as P1. That is now stale: project/BOM memory should become the next P0 product direction.
 
 ---
 
-## Completed Foundation Items
+## Recommended Next Tasks
 
-These were already completed in the prior TODO and should stay closed. They are useful, but they do not replace the need for the functionality-first work above.
+Work these in order. Keep each task honest about planned vs shipped behavior.
 
-- ~~Asset download/redirect endpoint~~ ✓ Done
-- ~~File storage strategy and `/storage/:key` route~~ ✓ Done
-- ~~JLC package dimension extraction~~ ✓ Done
-- ~~Readiness recomputation confirmation and bulk recompute command~~ ✓ Done
-- ~~Datasheet PDF download/hash/storage enrichment~~ ✓ Done
-- ~~Catalog search page tests~~ ✓ Done
-- ~~Duplicate candidate detection~~ ✓ Done
-- ~~Subcategory/category filter surfacing~~ ✓ Done
-- ~~Normalized JLC descriptions~~ ✓ Done
-- ~~Index-friendly search SQL refactor and structural assertions~~ ✓ Done
-- ~~Reject empty/weak `AUTH_SECRET`~~ ✓ Done
-- ~~Migration smoke coverage for 019/020/021~~ ✓ Done
-- ~~Stale homepage/admin test cleanup~~ ✓ Done
-- ~~pg-mem `similarity()` shim~~ ✓ Done
+1. **[P0-MEM1] Add project/BOM memory schema foundation - done 2026-04-30**
+   - Create migrations for `projects`, `project_revisions`, `bom_imports`, `bom_lines`, and `project_part_usages`.
+   - Preserve original BOM row payloads and weak/ambiguous match states.
+   - Do not add UI claims beyond empty/foundation states.
 
----
+2. **[P0-MEM2] Add shared contracts and API foundations - done 2026-04-30**
+   - Build API request/response contracts around the new project, revision, BOM import, BOM line, usage, and match-status primitives.
+   - Add API contracts for project list/detail, BOM import metadata, BOM lines, and usage reads.
+   - Keep write paths minimal until matching/import behavior is tested.
 
-# P0: Blocking or Mission-Critical
+3. **[P0-MEM3] Build project dashboard and project detail skeletons - done 2026-04-30**
+   - Add planned-but-real project surfaces with honest empty states.
+   - Show project/revision/BOM concepts without pretending BOM import is complete.
+   - Keep navigation clear that project memory is a new area, not public catalog search.
 
-These directly affect whether the site feels usable and trustworthy.
+4. **[P0-MEM4] Build BOM upload and column-mapping MVP - done 2026-04-30**
+   - Support CSV first unless an existing library makes XLSX low-risk.
+   - Let users map MPN, manufacturer, quantity, designators, description, notes, and supplier references.
+   - Store raw rows and mapped fields before part matching.
 
----
+5. **[P0-MEM5] Add BOM row part matching and usage creation - next**
+   - Match exact internal MPN/manufacturer first.
+   - Mark rows as matched, unmatched, ambiguous, or weak.
+   - Create `ProjectPartUsage` only for confirmed matches.
+   - Route unmatched exact MPNs toward the existing exact import path.
 
-## P0-1 · Add real local setup bootstrap
+6. **[P0-MEM6] Add where-used foundation**
+   - Show where a part is used by project, revision, designator, quantity, and usage status.
+   - Start with part detail and a simple where-used route.
+   - Do not imply historical usage means approved reuse.
 
-**Priority**: P0  
-**Why it matters**: The current project is too easy to run in a half-broken state. A user can run the web app while Postgres, migrations, admin auth, storage, and worker flows are missing or stale. That makes the site look nonfunctional even when the architecture is good.
+7. **[P0-MEM7] Add BOM health and risk projection MVP**
+   - Derive counts for matched/unmatched/ambiguous rows, approval gaps, lifecycle risk, missing verified CAD/export assets, connector buildability gaps, and missing evidence.
+   - Store or expose RiskFinding-style records only when they are explainable.
+   - Render a project/BOM health dashboard with next actions.
 
-**Expected outcome**: A single command:
+8. **[P0-MEM8] Add evidence attachment foundation**
+   - Attach evidence to parts, assets, projects, BOM imports/lines, usage records, and risk findings.
+   - Keep evidence separate from validation, approval, and export readiness.
+   - Start with metadata and local storage references before building a broad evidence vault UI.
 
-```bash
-npm run setup:dev
-```
-
-does the full local setup.
-
-**Required behavior**:
-- Copy `.env.example` to `.env` if `.env` does not exist.
-- Generate a 32+ byte `AUTH_SECRET` automatically if missing.
-- Start Docker services with `docker compose up -d`.
-- Wait for Postgres to become reachable.
-- Run all migrations.
-- Seed/create a local admin user.
-- Seed/import several known sample parts.
-- Print:
-  - Web URL
-  - API URL
-  - Admin login
-  - Useful commands for worker/import/recompute
-
-**Files to inspect or modify**:
-- `package.json`
-- `scripts/`
-- `.env.example`
-- `compose.yaml`
-- `packages/db/`
-- `apps/api/`
-- `apps/worker/`
-
-**Tests**:
-- Add a script test or dry-run mode if practical.
-- At minimum, document a manual verification path:
-  - clean clone
-  - `npm install`
-  - `npm run setup:dev`
-  - open catalog
-  - log in as admin
-  - search seeded part
-
-**Risk**: Medium. The setup touches environment, Docker, migrations, and seed data. Keep it boring and explicit.
+9. **[P0-MEM9] Add circuit block records**
+   - Add CircuitBlock and CircuitBlockPart data model.
+   - Build a simple circuit block library and detail view.
+   - Treat blocks as structured engineering knowledge with parts, constraints, evidence, risk, and reuse scope.
 
 ---
 
-## P0-2 · Add explicit DB migration commands
+# P0: Project/BOM Memory Foundation
 
-**Priority**: P0  
-**Why it matters**: `compose.yaml` mounts SQL files into Docker entrypoint initialization. That only applies when the database volume is brand new. Once the volume exists, new migration files will not automatically apply. This is exactly how local dev environments become haunted.
+These are the new blocking product tasks because the mission has expanded from a part workbench to engineering memory.
+
+---
+
+## P0-MEM1 - Add Project/BOM Memory Schema Foundation
+
+**Priority**: P0
+**Status**: Done 2026-04-30. Added migration `024_project_bom_memory.sql`, Drizzle schema mappings, shared planned-memory types, migration discovery coverage, and pg-mem smoke coverage for raw BOM rows, weak matches, confirmed usage, and idempotency guards.
+
+**Why it matters**: Project memory cannot be built on loose notes or UI-only state. The database needs first-class project, revision, BOM import, BOM line, and usage records before any honest where-used or BOM health workflow can exist.
 
 **Expected outcome**:
-Add commands:
 
-```bash
-npm run db:migrate
-npm run db:reset
-npm run db:status
-```
-
-**Required behavior**:
-- `db:migrate`: applies all unapplied migrations in order.
-- `db:reset`: drops/recreates local dev DB or clears schema after a confirmation/environment guard.
-- `db:status`: shows current applied migration version and pending migrations.
+- New migrations add:
+  - `projects`
+  - `project_revisions`
+  - `bom_imports`
+  - `bom_lines`
+  - `project_part_usages`
+- BOM rows preserve raw source payloads.
+- BOM line match status supports `unmatched`, `matched`, `ambiguous`, `weak_match`, and `ignored`.
+- Usage records link confirmed parts to projects/revisions/BOM rows.
 
 **Files to inspect or modify**:
-- `package.json`
-- `packages/db/src/`
+
 - `infra/postgres/`
-- `scripts/`
-
-**Tests**:
-- Migration smoke tests already exist; add script-level coverage if practical.
-- Verify migrations 001 through latest apply on an empty DB.
-- Verify re-running `db:migrate` is idempotent.
-
-**Risk**: Medium. A bad reset command can nuke data. Add explicit local/dev guardrails.
-
----
-
-## P0-3 · Add admin bootstrap / seed script
-
-**Priority**: P0  
-**Why it matters**: The project has protected admin workflows, but a fresh local environment needs an obvious way to create an admin. Otherwise import/review/promote flows look broken before the product even gets judged fairly.
-
-**Expected outcome**:
-One of these commands exists:
-
-```bash
-npm run seed:admin
-```
-
-or:
-
-```bash
-npm run create:admin -- --email admin@example.com --password localdev
-```
-
-**Required behavior**:
-- Create an admin user if one does not exist.
-- Avoid overwriting existing users unless explicitly requested.
-- Print clear login info in dev only.
-- Never print production secrets.
-
-**Files to inspect or modify**:
-- `apps/web/src/auth.ts`
-- `apps/web/src/app/sign-in/page.tsx`
 - `packages/db/src/schema.ts`
-- `scripts/`
+- `packages/shared/src/`
+- `scripts/__tests__/migrations.test.mjs`
+- `apps/api/src/migration-smoke.test.ts`
 
 **Tests**:
-- Script creates a user row with admin privileges.
-- Script is idempotent.
-- Existing admin is not overwritten accidentally.
 
-**Risk**: Low to medium. Keep it dev-safe and explicit.
+- Migration applies to empty DB.
+- Migration stays idempotent where applicable.
+- Schema exposes typed tables.
+- Weak/ambiguous match statuses are represented without pretending a part was confirmed.
+
+**Done when**:
+
+- The repo can persist project/BOM memory primitives without adding UI claims.
+
+**Completion notes**:
+
+- Created first-class project, revision, BOM import, BOM line, and confirmed usage persistence.
+- Preserved raw BOM row payloads and explicit match status so weak/ambiguous rows do not become where-used history.
+- Added typed foundations only; project/BOM UI and API workflow claims remain planned under later P0-MEM tasks.
 
 ---
 
-## P0-4 · Make exact-MPN no-match import synchronous for MVP
+## P0-MEM2 - Add Shared Contracts And API Foundations
 
-**Priority**: P0  
-**Why it matters**: The current no-match path can queue acquisition jobs and then rely on a worker process. If the worker is not running, the UI can feel like it does nothing. That is product poison.
+**Priority**: P0
+**Status**: Done 2026-04-30. Added project-memory API response contracts, read-only project/BOM/usage store functions, HTTP read routes, and focused API coverage for empty, unavailable, not-found, planned-capability, BOM-line, and confirmed-usage states.
+
+**Why it matters**: The UI, API, and worker need shared language before BOM upload, matching, usage history, and BOM health can be built safely.
 
 **Expected outcome**:
-For exact MPN searches:
-- If catalog match exists, open/show the part.
-- If no match exists, show **Import exact MPN**.
-- On import click, call the direct import path.
-- On success, route to `/parts/:partId`.
-- On failure, show a specific provider error.
 
-**Preferred MVP behavior**:
-Use direct provider import before queued acquisition.
-
-**Keep queued acquisition for**:
-- Bulk imports.
-- Scheduled sync.
-- Multi-provider background enrichment.
-- Cases where the worker is visibly running and job status is useful.
+- API request/response contracts for project, revision, BOM import, BOM line, usage, match status, and import status.
+- API read endpoints for:
+  - project list
+  - project detail
+  - project revisions
+  - BOM imports
+  - BOM lines
+  - part usage by project
+- API responses distinguish empty, unavailable, not configured, and planned/future states.
 
 **Files to inspect or modify**:
-- `apps/web/src/app/page.tsx`
-- `apps/web/src/app/catalog/page.tsx`
-- `apps/web/src/lib/api-client.ts`
+
+- `packages/shared/src/`
+- `apps/api/src/`
 - `apps/api/src/index.ts`
-- `apps/api/src/catalog-store.ts`
-- `apps/worker/src/provider-acquisition-jobs.ts`
+- `apps/api/src/catalog-store.ts` or a new project store module
+- `apps/web/src/lib/`
 
 **Tests**:
-- No-match exact MPN renders Import CTA.
-- Clicking import calls direct import endpoint.
-- Successful import redirects/links to the imported part detail.
-- Failed import displays provider-specific reason.
-- Generic keyword searches do not show exact-MPN import CTA.
 
-**Risk**: Medium. Be careful not to import junk for generic searches.
+- API returns empty project list from configured empty DB.
+- API returns DB-not-configured state honestly.
+- Types prevent weak matches from appearing as confirmed usage.
+
+**Done when**:
+
+- Project/BOM memory has provider-neutral API contracts, even before full upload/matching UI.
+
+**Completion notes**:
+
+- Added typed responses for project list/detail, project revisions, project BOM imports, BOM import lines, and project part usages.
+- Added read-only API routes without creating BOM upload, matching, where-used UI, circuit block, evidence vault, or BOM health claims.
+- Confirmed weak BOM lines remain line evidence only and do not become confirmed usage records.
 
 ---
 
-## P0-5 · Add visible worker/status diagnostics when async jobs are used
+## P0-MEM3 - Build Project Dashboard And Detail Skeletons
 
-**Priority**: P0  
-**Why it matters**: If queued jobs remain in the UI, the user needs to know whether the worker is online. Polling a job that never moves makes the app look dead.
+**Priority**: P0
+**Status**: Done 2026-04-30. Added `/projects` and `/projects/[projectId]` read-only project memory surfaces, navigation, API client helpers, setup/empty states, capability separation, and focused web tests.
+
+**Why it matters**: The app needs a visible project-memory home, but it must not overclaim unimplemented BOM workflows.
 
 **Expected outcome**:
-Add an API/worker health surface that reports:
-- API reachable
-- DB reachable
-- storage configured
-- worker recently heartbeat-ed
-- pending acquisition jobs
-- pending enrichment jobs
-- failed jobs
+
+- Navigation includes Projects.
+- Projects dashboard shows project list, empty state, and setup guidance.
+- Project detail shows revisions, BOM imports, usage summary, and risk/health placeholders only where backed by data.
+- Empty states explain what is not implemented yet without marketing copy.
 
 **Files to inspect or modify**:
-- `apps/api/src/index.ts`
-- `apps/worker/src/index.ts`
-- `apps/worker/src/catalog-repository.ts`
-- `apps/web/src/app/catalog/page.tsx`
-- `apps/web/src/app/admin/page.tsx`
 
-**Tests**:
-- Worker offline state renders a warning.
-- Worker online state clears warning.
-- Queued job UI includes status and next action.
-
-**Risk**: Low. Read-only visibility. Big usability payoff.
-
----
-
-# P1: Core Product Usability
-
-These make the site feel like an actual part-library tool instead of a governance dashboard wearing boots.
-
----
-
-## P1-1 · Rework catalog page into a practical workbench
-
-**Priority**: P1  
-**Why it matters**: The catalog/search page is trying to do too many jobs at once. It should be the main place engineers go to find or import a part.
-
-**Expected outcome**:
-Simplify the page into three zones:
-
-```txt
-1. Search / Import
-2. Results
-3. Selected part summary or next action
-```
-
-**Recommended layout**:
-- Top: large search box for MPN/manufacturer/provider ID.
-- Small secondary controls: filters, sort, CAD availability.
-- Results table with:
-  - MPN
-  - manufacturer
-  - description
-  - package
-  - lifecycle
-  - datasheet status
-  - CAD status
-  - readiness status
-- No-match state:
-  - exact MPN → Import CTA
-  - vague query → refine search copy
-- Ambiguous state:
-  - show candidate list, do not auto-pick first result.
-
-**Files to inspect or modify**:
-- `apps/web/src/app/catalog/page.tsx`
-- `apps/web/src/app/page.tsx`
-- `apps/web/src/app/globals.css`
-- `apps/web/src/lib/detail-view-model.ts`
-
-**Tests**:
-- Ready state with DB results.
-- No-match exact MPN shows import.
-- No-match vague query does not show import.
-- Ambiguous result shows candidates.
-- Result row links to part detail.
-
-**Risk**: Medium. UI refactor can break existing tests. Keep components small.
-
----
-
-## P1-2 · Make part detail page engineer-first
-
-**Priority**: P1  
-**Why it matters**: The detail page should answer the engineer's question fast: "Can I use this part, and what do I know about it?"
-
-**Expected outcome**:
-At the top of `/parts/:partId`, show:
-
-- MPN
-- manufacturer
-- normalized description
-- package
-- lifecycle
-- datasheet link/download
-- key metrics/specs
-- CAD availability
-- source/provider provenance
-- readiness status
-- next recommended action
-
-**Recommended section order**:
-1. Identity summary
-2. Critical engineering data
-3. Datasheet and assets
-4. CAD/export status
-5. Provider/source provenance
-6. Readiness issues and admin actions
-7. Raw/debug details collapsed by default
-
-**Files to inspect or modify**:
-- `apps/web/src/app/parts/[partId]/page.tsx`
-- `apps/web/src/lib/detail-view-model.ts`
-- `packages/shared/src/types.ts`
-
-**Tests**:
-- Detail page renders datasheet link when available.
-- Detail page renders CAD missing vs verified state.
-- Detail page renders source/provider provenance.
-- Detail page renders key metrics/specs in a scannable table.
-
-**Risk**: Low to medium. Mostly presentation logic.
-
----
-
-## P1-3 · Link readiness issues to actionable workflows
-
-**Priority**: P1  
-**Why it matters**: Showing `missing_verified_cad` or `pending_approval` without a direct next action wastes the operator's time.
-
-**Expected outcome**:
-Each issue on the part detail page gets a contextual action:
-- `missing_verified_cad` → request/generate CAD asset
-- `pending_approval` → open approval/review queue
-- `missing_datasheet` → run/import datasheet enrichment
-- `duplicate_candidate` → open duplicate/reconciliation workflow
-- `source_conflict` → open source reconciliation
-- connector issues → open connector intelligence workflow or mark unsupported
-
-**Files to inspect or modify**:
-- `apps/web/src/app/parts/[partId]/page.tsx`
-- `apps/web/src/lib/detail-view-model.ts`
-- `apps/web/src/app/admin/page.tsx`
-
-**Tests**:
-- Helper covers every issue code.
-- Detail page renders expected action link for each issue type.
-
-**Risk**: Low. Mostly UI routing.
-
----
-
-## P1-4 · Add a true end-to-end happy-path test
-
-**Priority**: P1  
-**Why it matters**: Unit tests are strong, but the product needs a locked-down user loop. Without this, the site can pass tests while still feeling useless.
-
-**Expected outcome**:
-Add one integration/e2e-style test that covers:
-
-```txt
-search unknown exact MPN
-→ import from supported provider/local fixture
-→ part is created
-→ part detail opens
-→ datasheet/source/readiness surfaces render
-```
-
-**Possible implementation options**:
-- Playwright test against local dev services.
-- API integration test plus web render test.
-- Test fixture provider if real provider calls are too brittle.
-
-**Files to inspect or modify**:
-- `apps/web/`
-- `apps/api/`
-- `apps/worker/`
-- `tests/` or package-level test setup
-
-**Risk**: Medium. E2E tests can be flaky. Use local fixture provider first.
-
----
-
-## P1-5 · Make product copy honest about provider coverage
-
-**Priority**: P1  
-**Why it matters**: The app should not imply it can fetch "any part out there" when current coverage is limited.
-
-**Expected outcome**:
-Update copy to say:
-- "Search your catalog or import exact MPNs from configured providers."
-- "Supported providers: Local Catalog, JLC/LCSC mirror."
-- "More distributors can be added through provider adapters."
-
-**Files to inspect or modify**:
-- `apps/web/src/app/page.tsx`
-- `apps/web/src/app/catalog/page.tsx`
-- `docs/PRODUCT_REQUIREMENTS.md`
-- `docs/IMPLEMENTATION_STATUS.md`
-
-**Tests**:
-- Update stale copy assertions if needed.
-
-**Risk**: Low.
-
----
-
-## P1-6 · Add local fixture provider for reliable development/demo imports
-
-**Priority**: P1  
-**Why it matters**: JLC/LCSC/community mirror behavior can change or fail. A local fixture provider gives the app a reliable "it works" demo path and stable tests.
-
-**Expected outcome**:
-A provider like `fixture-provider` or `demo-catalog` supports a few canonical parts:
-- resistor
-- capacitor
-- voltage regulator
-- connector
-- microcontroller or IC
-
-Each fixture should include:
-- manufacturer
-- MPN
-- package
-- category
-- lifecycle
-- metrics/specs
-- datasheet URL or local file
-- CAD readiness states, at least one missing and one verified/demo
-
-**Files to inspect or modify**:
-- `apps/worker/src/providers/`
-- `apps/api/src/provider-lookup*`
-- `apps/worker/src/provider-acquisition-jobs.ts`
-- `packages/shared/src/types.ts`
-
-**Tests**:
-- Import each fixture by exact MPN.
-- Search each imported fixture.
-- Detail page renders useful fields.
-
-**Risk**: Low. Demo data must be clearly labeled.
-
----
-
-# P2: Important but Not Immediate
-
-## P2-1 · Add extraction signal review UI to admin page
-
-**Priority**: P2  
-**Why it matters**: Extraction signals exist, but operators need a queue to review them and trigger downstream generation.
-
-**Expected outcome**:
-Add an "Extraction Signals" admin section grouped by signal type:
-- part MPN
-- signal type
-- confidence
-- source
-- review action
-- optional generation trigger
-
-**Files to inspect or modify**:
-- `apps/web/src/app/admin/page.tsx`
-- `apps/api/src/catalog-store.ts`
-- `apps/api/src/index.ts`
-
-**Tests**:
-- Admin page renders extraction signal queue.
-- API returns grouped extraction signals.
-
-**Risk**: Low.
-
----
-
-## P2-2 · Verify issue generation coverage for every readiness issue code
-
-**Priority**: P2  
-**Why it matters**: Every issue code should have at least one test path from input state to rendered/admin-visible issue.
-
-**Expected outcome**:
-A test matrix covers:
-- `low_confidence_identity`
-- `pending_approval`
-- `missing_verified_cad`
-- `missing_datasheet`
-- `missing_connector_mate`
-- `missing_connector_accessories`
-- `connector_low_confidence`
-- `lifecycle_risk`
-- `source_conflict`
-- `duplicate_candidate`
-
-**Files to inspect or modify**:
-- `packages/shared/src/part-readiness.ts`
-- `apps/worker/src/catalog-repository.test.ts`
-- `apps/web/src/app/admin/page.test.ts`
-
-**Risk**: Low.
-
----
-
-## P2-3 · Auto-detect multi-provider source conflicts
-
-**Priority**: P2  
-**Why it matters**: As soon as more providers exist, conflicting normalized data becomes a real data-integrity problem.
-
-**Expected outcome**:
-After successful import, compare source records for the same `part_id` across providers. If key fields disagree, create:
-- `source_conflict` issue
-- pending `part_source_reconciliations` row
-
-**Fields to compare first**:
-- manufacturer
-- package
-- category
-- lifecycle status
-- datasheet URL
-
-**Files to inspect or modify**:
-- `apps/worker/src/provider-acquisition-jobs.ts`
-- `apps/worker/src/catalog-repository.ts`
-- `packages/shared/src/part-readiness.ts`
-
-**Risk**: Medium. Avoid noisy false positives.
-
----
-
-## P2-4 · Add lifecycle and connector-class facet counts
-
-**Priority**: P2  
-**Why it matters**: Engineers benefit from seeing counts in filters, especially lifecycle states.
-
-**Expected outcome**:
-`readSearchFacets()` returns counts for:
-- lifecycle status
-- connector class
-
-Catalog filter UI renders counts.
-
-**Files to inspect or modify**:
-- `apps/api/src/catalog-store.ts`
-- `packages/shared/src/types.ts`
-- `apps/web/src/app/catalog/page.tsx`
-
-**Risk**: Low.
-
----
-
-## P2-5 · Add compare page
-
-**Priority**: P2  
-**Why it matters**: Engineers often compare drop-in candidates. This becomes more valuable once the search/import/detail loop is good.
-
-**Expected outcome**:
-`GET /compare?parts=id1,id2,id3` renders comparison for up to 4 parts:
-- MPN
-- manufacturer
-- package
-- lifecycle
-- metrics/specs
-- datasheet
-- CAD readiness
-- source/provider
-
-**Files to inspect or modify**:
-- `apps/web/src/app/compare/page.tsx`
+- `apps/web/src/app/projects/`
 - `apps/web/src/components/AppNavigation.tsx`
+- `apps/web/src/app/layout.tsx`
+- `apps/web/src/app/globals.css`
 
-**Risk**: Low.
+**Tests**:
+
+- Projects dashboard renders empty DB state.
+- Project detail renders not-found and empty states.
+- Navigation does not imply BOM health is shipped before data exists.
+
+**Done when**:
+
+- Users can see project memory as a real area of the product without confusing it for completed BOM import.
+
+**Completion notes**:
+
+- Added Projects navigation and updated shell framing around engineering memory.
+- Added a project dashboard that reads persisted project summaries, shows setup guidance, and keeps BOM upload, matching, where-used, circuit blocks, and BOM health labeled as planned.
+- Added a project detail skeleton with project summary, revisions, BOM imports, confirmed usage, and a planned BOM health placeholder without inventing risk counts.
+- Added web coverage for empty DB state, setup state, persisted project rows, project detail child sections, and 404 handling.
 
 ---
 
-## P2-6 · Add API rate limiting
+## P0-MEM4 - Build BOM Upload And Column-Mapping MVP
 
-**Priority**: P2  
-**Why it matters**: Search endpoints can be hammered. Even indexed queries cost resources.
+**Priority**: P0
+**Status**: Done 2026-04-30. Added project creation, CSV BOM preview, mapping, API-backed persistence, project detail upload UI, bounded previews, and regression coverage for parser, API write routes, and web rendering.
+
+**Why it matters**: BOM import is the bridge from part readiness to project memory.
 
 **Expected outcome**:
-In-memory rate limiter:
-- search: about 60/min/IP
-- detail reads: about 120/min/IP
-- writes/imports: about 10/min/IP
 
-Return `429` with `Retry-After`.
+- Upload CSV BOM.
+- Preview rows.
+- Map columns for MPN, manufacturer, quantity, designators, description, notes, and supplier references.
+- Persist `BomImport` and `BomLine` rows.
+- Preserve raw row payloads.
 
 **Files to inspect or modify**:
-- `apps/api/src/index.ts`
 
-**Risk**: Low.
+- `apps/web/src/app/projects/[projectId]/`
+- `apps/api/src/`
+- `apps/worker/src/`
+- `packages/shared/src/`
+- `infra/postgres/`
+
+**Tests**:
+
+- CSV parsing handles headers, blanks, and repeated designators.
+- Mapping preview does not create parts.
+- Persisted lines keep raw and mapped values.
+- Bad files fail with clear errors.
+
+**Done when**:
+
+- A user can upload a BOM and store mapped rows without any fake match or readiness claims.
+
+**Completion notes**:
+
+- Added project creation from `/projects`, including first draft revision creation so BOM intake has a real project scope.
+- Added CSV BOM preview and column mapping on project detail pages for MPN, manufacturer, quantity, designators, description, notes, and supplier references.
+- Added API write routes for project creation, no-write BOM preview, and mapped BOM persistence.
+- Persisted `BomImport` and `BomLine` records with raw row payloads, parsed designators/quantity, and `unmatched` status; no parts or usage records are created by upload.
+- Added bounded previews and row limits so large files do not force the project detail page to render every line.
 
 ---
 
-# P3: Future / Polish / Scale
+## P0-MEM5 - Add BOM Row Matching And Usage Creation
 
-## P3-1 · Draft generation: handle unsupported 3D model requests honestly
+**Priority**: P0
 
-**Priority**: P3  
+**Why it matters**: Where-used and BOM health require confirmed usage records, not guessed matches.
+
 **Expected outcome**:
-Either implement a minimal stub path or return `not_requestable` with reason `3d_model_generation_not_yet_supported`.
+
+- Exact MPN/manufacturer match against internal catalog.
+- Ambiguous rows stay ambiguous.
+- Weak rows stay weak.
+- Confirmed matches create `ProjectPartUsage`.
+- Unmatched exact MPN rows can link to the existing exact import flow.
+
+**Files to inspect or modify**:
+
+- `apps/worker/src/`
+- `apps/api/src/`
+- `packages/shared/src/search.ts`
+- `apps/web/src/components/ImportByMpnPanel.tsx`
+
+**Tests**:
+
+- Exact match creates usage.
+- Ambiguous match does not create usage.
+- Weak match does not create usage.
+- Existing import flow can be reached from unmatched exact rows.
+
+**Done when**:
+
+- Internal part usage history starts from confirmed evidence, not convenience guesses.
 
 ---
 
-## P3-2 · Automated file integrity validation after download
+## P0-MEM6 - Add Where-Used Foundation
 
-**Priority**: P3  
+**Priority**: P0
+
+**Why it matters**: Where-used history is the first visible payoff of project memory.
+
 **Expected outcome**:
-After download, verify hash, check PDF header for datasheets, write `asset_validation_records`, and update asset validation status.
+
+- Part detail shows project usage when records exist.
+- Dedicated where-used route or panel shows project, revision, usage status, designators, and quantity.
+- Usage context stays distinct from approval and export readiness.
+
+**Files to inspect or modify**:
+
+- `apps/web/src/app/parts/[partId]/page.tsx`
+- `apps/web/src/app/projects/`
+- `apps/api/src/`
+- `packages/shared/src/`
+
+**Tests**:
+
+- Part with no usage shows honest empty state.
+- Part with usage shows project/revision/designator/quantity.
+- Usage does not change approval/export labels.
+
+**Done when**:
+
+- A user can answer "where have we used this before?" for confirmed usage records.
 
 ---
 
-## P3-3 · Role-based access beyond single admin flag
+## P0-MEM7 - Add BOM Health And Risk Projection MVP
 
-**Priority**: P3  
-**Expected roles**:
-- `reader`
-- `reviewer`
-- `admin`
+**Priority**: P0
 
----
+**Why it matters**: BOM health turns project memory into decision support for hardware leads.
 
-## P3-4 · Generic audit log for all mutating actions
-
-**Priority**: P3  
 **Expected outcome**:
-Add `catalog_audit_events` and log imports, issue workflow changes, source reconciliation, generation requests, promotions, and reviews.
+
+- BOM summary reports:
+  - matched rows
+  - unmatched rows
+  - ambiguous/weak rows
+  - approval gaps
+  - lifecycle risk
+  - missing verified CAD/export assets
+  - connector buildability gaps
+  - missing evidence
+- Risk findings include clear next actions.
+- Dashboard avoids opaque scores unless each score has explainable inputs.
+
+**Files to inspect or modify**:
+
+- `packages/shared/src/`
+- `apps/api/src/`
+- `apps/worker/src/`
+- `apps/web/src/app/projects/[projectId]/`
+
+**Tests**:
+
+- BOM health derives expected counts from fixture rows.
+- Missing verified CAD is not confused with missing referenced CAD.
+- Approved does not imply export-ready.
+- Risk findings remain explainable.
+
+**Done when**:
+
+- A project BOM can be reviewed for concrete readiness and risk gaps.
 
 ---
 
-## P3-5 · Scheduled JLC/LCSC catalog sync
+## P0-MEM8 - Add Evidence Attachment Foundation
 
-**Priority**: P3  
+**Priority**: P0
+
+**Why it matters**: Internal engineering truth needs evidence beyond provider rows and asset validation records.
+
 **Expected outcome**:
-Worker command:
+
+- Evidence attachments can reference parts, assets, projects, BOM imports, BOM lines, usage records, and risk findings.
+- Attachments preserve provenance, file/link state, review status, and storage metadata.
+- Evidence does not imply validation, approval, or export readiness by itself.
+
+**Files to inspect or modify**:
+
+- `infra/postgres/`
+- `packages/shared/src/`
+- `apps/api/src/`
+- `apps/web/src/`
+- storage helpers if files are supported in the first pass
+
+**Tests**:
+
+- Evidence metadata persists.
+- Evidence can attach to multiple supported target types.
+- Evidence state does not alter part approval/export readiness.
+
+**Done when**:
+
+- The project can preserve decision evidence without overclaiming trust.
+
+---
+
+## P0-MEM9 - Add Circuit Block Records
+
+**Priority**: P0
+
+**Why it matters**: Reusable circuits are one of the strongest forms of internal engineering memory. They must be structured objects, not loose notes.
+
+**Expected outcome**:
+
+- CircuitBlock and CircuitBlockPart persistence.
+- Circuit block list and detail views.
+- Required/optional parts, constraints, status, evidence links, risks, and reuse scope.
+- Part detail can eventually show circuit block usage.
+
+**Files to inspect or modify**:
+
+- `infra/postgres/`
+- `packages/shared/src/`
+- `apps/api/src/`
+- `apps/web/src/app/circuit-blocks/`
+
+**Tests**:
+
+- Circuit block can be created/read from API.
+- Required parts render distinctly from optional parts.
+- Circuit block status does not override part readiness.
+
+**Done when**:
+
+- Reusable circuit knowledge has a durable, queryable structure.
+
+---
+
+# Carry-Forward Workbench Polish
+
+These remain useful, but they are no longer the main P0 mission unless they block project-memory workflows.
+
+## UX-CF1 - Split Catalog Page Into Components
+
+The catalog page is still too large. Extract search form, filter bar, quick readiness result, no-match/import state, and results presentation.
+
+## UX-CF2 - Split Detail Page Into Components
+
+The detail page remains too large. Extract use decision, readiness summary, asset summary, connector summary, provenance/audit sections, and action rail.
+
+## UX-CF3 - Continue Visual-Density Cleanup
+
+Keep tightening shell/catalog/detail density as project screens are added. Avoid returning to card-heavy or marketing-style layouts.
+
+## UX-CF4 - Rework Admin Into Task Queues
+
+Admin should continue moving toward queue-based operations with counts, filters, and concrete actions.
+
+## UX-CF5 - Improve Local Fixtures
+
+Add a stronger fixture set for project/BOM testing: resistor, capacitor, regulator, connector set, microcontroller, known missing CAD, known verified CAD, and known lifecycle risk.
+
+---
+
+# Completed Foundation
+
+These are complete and should remain regression-covered:
+
+- Real local setup bootstrap.
+- Explicit DB migration/reset/status commands.
+- Admin bootstrap seed script.
+- Direct exact-MPN no-match import for MVP.
+- Worker/status/queue diagnostics.
+- `/` renders the catalog workbench.
+- Catalog dense results table.
+- Detail use-decision card.
+- Shared next-action model.
+- First visual-density reset.
+- Happy-path product loop test.
+- Asset download/redirect endpoint.
+- Local file storage and `/storage/:key`.
+- JLC package dimension extraction.
+- Readiness recomputation command.
+- Datasheet download/hash/storage enrichment.
+- Catalog search tests and index-friendly SQL.
+- Duplicate candidate detection.
+- Category/subcategory/facet surfacing.
+- Auth-secret validation.
+- Migration smoke coverage.
+- Project/BOM memory schema foundation.
+- Project/BOM memory read contracts and API foundations.
+- Project dashboard and project detail skeletons with honest planned-work states.
+- Project creation and CSV BOM upload/column mapping foundation.
+
+---
+
+# Execution Plan
+
+## Phase 1 - Memory Schema And Contracts
+
+Implement **P0-MEM1** and **P0-MEM2** together.
+
+Goal: project/BOM memory has durable persistence and typed API/shared contracts before UI claims exist.
+
+Verification:
 
 ```bash
-npm run sync:jlcparts
+npm run typecheck
+npm test
+```
+
+## Phase 2 - Project Shell And BOM Intake
+
+P0-MEM4 is complete on top of the completed **P0-MEM3** project shell.
+
+Goal met: users can store mapped BOM rows from a project detail surface without part matching overclaims.
+
+Verification:
+
+```bash
+npm run typecheck
+npm test -w @ee-library/web
+npm test -w @ee-library/api
+```
+
+## Phase 3 - Usage And Where-Used
+
+Implement **P0-MEM5** and **P0-MEM6** together.
+
+Goal: confirmed BOM matches create usage history, and users can answer where a part has been used.
+
+Verification:
+
+```bash
+npm run typecheck
+npm test
+```
+
+## Phase 4 - BOM Health, Evidence, And Circuit Blocks
+
+Implement **P0-MEM7**, **P0-MEM8**, and **P0-MEM9** after usage history exists.
+
+Goal: project memory becomes actionable through risk review, evidence, and structured circuit reuse.
+
+Verification:
+
+```bash
+npm run typecheck
+npm test
+npm run smoke:local
 ```
 
 ---
 
-## P3-6 · Manufacturer alias normalization
+# Non-Goals For The Next P0 Wave
 
-**Priority**: P3  
-**Expected outcome**:
-Before creating a manufacturer, check exact normalized name and exact alias match. Do not do fuzzy merges yet.
+- Do not build live distributor search as a substitute for internal project memory.
+- Do not present project/BOM, where-used, circuit block, evidence vault, or BOM health workflows as shipped until implemented.
+- Do not let BOM import silently create approved parts.
+- Do not let weak BOM matching create confirmed usage.
+- Do not let evidence attachments imply validation, approval, or export readiness.
+- Do not build compare/tools before project memory has a usable foundation.
+- Do not pursue broad provider ecosystem work before project/BOM memory can preserve internal decisions.
 
----
-
-## P3-7 · Improve operations worker diagnostics
-
-**Priority**: P3  
-**Expected outcome**:
-`npm run operations:worker` reports acquisition jobs, enrichment jobs, stale readiness summaries, stuck assets, extraction signals, failed jobs, and parts without acquisition history.
-
----
-
-# Explicit Non-Goals Until P0/P1 Are Done
-
-Do not spend meaningful time on these yet:
-
-- More landing-page polish
-- More marketing copy beyond provider honesty
-- More decorative UI
-- More filters beyond practical catalog work
-- Compare page before import/detail loop works
-- Advanced connector intelligence expansion
-- Real 3D generation
-- Large provider ecosystem design
-
-First, make the tool feel useful.
-
----
-
-# Success Criteria for the Next Milestone
-
-The next milestone is successful when a clean local environment can do this without hand-holding:
-
-```txt
-1. Run one setup command.
-2. Open the app.
-3. Log in as admin.
-4. Search for a known exact MPN.
-5. If missing, import it immediately.
-6. Land on the part detail page.
-7. See datasheet/spec/package/lifecycle/source/CAD/readiness.
-8. Know the next action if data is missing.
-```
-
-If the product cannot do that smoothly, the rest is fancy wiring in a truck with no tires.
+First, make the product remember projects.
