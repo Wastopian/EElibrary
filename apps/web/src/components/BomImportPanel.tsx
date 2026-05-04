@@ -1,5 +1,5 @@
 /**
- * File header: Client-side CSV BOM preview, column mapping, and persistence panel.
+ * File header: Client-side CSV/XLSX BOM preview, column mapping, and persistence panel.
  */
 
 "use client";
@@ -25,15 +25,16 @@ type BomImportStatus =
 
 const unmappedValue = "__unmapped__";
 const newRevisionValue = "__new_revision__";
-const maxBomCsvBytes = 2 * 1024 * 1024;
+const maxBomFileBytes = 4 * 1024 * 1024;
 
 /**
- * Renders a real CSV upload and mapping workflow without running part matching.
+ * Renders a real CSV upload and mapping workflow while keeping matching as a separate action.
  */
 export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): React.ReactElement {
   const firstRevisionId = revisions[0]?.id ?? newRevisionValue;
   const [sourceFilename, setSourceFilename] = useState("");
   const [rawContent, setRawContent] = useState("");
+  const [sourceFormat, setSourceFormat] = useState<"csv" | "xlsx">("csv");
   const [selectedRevisionId, setSelectedRevisionId] = useState(firstRevisionId);
   const [revisionLabel, setRevisionLabel] = useState(revisions.length > 0 ? "" : "Working");
   const [mapping, setMapping] = useState<BomColumnMapping>({});
@@ -43,7 +44,7 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
   const canSave = Boolean(preview && rawContent && sourceFilename && mapping.mpn && (selectedRevisionId !== newRevisionValue || revisionLabel.trim()));
 
   /**
-   * Reads a local CSV file and requests a no-write preview from the API.
+   * Reads a local CSV or XLSX file and requests a no-write preview from the API.
    */
   const onFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -52,32 +53,49 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
       return;
     }
 
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      setStatus({ kind: "failed", message: "Only CSV BOM files are supported in this MVP." });
+    const lowerName = file.name.toLowerCase();
+    const isXlsx = lowerName.endsWith(".xlsx");
+    const isCsv = lowerName.endsWith(".csv");
+
+    if (!isCsv && !isXlsx) {
+      setStatus({ kind: "failed", message: "Only CSV and XLSX BOM files are supported." });
       return;
     }
 
-    if (file.size > maxBomCsvBytes) {
-      setStatus({ kind: "failed", message: "CSV BOM files are limited to 2 MB in this MVP." });
+    if (file.size > maxBomFileBytes) {
+      setStatus({ kind: "failed", message: "BOM files are limited to 4 MB." });
       return;
     }
 
     setStatus({ kind: "previewing" });
 
     try {
-      const text = await file.text();
+      let content: string;
+      let fmt: "csv" | "xlsx";
+
+      if (isXlsx) {
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        content = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
+        fmt = "xlsx";
+      } else {
+        content = await file.text();
+        fmt = "csv";
+      }
+
       const nextPreview = await previewBomImport({
-        rawContent: text,
+        rawContent: content,
         sourceFilename: file.name,
-        sourceFormat: "csv"
+        sourceFormat: fmt
       });
 
       setSourceFilename(file.name);
-      setRawContent(text);
+      setRawContent(content);
+      setSourceFormat(fmt);
       setMapping(nextPreview.suggestedMapping);
       setStatus({ kind: "ready", preview: nextPreview });
     } catch (error) {
-      setStatus({ kind: "failed", message: resolveBomImportFailure(error, "BOM preview failed. Check the CSV and try again.") });
+      setStatus({ kind: "failed", message: resolveBomImportFailure(error, "BOM preview failed. Check the file and try again.") });
     }
   }, []);
 
@@ -89,7 +107,7 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
       event.preventDefault();
 
       if (!preview) {
-        setStatus({ kind: "failed", message: "Preview a CSV BOM before saving it." });
+        setStatus({ kind: "failed", message: "Preview a BOM file before saving it." });
         return;
       }
 
@@ -107,7 +125,7 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
           rawContent,
           revisionLabel: selectedRevisionId === newRevisionValue ? revisionLabel.trim() : null,
           sourceFilename,
-          sourceFormat: "csv"
+          sourceFormat
         });
 
         setStatus({ kind: "success", response });
@@ -116,7 +134,7 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
         setStatus({ kind: "failed", message: resolveBomImportFailure(error, "BOM import failed. Check the mapping and try again.") });
       }
     },
-    [mapping, preview, projectId, rawContent, revisionLabel, selectedRevisionId, sourceFilename]
+    [mapping, preview, projectId, rawContent, revisionLabel, selectedRevisionId, sourceFilename, sourceFormat]
   );
 
   /**
@@ -136,8 +154,8 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
       <form className="bom-import-panel__form" onSubmit={onSubmit}>
         <div className="bom-import-panel__upload-row">
           <label className="bom-import-panel__field">
-            <span>CSV BOM file</span>
-            <input accept=".csv,text/csv" onChange={onFileChange} type="file" />
+            <span>BOM file (CSV or XLSX)</span>
+            <input accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={onFileChange} type="file" />
           </label>
           <label className="bom-import-panel__field">
             <span>Revision scope</span>
@@ -186,7 +204,7 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
               <button disabled={!canSave || status.kind === "saving"} type="submit">
                 {status.kind === "saving" ? "Saving BOM..." : "Save mapped BOM"}
               </button>
-              <span>Saved rows stay unmatched until P0-MEM5 matching confirms internal parts.</span>
+              <span>Saved rows stay unmatched until you run exact internal matching from the import table.</span>
             </div>
           </>
         ) : null}
@@ -266,11 +284,11 @@ function PreviewTable({ preview }: { preview: BomImportPreviewResponse }) {
  */
 function BomImportStatusMessage({ status }: { status: BomImportStatus }) {
   if (status.kind === "idle") {
-    return <p className="bom-import-panel__status bom-import-panel__status--idle">Upload a CSV to preview rows and map columns before anything is persisted.</p>;
+    return <p className="bom-import-panel__status bom-import-panel__status--idle">Upload a CSV or XLSX file to preview rows and map columns before anything is persisted.</p>;
   }
 
   if (status.kind === "previewing") {
-    return <p className="bom-import-panel__status bom-import-panel__status--pending">Parsing CSV preview...</p>;
+    return <p className="bom-import-panel__status bom-import-panel__status--pending">Parsing BOM preview...</p>;
   }
 
   if (status.kind === "saving") {
@@ -280,7 +298,7 @@ function BomImportStatusMessage({ status }: { status: BomImportStatus }) {
   if (status.kind === "success") {
     return (
       <p className="bom-import-panel__status bom-import-panel__status--success">
-        Saved {status.response.lineCount} BOM rows. Match status remains unmatched until row matching runs.
+        Saved {status.response.lineCount} BOM rows. Run row matching from the BOM imports table when you are ready to create confirmed usage.
       </p>
     );
   }

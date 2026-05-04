@@ -5,6 +5,7 @@
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import { extname, basename } from "node:path";
 import { performance } from "node:perf_hooks";
 import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
@@ -18,10 +19,10 @@ import { formatProviderImportFailureMessage, parseProviderImportRequest } from "
 import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
-import { getStorageClient, setStorageClientForTests } from "./file-storage";
+import { getStorageClient } from "./file-storage";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
-import { createBomImportInDatabase, createProjectInDatabase, readBomImportLinesFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase } from "./project-memory-store";
+import { createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -30,7 +31,27 @@ import type {
   BomImportPreviewInput,
   CadAvailabilityFilter,
   CatalogDataSource,
+  CircuitBlockCreateInput,
+  CircuitBlockInstantiationCreateInput,
+  CircuitBlockPartCreateInput,
+  CircuitBlockPartSubstitutionPolicy,
+  CircuitBlockPartUpdateInput,
+  CircuitBlockStatus,
+  CircuitBlockType,
+  CircuitBlockUpdateInput,
   ConnectorClass,
+  EvidenceAttachmentCreateInput,
+  EvidenceAttachmentFileUploadInput,
+  EvidenceAttachmentListFilters,
+  EvidenceAttachmentType,
+  EvidenceAttachmentUpdateInput,
+  EvidenceReviewStatus,
+  EvidenceStorageState,
+  EvidenceTargetType,
+  ExportBundleCreateInput,
+  ExportBundleFormat,
+  FollowUpStatus,
+  FollowUpUpdateInput,
   GenerationRequestCreateInput,
   GenerationTargetAssetType,
   PartApprovalStatus,
@@ -43,15 +64,20 @@ import type {
   PartSearchRecord,
   PartReadinessStatus,
   PartSearchSort,
+  PartSubstitutionCreateInput,
   ProjectCreateInput,
+  ProjectRevisionStatus,
+  ProjectRevisionUpdateInput,
   ProjectStatus,
+  ProjectUpdateInput,
   ProviderImportCreateResponse,
   ReviewActionInput,
   ReviewOutcome,
   ReviewTargetType,
   SourceReconciliationStatus,
   SourceReconciliationUpdateInput,
-  SearchPagination
+  SearchPagination,
+  WhereUsedTargetType
 } from "@ee-library/shared/types";
 
 /** port is the local HTTP port for the API process. */
@@ -59,6 +85,9 @@ const port = Number(process.env.API_PORT ?? 4000);
 
 /** maxBomCsvBytes bounds MVP JSON upload size before row matching moves into worker-backed intake. */
 const maxBomCsvBytes = 2 * 1024 * 1024;
+
+/** maxEvidenceUploadBytes bounds local evidence uploads accepted through JSON base64 MVP transport. */
+const maxEvidenceUploadBytes = 8 * 1024 * 1024;
 
 /** RouteTiming stores one measured operation for headers and local logs. */
 interface RouteTiming {
@@ -106,10 +135,29 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
   const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(url.pathname);
   const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(url.pathname);
+  const projectRevisionCompareMatch = /^\/projects\/([^/]+)\/revisions\/compare$/u.exec(url.pathname);
+  const projectRevisionDetailMatch = /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u.exec(url.pathname);
   const projectBomImportsMatch = /^\/projects\/([^/]+)\/bom-imports$/u.exec(url.pathname);
   const projectUsagesMatch = /^\/projects\/([^/]+)\/usages$/u.exec(url.pathname);
+  const projectBomHealthMatch = /^\/projects\/([^/]+)\/bom-health$/u.exec(url.pathname);
+  const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(url.pathname);
+  const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(url.pathname);
   const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
+  const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(url.pathname);
+  const circuitBlockPartUpdateMatch = /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u.exec(url.pathname);
+  const circuitBlockFollowUpsMatch = /^\/circuit-blocks\/([^/]+)\/follow-ups$/u.exec(url.pathname);
+  const circuitBlockProjectDepsMatch = /^\/circuit-blocks\/([^/]+)\/project-dependencies$/u.exec(url.pathname);
+  const circuitBlockDetailMatch = /^\/circuit-blocks\/([^/]+)$/u.exec(url.pathname);
+  const evidenceAttachmentDetailMatch = /^\/evidence-attachments\/([^/]+)$/u.exec(url.pathname);
+  const followUpDetailMatch = /^\/follow-ups\/([^/]+)$/u.exec(url.pathname);
   const bomImportLinesMatch = /^\/bom-imports\/([^/]+)\/lines$/u.exec(url.pathname);
+  const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(url.pathname);
+  const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(url.pathname);
+  const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
+  const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(url.pathname);
+  const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
+  const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
+  const projectCircuitBlockInstantiationsMatch = /^\/projects\/([^/]+)\/circuit-block-instantiations$/u.exec(url.pathname);
   const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
 
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
@@ -124,6 +172,20 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "PATCH" && projectRevisionDetailMatch?.[1] && projectRevisionDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectRevisionUpdate(request, response, decodeURIComponent(projectRevisionDetailMatch[1]), decodeURIComponent(projectRevisionDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "PATCH" && projectDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectUpdate(request, response, decodeURIComponent(projectDetailMatch[1]));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/bom-imports/preview") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -135,6 +197,83 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProjectBomImportCreate(request, response, decodeURIComponent(projectBomImportsMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "POST" && bomImportMatchMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleBomImportMatch(response, decodeURIComponent(bomImportMatchMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/evidence-attachments") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleEvidenceAttachmentCreate(request, response, session.sub);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/evidence-attachments/files") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleEvidenceAttachmentFileUpload(request, response, session.sub);
+    return;
+  }
+
+  if (request.method === "PATCH" && evidenceAttachmentDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleEvidenceAttachmentUpdate(request, response, decodeURIComponent(evidenceAttachmentDetailMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && projectFollowUpsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFollowUpsSync(response, decodeURIComponent(projectFollowUpsMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && circuitBlockFollowUpsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockFollowUpsSync(response, decodeURIComponent(circuitBlockFollowUpsMatch[1]));
+    return;
+  }
+
+  if (request.method === "PATCH" && followUpDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleFollowUpUpdate(request, response, decodeURIComponent(followUpDetailMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/circuit-blocks") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockCreate(request, response);
+    return;
+  }
+
+  if (request.method === "PATCH" && circuitBlockPartUpdateMatch?.[1] && circuitBlockPartUpdateMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockPartUpdate(request, response, decodeURIComponent(circuitBlockPartUpdateMatch[1]), decodeURIComponent(circuitBlockPartUpdateMatch[2]));
+    return;
+  }
+
+  if (request.method === "PATCH" && circuitBlockDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockUpdate(request, response, decodeURIComponent(circuitBlockDetailMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && circuitBlockPartCreateMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockPartCreate(request, response, decodeURIComponent(circuitBlockPartCreateMatch[1]));
     return;
   }
 
@@ -194,9 +333,37 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && projectExportBundlesMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleExportBundleCreate(request, response, decodeURIComponent(projectExportBundlesMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "POST" && projectCircuitBlockInstantiationsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockInstantiationCreate(request, response, decodeURIComponent(projectCircuitBlockInstantiationsMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "POST" && partSubstitutionsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePartSubstitutionCreate(request, response, decodeURIComponent(partSubstitutionsMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "POST" && substitutionRevokeMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePartSubstitutionRevoke(response, decodeURIComponent(substitutionRevokeMatch[1]), session.sub);
+    return;
+  }
+
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, project POST, BOM preview/import POST, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, and source-reconciliation POST routes are enabled for the catalog API"
+      error: "Only GET, project POST/PATCH, project revision PATCH, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, and export-bundle POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -228,8 +395,38 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (url.pathname === "/where-used") {
+    await handleWhereUsedSearchRead(response, url);
+    return;
+  }
+
+  if (url.pathname === "/evidence-attachments") {
+    await handleEvidenceAttachmentsRead(response, url);
+    return;
+  }
+
   if (url.pathname === "/projects") {
     await handleProjectListRead(response);
+    return;
+  }
+
+  if (url.pathname === "/projects/health-summary") {
+    await handleProjectFleetRiskRead(response);
+    return;
+  }
+
+  if (url.pathname === "/circuit-blocks") {
+    await handleCircuitBlockListRead(response);
+    return;
+  }
+
+  if (circuitBlockDetailMatch?.[1]) {
+    await handleCircuitBlockDetailRead(response, decodeURIComponent(circuitBlockDetailMatch[1]));
+    return;
+  }
+
+  if (projectRevisionCompareMatch?.[1]) {
+    await handleProjectRevisionCompareRead(response, decodeURIComponent(projectRevisionCompareMatch[1]), url);
     return;
   }
 
@@ -248,6 +445,36 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (projectBomHealthMatch?.[1]) {
+    await handleProjectBomHealthRead(response, decodeURIComponent(projectBomHealthMatch[1]));
+    return;
+  }
+
+  if (projectExportBundlesMatch?.[1]) {
+    await handleExportBundlesRead(response, decodeURIComponent(projectExportBundlesMatch[1]));
+    return;
+  }
+
+  if (projectEvidenceMatch?.[1]) {
+    await handleProjectEvidenceAttachmentsRead(response, decodeURIComponent(projectEvidenceMatch[1]));
+    return;
+  }
+
+  if (projectFollowUpsMatch?.[1]) {
+    await handleProjectFollowUpsRead(response, decodeURIComponent(projectFollowUpsMatch[1]));
+    return;
+  }
+
+  if (circuitBlockFollowUpsMatch?.[1]) {
+    await handleCircuitBlockFollowUpsRead(response, decodeURIComponent(circuitBlockFollowUpsMatch[1]));
+    return;
+  }
+
+  if (circuitBlockProjectDepsMatch?.[1]) {
+    await handleCircuitBlockProjectDependenciesRead(response, decodeURIComponent(circuitBlockProjectDepsMatch[1]));
+    return;
+  }
+
   if (projectDetailMatch?.[1]) {
     await handleProjectDetailRead(response, decodeURIComponent(projectDetailMatch[1]));
     return;
@@ -258,8 +485,28 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (bomImportDiagnosticsMatch?.[1]) {
+    await handleBomImportDiagnosticsRead(response, decodeURIComponent(bomImportDiagnosticsMatch[1]));
+    return;
+  }
+
+  if (url.pathname === "/bom-compare") {
+    await handleBomRevisionCompareRead(response, url);
+    return;
+  }
+
   if (storageServeMatch?.[1]) {
     await handleStorageFileServe(response, storageServeMatch[1]);
+    return;
+  }
+
+  if (partUsagesMatch?.[1]) {
+    await handlePartWhereUsedRead(response, decodeURIComponent(partUsagesMatch[1]));
+    return;
+  }
+
+  if (partSubstitutionsMatch?.[1]) {
+    await handlePartSubstitutionsRead(response, decodeURIComponent(partSubstitutionsMatch[1]));
     return;
   }
 
@@ -619,6 +866,96 @@ async function handleProjectCreate(request: IncomingMessage, response: ServerRes
 }
 
 /**
+ * Handles project metadata edits without changing BOM, evidence, approval, or export records.
+ */
+async function handleProjectUpdate(request: IncomingMessage, response: ServerResponse, projectId: string): Promise<void> {
+  const body = await readJsonBody<ProjectUpdateInput>(request);
+
+  if (!body || !isProjectUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_UPDATE",
+        message: "Project update requires name and supported status."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "project-update", () => updateProjectInDatabase(projectId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles project revision metadata edits while keeping BOM rows and usage history unchanged.
+ */
+async function handleProjectRevisionUpdate(request: IncomingMessage, response: ServerResponse, projectId: string, revisionId: string): Promise<void> {
+  const body = await readJsonBody<ProjectRevisionUpdateInput>(request);
+
+  if (!body || !isProjectRevisionUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_REVISION_UPDATE",
+        message: "Project revision update requires a supported revision status."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "project-revision-update", () => updateProjectRevisionInDatabase(projectId, revisionId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles no-write BOM CSV preview requests for the mapping UI.
  */
 async function handleBomImportPreview(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -699,6 +1036,488 @@ async function handleProjectBomImportCreate(request: IncomingMessage, response: 
 }
 
 /**
+ * Handles internal BOM row matching and confirmed usage creation for one persisted import.
+ */
+async function handleBomImportMatch(response: ServerResponse, bomImportId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "bom-import-match",
+      () => matchBomImportRowsInDatabase(bomImportId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "BOM_IMPORT_NOT_FOUND", "BOM import not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles evidence attachment metadata creation without changing approval, validation, or export readiness.
+ */
+async function handleEvidenceAttachmentCreate(request: IncomingMessage, response: ServerResponse, uploadedBy: string | null): Promise<void> {
+  const body = await readJsonBody<EvidenceAttachmentCreateInput>(request);
+
+  if (!body || !isEvidenceAttachmentCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_EVIDENCE_ATTACHMENT",
+        message: "Evidence attachments require targetType, targetId, evidenceType, and title."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "evidence-attachment-create", () => createEvidenceAttachmentInDatabase(body, uploadedBy), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles local evidence file upload through the storage layer before persisting metadata.
+ */
+async function handleEvidenceAttachmentFileUpload(request: IncomingMessage, response: ServerResponse, uploadedBy: string | null): Promise<void> {
+  const body = await readJsonBody<EvidenceAttachmentFileUploadInput>(request);
+
+  if (!body || !isEvidenceAttachmentFileUploadInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_EVIDENCE_FILE_UPLOAD",
+        message: "Evidence file upload requires targetType, targetId, title, fileName, and contentBase64."
+      }
+    });
+    return;
+  }
+
+  const content = decodeEvidenceUploadContent(body.contentBase64);
+
+  if (!content || content.length === 0 || content.length > maxEvidenceUploadBytes) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_EVIDENCE_FILE_CONTENT",
+        message: `Evidence files must be valid base64 and no larger than ${maxEvidenceUploadBytes} bytes.`
+      }
+    });
+    return;
+  }
+
+  const fileHash = createHash("sha256").update(content).digest("hex");
+  const storageKey = buildEvidenceStorageKey(body.targetType, body.targetId, body.fileName, fileHash);
+
+  try {
+    await timeRouteOperation(response, "evidence-file-write", () => getStorageClient().write(storageKey, content), () => `${content.length} bytes`);
+  } catch (error) {
+    sendJson(response, getStorageClient().backend === "not_configured" ? 503 : 500, {
+      error: {
+        code: "EVIDENCE_STORAGE_WRITE_FAILED",
+        message: error instanceof Error ? error.message : "Evidence file storage failed."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "evidence-file-metadata-create",
+      () => createEvidenceAttachmentInDatabase({
+        evidenceType: "file",
+        fileHash,
+        mimeType: normalizeOptionalBodyString(body.mimeType) ?? "application/octet-stream",
+        notes: normalizeOptionalBodyString(body.notes) ?? null,
+        provenance: normalizeOptionalBodyString(body.provenance) ?? "manual_internal",
+        reviewStatus: body.reviewStatus ?? "unreviewed",
+        storageKey,
+        targetId: body.targetId,
+        targetType: body.targetType,
+        title: body.title
+      }, uploadedBy),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles evidence review edits without changing target validation or approval.
+ */
+async function handleEvidenceAttachmentUpdate(request: IncomingMessage, response: ServerResponse, evidenceAttachmentId: string): Promise<void> {
+  const body = await readJsonBody<EvidenceAttachmentUpdateInput>(request);
+
+  if (!body || !isEvidenceAttachmentUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_EVIDENCE_ATTACHMENT_UPDATE",
+        message: "Evidence review edits require reviewStatus and optional notes."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "evidence-attachment-update", () => updateEvidenceAttachmentInDatabase(evidenceAttachmentId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "EVIDENCE_ATTACHMENT_NOT_FOUND", "Evidence attachment not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles project follow-up sync from computed BOM health findings.
+ */
+async function handleProjectFollowUpsSync(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "project-follow-ups-sync", () => syncProjectFollowUpsFromBomHealthInDatabase(projectId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles circuit block follow-up sync from linked required-role readiness gaps.
+ */
+async function handleCircuitBlockFollowUpsSync(response: ServerResponse, circuitBlockId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "circuit-block-follow-ups-sync", () => syncCircuitBlockFollowUpsFromReadinessInDatabase(circuitBlockId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CIRCUIT_BLOCK_NOT_FOUND", "Circuit block not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles follow-up workflow edits without altering the computed source records.
+ */
+async function handleFollowUpUpdate(request: IncomingMessage, response: ServerResponse, followUpId: string): Promise<void> {
+  const body = await readJsonBody<FollowUpUpdateInput>(request);
+
+  if (!body || !isFollowUpUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_FOLLOW_UP_UPDATE",
+        message: "Follow-up edits require a valid status and optional workflow metadata."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "follow-up-update", () => updateFollowUpInDatabase(followUpId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "FOLLOW_UP_NOT_FOUND", "Follow-up record not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles circuit block creation while preserving linked-part readiness boundaries.
+ */
+async function handleCircuitBlockCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<CircuitBlockCreateInput>(request);
+
+  if (!body || !isCircuitBlockCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK",
+        message: "Circuit block creation requires blockKey, name, and supported blockType."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "circuit-block-create", () => createCircuitBlockInDatabase(body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "conflict") {
+      sendJson(response, 409, {
+        error: {
+          code: "CIRCUIT_BLOCK_EXISTS",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles circuit block metadata edits without changing linked part trust state.
+ */
+async function handleCircuitBlockUpdate(request: IncomingMessage, response: ServerResponse, circuitBlockId: string): Promise<void> {
+  const body = await readJsonBody<CircuitBlockUpdateInput>(request);
+
+  if (!body || !isCircuitBlockUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK_UPDATE",
+        message: "Circuit block update requires name, supported type, and valid status."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "circuit-block-update", () => updateCircuitBlockInDatabase(circuitBlockId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CIRCUIT_BLOCK_NOT_FOUND", "Circuit block not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles adding or refreshing a part role inside one circuit block.
+ */
+async function handleCircuitBlockPartCreate(request: IncomingMessage, response: ServerResponse, circuitBlockId: string): Promise<void> {
+  const body = await readJsonBody<CircuitBlockPartCreateInput>(request);
+
+  if (!body || !isCircuitBlockPartCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK_PART",
+        message: "Circuit block part creation requires partId and role."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "circuit-block-part-create", () => createCircuitBlockPartInDatabase(circuitBlockId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles circuit block part-role metadata edits without changing part identity.
+ */
+async function handleCircuitBlockPartUpdate(request: IncomingMessage, response: ServerResponse, circuitBlockId: string, circuitBlockPartId: string): Promise<void> {
+  const body = await readJsonBody<CircuitBlockPartUpdateInput>(request);
+
+  if (!body || !isCircuitBlockPartUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK_PART_UPDATE",
+        message: "Circuit block part update requires requirement, quantity, and substitution metadata."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "circuit-block-part-update", () => updateCircuitBlockPartInDatabase(circuitBlockId, circuitBlockPartId, body), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only project-memory list requests.
  */
 async function handleProjectListRead(response: ServerResponse): Promise<void> {
@@ -712,6 +1531,80 @@ async function handleProjectListRead(response: ServerResponse): Promise<void> {
 
     if (result.status === "not_configured") {
       sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles the cross-project risk dashboard read.
+ */
+async function handleProjectFleetRiskRead(response: ServerResponse): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-fleet-risk-read",
+      () => readProjectFleetRiskFromDatabase(),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only circuit block library requests.
+ */
+async function handleCircuitBlockListRead(response: ServerResponse): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-list-read",
+      () => readCircuitBlocksFromDatabase(),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only circuit block detail requests.
+ */
+async function handleCircuitBlockDetailRead(response: ServerResponse, circuitBlockId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-detail-read",
+      () => readCircuitBlockDetailFromDatabase(circuitBlockId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CIRCUIT_BLOCK_NOT_FOUND", "Circuit block not found.");
       return;
     }
 
@@ -768,6 +1661,52 @@ async function handleProjectRevisionsRead(response: ServerResponse, projectId: s
 
     if (result.status === "not_found") {
       sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles revision-vs-revision BOM compare reads scoped to one project.
+ */
+async function handleProjectRevisionCompareRead(response: ServerResponse, projectId: string, url: URL): Promise<void> {
+  const fromRevisionId = url.searchParams.get("from");
+  const toRevisionId = url.searchParams.get("to");
+
+  if (!fromRevisionId || !toRevisionId) {
+    sendJson(response, 400, {
+      error: {
+        code: "REVISION_COMPARE_PARAMS_REQUIRED",
+        message: "Revision compare requires from and to query parameters."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-revision-compare",
+      () => readProjectRevisionCompareFromDatabase(projectId, fromRevisionId, toRevisionId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
       return;
     }
 
@@ -852,6 +1791,225 @@ async function handleProjectPartUsagesRead(response: ServerResponse, projectId: 
 
     if (result.status === "not_found") {
       sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only BOM health projection requests for one project.
+ */
+async function handleProjectBomHealthRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-bom-health-read",
+      () => readProjectBomHealthFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project evidence metadata requests.
+ */
+async function handleProjectEvidenceAttachmentsRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-evidence-read",
+      () => readProjectEvidenceAttachmentsFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles global evidence vault reads with target, review, provenance, and storage filters.
+ */
+async function handleEvidenceAttachmentsRead(response: ServerResponse, url: URL): Promise<void> {
+  const filters = readEvidenceAttachmentListFilters(url);
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "evidence-attachments-read",
+      () => readEvidenceAttachmentsFromDatabase(filters),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project follow-up queue requests.
+ */
+async function handleProjectFollowUpsRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-follow-ups-read",
+      () => readProjectFollowUpsFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only circuit block follow-up queue requests.
+ */
+async function handleCircuitBlockFollowUpsRead(response: ServerResponse, circuitBlockId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-follow-ups-read",
+      () => readCircuitBlockFollowUpsFromDatabase(circuitBlockId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CIRCUIT_BLOCK_NOT_FOUND", "Circuit block not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project dependency requests for one circuit block.
+ */
+async function handleCircuitBlockProjectDependenciesRead(response: ServerResponse, circuitBlockId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-project-deps-read",
+      () => readCircuitBlockProjectDependenciesFromDatabase(circuitBlockId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CIRCUIT_BLOCK_NOT_FOUND", "Circuit block not found.");
+      return;
+    }
+
+    sendCatalogJson(response, { dependencies: result.dependencies }, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only where-used history requests for one internal part.
+ */
+async function handlePartWhereUsedRead(response: ServerResponse, partId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-where-used-read",
+      () => readPartWhereUsedFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PART_NOT_FOUND", "Part not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles global where-used search across supported project-memory dependency records.
+ */
+async function handleWhereUsedSearchRead(response: ServerResponse, url: URL): Promise<void> {
+  const targetType = readWhereUsedTargetType(url.searchParams.get("targetType"));
+  const query = url.searchParams.get("q") ?? "";
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "where-used-search-read",
+      () => readWhereUsedSearchFromDatabase(targetType, query),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
       return;
     }
 
@@ -1511,6 +2669,45 @@ function isProjectCreateInput(value: unknown): value is ProjectCreateInput {
 }
 
 /**
+ * Checks project-update request shape before writing metadata.
+ */
+function isProjectUpdateInput(value: unknown): value is ProjectUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<ProjectUpdateInput>;
+
+  return typeof body.name === "string" &&
+    body.name.trim().length > 0 &&
+    isOptionalBodyString(body.description) &&
+    isOptionalBodyString(body.owner) &&
+    isProjectStatus(body.status);
+}
+
+/**
+ * Checks project revision status values without trusting request JSON.
+ */
+function isProjectRevisionStatus(value: unknown): value is ProjectRevisionStatus {
+  return value === "draft" || value === "in_review" || value === "released" || value === "superseded" || value === "archived";
+}
+
+/**
+ * Checks project-revision update request shape before writing metadata.
+ */
+function isProjectRevisionUpdateInput(value: unknown): value is ProjectRevisionUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<ProjectRevisionUpdateInput>;
+
+  return isProjectRevisionStatus(body.revisionStatus) &&
+    isOptionalBodyString(body.sourceReference) &&
+    isOptionalBodyString(body.releasedAt);
+}
+
+/**
  * Checks no-write BOM preview request shape.
  */
 function isBomImportPreviewInput(value: unknown): value is BomImportPreviewInput {
@@ -1520,7 +2717,7 @@ function isBomImportPreviewInput(value: unknown): value is BomImportPreviewInput
 
   const body = value as Partial<BomImportPreviewInput>;
 
-  return body.sourceFormat === "csv" &&
+  return (body.sourceFormat === "csv" || body.sourceFormat === "xlsx") &&
     typeof body.sourceFilename === "string" &&
     body.sourceFilename.trim().length > 0 &&
     typeof body.rawContent === "string" &&
@@ -1548,6 +2745,313 @@ function isBomImportCreateInput(value: unknown): value is BomImportCreateInput {
     isOptionalBodyString(body.columnMapping.description) &&
     isOptionalBodyString(body.columnMapping.notes) &&
     isOptionalBodyString(body.columnMapping.supplierReference);
+}
+
+/**
+ * Checks circuit block creation request shape before persistence validation.
+ */
+function isCircuitBlockCreateInput(value: unknown): value is CircuitBlockCreateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<CircuitBlockCreateInput>;
+
+  return typeof body.blockKey === "string" &&
+    body.blockKey.trim().length > 0 &&
+    typeof body.name === "string" &&
+    body.name.trim().length > 0 &&
+    isCircuitBlockType(body.blockType) &&
+    isOptionalBodyString(body.description) &&
+    isOptionalBodyString(body.owner) &&
+    isOptionalBodyString(body.reuseScope) &&
+    (body.status === undefined || isCircuitBlockStatus(body.status)) &&
+    (body.constraints === undefined || body.constraints === null || (typeof body.constraints === "object" && !Array.isArray(body.constraints)));
+}
+
+/**
+ * Checks circuit block update request shape before persistence validation.
+ */
+function isCircuitBlockUpdateInput(value: unknown): value is CircuitBlockUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<CircuitBlockUpdateInput>;
+
+  return typeof body.name === "string" &&
+    body.name.trim().length > 0 &&
+    isCircuitBlockType(body.blockType) &&
+    isOptionalBodyString(body.description) &&
+    isOptionalBodyString(body.owner) &&
+    isOptionalBodyString(body.reuseScope) &&
+    isCircuitBlockStatus(body.status) &&
+    (body.constraints === undefined || body.constraints === null || (typeof body.constraints === "object" && !Array.isArray(body.constraints)));
+}
+
+/**
+ * Checks circuit block part-role request shape before persistence validation.
+ */
+function isCircuitBlockPartCreateInput(value: unknown): value is CircuitBlockPartCreateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<CircuitBlockPartCreateInput>;
+
+  return typeof body.partId === "string" &&
+    body.partId.trim().length > 0 &&
+    typeof body.role === "string" &&
+    body.role.trim().length > 0 &&
+    (body.quantity === undefined || body.quantity === null || (typeof body.quantity === "number" && Number.isFinite(body.quantity))) &&
+    (body.isRequired === undefined || typeof body.isRequired === "boolean") &&
+    (body.substitutionPolicy === undefined || isCircuitBlockPartSubstitutionPolicy(body.substitutionPolicy)) &&
+    isOptionalBodyString(body.notes);
+}
+
+/**
+ * Checks circuit block part-role update request shape before persistence validation.
+ */
+function isCircuitBlockPartUpdateInput(value: unknown): value is CircuitBlockPartUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<CircuitBlockPartUpdateInput>;
+
+  return (body.quantity === undefined || body.quantity === null || (typeof body.quantity === "number" && Number.isFinite(body.quantity))) &&
+    typeof body.isRequired === "boolean" &&
+    isCircuitBlockPartSubstitutionPolicy(body.substitutionPolicy) &&
+    isOptionalBodyString(body.notes);
+}
+
+/**
+ * Checks evidence attachment request shape before persistence validation.
+ */
+function isEvidenceAttachmentCreateInput(value: unknown): value is EvidenceAttachmentCreateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<EvidenceAttachmentCreateInput>;
+
+  return isEvidenceTargetType(body.targetType) &&
+    typeof body.targetId === "string" &&
+    body.targetId.trim().length > 0 &&
+    isEvidenceAttachmentType(body.evidenceType) &&
+    typeof body.title === "string" &&
+    body.title.trim().length > 0 &&
+    isOptionalBodyString(body.sourceUrl) &&
+    isOptionalBodyString(body.storageKey) &&
+    isOptionalBodyString(body.fileHash) &&
+    isOptionalBodyString(body.mimeType) &&
+    isOptionalBodyString(body.notes) &&
+    isOptionalBodyString(body.provenance) &&
+    (body.reviewStatus === undefined || isEvidenceReviewStatus(body.reviewStatus));
+}
+
+/**
+ * Checks evidence file upload request shape before decoding content.
+ */
+function isEvidenceAttachmentFileUploadInput(value: unknown): value is EvidenceAttachmentFileUploadInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<EvidenceAttachmentFileUploadInput>;
+
+  return isEvidenceTargetType(body.targetType) &&
+    typeof body.targetId === "string" &&
+    body.targetId.trim().length > 0 &&
+    typeof body.title === "string" &&
+    body.title.trim().length > 0 &&
+    typeof body.fileName === "string" &&
+    body.fileName.trim().length > 0 &&
+    typeof body.contentBase64 === "string" &&
+    body.contentBase64.trim().length > 0 &&
+    isOptionalBodyString(body.mimeType) &&
+    isOptionalBodyString(body.notes) &&
+    isOptionalBodyString(body.provenance) &&
+    (body.reviewStatus === undefined || isEvidenceReviewStatus(body.reviewStatus));
+}
+
+/**
+ * Checks evidence review edit request shape before persistence validation.
+ */
+function isEvidenceAttachmentUpdateInput(value: unknown): value is EvidenceAttachmentUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<EvidenceAttachmentUpdateInput>;
+
+  return isEvidenceReviewStatus(body.reviewStatus) && isOptionalBodyString(body.notes);
+}
+
+/**
+ * Checks follow-up workflow edit request shape before store validation.
+ */
+function isFollowUpUpdateInput(value: unknown): value is FollowUpUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<FollowUpUpdateInput>;
+
+  return isFollowUpStatus(body.status) &&
+    isOptionalBodyString(body.assignedTo) &&
+    isOptionalBodyString(body.resolutionNotes) &&
+    (body.evidenceAttachmentIds === undefined || body.evidenceAttachmentIds === null || (Array.isArray(body.evidenceAttachmentIds) && body.evidenceAttachmentIds.every((id) => typeof id === "string")));
+}
+
+/**
+ * Reads provider-neutral evidence vault filters from query params.
+ */
+function readEvidenceAttachmentListFilters(url: URL): EvidenceAttachmentListFilters {
+  return {
+    evidenceType: readEvidenceAttachmentType(url.searchParams.get("evidenceType")),
+    query: normalizeOptionalBodyString(url.searchParams.get("q")) ?? null,
+    reviewStatus: readEvidenceReviewStatus(url.searchParams.get("reviewStatus")),
+    sourceSystem: normalizeOptionalBodyString(url.searchParams.get("sourceSystem")) ?? null,
+    storageState: readEvidenceStorageState(url.searchParams.get("storageState")),
+    targetType: readEvidenceTargetType(url.searchParams.get("targetType"))
+  };
+}
+
+/**
+ * Checks evidence target type values without exposing table names to request bodies.
+ */
+function isEvidenceTargetType(value: unknown): value is EvidenceTargetType {
+  return value === "part" ||
+    value === "asset" ||
+    value === "project" ||
+    value === "bom_import" ||
+    value === "bom_line" ||
+    value === "project_part_usage" ||
+    value === "risk_finding" ||
+    value === "circuit_block" ||
+    value === "circuit_block_part";
+}
+
+/**
+ * Checks circuit block category values.
+ */
+function isCircuitBlockType(value: unknown): value is CircuitBlockType {
+  return value === "power" || value === "mcu_support" || value === "interface" || value === "protection" || value === "connector_set" || value === "sensor_front_end" || value === "other";
+}
+
+/**
+ * Checks circuit block review states without inferring part readiness.
+ */
+function isCircuitBlockStatus(value: unknown): value is CircuitBlockStatus {
+  return value === "draft" || value === "in_review" || value === "approved" || value === "restricted" || value === "deprecated";
+}
+
+/**
+ * Checks circuit block substitution policy values.
+ */
+function isCircuitBlockPartSubstitutionPolicy(value: unknown): value is CircuitBlockPartSubstitutionPolicy {
+  return value === "exact_required" || value === "approved_alternate_allowed" || value === "equivalent_allowed" || value === "do_not_substitute";
+}
+
+/**
+ * Reads a global where-used target type without accepting arbitrary target labels.
+ */
+function readWhereUsedTargetType(value: string | null): WhereUsedTargetType {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+    return value;
+  }
+
+  return "part";
+}
+
+/**
+ * Checks evidence attachment type values.
+ */
+function isEvidenceAttachmentType(value: unknown): value is EvidenceAttachmentType {
+  return value === "note" || value === "link" || value === "file";
+}
+
+/**
+ * Checks evidence review statuses without treating acceptance as approval.
+ */
+function isEvidenceReviewStatus(value: unknown): value is EvidenceReviewStatus {
+  return value === "unreviewed" || value === "accepted" || value === "rejected" || value === "superseded";
+}
+
+/**
+ * Checks evidence storage filter values without treating stored files as exportable.
+ */
+function isEvidenceStorageState(value: unknown): value is EvidenceStorageState {
+  return value === "file_backed" || value === "link_only" || value === "note_only";
+}
+
+/**
+ * Checks follow-up workflow states without changing source readiness state.
+ */
+function isFollowUpStatus(value: unknown): value is FollowUpStatus {
+  return value === "open" || value === "in_progress" || value === "resolved" || value === "dismissed";
+}
+
+/**
+ * Reads an evidence target filter while dropping unsupported query values.
+ */
+function readEvidenceTargetType(value: string | null): EvidenceTargetType | null {
+  return isEvidenceTargetType(value) ? value : null;
+}
+
+/**
+ * Reads an evidence kind filter while dropping unsupported query values.
+ */
+function readEvidenceAttachmentType(value: string | null): EvidenceAttachmentType | null {
+  return isEvidenceAttachmentType(value) ? value : null;
+}
+
+/**
+ * Reads an evidence review filter while dropping unsupported query values.
+ */
+function readEvidenceReviewStatus(value: string | null): EvidenceReviewStatus | null {
+  return isEvidenceReviewStatus(value) ? value : null;
+}
+
+/**
+ * Reads a storage-state filter while dropping unsupported query values.
+ */
+function readEvidenceStorageState(value: string | null): EvidenceStorageState | null {
+  return isEvidenceStorageState(value) ? value : null;
+}
+
+/**
+ * Decodes browser-provided base64 evidence content with optional data URL prefix.
+ */
+function decodeEvidenceUploadContent(contentBase64: string): Buffer | null {
+  const rawBase64 = contentBase64.includes(",") ? contentBase64.slice(contentBase64.indexOf(",") + 1) : contentBase64;
+  const compactBase64 = rawBase64.replace(/\s+/gu, "");
+
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(compactBase64)) {
+    return null;
+  }
+
+  return Buffer.from(compactBase64, "base64");
+}
+
+/**
+ * Builds a deterministic storage key from target identity, content hash, and original filename.
+ */
+function buildEvidenceStorageKey(targetType: EvidenceTargetType, targetId: string, fileName: string, fileHash: string): string {
+  const normalizedName = basename(fileName).replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "evidence-file";
+  const extension = extname(normalizedName);
+  const nameWithoutExtension = extension ? normalizedName.slice(0, -extension.length) : normalizedName;
+  const safeName = `${nameWithoutExtension.slice(0, 72)}${extension.slice(0, 16)}`;
+
+  return `evidence/${targetType}/${slugStorageSegment(targetId)}/${fileHash.slice(0, 16)}-${safeName}`;
+}
+
+/**
+ * Sanitizes user-provided target ids before using them as storage path segments.
+ */
+function slugStorageSegment(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "target";
 }
 
 /**
@@ -1692,17 +3196,45 @@ function buildTelemetryHeaders(response: ServerResponse, statusCode: number): Re
 function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts") return "api-search";
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
+  if (method === "GET" && pathname === "/where-used") return "api-where-used-search";
   if (method === "GET" && pathname === "/projects") return "api-project-list";
+  if (method === "GET" && pathname === "/projects/health-summary") return "api-project-fleet-risk";
   if (method === "POST" && pathname === "/projects") return "api-project-create";
+  if (method === "PATCH" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-update";
   if (method === "GET" && /^\/projects\/[^/]+\/revisions$/u.test(pathname)) return "api-project-revisions";
+  if (method === "GET" && /^\/projects\/[^/]+\/revisions\/compare$/u.test(pathname)) return "api-project-revision-compare";
+  if (method === "PATCH" && /^\/projects\/[^/]+\/revisions\/[^/]+$/u.test(pathname)) return "api-project-revision-update";
   if (method === "GET" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-project-bom-imports";
   if (method === "POST" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-bom-import-create";
   if (method === "GET" && /^\/projects\/[^/]+\/usages$/u.test(pathname)) return "api-project-usages";
+  if (method === "GET" && /^\/projects\/[^/]+\/bom-health$/u.test(pathname)) return "api-project-bom-health";
+  if (method === "GET" && /^\/projects\/[^/]+\/evidence$/u.test(pathname)) return "api-project-evidence";
+  if (method === "GET" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups";
+  if (method === "POST" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups-sync";
   if (method === "GET" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-detail";
   if (method === "GET" && /^\/bom-imports\/[^/]+\/lines$/u.test(pathname)) return "api-bom-import-lines";
   if (method === "POST" && pathname === "/bom-imports/preview") return "api-bom-import-preview";
+  if (method === "POST" && /^\/bom-imports\/[^/]+\/match$/u.test(pathname)) return "api-bom-import-match";
+  if (method === "GET" && pathname === "/evidence-attachments") return "api-evidence-attachments";
+  if (method === "POST" && pathname === "/evidence-attachments") return "api-evidence-attachment-create";
+  if (method === "POST" && pathname === "/evidence-attachments/files") return "api-evidence-file-upload";
+  if (method === "PATCH" && /^\/evidence-attachments\/[^/]+$/u.test(pathname)) return "api-evidence-attachment-update";
+  if (method === "GET" && pathname === "/circuit-blocks") return "api-circuit-block-list";
+  if (method === "POST" && pathname === "/circuit-blocks") return "api-circuit-block-create";
+  if (method === "PATCH" && /^\/circuit-blocks\/[^/]+$/u.test(pathname)) return "api-circuit-block-update";
+  if (method === "GET" && /^\/circuit-blocks\/[^/]+$/u.test(pathname)) return "api-circuit-block-detail";
+  if (method === "GET" && /^\/circuit-blocks\/[^/]+\/follow-ups$/u.test(pathname)) return "api-circuit-block-follow-ups";
+  if (method === "POST" && /^\/circuit-blocks\/[^/]+\/follow-ups$/u.test(pathname)) return "api-circuit-block-follow-ups-sync";
+  if (method === "POST" && /^\/circuit-blocks\/[^/]+\/parts$/u.test(pathname)) return "api-circuit-block-part-create";
+  if (method === "PATCH" && /^\/circuit-blocks\/[^/]+\/parts\/[^/]+$/u.test(pathname)) return "api-circuit-block-part-update";
+  if (method === "POST" && /^\/projects\/[^/]+\/circuit-block-instantiations$/u.test(pathname)) return "api-circuit-block-instantiation-create";
+  if (method === "GET" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitutions-read";
+  if (method === "POST" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitution-create";
+  if (method === "POST" && /^\/substitutions\/[^/]+\/revoke$/u.test(pathname)) return "api-part-substitution-revoke";
+  if (method === "PATCH" && /^\/follow-ups\/[^/]+$/u.test(pathname)) return "api-follow-up-update";
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
+  if (method === "GET" && /^\/parts\/[^/]+\/usages$/u.test(pathname)) return "api-part-where-used";
   if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
   if (method === "POST" && pathname === "/provider-lookups") return "api-provider-lookup";
   if (method === "POST" && pathname === "/provider-acquisition-jobs") return "api-provider-acquisition-job-create";
@@ -1835,6 +3367,259 @@ async function loadSeedCatalogRecords(): Promise<PartSearchRecord[]> {
   const { getAllPartRecords } = await import("@ee-library/shared/search");
 
   return getAllPartRecords();
+}
+
+/**
+ * Generates a synthetic BOM import for one circuit block instantiation, matching block parts to the catalog.
+ */
+async function handleCircuitBlockInstantiationCreate(request: IncomingMessage, response: ServerResponse, projectId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<CircuitBlockInstantiationCreateInput>(request);
+
+  if (!body || typeof body.circuitBlockId !== "string" || typeof body.projectRevisionId !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK_INSTANTIATION_REQUEST",
+        message: "Body requires circuitBlockId and projectRevisionId strings."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-instantiation-create",
+      () => instantiateCircuitBlockIntoProjectBomInDatabase(projectId, body, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Persists one engineering-signed-off part substitution against a catalog part.
+ */
+async function handlePartSubstitutionCreate(request: IncomingMessage, response: ServerResponse, partId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<PartSubstitutionCreateInput>(request);
+
+  if (!body || typeof body.substitutePartId !== "string" || (body.scope !== "global" && body.scope !== "project")) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PART_SUBSTITUTION_REQUEST",
+        message: "Body requires substitutePartId and scope ('global' or 'project')."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-substitution-create",
+      () => createPartSubstitutionInDatabase(partId, body, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendJson(response, 404, { error: { code: result.code, message: result.message } }); return; }
+    if (result.status === "invalid") { sendJson(response, 400, { error: { code: result.code, message: result.message } }); return; }
+    if (result.status === "conflict") { sendJson(response, 409, { error: { code: "PART_SUBSTITUTION_CONFLICT", message: result.message } }); return; }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Reads active and revoked substitution history for one catalog part.
+ */
+async function handlePartSubstitutionsRead(response: ServerResponse, partId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-substitutions-read",
+      () => readPartSubstitutionsForPartFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendProjectMemoryNotFound(response, "PART_NOT_FOUND", "Part not found."); return; }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Revokes one previously-approved substitution while preserving history for audit.
+ */
+async function handlePartSubstitutionRevoke(response: ServerResponse, substitutionId: string, actor: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-substitution-revoke",
+      () => revokePartSubstitutionInDatabase(substitutionId, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendProjectMemoryNotFound(response, "PART_SUBSTITUTION_NOT_FOUND", "Substitution not found."); return; }
+    if (result.status === "invalid") { sendJson(response, 400, { error: { code: result.code, message: result.message } }); return; }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Creates a manifest-first export bundle for all verified parts in a project.
+ */
+async function handleExportBundleCreate(request: IncomingMessage, response: ServerResponse, projectId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<ExportBundleCreateInput>(request);
+
+  const validFormats: ExportBundleFormat[] = ["altium", "solidworks", "neutral"];
+
+  if (!body || !validFormats.includes(body.bundleFormat as ExportBundleFormat)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_EXPORT_BUNDLE_REQUEST",
+        message: "Export bundle requires bundleFormat: altium, solidworks, or neutral."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "export-bundle-create", () => createExportBundleInDatabase(projectId, body, actor), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Lists export bundles for one project.
+ */
+async function handleExportBundlesRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "export-bundles-read", () => readExportBundlesFromDatabase(projectId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Reads match-status diagnostics for one BOM import.
+ */
+async function handleBomImportDiagnosticsRead(response: ServerResponse, importId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "bom-diagnostics-read", () => readBomImportDiagnosticsFromDatabase(importId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: "BOM_IMPORT_NOT_FOUND", message: "BOM import not found." } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Compares two BOM imports side-by-side for a project revision diff.
+ */
+async function handleBomRevisionCompareRead(response: ServerResponse, url: URL): Promise<void> {
+  const projectId = url.searchParams.get("projectId");
+  const importId1 = url.searchParams.get("importId1");
+  const importId2 = url.searchParams.get("importId2");
+
+  if (!projectId || !importId1 || !importId2) {
+    sendJson(response, 400, {
+      error: {
+        code: "BOM_COMPARE_PARAMS_REQUIRED",
+        message: "BOM compare requires projectId, importId1, and importId2 query parameters."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "bom-compare-read", () => readBomRevisionCompareFromDatabase(projectId, importId1, importId2), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: "BOM_IMPORTS_NOT_FOUND", message: "One or both BOM imports were not found in this project." } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
 }
 
 /**

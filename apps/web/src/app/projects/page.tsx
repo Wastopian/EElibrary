@@ -7,16 +7,17 @@ import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { ProjectCreatePanel } from "../../components/ProjectCreatePanel";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
-import { fetchApiHealth, fetchProjectListEnvelope, isApiClientError } from "../../lib/api-client";
+import { fetchApiHealth, fetchProjectFleetRisk, fetchProjectListEnvelope, isApiClientError } from "../../lib/api-client";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CatalogDataSource, ProjectListResponse, ProjectMemoryCapability, ProjectMemoryCapabilityState, ProjectStatus, ProjectSummary } from "@ee-library/shared/types";
+import type { CatalogDataSource, ProjectFleetRiskResponse, ProjectFleetRiskRow, ProjectListResponse, ProjectMemoryCapability, ProjectMemoryCapabilityState, ProjectStatus, ProjectSummary } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
 /** ProjectsDashboardState separates ready project-memory reads from setup/recovery states. */
 type ProjectsDashboardState =
   | {
+      fleetRisk: ProjectFleetRiskResponse | null;
       health: ApiHealth | null;
       response: ProjectListResponse;
       source: CatalogDataSource;
@@ -39,9 +40,17 @@ export default async function ProjectsPage() {
     return <ProjectsSetupState dashboardState={dashboardState} />;
   }
 
-  const { health, response, source } = dashboardState;
+  const { fleetRisk, health, response, source } = dashboardState;
   const foundationCapabilities = response.capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = response.capabilities.filter((capability) => capability.state === "planned");
+  const fleetRows = fleetRisk?.rows ?? [];
+  const jumpItems = [
+    { href: "#projects-list-heading", label: "Projects" },
+    ...(fleetRows.length > 0 ? [{ href: "#projects-fleet-risk-heading", label: "Fleet risk" }] : []),
+    { href: "#project-create-heading", label: "Create" },
+    { href: "#project-foundations-heading", label: "Foundations" },
+    ...(plannedCapabilities.length > 0 ? [{ href: "#planned-project-memory-heading", label: "Planned work" }] : [])
+  ];
 
   return (
     <main className="projects-layout">
@@ -51,7 +60,7 @@ export default async function ProjectsPage() {
             <p className="app-kicker">Project memory</p>
             <h1>Projects and BOM usage foundations</h1>
             <p className="projects-hero__lede">
-              Create project memory, read persisted revisions and BOM imports, and upload mapped CSV BOM rows. Matching, where-used search, circuit blocks, and BOM health remain planned workflows.
+              Create project memory, read persisted revisions and BOM imports, upload mapped CSV BOM rows, match usage, review BOM health, attach evidence, and branch into reusable circuit blocks.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label={source === "seed_fallback" ? "Unexpected seed mode" : "DB-backed project memory"} tone={source === "database" ? "verified" : "review"} />
@@ -65,15 +74,7 @@ export default async function ProjectsPage() {
 
       <ProjectMemoryTruthRail />
 
-      <WorkspaceJumpNav
-        ariaLabel="Project memory sections"
-        items={[
-          { href: "#projects-list-heading", label: "Projects" },
-          { href: "#project-create-heading", label: "Create" },
-          { href: "#project-foundations-heading", label: "Foundations" },
-          { href: "#planned-project-memory-heading", label: "Planned work" }
-        ]}
-      />
+      <WorkspaceJumpNav ariaLabel="Project memory sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="projects-list-heading">
         <SectionHeading
@@ -89,6 +90,23 @@ export default async function ProjectsPage() {
           {response.projects.length > 0 ? <ProjectsTable projects={response.projects} /> : <ProjectsEmptyState />}
         </SectionPanel>
       </section>
+
+      {fleetRows.length > 0 && (
+        <section className="detail-section" aria-labelledby="projects-fleet-risk-heading">
+          <SectionHeading
+            id="projects-fleet-risk-heading"
+            index="02"
+            subtitle="Cross-project risk counts derived from persisted BOM rows, confirmed usage, lifecycle, CAD, and follow-up records."
+            title="Fleet risk dashboard"
+          />
+          <SectionPanel
+            description={fleetRisk?.boundary ?? "Counts are explainable inputs only and do not approve parts, validate assets, or unlock export."}
+            title={`${fleetRows.length} project${fleetRows.length === 1 ? "" : "s"} ranked by total risk count`}
+          >
+            <ProjectFleetRiskTable rows={fleetRows} />
+          </SectionPanel>
+        </section>
+      )}
 
       <section className="detail-section" aria-labelledby="project-create-heading">
         <SectionHeading
@@ -107,20 +125,22 @@ export default async function ProjectsPage() {
 
       <section className="detail-section" aria-labelledby="project-foundations-heading">
         <SectionHeading id="project-foundations-heading" index="03" subtitle="These capabilities are foundations exposed by current endpoints." title="Current foundations" />
-        <SectionPanel description="Foundation means the API has real persistence for this stage. Matching, where-used search, and risk review stay separate planned workflows." title="Readable project memory">
+        <SectionPanel description="Foundation means the API has real persistence for this stage while keeping approval, evidence, and export boundaries separate." title="Readable project memory">
           <CapabilityList capabilities={foundationCapabilities} />
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="planned-project-memory-heading">
-        <SectionHeading id="planned-project-memory-heading" index="04" subtitle="These workflows are intentionally visible as planned work, not shipped behavior." title="Planned project memory" />
-        <SectionPanel
-          description="The next P0 tasks turn the schema and read endpoints into BOM intake, usage history, and risk review."
-          title="Near-term project workflow"
-        >
-          <CapabilityList capabilities={plannedCapabilities} />
-        </SectionPanel>
-      </section>
+      {plannedCapabilities.length > 0 ? (
+        <section className="detail-section" aria-labelledby="planned-project-memory-heading">
+          <SectionHeading id="planned-project-memory-heading" index="04" subtitle="These workflows are intentionally visible as planned work, not shipped behavior." title="Planned project memory" />
+          <SectionPanel
+            description="The next work turns foundation data into richer project-memory workflows."
+            title="Near-term project workflow"
+          >
+            <CapabilityList capabilities={plannedCapabilities} />
+          </SectionPanel>
+        </section>
+      ) : null}
     </main>
   );
 }
@@ -133,8 +153,15 @@ async function loadProjectsDashboard(): Promise<ProjectsDashboardState> {
 
   try {
     const [health, envelope] = await Promise.all([healthPromise, fetchProjectListEnvelope()]);
+    let fleetRisk: ProjectFleetRiskResponse | null = null;
+    try {
+      fleetRisk = await fetchProjectFleetRisk();
+    } catch {
+      fleetRisk = null;
+    }
 
     return {
+      fleetRisk,
       health,
       response: envelope.data,
       source: envelope.source ?? "database",
@@ -295,6 +322,82 @@ function ProjectsTable({ projects }: { projects: ProjectSummary[] }) {
       </table>
     </div>
   );
+}
+
+/**
+ * Renders the cross-project risk dashboard table with drill-down links to project detail anchors.
+ */
+function ProjectFleetRiskTable({ rows }: { rows: ProjectFleetRiskRow[] }) {
+  return (
+    <div className="projects-table-wrap">
+      <table className="projects-table">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Total risk</th>
+            <th>Unmatched</th>
+            <th>Weak/ambiguous</th>
+            <th>Approval gaps</th>
+            <th>Lifecycle risk</th>
+            <th>Missing verified CAD</th>
+            <th>Open follow-ups</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.project.id}>
+              <td>
+                <Link href={`/projects/${row.project.id}`}>
+                  <span className="ui-mono">{row.project.projectKey}</span>
+                </Link>
+                <div className="projects-table__primary">{row.project.name}</div>
+              </td>
+              <td>
+                <StatusBadge label={row.totalRiskCount.toString()} tone={fleetTotalTone(row.totalRiskCount)} />
+              </td>
+              <td>
+                <FleetCountLink projectId={row.project.id} anchor="project-bom-diagnostics-heading" count={row.unmatchedLineCount} />
+              </td>
+              <td>
+                <FleetCountLink projectId={row.project.id} anchor="project-bom-diagnostics-heading" count={row.weakOrAmbiguousLineCount} />
+              </td>
+              <td>
+                <FleetCountLink projectId={row.project.id} anchor="project-risk-heading" count={row.approvalGapCount} />
+              </td>
+              <td>
+                <FleetCountLink projectId={row.project.id} anchor="project-risk-heading" count={row.lifecycleRiskCount} />
+              </td>
+              <td>
+                <FleetCountLink projectId={row.project.id} anchor="project-risk-heading" count={row.missingVerifiedCadCount} />
+              </td>
+              <td>
+                <FleetCountLink projectId={row.project.id} anchor="project-follow-ups-heading" count={row.openFollowUpCount} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Renders one fleet count cell as a drill-down link when the count is non-zero, otherwise plain text.
+ */
+function FleetCountLink({ anchor, count, projectId }: { anchor: string; count: number; projectId: string }) {
+  if (count === 0) {
+    return <span className="muted-copy">0</span>;
+  }
+  return <Link href={`/projects/${projectId}#${anchor}`}>{count}</Link>;
+}
+
+/**
+ * Maps a fleet total risk count to a badge tone so the dashboard surfaces high-risk projects visually.
+ */
+function fleetTotalTone(total: number): BadgeTone {
+  if (total >= 5) return "danger";
+  if (total >= 1) return "review";
+  return "verified";
 }
 
 /**

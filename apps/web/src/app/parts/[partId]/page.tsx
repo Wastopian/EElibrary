@@ -10,7 +10,8 @@ import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, Statu
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
-import { buildAssetDownloadUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail } from "../../../lib/api-client";
+import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
+import { buildAssetDownloadUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
 import {
   assetTrustStageTone,
   formatAssetPromotionBlockers,
@@ -41,7 +42,7 @@ import {
 } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PreviewStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PartWhereUsedResponse, PreviewStatus, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -63,12 +64,21 @@ type DetailRiskFlag = {
   tone: "danger" | "review";
 };
 
+/** PartWhereUsedState keeps part detail renderable when project memory is unavailable. */
+type PartWhereUsedState =
+  | { status: "available"; response: PartWhereUsedResponse }
+  | { status: "not_found" }
+  | { status: "unavailable"; code: string; message: string };
+
 /**
  * Renders a component detail page with provenance, connector intelligence, asset state, and export readiness.
  */
 export default async function PartDetailPage({ params }: DetailPageProps) {
   const { partId } = await params;
-  const detail = await fetchPartDetail(partId);
+  const [detail, whereUsedState] = await Promise.all([
+    fetchPartDetail(partId),
+    loadPartWhereUsed(partId)
+  ]);
 
   if (!detail) {
     notFound();
@@ -99,7 +109,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     tone: scoreTone(metric.confidenceScore),
     value: formatMetricValue(metric)
   }));
-  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions);
+  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState);
 
   /**
    * Requests generation through the API while leaving completion and export approval explicit.
@@ -345,10 +355,22 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </details>
       </section>
 
+      <section className="detail-section" aria-labelledby="where-used-heading">
+        <SectionHeading
+          id="where-used-heading"
+          index="02"
+          subtitle="Confirmed project usage records from matched BOM rows. Historical use does not approve this part or make exports available."
+          title="Where-used"
+        />
+        <SectionPanel description="Usage history answers where the part appeared while keeping approval, review, and export readiness separate." title="Confirmed usage history">
+          <PartWhereUsedPanel state={whereUsedState} />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="mates-heading">
         <SectionHeading
           id="mates-heading"
-          index="02"
+          index="03"
           subtitle="Connector build sets, mates, accessories, tooling, and cable relationships stay close to readiness."
           title="Mates and accessories"
         />
@@ -427,7 +449,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
       <section className="detail-section" aria-labelledby="alternates-heading">
         <SectionHeading
           id="alternates-heading"
-          index="03"
+          index="04"
           subtitle="Alternates and companion parts stay separate so substitutions do not blur into typical co-parts."
           title="Alternates and companions"
         />
@@ -445,10 +467,25 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         )}
       </section>
 
+      <section className="detail-section" aria-labelledby="substitutions-heading">
+        <SectionHeading
+          id="substitutions-heading"
+          index="04b"
+          subtitle="Engineer-signed-off alternates that BOM diagnostics can surface as triage hints. Substitutions are decision records, not automatic confirmations."
+          title="Approved substitutes"
+        />
+        <SectionPanel
+          description="Add an approved alternate part for substitution decisions. Scope can be global (any project) or restricted to one project."
+          title="Substitution decisions"
+        >
+          <PartSubstitutionPanel partId={record.part.id} partMpn={record.part.mpn} />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="sourcing-heading">
         <SectionHeading
           id="sourcing-heading"
-          index="04"
+          index="05"
           subtitle="Lifecycle, source freshness, and import provenance are available here. Distributor pricing remains unavailable until the backend models it."
           title="Sourcing and lifecycle"
         />
@@ -485,7 +522,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
       <section className="detail-section detail-section--technical" aria-labelledby="files-heading">
         <SectionHeading
           id="files-heading"
-          index="05"
+          index="06"
           subtitle="Best-ranked asset per class. Availability, provenance, review, validation, and export status stay separate."
           title="Files and models"
         />
@@ -534,7 +571,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
       <section className="detail-section" aria-labelledby="approval-heading">
         <SectionHeading
           id="approval-heading"
-          index="06"
+          index="07"
           subtitle="Review workflows, generation requests, and explicit export promotion stay separate from part identity and asset provenance."
           title="Approval and export"
         />
@@ -579,6 +616,110 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
       </section>
     </main>
+  );
+}
+
+/**
+ * Loads where-used history as a recoverable side-channel so detail truth can still render.
+ */
+async function loadPartWhereUsed(partId: string): Promise<PartWhereUsedState> {
+  try {
+    const response = await fetchPartWhereUsed(partId);
+
+    return response ? { response, status: "available" } : { status: "not_found" };
+  } catch (error) {
+    if (isApiClientError(error)) {
+      return {
+        code: error.code,
+        message: error.message,
+        status: "unavailable"
+      };
+    }
+
+    return {
+      code: "WHERE_USED_UNAVAILABLE",
+      message: "Where-used history could not be read from project memory.",
+      status: "unavailable"
+    };
+  }
+}
+
+/**
+ * Renders confirmed project usage history without feeding it into approval or export labels.
+ */
+function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
+  if (state.status === "unavailable") {
+    return (
+      <EmptyState
+        body={`Confirmed where-used history requires project memory to be available. ${state.message}`}
+        title="Where-used unavailable"
+      />
+    );
+  }
+
+  if (state.status === "not_found") {
+    return (
+      <EmptyState
+        body="The detail source did not return a project-memory part identity for this where-used request."
+        title="No where-used history"
+      />
+    );
+  }
+
+  if (state.response.usages.length === 0) {
+    return (
+      <EmptyState
+        body="No confirmed project usage records exist for this part. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
+        title="No confirmed project usage"
+      />
+    );
+  }
+
+  return (
+    <div className="where-used-panel">
+      <p className="where-used-panel__boundary">
+        <strong>Usage evidence only.</strong> Project usage does not approve this part or make exports available.
+      </p>
+      <div className="where-used-table-wrap">
+        <table className="where-used-table">
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Revision</th>
+              <th>Usage status</th>
+              <th>Designators</th>
+              <th>Qty</th>
+              <th>Context</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {state.response.usages.map(({ bomLine, project, projectRevision, usage }) => (
+              <tr key={usage.id}>
+                <td>
+                  <Link href={`/projects/${project.id}`}>{project.name}</Link>
+                  <p className="ui-mono">{project.projectKey}</p>
+                </td>
+                <td>
+                  <span>{formatRevisionLabel(projectRevision.revisionLabel)}</span>
+                  <p>{projectRevision.revisionStatus}</p>
+                </td>
+                <td>
+                  <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
+                </td>
+                <td className="ui-mono">{formatDesignators(usage.designators)}</td>
+                <td>{formatQuantity(usage.quantity)}</td>
+                <td>
+                  <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage context recorded"}</span>
+                  {bomLine ? <p className="ui-mono">BOM row {bomLine.rowNumber}</p> : <p>No BOM row linked</p>}
+                </td>
+                <td>{formatDateTime(usage.updatedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -1185,16 +1326,24 @@ function DetailActionRail({
 /**
  * Creates compact tab badges from real relationship, asset, and export data.
  */
-function buildDetailTabs(hasConnectorIntelligence: boolean, record: PartDetailPageRecord, assetGroups: AssetClassSummary[], exportActions: { available: boolean }[]) {
+function buildDetailTabs(
+  hasConnectorIntelligence: boolean,
+  record: PartDetailPageRecord,
+  assetGroups: AssetClassSummary[],
+  exportActions: { available: boolean }[],
+  whereUsedState: PartWhereUsedState
+) {
   const connectorCount = hasConnectorIntelligence
     ? record.buildableMatingSet.requiredAccessories.length + record.buildableMatingSet.optionalAccessories.length + record.buildableMatingSet.toolingRequirements.length + record.buildableMatingSet.cableOptions.length + (record.buildableMatingSet.bestMate ? 1 : 0)
     : 0;
   const alternateCount = record.similarParts.length + record.companionRecommendations.length;
   const cadAttentionCount = assetGroups.filter((group) => group.readiness !== "export_ready" && group.readiness !== "validated_file").length;
   const blockedExportCount = exportActions.filter((action) => !action.available).length;
+  const whereUsedCount = whereUsedState.status === "available" ? whereUsedState.response.usages.length : 0;
 
   return [
     { badge: undefined, href: "#overview-heading", label: "Overview" },
+    { badge: whereUsedCount > 0 ? `${whereUsedCount}` : undefined, href: "#where-used-heading", label: "Where-used" },
     { badge: connectorCount > 0 ? `${connectorCount}` : undefined, href: "#mates-heading", label: "Mates & accessories" },
     { badge: alternateCount > 0 ? `${alternateCount}` : undefined, href: "#alternates-heading", label: "Alternates" },
     { badge: undefined, href: "#sourcing-heading", label: "Sourcing" },
@@ -1648,6 +1797,57 @@ function formatDateTime(value: string): string {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+/**
+ * Formats a project revision label without duplicating labels that already include "Rev".
+ */
+function formatRevisionLabel(value: string): string {
+  return /^rev\b/iu.test(value.trim()) ? value : `Rev ${value}`;
+}
+
+/**
+ * Formats project usage status into stable workstation copy.
+ */
+function formatUsageStatus(status: ProjectPartUsageStatus): string {
+  const labels: Record<ProjectPartUsageStatus, string> = {
+    deprecated: "Deprecated",
+    in_review: "In review",
+    proposed: "Proposed",
+    released: "Released",
+    used: "Used"
+  };
+
+  return labels[status];
+}
+
+/**
+ * Maps project usage status into review-oriented badge tones.
+ */
+function usageStatusTone(status: ProjectPartUsageStatus): BadgeTone {
+  const tones: Record<ProjectPartUsageStatus, BadgeTone> = {
+    deprecated: "danger",
+    in_review: "review",
+    proposed: "info",
+    released: "verified",
+    used: "verified"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Formats BOM designators without hiding the difference between none and unknown.
+ */
+function formatDesignators(designators: string[]): string {
+  return designators.length > 0 ? designators.join(", ") : "None recorded";
+}
+
+/**
+ * Formats nullable BOM quantity without pretending unknown is zero.
+ */
+function formatQuantity(quantity: number | null): string {
+  return quantity === null ? "Unknown" : quantity.toString();
 }
 
 /**

@@ -35,9 +35,9 @@ test("projects dashboard renders empty DB state with project creation path", asy
     assert.match(html, /Create a project first/u);
     assert.match(html, /Create project/u);
     assert.match(html, /Current foundations/u);
-    assert.match(html, /Planned project memory/u);
     assert.match(html, /Where-used/u);
-    assert.match(html, /Planned/u);
+    assert.match(html, /Circuit blocks/u);
+    assert.doesNotMatch(html, /Planned project memory/u);
     assert.doesNotMatch(html, /BOM health dashboard is ready/u);
   } finally {
     restoreFetch();
@@ -221,16 +221,34 @@ function buildCapabilities(): ProjectMemoryCapability[] {
       state: "foundation"
     },
     {
-      detail: "Where-used views will read from confirmed project usage records.",
-      id: "where_used",
-      label: "Where-used",
-      state: "planned"
+      detail: "BOM row matching can confirm exact internal MPN/manufacturer rows.",
+      id: "bom_matching",
+      label: "BOM matching",
+      state: "foundation"
     },
     {
-      detail: "BOM health and risk projections are planned after usage history exists.",
+      detail: "Where-used reads expose confirmed project usage by part.",
+      id: "where_used",
+      label: "Where-used",
+      state: "foundation"
+    },
+    {
+      detail: "BOM health derives explainable risk findings.",
       id: "bom_health",
       label: "BOM health",
-      state: "planned"
+      state: "foundation"
+    },
+    {
+      detail: "Evidence attachment metadata can be preserved.",
+      id: "evidence_vault",
+      label: "Evidence vault",
+      state: "foundation"
+    },
+    {
+      detail: "Circuit block records preserve structured reusable circuit knowledge.",
+      id: "circuit_blocks",
+      label: "Circuit blocks",
+      state: "foundation"
     }
   ];
 }

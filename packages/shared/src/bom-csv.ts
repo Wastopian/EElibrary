@@ -1,8 +1,9 @@
 /**
- * File header: Parses and maps CSV BOM files for project-memory preview and persistence.
+ * File header: Parses and maps CSV and XLSX BOM files for project-memory preview and persistence.
  */
 
-import type { BomColumnMapping, BomImportPreviewResponse, BomImportPreviewRow } from "./types";
+import * as XLSX from "xlsx";
+import type { BomColumnMapping, BomImportPreviewInput, BomImportPreviewResponse, BomImportPreviewRow } from "./types";
 
 /** BomCsvErrorCode names parser failures that API and UI callers can show clearly. */
 export type BomCsvErrorCode = "EMPTY_FILE" | "UNTERMINATED_QUOTE" | "HEADER_REQUIRED" | "ROW_LIMIT_EXCEEDED" | "UNSUPPORTED_FORMAT";
@@ -55,10 +56,12 @@ const DEFAULT_MAX_ROWS = 5000;
 const DEFAULT_PREVIEW_ROW_LIMIT = 20;
 
 /**
- * Builds a no-write preview response from raw CSV text.
+ * Builds a no-write preview response from raw file content. CSV is plain text; XLSX is base64.
  */
-export function buildBomImportPreview(input: { rawContent: string; sourceFilename: string; sourceFormat: "csv" }, options: BomCsvParseOptions = {}): BomImportPreviewResponse {
-  const parsed = parseBomCsv(input.rawContent, options);
+export function buildBomImportPreview(input: BomImportPreviewInput, options: BomCsvParseOptions = {}): BomImportPreviewResponse {
+  const parsed = input.sourceFormat === "xlsx"
+    ? parseBomXlsx(input.rawContent, options)
+    : parseBomCsv(input.rawContent, options);
   const previewLimit = options.previewRowLimit ?? DEFAULT_PREVIEW_ROW_LIMIT;
 
   return {
@@ -67,9 +70,69 @@ export function buildBomImportPreview(input: { rawContent: string; sourceFilenam
     rowsPreview: parsed.rows.slice(0, previewLimit),
     skippedBlankRowCount: parsed.skippedBlankRowCount,
     sourceFilename: input.sourceFilename,
-    sourceFormat: "csv",
+    sourceFormat: input.sourceFormat,
     suggestedMapping: suggestBomColumnMapping(parsed.headers),
     warnings: parsed.warnings
+  };
+}
+
+/**
+ * Parses a base64-encoded XLSX workbook into the same row shape as parseBomCsv.
+ * Uses the first worksheet in the workbook.
+ */
+export function parseBomXlsx(base64Content: string, options: BomCsvParseOptions = {}): ParsedBomCsv {
+  const workbook = XLSX.read(base64Content, { type: "base64" });
+  const sheetName = workbook.SheetNames[0];
+
+  if (!sheetName) {
+    throw new BomCsvParseError("EMPTY_FILE", "The XLSX workbook contains no worksheets.");
+  }
+
+  const worksheet = workbook.Sheets[sheetName];
+
+  if (!worksheet) {
+    throw new BomCsvParseError("EMPTY_FILE", "The first XLSX worksheet is empty.");
+  }
+
+  const table: string[][] = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "" });
+
+  if (table.length === 0 || !table[0] || table[0].every((cell) => String(cell).trim().length === 0)) {
+    throw new BomCsvParseError("HEADER_REQUIRED", "The XLSX worksheet needs a header row.");
+  }
+
+  const headers = makeUniqueHeaders(table[0].map(String));
+  const rows: BomImportPreviewRow[] = [];
+  let skippedBlankRowCount = 0;
+  const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS;
+
+  for (let index = 1; index < table.length; index += 1) {
+    const record = (table[index] ?? []).map(String);
+
+    if (record.every((cell) => cell.trim().length === 0)) {
+      skippedBlankRowCount += 1;
+      continue;
+    }
+
+    if (rows.length >= maxRows) {
+      throw new BomCsvParseError("ROW_LIMIT_EXCEEDED", `BOM XLSX imports are limited to ${maxRows} nonblank rows.`);
+    }
+
+    rows.push({
+      rowNumber: rows.length + 1,
+      values: rowToRecord(headers, record)
+    });
+  }
+
+  if (rows.length === 0) {
+    throw new BomCsvParseError("EMPTY_FILE", "No nonblank rows were found in the XLSX worksheet.");
+  }
+
+  return {
+    headers,
+    rowCount: rows.length,
+    rows,
+    skippedBlankRowCount,
+    warnings: buildCsvWarnings(headers, rows, skippedBlankRowCount)
   };
 }
 

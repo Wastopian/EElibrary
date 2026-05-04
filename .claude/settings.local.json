@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc *)"
+      "Bash(git -C C:/Users/might/Documents/Projects/EE log --all --diff-filter=D --name-only --pretty=format: -- '*FUNC*' '*func*' '*todo*' '*TODO*' '*Todo*')",
+      "Bash(git -C C:/Users/might/Documents/Projects/EE log --all --oneline -- '*FUNC*' '*todo*' '*TODO*')",
+      "Bash(git -C C:/Users/might/Documents/Projects/EE stash list)",
+      "Bash(git -C C:/Users/might/Documents/Projects/EE show codex/fix-catalog-repository-typecheck:.claude/settings.local.json)",
+      "Bash(git -C C:/Users/might/Documents/Projects/EE log --oneline -5)",
+      "Bash(npm run *)",
+      "Bash(npm test *)"
     ]
   }
 }

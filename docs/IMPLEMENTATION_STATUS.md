@@ -2,6 +2,8 @@
 
 This document maps the product and architecture docs to the code that is actually shipped today.
 
+For dated **git worktree / working-tree registration** (for example same-day integration notes), see [`REGISTER.md`](../REGISTER.md) in the repo root.
+
 Status legend:
 
 - `Shipped` - present in the repo and intended for use

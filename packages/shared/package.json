@@ -61,5 +61,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "node ../../scripts/run-tests.mjs src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }

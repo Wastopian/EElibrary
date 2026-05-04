@@ -107,6 +107,7 @@ Near-term work should turn the current part-readiness foundation into project-le
 
 ## Docs Map
 
+- [`REGISTER.md`](REGISTER.md) - dated git worktree and working-tree registration notes (repo root)
 - [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) - shipped vs planned status matrix
 - [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) - product intent and scope
 - [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) - system boundaries and runtime responsibilities

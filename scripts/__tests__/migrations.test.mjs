@@ -45,3 +45,48 @@ test("discoverMigrations includes the project and BOM memory migration", async (
     `expected a *_project_bom_memory.sql migration in ${files.join(", ")}`
   );
 });
+
+test("discoverMigrations includes the project health evidence migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("project_health_evidence.sql")),
+    `expected a *_project_health_evidence.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the circuit blocks migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("circuit_blocks.sql")),
+    `expected a *_circuit_blocks.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the follow-up records migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("follow_up_records.sql")),
+    `expected a *_follow_up_records.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the circuit block instantiation migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("circuit_block_instantiation.sql")),
+    `expected a *_circuit_block_instantiation.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the part substitutions migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("part_substitutions.sql")),
+    `expected a *_part_substitutions.sql migration in ${files.join(", ")}`
+  );
+});

@@ -4,6 +4,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   integer,
@@ -1081,6 +1082,144 @@ export const projectPartUsages = pgTable(
   ]
 );
 
+/** circuitBlocks stores reusable circuit knowledge as structured engineering memory. */
+export const circuitBlocks = pgTable(
+  "circuit_blocks",
+  {
+    id: text("id").primaryKey(),
+    blockKey: text("block_key").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    blockType: text("block_type").notNull().default("other"),
+    owner: text("owner"),
+    status: text("status").notNull().default("draft"),
+    reuseScope: text("reuse_scope").notNull().default(""),
+    constraints: jsonb("constraints").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uq_circuit_blocks_block_key").on(t.blockKey),
+    index("idx_circuit_blocks_status_updated_at").on(t.status, t.updatedAt),
+    index("idx_circuit_blocks_type_status").on(t.blockType, t.status, t.updatedAt),
+    check(
+      "circuit_blocks_block_type_check",
+      literalCheck(`block_type IN ('power', 'mcu_support', 'interface', 'protection', 'connector_set', 'sensor_front_end', 'other')`)
+    ),
+    check(
+      "circuit_blocks_status_check",
+      literalCheck(`status IN ('draft', 'in_review', 'approved', 'restricted', 'deprecated')`)
+    ),
+  ]
+);
+
+/** circuitBlockParts stores the part roles required by a reusable circuit block. */
+export const circuitBlockParts = pgTable(
+  "circuit_block_parts",
+  {
+    id: text("id").primaryKey(),
+    circuitBlockId: text("circuit_block_id")
+      .notNull()
+      .references(() => circuitBlocks.id),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    role: text("role").notNull(),
+    quantity: numeric("quantity"),
+    isRequired: boolean("is_required").notNull().default(true),
+    substitutionPolicy: text("substitution_policy").notNull().default("exact_required"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.circuitBlockId, t.partId, t.role),
+    index("idx_circuit_block_parts_block_required").on(t.circuitBlockId, t.isRequired, t.role),
+    index("idx_circuit_block_parts_part").on(t.partId, t.circuitBlockId),
+    check(
+      "circuit_block_parts_substitution_policy_check",
+      literalCheck(`substitution_policy IN ('exact_required', 'approved_alternate_allowed', 'equivalent_allowed', 'do_not_substitute')`)
+    ),
+    check("circuit_block_parts_quantity_check", literalCheck(`quantity IS NULL OR quantity > 0`)),
+  ]
+);
+
+/** evidenceAttachments stores reviewable decision evidence without changing approval or export state. */
+export const evidenceAttachments = pgTable(
+  "evidence_attachments",
+  {
+    id: text("id").primaryKey(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id").notNull(),
+    evidenceType: text("evidence_type").notNull(),
+    title: text("title").notNull(),
+    sourceUrl: text("source_url"),
+    storageKey: text("storage_key"),
+    fileHash: text("file_hash"),
+    mimeType: text("mime_type"),
+    notes: text("notes"),
+    provenance: text("provenance").notNull().default("manual_internal"),
+    reviewStatus: text("review_status").notNull().default("unreviewed"),
+    uploadedBy: text("uploaded_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_evidence_attachments_target").on(t.targetType, t.targetId, t.createdAt),
+    index("idx_evidence_attachments_review").on(t.reviewStatus, t.updatedAt),
+    check(
+      "evidence_attachments_target_type_check",
+      literalCheck(`target_type IN ('part', 'asset', 'project', 'bom_import', 'bom_line', 'project_part_usage', 'risk_finding', 'circuit_block', 'circuit_block_part')`)
+    ),
+    check(
+      "evidence_attachments_evidence_type_check",
+      literalCheck(`evidence_type IN ('note', 'link', 'file')`)
+    ),
+    check(
+      "evidence_attachments_review_status_check",
+      literalCheck(`review_status IN ('unreviewed', 'accepted', 'rejected', 'superseded')`)
+    ),
+    check(
+      "evidence_attachments_required_reference_check",
+      literalCheck(`(evidence_type = 'link' AND source_url IS NOT NULL) OR (evidence_type = 'file' AND storage_key IS NOT NULL) OR (evidence_type = 'note' AND notes IS NOT NULL)`)
+    ),
+  ]
+);
+
+/** followUpRecords stores assignable work derived from computed BOM and circuit gaps. */
+export const followUpRecords = pgTable(
+  "follow_up_records",
+  {
+    id: text("id").primaryKey(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceFindingId: text("source_finding_id").notNull(),
+    title: text("title").notNull(),
+    detail: text("detail").notNull(),
+    nextAction: text("next_action").notNull(),
+    severity: text("severity").notNull(),
+    status: text("status").notNull().default("open"),
+    assignedTo: text("assigned_to"),
+    sourceInputs: jsonb("source_inputs").notNull().default(sql`'[]'::jsonb`),
+    evidenceAttachmentIds: jsonb("evidence_attachment_ids").notNull().default(sql`'[]'::jsonb`),
+    resolutionNotes: text("resolution_notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => [
+    unique().on(t.targetType, t.targetId, t.sourceType, t.sourceFindingId),
+    index("idx_follow_up_records_target").on(t.targetType, t.targetId, t.status, t.updatedAt),
+    index("idx_follow_up_records_status").on(t.status, t.severity, t.updatedAt),
+    index("idx_follow_up_records_source").on(t.sourceType, t.sourceFindingId),
+    check("follow_up_records_target_type_check", literalCheck(`target_type IN ('project', 'circuit_block')`)),
+    check("follow_up_records_source_type_check", literalCheck(`source_type IN ('bom_health', 'circuit_block_gap')`)),
+    check("follow_up_records_severity_check", literalCheck(`severity IN ('review', 'danger')`)),
+    check("follow_up_records_status_check", literalCheck(`status IN ('open', 'in_progress', 'resolved', 'dismissed')`)),
+  ]
+);
+
 export const users = pgTable(
   "users",
   {
@@ -1093,5 +1232,29 @@ export const users = pgTable(
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
     check("users_role_check", literalCheck(`role IN ('admin', 'user')`)),
+  ]
+);
+
+/** exportBundles records manifest-first export package outputs for verified project part assets. */
+export const exportBundles = pgTable(
+  "export_bundles",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull().references(() => projects.id),
+    revisionLabel: text("revision_label"),
+    bundleFormat: text("bundle_format").notNull(),
+    storageKey: text("storage_key"),
+    manifest: jsonb("manifest").notNull().default({}),
+    partCount: integer("part_count").notNull().default(0),
+    includedAssetCount: integer("included_asset_count").notNull().default(0),
+    omittedAssetCount: integer("omitted_asset_count").notNull().default(0),
+    warningCount: integer("warning_count").notNull().default(0),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_export_bundles_project").on(t.projectId, t.createdAt),
+    index("idx_export_bundles_format").on(t.bundleFormat, t.createdAt),
+    check("export_bundles_format_check", literalCheck(`bundle_format IN ('altium', 'solidworks', 'neutral')`)),
   ]
 );

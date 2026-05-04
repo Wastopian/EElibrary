@@ -84,6 +84,24 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           match: { path: "/projects", type: "path" }
         },
         {
+          description: "Search confirmed usage and circuit block dependencies.",
+          href: "/where-used",
+          label: "Where-used",
+          match: { path: "/where-used", type: "path" }
+        },
+        {
+          description: "Find, upload, and review evidence provenance rows.",
+          href: "/evidence",
+          label: "Evidence",
+          match: { path: "/evidence", type: "path" }
+        },
+        {
+          description: "Capture reusable circuit blocks, linked part roles, and evidence.",
+          href: "/circuit-blocks",
+          label: "Circuit blocks",
+          match: { path: "/circuit-blocks", type: "path" }
+        },
+        {
           description: "Review, promotion, failed import, and follow-up queues.",
           href: "/admin",
           label: "Admin",

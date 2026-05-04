@@ -67,6 +67,15 @@ const searchJoinIndexesMigrationSql = readFileSync(new URL("../../../infra/postg
 /** projectBomMemoryMigrationSql loads the migration 024 project and BOM memory migration under test. */
 const projectBomMemoryMigrationSql = readFileSync(new URL("../../../infra/postgres/024_project_bom_memory.sql", import.meta.url), "utf8");
 
+/** projectHealthEvidenceMigrationSql loads the migration 025 project evidence migration under test. */
+const projectHealthEvidenceMigrationSql = readFileSync(new URL("../../../infra/postgres/025_project_health_evidence.sql", import.meta.url), "utf8");
+
+/** circuitBlocksMigrationSql loads the migration 026 circuit block migration under test. */
+const circuitBlocksMigrationSql = readFileSync(new URL("../../../infra/postgres/026_circuit_blocks.sql", import.meta.url), "utf8");
+
+/** followUpRecordsMigrationSql loads the migration 027 follow-up records migration under test. */
+const followUpRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/027_follow_up_records.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -442,6 +451,144 @@ test("project/BOM memory migration preserves row truth and confirmed usage only"
 
   const idempotentUsageCount = db.public.one(`SELECT COUNT(*)::int AS usage_count FROM project_part_usages`);
   assert.equal(idempotentUsageCount.usage_count, 1);
+});
+
+/**
+ * Verifies evidence attachment migration stores metadata without approval/export side effects.
+ */
+test("project health evidence migration preserves attachment metadata and review state", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, projectHealthEvidenceMigrationSql);
+
+  db.public.none(`
+    INSERT INTO evidence_attachments (id, target_type, target_id, evidence_type, title, source_url, provenance, review_status, uploaded_by)
+    VALUES ('evidence-alpha-link', 'project', 'project-alpha', 'link', 'Design review', 'https://example.test/review', 'manual_internal', 'unreviewed', 'smoke-test');
+  `);
+
+  const evidence = db.public.one(`SELECT target_type, evidence_type, title, source_url, review_status FROM evidence_attachments WHERE id = 'evidence-alpha-link'`);
+
+  assert.deepEqual(evidence, {
+    evidence_type: "link",
+    review_status: "unreviewed",
+    source_url: "https://example.test/review",
+    target_type: "project",
+    title: "Design review",
+  });
+  assert.throws(
+    () => db.public.none(`INSERT INTO evidence_attachments (id, target_type, target_id, evidence_type, title) VALUES ('evidence-bad', 'project', 'project-alpha', 'link', 'Missing URL')`),
+    /check/i
+  );
+  assert.match(projectHealthEvidenceMigrationSql, /CREATE TABLE IF NOT EXISTS evidence_attachments/u);
+});
+
+/**
+ * Verifies circuit block migration stores reusable block roles and circuit evidence targets.
+ */
+test("circuit block migration preserves reusable part roles and evidence targets", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-memory', 'Memory Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-memory', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-memory-ldo', 'TPS7A02DBVR', 'mfr-memory', 'Power management', 'active', 'pkg-memory', 0.8);
+  `);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, projectHealthEvidenceMigrationSql);
+  applyMigrationSql(db, circuitBlocksMigrationSql);
+
+  db.public.none(`
+    INSERT INTO circuit_blocks (id, block_key, name, description, block_type, owner, status, reuse_scope, constraints)
+    VALUES ('cblock-power', 'POWER-LDO', 'LDO rail', 'Reusable regulator rail.', 'power', 'hardware', 'approved', 'Sensor boards', '{"vin":"5V"}'::jsonb);
+
+    INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes)
+    VALUES ('cbpart-power-ldo', 'cblock-power', 'part-memory-ldo', 'Main regulator', 1, true, 'exact_required', 'Keep close to load.');
+
+    INSERT INTO evidence_attachments (id, target_type, target_id, evidence_type, title, source_url)
+    VALUES ('evidence-cblock-review', 'circuit_block', 'cblock-power', 'link', 'Circuit review', 'https://example.test/circuit-review');
+  `);
+
+  const role = db.public.one(`
+    SELECT
+      cb.block_key,
+      cb.status,
+      cbp.role,
+      cbp.is_required,
+      cbp.substitution_policy
+    FROM circuit_block_parts cbp
+    JOIN circuit_blocks cb ON cb.id = cbp.circuit_block_id
+    WHERE cbp.id = 'cbpart-power-ldo'
+  `);
+  const evidence = db.public.one(`SELECT target_type, title FROM evidence_attachments WHERE id = 'evidence-cblock-review'`);
+
+  assert.deepEqual(role, {
+    block_key: "POWER-LDO",
+    is_required: true,
+    role: "Main regulator",
+    status: "approved",
+    substitution_policy: "exact_required",
+  });
+  assert.deepEqual(evidence, {
+    target_type: "circuit_block",
+    title: "Circuit review",
+  });
+  assert.throws(
+    () => db.public.none(`INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity) VALUES ('cbpart-bad', 'cblock-power', 'part-memory-ldo', 'Bad quantity', 0)`),
+    /check/i
+  );
+  assert.match(circuitBlocksMigrationSql, /CREATE TABLE IF NOT EXISTS circuit_blocks/u);
+  assert.match(circuitBlocksMigrationSql, /CREATE TABLE IF NOT EXISTS circuit_block_parts/u);
+});
+
+/**
+ * Verifies follow-up records persist assignable work without changing source readiness tables.
+ */
+test("follow-up records migration preserves assignable workflow state", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, projectHealthEvidenceMigrationSql);
+  applyMigrationSql(db, circuitBlocksMigrationSql);
+  applyMigrationSql(db, followUpRecordsMigrationSql);
+
+  db.public.none(`
+    INSERT INTO follow_up_records (id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status, assigned_to, source_inputs, evidence_attachment_ids, resolution_notes)
+    VALUES (
+      'followup-alpha-cad',
+      'project',
+      'project-alpha',
+      'bom_health',
+      'project-alpha:bom-health:missing_verified_cad',
+      'Missing CAD',
+      'One matched row is missing verified CAD.',
+      'Review asset evidence.',
+      'review',
+      'in_progress',
+      'hardware',
+      '["U1: missing CAD"]'::jsonb,
+      '["evidence-alpha-link"]'::jsonb,
+      'Assigned for review.'
+    );
+  `);
+
+  const followUp = db.public.one(`SELECT target_type, source_type, status, assigned_to, severity FROM follow_up_records WHERE id = 'followup-alpha-cad'`);
+
+  assert.deepEqual(followUp, {
+    assigned_to: "hardware",
+    severity: "review",
+    source_type: "bom_health",
+    status: "in_progress",
+    target_type: "project",
+  });
+  assert.throws(
+    () => db.public.none(`INSERT INTO follow_up_records (id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status) VALUES ('followup-bad', 'part', 'part-a', 'bom_health', 'bad', 'Bad', 'Bad', 'Bad', 'review', 'open')`),
+    /check/i
+  );
+  assert.match(followUpRecordsMigrationSql, /CREATE TABLE IF NOT EXISTS follow_up_records/u);
 });
 
 /**
