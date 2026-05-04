@@ -4,37 +4,148 @@
 
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
-import { BomCsvParseError, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv } from "@ee-library/shared/bom-csv";
+import { BomCsvParseError, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
 import { CatalogStoreError } from "./catalog-store";
 import type {
+  AssetProvenance,
+  AssetType,
   BomImport,
   BomImportCreateInput,
   BomImportCreateResponse,
+  BomImportDiagnosticsResponse,
+  BomImportDiagnosticsRow,
+  BomImportMatchResponse,
+  BomImportMatchSummary,
   BomImportLinesResponse,
   BomLine,
+  BomLineImportCandidate,
   BomLineMatchStatus,
+  BomRevisionCompareResponse,
+  BomRevisionCompareRow,
+  ProjectRevisionCompareChangeKind,
+  ProjectRevisionCompareIdentityKind,
+  ProjectRevisionCompareResponse,
+  ProjectRevisionCompareRow,
+  ProjectRevisionCompareSide,
+  CircuitBlock,
+  CircuitBlockCreateInput,
+  CircuitBlockCreateResponse,
+  CircuitBlockDetailResponse,
+  CircuitBlockInstantiation,
+  CircuitBlockInstantiationCreateInput,
+  CircuitBlockInstantiationCreateResponse,
+  CircuitBlockListResponse,
+  CircuitBlockPart,
+  CircuitBlockPartCatalogSummary,
+  CircuitBlockPartCreateInput,
+  CircuitBlockPartCreateResponse,
+  CircuitBlockPartRecord,
+  CircuitBlockPartSubstitutionPolicy,
+  CircuitBlockPartUpdateInput,
+  CircuitBlockPartUpdateResponse,
+  CircuitBlockStatus,
+  CircuitBlockSummary,
+  CircuitBlockType,
+  CircuitBlockUpdateInput,
+  CircuitBlockUpdateResponse,
+  EvidenceAttachment,
+  EvidenceAttachmentCreateInput,
+  EvidenceAttachmentCreateResponse,
+  EvidenceAttachmentListFilters,
+  EvidenceAttachmentListResponse,
+  EvidenceAttachmentType,
+  EvidenceAttachmentUpdateInput,
+  EvidenceAttachmentUpdateResponse,
+  EvidenceReviewStatus,
+  EvidenceStorageState,
+  EvidenceTargetType,
+  ExportBundle,
+  ExportBundleCreateInput,
+  ExportBundleCreateResponse,
+  ExportBundleFormat,
+  ExportBundleIncludedAsset,
+  ExportBundleListResponse,
+  ExportBundleManifest,
+  ExportBundleOmission,
+  FileFormat,
+  FollowUpListResponse,
+  FollowUpRecord,
+  FollowUpSourceType,
+  FollowUpStatus,
+  FollowUpSyncResponse,
+  FollowUpTargetType,
+  FollowUpUpdateInput,
+  FollowUpUpdateResponse,
+  ApprovedSubstituteHint,
+  PartSubstitution,
+  PartSubstitutionCreateInput,
+  PartSubstitutionCreateResponse,
+  PartSubstitutionListResponse,
+  PartSubstitutionRevokeResponse,
+  PartSubstitutionScope,
+  PartSubstitutionStatus,
+  PartSubstitutionSummary,
+  PartWhereUsedRecord,
+  PartWhereUsedResponse,
+  ProjectBomHealthResponse,
+  ProjectBomHealthSummary,
+  ProjectBomRiskFinding,
+  ProjectBomRiskFindingCode,
   ProjectCreateInput,
   ProjectCreateResponse,
   Project,
   ProjectBomImportsResponse,
   ProjectDetailResponse,
+  ProjectEvidenceAttachmentsResponse,
+  ProjectFleetRiskResponse,
+  ProjectFleetRiskRow,
   ProjectListResponse,
   ProjectMemoryCapability,
   ProjectPartUsage,
   ProjectPartUsagesResponse,
   ProjectRevision,
+  ProjectRevisionStatus,
+  ProjectRevisionUpdateInput,
+  ProjectRevisionUpdateResponse,
   ProjectRevisionsResponse,
-  ProjectSummary
+  ProjectSummary,
+  ProjectUpdateInput,
+  ProjectUpdateResponse,
+  CircuitBlockProjectDependency,
+  WhereUsedAssetExportRecord,
+  WhereUsedCircuitBlockDependencyRecord,
+  WhereUsedProjectUsageRecord,
+  WhereUsedSearchResponse,
+  WhereUsedTargetType
 } from "@ee-library/shared/types";
 
 /** ProjectListReadResult reports list availability without falling back to fake project memory. */
 export type ProjectListReadResult = { status: "available"; response: ProjectListResponse } | { status: "not_configured" };
+
+/** ProjectFleetRiskReadResult reports the cross-project risk dashboard. */
+export type ProjectFleetRiskReadResult =
+  | { status: "available"; response: ProjectFleetRiskResponse }
+  | { status: "not_configured" };
 
 /** ProjectCreateResult reports project creation or safe conflict/setup failures. */
 export type ProjectCreateResult =
   | { status: "created"; response: ProjectCreateResponse }
   | { status: "conflict"; message: string }
   | { status: "not_configured" };
+
+/** ProjectUpdateResult reports project metadata edits without touching trust records. */
+export type ProjectUpdateResult =
+  | { status: "updated"; response: ProjectUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** ProjectRevisionUpdateResult reports revision metadata edits scoped to one project. */
+export type ProjectRevisionUpdateResult =
+  | { status: "updated"; response: ProjectRevisionUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
 
 /** ProjectDetailReadResult reports one project detail read or an honest persistence boundary failure. */
 export type ProjectDetailReadResult =
@@ -61,6 +172,179 @@ export type BomImportCreateResult =
   | { status: "not_configured" }
   | { status: "not_found" };
 
+/** BomImportMatchResult reports one internal matching run without hiding setup boundaries. */
+export type BomImportMatchResult =
+  | { status: "matched"; response: BomImportMatchResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** PartWhereUsedReadResult reports usage history availability for one internal part. */
+export type PartWhereUsedReadResult =
+  | { status: "available"; response: PartWhereUsedResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** WhereUsedSearchReadResult reports global where-used search availability. */
+export type WhereUsedSearchReadResult =
+  | { status: "available"; response: WhereUsedSearchResponse }
+  | { status: "not_configured" };
+
+/** ProjectBomHealthReadResult reports computed BOM health availability for one project. */
+export type ProjectBomHealthReadResult =
+  | { status: "available"; response: ProjectBomHealthResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** EvidenceAttachmentCreateResult reports validated evidence persistence boundaries. */
+export type EvidenceAttachmentCreateResult =
+  | { status: "created"; response: EvidenceAttachmentCreateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** EvidenceAttachmentListReadResult reports global evidence vault availability. */
+export type EvidenceAttachmentListReadResult =
+  | { status: "available"; response: EvidenceAttachmentListResponse }
+  | { status: "not_configured" };
+
+/** EvidenceAttachmentUpdateResult reports review metadata edits for one evidence row. */
+export type EvidenceAttachmentUpdateResult =
+  | { status: "updated"; response: EvidenceAttachmentUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** ProjectEvidenceReadResult reports evidence reads scoped to one project. */
+export type ProjectEvidenceReadResult =
+  | { status: "available"; response: ProjectEvidenceAttachmentsResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** FollowUpListReadResult reports persisted follow-up queue availability. */
+export type FollowUpListReadResult =
+  | { status: "available"; response: FollowUpListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** FollowUpSyncResult reports generated or refreshed persistent follow-up work. */
+export type FollowUpSyncResult =
+  | { status: "synced"; response: FollowUpSyncResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** FollowUpUpdateResult reports follow-up workflow edits. */
+export type FollowUpUpdateResult =
+  | { status: "updated"; response: FollowUpUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** CircuitBlockListReadResult reports reusable circuit library availability. */
+export type CircuitBlockListReadResult =
+  | { status: "available"; response: CircuitBlockListResponse }
+  | { status: "not_configured" };
+
+/** CircuitBlockDetailReadResult reports one circuit block detail or setup/not-found state. */
+export type CircuitBlockDetailReadResult =
+  | { status: "available"; response: CircuitBlockDetailResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** CircuitBlockCreateResult reports circuit block creation and safe conflict/setup failures. */
+export type CircuitBlockCreateResult =
+  | { status: "created"; response: CircuitBlockCreateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "conflict"; message: string }
+  | { status: "not_configured" };
+
+/** CircuitBlockUpdateResult reports editable circuit metadata outcomes. */
+export type CircuitBlockUpdateResult =
+  | { status: "updated"; response: CircuitBlockUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** CircuitBlockPartCreateResult reports part-role persistence for one circuit block. */
+export type CircuitBlockPartCreateResult =
+  | { status: "created"; response: CircuitBlockPartCreateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** CircuitBlockPartUpdateResult reports editable role metadata outcomes. */
+export type CircuitBlockPartUpdateResult =
+  | { status: "updated"; response: CircuitBlockPartUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** PartSubstitutionCreateResult reports approval persistence and validation outcomes for one substitution. */
+export type PartSubstitutionCreateResult =
+  | { status: "created"; response: PartSubstitutionCreateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "conflict"; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** PartSubstitutionListReadResult reports the active + revoked substitutions for one part. */
+export type PartSubstitutionListReadResult =
+  | { status: "available"; response: PartSubstitutionListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** PartSubstitutionRevokeResult reports a revoke action and its trust boundary. */
+export type PartSubstitutionRevokeResult =
+  | { status: "revoked"; response: PartSubstitutionRevokeResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** CircuitBlockInstantiationCreateResult reports synthetic-BOM generation from a reusable block. */
+export type CircuitBlockInstantiationCreateResult =
+  | { status: "created"; response: CircuitBlockInstantiationCreateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** ExportBundleCreateResult reports bundle generation and manifest persistence. */
+export type ExportBundleCreateResult =
+  | { status: "created"; response: ExportBundleCreateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** ExportBundleListReadResult reports export bundle history for one project. */
+export type ExportBundleListReadResult =
+  | { status: "available"; response: ExportBundleListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** BomImportDiagnosticsReadResult reports match-status diagnostics for one import. */
+export type BomImportDiagnosticsReadResult =
+  | { status: "available"; response: BomImportDiagnosticsResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** BomRevisionCompareReadResult reports the diff between two BOM imports. */
+export type BomRevisionCompareReadResult =
+  | { status: "available"; response: BomRevisionCompareResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** ProjectRevisionCompareReadResult reports the revision-vs-revision BOM diff for one project. */
+export type ProjectRevisionCompareReadResult =
+  | { status: "available"; response: ProjectRevisionCompareResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** CircuitBlockProjectDependenciesReadResult reports projects that use parts from one circuit block. */
+export type CircuitBlockProjectDependenciesReadResult =
+  | { status: "available"; dependencies: CircuitBlockProjectDependency[] }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
 /** ProjectMemoryCapability list labels read foundations and planned workflows for honest API consumers. */
 const PROJECT_MEMORY_CAPABILITIES: ProjectMemoryCapability[] = [
   {
@@ -82,34 +366,34 @@ const PROJECT_MEMORY_CAPABILITIES: ProjectMemoryCapability[] = [
     state: "foundation"
   },
   {
-    detail: "Automatic BOM row matching is planned; weak and ambiguous matches must not create confirmed usage.",
+    detail: "BOM row matching can confirm exact internal MPN/manufacturer rows while keeping weak and ambiguous rows out of usage history.",
     id: "bom_matching",
     label: "BOM matching",
-    state: "planned"
+    state: "foundation"
   },
   {
-    detail: "Where-used views will read from confirmed project usage records.",
+    detail: "Where-used reads expose confirmed project usage by part while staying separate from approval and export readiness.",
     id: "where_used",
     label: "Where-used",
-    state: "planned"
+    state: "foundation"
   },
   {
-    detail: "BOM health and risk projections are planned after usage history exists.",
+    detail: "BOM health derives explainable risk findings from persisted BOM rows, confirmed usage, assets, lifecycle, and evidence.",
     id: "bom_health",
     label: "BOM health",
-    state: "planned"
+    state: "foundation"
   },
   {
-    detail: "Evidence attachment workflows are planned and remain separate from approval or export readiness.",
+    detail: "Evidence attachment metadata can be preserved for projects, parts, BOM rows, usage, assets, and risk findings without changing trust state.",
     id: "evidence_vault",
     label: "Evidence vault",
-    state: "planned"
+    state: "foundation"
   },
   {
-    detail: "Circuit block records are planned as structured engineering knowledge, not loose notes.",
+    detail: "Circuit block records preserve structured reusable circuit knowledge, constraints, linked parts, and evidence without overriding part readiness.",
     id: "circuit_blocks",
     label: "Circuit blocks",
-    state: "planned"
+    state: "foundation"
   }
 ];
 
@@ -184,6 +468,9 @@ interface DatabaseBomLineRow {
   matched_part_id: string | null;
   match_status: BomLine["matchStatus"];
   match_confidence_score: string | number | null;
+  instantiated_from_circuit_block_id: string | null;
+  instantiated_from_circuit_block_part_id: string | null;
+  instantiated_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -203,6 +490,320 @@ interface DatabaseProjectPartUsageRow {
   readiness_snapshot: unknown;
   created_at: Date | string;
   updated_at: Date | string;
+}
+
+/** DatabasePartWhereUsedRow is one usage row joined to project, revision, and optional BOM-line context. */
+interface DatabasePartWhereUsedRow {
+  usage_id: string;
+  usage_project_id: string;
+  usage_project_revision_id: string;
+  usage_bom_line_id: string | null;
+  usage_part_id: string;
+  usage_context: string | null;
+  usage_designators: unknown;
+  usage_quantity: string | number | null;
+  usage_status: ProjectPartUsage["usageStatus"];
+  usage_approval_snapshot: unknown;
+  usage_readiness_snapshot: unknown;
+  usage_created_at: Date | string;
+  usage_updated_at: Date | string;
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  project_description: string;
+  project_owner: string | null;
+  project_status: Project["status"];
+  project_created_at: Date | string;
+  project_updated_at: Date | string;
+  revision_id: string;
+  revision_project_id: string;
+  revision_label: string;
+  revision_status: ProjectRevision["revisionStatus"];
+  revision_source_reference: string | null;
+  revision_released_at: Date | string | null;
+  revision_created_at: Date | string;
+  revision_updated_at: Date | string;
+  line_id: string | null;
+  line_bom_import_id: string | null;
+  line_project_id: string | null;
+  line_project_revision_id: string | null;
+  line_row_number: number | null;
+  line_designators: unknown;
+  line_quantity: string | number | null;
+  line_raw_mpn: string | null;
+  line_raw_manufacturer: string | null;
+  line_raw_description: string | null;
+  line_raw_supplier_reference: string | null;
+  line_raw_notes: string | null;
+  line_raw_row_payload: unknown;
+  line_matched_part_id: string | null;
+  line_match_status: BomLine["matchStatus"] | null;
+  line_match_confidence_score: string | number | null;
+  line_created_at: Date | string | null;
+  line_updated_at: Date | string | null;
+}
+
+/** DatabaseProjectBomHealthRow carries one BOM line plus matched-part health inputs. */
+interface DatabaseProjectBomHealthRow extends DatabaseBomLineRow {
+  lifecycle_status: string | null;
+  matched_part_last_updated_at: Date | string | null;
+  approval_status: string | null;
+  readiness_status: string | null;
+  connector_class: string | null;
+  blocker_count: string | number | null;
+  verified_cad_count: string | number;
+  file_backed_cad_count: string | number;
+  referenced_cad_count: string | number;
+  evidence_count: string | number;
+}
+
+/** DatabaseEvidenceAttachmentRow is one persisted decision-evidence metadata row. */
+interface DatabaseEvidenceAttachmentRow {
+  id: string;
+  target_type: EvidenceTargetType;
+  target_id: string;
+  evidence_type: EvidenceAttachmentType;
+  title: string;
+  source_url: string | null;
+  storage_key: string | null;
+  file_hash: string | null;
+  mime_type: string | null;
+  notes: string | null;
+  provenance: string;
+  review_status: EvidenceReviewStatus;
+  uploaded_by: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+/** DatabaseFollowUpRecordRow is one persisted assignable follow-up work item. */
+interface DatabaseFollowUpRecordRow {
+  id: string;
+  target_type: FollowUpTargetType;
+  target_id: string;
+  source_type: FollowUpRecord["sourceType"];
+  source_finding_id: string;
+  title: string;
+  detail: string;
+  next_action: string;
+  severity: FollowUpRecord["severity"];
+  status: FollowUpStatus;
+  assigned_to: string | null;
+  source_inputs: unknown;
+  evidence_attachment_ids: unknown;
+  resolution_notes: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+  resolved_at: Date | string | null;
+}
+
+/** DatabaseCircuitBlockRow is one reusable circuit knowledge record. */
+interface DatabaseCircuitBlockRow {
+  id: string;
+  block_key: string;
+  name: string;
+  description: string;
+  block_type: CircuitBlockType;
+  owner: string | null;
+  status: CircuitBlockStatus;
+  reuse_scope: string;
+  constraints: unknown;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+/** DatabaseCircuitBlockSummaryRow adds explainable list counts to one block row. */
+interface DatabaseCircuitBlockSummaryRow extends DatabaseCircuitBlockRow {
+  total_part_count: string | number;
+  required_part_count: string | number;
+  optional_part_count: string | number;
+  approved_part_count: string | number;
+  readiness_gap_count: string | number;
+  lifecycle_risk_count: string | number;
+  strict_substitution_count: string | number;
+  evidence_attachment_count: string | number;
+  project_usage_count: string | number;
+}
+
+/** DatabaseCircuitBlockProjectDependencyRow is one project that has confirmed usages of block parts. */
+interface DatabaseCircuitBlockProjectDependencyRow {
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  project_status: string;
+  project_created_at: Date | string;
+  project_updated_at: Date | string;
+  matched_part_count: string | number;
+  total_block_part_count: string | number;
+}
+
+/** DatabaseCircuitBlockPartRow is one part role inside a reusable circuit block. */
+interface DatabaseCircuitBlockPartRow {
+  id: string;
+  circuit_block_id: string;
+  part_id: string;
+  role: string;
+  quantity: string | number | null;
+  is_required: boolean;
+  substitution_policy: CircuitBlockPartSubstitutionPolicy;
+  notes: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+/** DatabaseCircuitBlockPartDetailRow joins a block part to current catalog health signals. */
+interface DatabaseCircuitBlockPartDetailRow extends DatabaseCircuitBlockPartRow {
+  mpn: string;
+  manufacturer_name: string;
+  lifecycle_status: CircuitBlockPartCatalogSummary["lifecycleStatus"];
+  approval_status: CircuitBlockPartCatalogSummary["approvalStatus"];
+  readiness_status: CircuitBlockPartCatalogSummary["readinessStatus"];
+  connector_class: CircuitBlockPartCatalogSummary["connectorClass"];
+  blocker_count: string | number | null;
+}
+
+/** DatabaseWhereUsedPartSummaryRow is a compact part identity plus current readiness context. */
+interface DatabaseWhereUsedPartSummaryRow {
+  part_id: string;
+  mpn: string;
+  manufacturer_name: string;
+  lifecycle_status: CircuitBlockPartCatalogSummary["lifecycleStatus"];
+  approval_status: CircuitBlockPartCatalogSummary["approvalStatus"];
+  readiness_status: CircuitBlockPartCatalogSummary["readinessStatus"];
+  connector_class: CircuitBlockPartCatalogSummary["connectorClass"];
+  blocker_count: string | number | null;
+}
+
+/** DatabaseWhereUsedCircuitBlockDependencyRow joins a circuit block role to its part summary. */
+interface DatabaseWhereUsedCircuitBlockDependencyRow extends DatabaseCircuitBlockPartDetailRow {
+  block_id: string;
+  block_key: string;
+  block_name: string;
+  block_description: string;
+  block_type: CircuitBlockType;
+  block_owner: string | null;
+  block_status: CircuitBlockStatus;
+  block_reuse_scope: string;
+  block_constraints: unknown;
+  block_created_at: Date | string;
+  block_updated_at: Date | string;
+}
+
+/** DatabasePartMatchCandidateRow is the canonical internal part identity used for BOM matching. */
+interface DatabasePartMatchCandidateRow {
+  part_id: string;
+  mpn: string;
+  manufacturer_id: string;
+  manufacturer_name: string;
+  manufacturer_aliases: unknown;
+}
+
+/** DatabasePartApprovalSnapshotRow is the approval evidence captured onto confirmed usage. */
+interface DatabasePartApprovalSnapshotRow {
+  approval_status: string;
+  summary: string;
+  detail: string;
+  evidence: unknown;
+  decided_by: string | null;
+  decided_at: Date | string | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabasePartReadinessSnapshotRow is the readiness evidence captured onto confirmed usage. */
+interface DatabasePartReadinessSnapshotRow {
+  readiness_status: string;
+  identity_status: string;
+  connector_class: string;
+  blocker_count: string | number;
+  blocker_summary: unknown;
+  recommended_actions: unknown;
+  detail: string;
+  last_evaluated_at: Date | string;
+}
+
+/** BomLineMatchOutcome is the deterministic result of matching one BOM line. */
+interface BomLineMatchOutcome {
+  matchConfidenceScore: number | null;
+  matchedPartId: string | null;
+  matchStatus: BomLineMatchStatus;
+}
+
+/** NormalizedProjectUpdateInput is validated project edit input ready for SQL parameters. */
+interface NormalizedProjectUpdateInput {
+  description: string;
+  name: string;
+  owner: string | null;
+  status: Project["status"];
+}
+
+/** NormalizedProjectRevisionUpdateInput is validated revision edit input ready for SQL parameters. */
+interface NormalizedProjectRevisionUpdateInput {
+  releasedAt: Date | null;
+  revisionStatus: ProjectRevisionStatus;
+  sourceReference: string | null;
+}
+
+/** NormalizedCircuitBlockCreateInput is validated write input ready for SQL parameters. */
+interface NormalizedCircuitBlockCreateInput {
+  blockKey: string;
+  blockType: CircuitBlockType;
+  constraints: Record<string, unknown>;
+  description: string;
+  name: string;
+  owner: string | null;
+  reuseScope: string;
+  status: CircuitBlockStatus;
+}
+
+/** NormalizedCircuitBlockUpdateInput is validated block edit input ready for SQL parameters. */
+interface NormalizedCircuitBlockUpdateInput {
+  blockType: CircuitBlockType;
+  constraints: Record<string, unknown>;
+  description: string;
+  name: string;
+  owner: string | null;
+  reuseScope: string;
+  status: CircuitBlockStatus;
+}
+
+/** NormalizedCircuitBlockPartCreateInput is validated part-role input ready for SQL parameters. */
+interface NormalizedCircuitBlockPartCreateInput {
+  isRequired: boolean;
+  notes: string | null;
+  partId: string;
+  quantity: number | null;
+  role: string;
+  substitutionPolicy: CircuitBlockPartSubstitutionPolicy;
+}
+
+/** NormalizedCircuitBlockPartUpdateInput is validated role edit input ready for SQL parameters. */
+interface NormalizedCircuitBlockPartUpdateInput {
+  isRequired: boolean;
+  notes: string | null;
+  quantity: number | null;
+  substitutionPolicy: CircuitBlockPartSubstitutionPolicy;
+}
+
+/** NormalizedFollowUpUpdateInput is validated workflow metadata for one follow-up row. */
+interface NormalizedFollowUpUpdateInput {
+  assignedTo: string | null;
+  evidenceAttachmentIds: string[] | undefined;
+  resolutionNotes: string | null;
+  status: FollowUpStatus;
+}
+
+/** FollowUpSeedRecord is a computed gap ready to upsert as assignable work. */
+interface FollowUpSeedRecord {
+  detail: string;
+  evidenceAttachmentIds: string[];
+  nextAction: string;
+  severity: FollowUpRecord["severity"];
+  sourceFindingId: string;
+  sourceInputs: string[];
+  sourceType: FollowUpSourceType;
+  targetId: string;
+  targetType: FollowUpTargetType;
+  title: string;
 }
 
 /** ProjectMemoryInputError reports validated request problems from write helpers. */
@@ -324,6 +925,153 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
 }
 
 /**
+ * Updates project metadata without approving parts, rematching BOM rows, or changing export readiness.
+ */
+export async function updateProjectInDatabase(projectId: string, input: ProjectUpdateInput): Promise<ProjectUpdateResult> {
+  const normalized = normalizeProjectUpdateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const now = new Date();
+    const result = await databasePool.query<DatabaseProjectRow>(
+      `
+        UPDATE projects
+        SET name = $2,
+          description = $3,
+          owner = $4,
+          status = $5,
+          updated_at = $6
+        WHERE id = $1
+        RETURNING id, project_key, name, description, owner, status, created_at, updated_at
+      `,
+      [
+        projectId,
+        normalized.input.name,
+        normalized.input.description,
+        normalized.input.owner,
+        normalized.input.status,
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    const detail = await readProjectDetailFromDatabase(projectId);
+
+    if (detail.status !== "available") {
+      throw new CatalogStoreError("query_failed", "Updated project could not be read back from project memory.", new Error("project_update_readback_failed"));
+    }
+
+    return {
+      response: {
+        boundary: "Project metadata edits do not approve parts, validate evidence, or alter export readiness.",
+        detail: detail.response,
+        project: mapProjectRow(row)
+      },
+      status: "updated"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Updates project revision metadata without changing persisted BOM rows or confirmed usage records.
+ */
+export async function updateProjectRevisionInDatabase(projectId: string, revisionId: string, input: ProjectRevisionUpdateInput): Promise<ProjectRevisionUpdateResult> {
+  const normalized = normalizeProjectRevisionUpdateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await projectExists(databasePool, projectId))) {
+      return {
+        code: "PROJECT_NOT_FOUND",
+        message: "Project not found.",
+        status: "not_found"
+      };
+    }
+
+    const now = new Date();
+    const result = await databasePool.query<DatabaseProjectRevisionRow>(
+      `
+        UPDATE project_revisions
+        SET revision_status = $3,
+          source_reference = $4,
+          released_at = $5,
+          updated_at = $6
+        WHERE project_id = $1 AND id = $2
+        RETURNING id, project_id, revision_label, revision_status, source_reference, released_at, created_at, updated_at
+      `,
+      [
+        projectId,
+        revisionId,
+        normalized.input.revisionStatus,
+        normalized.input.sourceReference,
+        normalized.input.releasedAt,
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return {
+        code: "PROJECT_REVISION_NOT_FOUND",
+        message: "Project revision not found.",
+        status: "not_found"
+      };
+    }
+
+    await databasePool.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [projectId, now]);
+
+    const detail = await readProjectDetailFromDatabase(projectId);
+
+    if (detail.status !== "available") {
+      throw new CatalogStoreError("query_failed", "Updated project revision could not be read back from project memory.", new Error("project_revision_update_readback_failed"));
+    }
+
+    return {
+      response: {
+        boundary: "Revision metadata edits do not remap BOM rows or create confirmed part usage.",
+        detail: detail.response,
+        revision: mapProjectRevisionRow(row)
+      },
+      status: "updated"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
  * Reads the project list from persisted project-memory tables.
  */
 export async function readProjectsFromDatabase(): Promise<ProjectListReadResult> {
@@ -347,6 +1095,119 @@ export async function readProjectsFromDatabase(): Promise<ProjectListReadResult>
   } catch (error) {
     throw toProjectMemoryStoreError(error);
   }
+}
+
+/**
+ * Reads a cross-project risk dashboard with explainable BOM, approval, lifecycle, CAD, and follow-up counts.
+ */
+export async function readProjectFleetRiskFromDatabase(): Promise<ProjectFleetRiskReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const summaries = await readProjectSummaries(databasePool);
+
+    const rows: ProjectFleetRiskRow[] = [];
+    for (const summary of summaries) {
+      const projectId = summary.project.id;
+      const [healthRows, openFollowUpCount] = await Promise.all([
+        readProjectBomHealthRows(databasePool, projectId),
+        readOpenProjectFollowUpCount(databasePool, projectId)
+      ]);
+
+      const counts = computeProjectFleetCounts(healthRows);
+      const row: ProjectFleetRiskRow = {
+        approvalGapCount: counts.approvalGapCount,
+        lifecycleRiskCount: counts.lifecycleRiskCount,
+        missingVerifiedCadCount: counts.missingVerifiedCadCount,
+        openFollowUpCount,
+        project: summary.project,
+        totalRiskCount:
+          counts.unmatchedLineCount +
+          counts.weakOrAmbiguousLineCount +
+          counts.approvalGapCount +
+          counts.lifecycleRiskCount +
+          counts.missingVerifiedCadCount +
+          openFollowUpCount,
+        unmatchedLineCount: counts.unmatchedLineCount,
+        weakOrAmbiguousLineCount: counts.weakOrAmbiguousLineCount
+      };
+      rows.push(row);
+    }
+
+    rows.sort((left, right) => {
+      if (right.totalRiskCount !== left.totalRiskCount) {
+        return right.totalRiskCount - left.totalRiskCount;
+      }
+      return left.project.name.localeCompare(right.project.name);
+    });
+
+    return {
+      response: {
+        boundary:
+          "Counts are explainable inputs derived from persisted BOM rows, confirmed usage, lifecycle, CAD, and follow-up records. They do not approve parts, validate assets, or unlock export.",
+        rows,
+        state: rows.length > 0 ? "available" : "empty"
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Counts open follow-up records targeting one project.
+ */
+async function readOpenProjectFollowUpCount(databasePool: Pool | PoolClient, projectId: string): Promise<number> {
+  const result = await databasePool.query<{ open_count: string | number }>(
+    `SELECT COUNT(*)::text AS open_count
+       FROM follow_up_records
+       WHERE target_type = 'project' AND target_id = $1 AND status = 'open'`,
+    [projectId]
+  );
+  return Number(result.rows[0]?.open_count ?? 0);
+}
+
+/**
+ * Aggregates one project's BOM health rows into the fleet-row count fields.
+ */
+function computeProjectFleetCounts(rows: DatabaseProjectBomHealthRow[]): {
+  unmatchedLineCount: number;
+  weakOrAmbiguousLineCount: number;
+  approvalGapCount: number;
+  lifecycleRiskCount: number;
+  missingVerifiedCadCount: number;
+} {
+  let unmatchedLineCount = 0;
+  let weakOrAmbiguousLineCount = 0;
+  let approvalGapCount = 0;
+  let lifecycleRiskCount = 0;
+  let missingVerifiedCadCount = 0;
+
+  for (const row of rows) {
+    const matchStatus = row.match_status;
+    if (matchStatus === "unmatched") unmatchedLineCount += 1;
+    if (matchStatus === "weak_match" || matchStatus === "ambiguous") weakOrAmbiguousLineCount += 1;
+
+    if (matchStatus === "matched" && row.matched_part_id) {
+      if (row.approval_status !== "approved") {
+        approvalGapCount += 1;
+      }
+      if (row.lifecycle_status === "obsolete" || row.lifecycle_status === "not_recommended") {
+        lifecycleRiskCount += 1;
+      }
+      const verifiedCadCount = Number(row.verified_cad_count ?? 0);
+      if (!Number.isFinite(verifiedCadCount) || verifiedCadCount === 0) {
+        missingVerifiedCadCount += 1;
+      }
+    }
+  }
+
+  return { approvalGapCount, lifecycleRiskCount, missingVerifiedCadCount, unmatchedLineCount, weakOrAmbiguousLineCount };
 }
 
 /**
@@ -400,7 +1261,9 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
   }
 
   try {
-    const parsedCsv = parseBomCsv(input.rawContent);
+    const parsedCsv = input.sourceFormat === "xlsx"
+      ? parseBomXlsx(input.rawContent)
+      : parseBomCsv(input.rawContent);
     const columnMapping = normalizeBomColumnMapping(input.columnMapping);
 
     if (!hasMappedHeader(parsedCsv.headers, columnMapping.mpn)) {
@@ -446,7 +1309,7 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
       const bomImportResult = await client.query<DatabaseBomImportRow>(
         `
           INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, 'csv', $5, 'mapped', $6::jsonb, $7::jsonb, $8, $9, $9)
+          VALUES ($1, $2, $3, $4, $5, $6, 'mapped', $7::jsonb, $8::jsonb, $9, $10, $10)
           RETURNING id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at
         `,
         [
@@ -454,6 +1317,7 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
           projectId,
           revision.id,
           input.sourceFilename.trim(),
+          input.sourceFormat ?? "csv",
           null,
           JSON.stringify(columnMapping),
           JSON.stringify(importSummary),
@@ -468,7 +1332,7 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
           `
             INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, NULL, $14, NULL, $15, $15)
-            RETURNING id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at
+            RETURNING id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at
           `,
           [
             `bomline-${randomUUID()}`,
@@ -534,6 +1398,117 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
       };
     }
 
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Matches one persisted BOM import against internal catalog rows and creates usage only for confirmed rows.
+ */
+export async function matchBomImportRowsInDatabase(bomImportId: string): Promise<BomImportMatchResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const client = await databasePool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const bomImportResult = await client.query<DatabaseBomImportRow>(
+        `
+          SELECT id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at
+          FROM bom_imports
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [bomImportId]
+      );
+      const bomImport = bomImportResult.rows[0];
+
+      if (!bomImport) {
+        await client.query("ROLLBACK");
+        return { status: "not_found" };
+      }
+
+      const sourceLines = await readBomImportLines(client, bomImportId);
+      const now = new Date();
+      const updatedLines: BomLine[] = [];
+      const updatedUsages: ProjectPartUsage[] = [];
+      const importCandidates: BomLineImportCandidate[] = [];
+
+      for (const line of sourceLines) {
+        const outcome = line.matchStatus === "ignored"
+          ? ({ matchConfidenceScore: line.matchConfidenceScore, matchedPartId: line.matchedPartId, matchStatus: "ignored" } satisfies BomLineMatchOutcome)
+          : await resolveBomLineMatch(client, line);
+        const updatedLine = await updateBomLineMatch(client, line, outcome, now);
+
+        updatedLines.push(updatedLine);
+
+        if (outcome.matchStatus === "matched" && outcome.matchedPartId) {
+          updatedUsages.push(await upsertProjectPartUsageForMatchedLine(client, updatedLine, outcome.matchedPartId, now));
+        } else {
+          await deleteProjectPartUsageForBomLine(client, line.id);
+
+          const importCandidate = buildLineImportCandidate(updatedLine);
+
+          if (importCandidate) {
+            importCandidates.push(importCandidate);
+          }
+        }
+      }
+
+      const summary = buildBomImportMatchSummary(updatedLines, updatedUsages.length, importCandidates.length);
+      const nextImportSummary = {
+        ...toRecord(bomImport.import_summary),
+        matching: {
+          ...summary,
+          engine: "internal_exact_mpn_manufacturer_v1",
+          matchedAt: now.toISOString()
+        },
+        matchStatus: "processed"
+      };
+      const updatedBomImportResult = await client.query<DatabaseBomImportRow>(
+        `
+          UPDATE bom_imports
+          SET import_status = 'processed',
+            import_summary = $2::jsonb,
+            updated_at = $3
+          WHERE id = $1
+          RETURNING id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at
+        `,
+        [bomImportId, JSON.stringify(nextImportSummary), now]
+      );
+      const updatedBomImport = updatedBomImportResult.rows[0];
+
+      if (!updatedBomImport) {
+        throw new CatalogStoreError("query_failed", "BOM import matching returned no persisted import row.", new Error("missing_bom_match_row"));
+      }
+
+      await client.query("UPDATE project_revisions SET updated_at = $2 WHERE id = $1", [updatedBomImport.project_revision_id, now]);
+      await client.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [updatedBomImport.project_id, now]);
+      await client.query("COMMIT");
+
+      return {
+        response: {
+          bomImport: mapBomImportRow(updatedBomImport),
+          importCandidates,
+          linesPreview: updatedLines.slice(0, 50),
+          summary,
+          usagesPreview: updatedUsages.slice(0, 50)
+        },
+        status: "matched"
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
     throw toProjectMemoryStoreError(error);
   }
 }
@@ -659,6 +1634,929 @@ export async function readProjectPartUsagesFromDatabase(projectId: string): Prom
 }
 
 /**
+ * Reads confirmed where-used history for one internal part id.
+ */
+export async function readPartWhereUsedFromDatabase(partId: string): Promise<PartWhereUsedReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await partExists(databasePool, partId))) {
+      return { status: "not_found" };
+    }
+
+    const usages = await readPartWhereUsed(databasePool, partId);
+
+    return {
+      response: {
+        partId,
+        state: usages.length > 0 ? "available" : "empty",
+        usages
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads global where-used search results across confirmed usage and circuit block dependencies.
+ */
+export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTargetType, query: string): Promise<WhereUsedSearchReadResult> {
+  const normalizedTargetType = normalizeWhereUsedTargetType(targetType);
+  const normalizedQuery = normalizeOptionalText(query) ?? "";
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const unsupportedReason = getUnsupportedWhereUsedReason(normalizedTargetType);
+
+    if (unsupportedReason || normalizedQuery.length === 0) {
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports: [],
+          circuitBlockDependencies: [],
+          matchedCircuitBlocks: [],
+          matchedParts: [],
+          projectUsages: [],
+          query: normalizedQuery,
+          supportedTarget: !unsupportedReason,
+          targetType: normalizedTargetType,
+          unsupportedReason
+        }),
+        status: "available"
+      };
+    }
+
+    if (normalizedTargetType === "part") {
+      const matchedParts = await readWhereUsedPartMatches(databasePool, normalizedQuery);
+      const [projectUsages, circuitBlockDependencies] = await Promise.all([
+        readWhereUsedProjectUsagesForParts(databasePool, matchedParts),
+        readWhereUsedCircuitBlockDependenciesForPartIds(databasePool, matchedParts.map((part) => part.partId))
+      ]);
+
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports: [],
+          circuitBlockDependencies,
+          matchedCircuitBlocks: [],
+          matchedParts,
+          projectUsages,
+          query: normalizedQuery,
+          supportedTarget: true,
+          targetType: normalizedTargetType,
+          unsupportedReason: null
+        }),
+        status: "available"
+      };
+    }
+
+    if (normalizedTargetType === "asset") {
+      const matchedParts = await readWhereUsedPartMatches(databasePool, normalizedQuery);
+      const [projectUsages, assetExports] = await Promise.all([
+        readWhereUsedProjectUsagesForParts(databasePool, matchedParts),
+        readWhereUsedAssetExports(databasePool, matchedParts)
+      ]);
+
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports,
+          circuitBlockDependencies: [],
+          matchedCircuitBlocks: [],
+          matchedParts,
+          projectUsages,
+          query: normalizedQuery,
+          supportedTarget: true,
+          targetType: normalizedTargetType,
+          unsupportedReason: null
+        }),
+        status: "available"
+      };
+    }
+
+    if (normalizedTargetType === "connector_set") {
+      const matchedParts = await readWhereUsedConnectorMatches(databasePool, normalizedQuery);
+      const [projectUsages, circuitBlockDependencies] = await Promise.all([
+        readWhereUsedProjectUsagesForParts(databasePool, matchedParts),
+        readWhereUsedCircuitBlockDependenciesForPartIds(databasePool, matchedParts.map((p) => p.partId))
+      ]);
+
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports: [],
+          circuitBlockDependencies,
+          matchedCircuitBlocks: [],
+          matchedParts,
+          projectUsages,
+          query: normalizedQuery,
+          supportedTarget: true,
+          targetType: normalizedTargetType,
+          unsupportedReason: null
+        }),
+        status: "available"
+      };
+    }
+
+    const matchedCircuitBlocks = await readWhereUsedCircuitBlockMatches(databasePool, normalizedQuery);
+    const circuitBlockDependencies = await readWhereUsedCircuitBlockDependenciesForBlockIds(databasePool, matchedCircuitBlocks.map((summary) => summary.circuitBlock.id));
+    const projectUsages = await readWhereUsedProjectUsagesForDependencies(databasePool, circuitBlockDependencies);
+
+    return {
+      response: buildWhereUsedSearchResponse({
+        assetExports: [],
+        circuitBlockDependencies,
+        matchedCircuitBlocks,
+        matchedParts: [],
+        projectUsages,
+        query: normalizedQuery,
+        supportedTarget: true,
+        targetType: normalizedTargetType,
+        unsupportedReason: null
+      }),
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads explainable BOM health for one project without persisting opaque scores.
+ */
+export async function readProjectBomHealthFromDatabase(projectId: string): Promise<ProjectBomHealthReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await projectExists(databasePool, projectId))) {
+      return { status: "not_found" };
+    }
+
+    const [rows, evidenceAttachments, lifecycleReviewCheckpointAt] = await Promise.all([
+      readProjectBomHealthRows(databasePool, projectId),
+      readProjectEvidenceAttachments(databasePool, projectId),
+      readProjectBomHealthReviewCheckpointAt(databasePool, projectId)
+    ]);
+
+    return {
+      response: buildProjectBomHealthResponse(projectId, rows, evidenceAttachments.length, lifecycleReviewCheckpointAt),
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads evidence metadata attached to one project or its project-memory child records.
+ */
+export async function readProjectEvidenceAttachmentsFromDatabase(projectId: string): Promise<ProjectEvidenceReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await projectExists(databasePool, projectId))) {
+      return { status: "not_found" };
+    }
+
+    const attachments = await readProjectEvidenceAttachments(databasePool, projectId);
+
+    return {
+      response: {
+        attachments,
+        projectId,
+        state: attachments.length > 0 ? "available" : "empty"
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads global evidence rows for the evidence vault with honest storage/review filters.
+ */
+export async function readEvidenceAttachmentsFromDatabase(filters: EvidenceAttachmentListFilters = {}): Promise<EvidenceAttachmentListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const normalizedFilters = normalizeEvidenceAttachmentListFilters(filters);
+    const attachments = await readEvidenceAttachments(databasePool, normalizedFilters);
+
+    return {
+      response: {
+        attachments,
+        boundary: "Evidence review is provenance review only; it does not approve parts, validate assets, or unlock export.",
+        filters: normalizedFilters,
+        state: attachments.length > 0 ? "available" : "empty",
+        summary: buildEvidenceAttachmentListSummary(attachments)
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Persists one evidence attachment metadata row without mutating validation, approval, or export state.
+ */
+export async function createEvidenceAttachmentInDatabase(input: EvidenceAttachmentCreateInput, uploadedBy: string | null): Promise<EvidenceAttachmentCreateResult> {
+  const normalized = normalizeEvidenceAttachmentInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const target = await evidenceTargetExists(databasePool, normalized.input.targetType, normalized.input.targetId);
+
+    if (!target.exists) {
+      return {
+        code: target.code,
+        message: target.message,
+        status: "not_found"
+      };
+    }
+
+    const now = new Date();
+    const result = await databasePool.query<DatabaseEvidenceAttachmentRow>(
+      `
+        INSERT INTO evidence_attachments (id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+        RETURNING id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at
+      `,
+      [
+        `evidence-${randomUUID()}`,
+        normalized.input.targetType,
+        normalized.input.targetId,
+        normalized.input.evidenceType,
+        normalized.input.title,
+        normalized.input.sourceUrl,
+        normalized.input.storageKey,
+        normalized.input.fileHash,
+        normalized.input.mimeType,
+        normalized.input.notes,
+        normalized.input.provenance,
+        normalized.input.reviewStatus,
+        uploadedBy,
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      throw new CatalogStoreError("query_failed", "Evidence attachment creation returned no persisted row.", new Error("missing_evidence_create_row"));
+    }
+
+    return {
+      response: {
+        attachment: mapEvidenceAttachmentRow(row),
+        boundary: "Evidence preserves decision context only; it does not validate assets, approve parts, or unlock export."
+      },
+      status: "created"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Updates evidence review metadata without changing the trust state of the target object.
+ */
+export async function updateEvidenceAttachmentInDatabase(evidenceAttachmentId: string, input: EvidenceAttachmentUpdateInput): Promise<EvidenceAttachmentUpdateResult> {
+  const normalized = normalizeEvidenceAttachmentUpdateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const now = new Date();
+    const result = await databasePool.query<DatabaseEvidenceAttachmentRow>(
+      `
+        UPDATE evidence_attachments
+        SET review_status = $2,
+          notes = $3,
+          updated_at = $4
+        WHERE id = $1
+        RETURNING id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at
+      `,
+      [evidenceAttachmentId, normalized.input.reviewStatus, normalized.input.notes, now]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    return {
+      response: {
+        attachment: mapEvidenceAttachmentRow(row),
+        boundary: "Evidence review status changed only the evidence row; target approval, validation, and export readiness remain unchanged."
+      },
+      status: "updated"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads follow-up records for one project, preserving workflow status apart from computed BOM health.
+ */
+export async function readProjectFollowUpsFromDatabase(projectId: string): Promise<FollowUpListReadResult> {
+  return readFollowUpsFromDatabase("project", projectId);
+}
+
+/**
+ * Reads follow-up records for one circuit block, preserving linked-part readiness as separate truth.
+ */
+export async function readCircuitBlockFollowUpsFromDatabase(circuitBlockId: string): Promise<FollowUpListReadResult> {
+  return readFollowUpsFromDatabase("circuit_block", circuitBlockId);
+}
+
+/**
+ * Converts current BOM health findings into stable, assignable project follow-up work.
+ */
+export async function syncProjectFollowUpsFromBomHealthInDatabase(projectId: string): Promise<FollowUpSyncResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const client = await databasePool.connect();
+
+    try {
+      if (!(await projectExists(client, projectId))) {
+        return { status: "not_found" };
+      }
+
+      const [rows, evidenceAttachments, lifecycleReviewCheckpointAt] = await Promise.all([
+        readProjectBomHealthRows(client, projectId),
+        readProjectEvidenceAttachments(client, projectId),
+        readProjectBomHealthReviewCheckpointAt(client, projectId)
+      ]);
+      const health = buildProjectBomHealthResponse(projectId, rows, evidenceAttachments.length, lifecycleReviewCheckpointAt);
+      const seeds = health.findings.map((finding) => buildProjectBomHealthFollowUpSeed(finding));
+      const now = new Date();
+
+      await client.query("BEGIN");
+      const counts = await upsertFollowUpSeeds(client, seeds, now);
+      await client.query("COMMIT");
+
+      const followUps = await readFollowUpRows(client, "project", projectId);
+
+      return {
+        response: {
+          boundary: "Follow-ups track assignable work only; status changes do not approve parts, validate evidence, or alter export readiness.",
+          createdCount: counts.createdCount,
+          followUps,
+          refreshedCount: counts.refreshedCount,
+          targetId: projectId,
+          targetType: "project"
+        },
+        status: "synced"
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Converts required circuit block readiness gaps into stable, assignable follow-up work.
+ */
+export async function syncCircuitBlockFollowUpsFromReadinessInDatabase(circuitBlockId: string): Promise<FollowUpSyncResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const client = await databasePool.connect();
+
+    try {
+      const summary = await readCircuitBlockSummary(client, circuitBlockId);
+
+      if (!summary) {
+        return { status: "not_found" };
+      }
+
+      const parts = await readCircuitBlockPartRecords(client, circuitBlockId);
+      const seeds = parts
+        .filter(isCircuitBlockPartReadinessGap)
+        .map((record) => buildCircuitBlockGapFollowUpSeed(summary.circuitBlock.id, record));
+      const now = new Date();
+
+      await client.query("BEGIN");
+      const counts = await upsertFollowUpSeeds(client, seeds, now);
+      await client.query("COMMIT");
+
+      const followUps = await readFollowUpRows(client, "circuit_block", circuitBlockId);
+
+      return {
+        response: {
+          boundary: "Circuit follow-ups track reuse review work only; linked parts keep their own approval, readiness, validation, and export state.",
+          createdCount: counts.createdCount,
+          followUps,
+          refreshedCount: counts.refreshedCount,
+          targetId: circuitBlockId,
+          targetType: "circuit_block"
+        },
+        status: "synced"
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Updates one follow-up workflow row without changing the source BOM, part, evidence, or export truth.
+ */
+export async function updateFollowUpInDatabase(followUpId: string, input: FollowUpUpdateInput): Promise<FollowUpUpdateResult> {
+  const normalized = normalizeFollowUpUpdateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (normalized.input.evidenceAttachmentIds && !(await evidenceAttachmentsExist(databasePool, normalized.input.evidenceAttachmentIds))) {
+      return {
+        code: "EVIDENCE_ATTACHMENT_NOT_FOUND",
+        message: "Every related evidence id must reference an existing evidence attachment.",
+        status: "invalid"
+      };
+    }
+
+    const now = new Date();
+    const hasEvidenceAttachmentIds = normalized.input.evidenceAttachmentIds !== undefined;
+    const evidenceAttachmentIdsJson = JSON.stringify(normalized.input.evidenceAttachmentIds ?? []);
+    const resolvedAt = normalized.input.status === "resolved" || normalized.input.status === "dismissed" ? now : null;
+    const result = await databasePool.query<DatabaseFollowUpRecordRow>(
+      `
+        UPDATE follow_up_records
+        SET status = $2,
+          assigned_to = $3,
+          resolution_notes = $4,
+          evidence_attachment_ids = CASE WHEN $5 THEN $6::jsonb ELSE evidence_attachment_ids END,
+          resolved_at = $7,
+          updated_at = $8
+        WHERE id = $1
+        RETURNING id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status, assigned_to, source_inputs, evidence_attachment_ids, resolution_notes, created_at, updated_at, resolved_at
+      `,
+      [followUpId, normalized.input.status, normalized.input.assignedTo, normalized.input.resolutionNotes, hasEvidenceAttachmentIds, evidenceAttachmentIdsJson, resolvedAt, now]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    return {
+      response: {
+        boundary: "Follow-up status changed only the work queue row; source readiness, approval, evidence review, and export state remain unchanged.",
+        followUp: mapFollowUpRecordRow(row)
+      },
+      status: "updated"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads the reusable circuit block library without converting block state into part readiness.
+ */
+export async function readCircuitBlocksFromDatabase(): Promise<CircuitBlockListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const circuitBlocks = await readCircuitBlockSummaries(databasePool);
+
+    return {
+      response: {
+        circuitBlocks,
+        state: circuitBlocks.length > 0 ? "available" : "empty"
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads one reusable circuit block with linked parts and evidence metadata.
+ */
+export async function readCircuitBlockDetailFromDatabase(circuitBlockId: string): Promise<CircuitBlockDetailReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const detail = await buildCircuitBlockDetail(databasePool, circuitBlockId);
+
+    if (!detail) {
+      return { status: "not_found" };
+    }
+
+    return {
+      response: detail,
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Creates a structured reusable circuit block without implying its parts are approved or export-ready.
+ */
+export async function createCircuitBlockInDatabase(input: CircuitBlockCreateInput): Promise<CircuitBlockCreateResult> {
+  const normalized = normalizeCircuitBlockCreateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const now = new Date();
+    const result = await databasePool.query<DatabaseCircuitBlockRow>(
+      `
+        INSERT INTO circuit_blocks (id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $10)
+        RETURNING id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at
+      `,
+      [
+        buildCircuitBlockId(normalized.input.blockKey),
+        normalized.input.blockKey,
+        normalized.input.name,
+        normalized.input.description,
+        normalized.input.blockType,
+        normalized.input.owner,
+        normalized.input.status,
+        normalized.input.reuseScope,
+        JSON.stringify(normalized.input.constraints),
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      throw new CatalogStoreError("query_failed", "Circuit block creation returned no persisted row.", new Error("missing_circuit_block_create_row"));
+    }
+
+    const detail = await buildCircuitBlockDetail(databasePool, row.id);
+
+    if (!detail) {
+      throw new CatalogStoreError("query_failed", "Circuit block detail was missing immediately after creation.", new Error("missing_circuit_block_detail_after_create"));
+    }
+
+    return {
+      response: {
+        boundary: "Circuit block status is reusable knowledge only; linked parts keep their own approval, readiness, and export state.",
+        circuitBlock: mapCircuitBlockRow(row),
+        detail
+      },
+      status: "created"
+    };
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return {
+        message: "A circuit block with that key already exists.",
+        status: "conflict"
+      };
+    }
+
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Updates reusable circuit metadata without changing linked part approval, validation, or export readiness.
+ */
+export async function updateCircuitBlockInDatabase(circuitBlockId: string, input: CircuitBlockUpdateInput): Promise<CircuitBlockUpdateResult> {
+  const normalized = normalizeCircuitBlockUpdateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const now = new Date();
+    const result = await databasePool.query<DatabaseCircuitBlockRow>(
+      `
+        UPDATE circuit_blocks
+        SET name = $2,
+          description = $3,
+          block_type = $4,
+          owner = $5,
+          status = $6,
+          reuse_scope = $7,
+          constraints = $8::jsonb,
+          updated_at = $9
+        WHERE id = $1
+        RETURNING id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at
+      `,
+      [
+        circuitBlockId,
+        normalized.input.name,
+        normalized.input.description,
+        normalized.input.blockType,
+        normalized.input.owner,
+        normalized.input.status,
+        normalized.input.reuseScope,
+        JSON.stringify(normalized.input.constraints),
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    const detail = await buildCircuitBlockDetail(databasePool, circuitBlockId);
+
+    if (!detail) {
+      throw new CatalogStoreError("query_failed", "Circuit block detail was missing immediately after update.", new Error("missing_circuit_block_detail_after_update"));
+    }
+
+    return {
+      response: {
+        boundary: "Circuit block edits update reusable knowledge only; linked parts keep their own approval, readiness, and export state.",
+        circuitBlock: mapCircuitBlockRow(row),
+        detail
+      },
+      status: "updated"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Creates or refreshes one part role inside a reusable circuit block.
+ */
+export async function createCircuitBlockPartInDatabase(circuitBlockId: string, input: CircuitBlockPartCreateInput): Promise<CircuitBlockPartCreateResult> {
+  const normalized = normalizeCircuitBlockPartCreateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await circuitBlockExists(databasePool, circuitBlockId))) {
+      return {
+        code: "CIRCUIT_BLOCK_NOT_FOUND",
+        message: "Circuit block not found.",
+        status: "not_found"
+      };
+    }
+
+    if (!(await partExists(databasePool, normalized.input.partId))) {
+      return {
+        code: "PART_NOT_FOUND",
+        message: "Part not found.",
+        status: "not_found"
+      };
+    }
+
+    const now = new Date();
+    const result = await databasePool.query<DatabaseCircuitBlockPartRow>(
+      `
+        INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+        ON CONFLICT (circuit_block_id, part_id, role) DO UPDATE
+        SET quantity = EXCLUDED.quantity,
+          is_required = EXCLUDED.is_required,
+          substitution_policy = EXCLUDED.substitution_policy,
+          notes = EXCLUDED.notes,
+          updated_at = EXCLUDED.updated_at
+        RETURNING id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at
+      `,
+      [
+        buildCircuitBlockPartId(circuitBlockId, normalized.input.partId, normalized.input.role),
+        circuitBlockId,
+        normalized.input.partId,
+        normalized.input.role,
+        normalized.input.quantity,
+        normalized.input.isRequired,
+        normalized.input.substitutionPolicy,
+        normalized.input.notes,
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      throw new CatalogStoreError("query_failed", "Circuit block part creation returned no persisted row.", new Error("missing_circuit_block_part_create_row"));
+    }
+
+    await databasePool.query("UPDATE circuit_blocks SET updated_at = $2 WHERE id = $1", [circuitBlockId, now]);
+
+    const detail = await buildCircuitBlockDetail(databasePool, circuitBlockId);
+
+    if (!detail) {
+      throw new CatalogStoreError("query_failed", "Circuit block detail was missing immediately after adding a part.", new Error("missing_circuit_block_detail_after_part_create"));
+    }
+
+    return {
+      response: {
+        boundary: "Adding a part role to a circuit block does not approve the part or verify its export assets.",
+        circuitBlockPart: mapCircuitBlockPartRow(row),
+        detail
+      },
+      status: "created"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Updates one existing circuit-block role without changing the linked internal part identity.
+ */
+export async function updateCircuitBlockPartInDatabase(circuitBlockId: string, circuitBlockPartId: string, input: CircuitBlockPartUpdateInput): Promise<CircuitBlockPartUpdateResult> {
+  const normalized = normalizeCircuitBlockPartUpdateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await circuitBlockExists(databasePool, circuitBlockId))) {
+      return {
+        code: "CIRCUIT_BLOCK_NOT_FOUND",
+        message: "Circuit block not found.",
+        status: "not_found"
+      };
+    }
+
+    const now = new Date();
+    const result = await databasePool.query<DatabaseCircuitBlockPartRow>(
+      `
+        UPDATE circuit_block_parts
+        SET quantity = $3,
+          is_required = $4,
+          substitution_policy = $5,
+          notes = $6,
+          updated_at = $7
+        WHERE circuit_block_id = $1 AND id = $2
+        RETURNING id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at
+      `,
+      [
+        circuitBlockId,
+        circuitBlockPartId,
+        normalized.input.quantity,
+        normalized.input.isRequired,
+        normalized.input.substitutionPolicy,
+        normalized.input.notes,
+        now
+      ]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return {
+        code: "CIRCUIT_BLOCK_PART_NOT_FOUND",
+        message: "Circuit block part role not found.",
+        status: "not_found"
+      };
+    }
+
+    await databasePool.query("UPDATE circuit_blocks SET updated_at = $2 WHERE id = $1", [circuitBlockId, now]);
+
+    const detail = await buildCircuitBlockDetail(databasePool, circuitBlockId);
+
+    if (!detail) {
+      throw new CatalogStoreError("query_failed", "Circuit block detail was missing immediately after editing a part role.", new Error("missing_circuit_block_detail_after_part_update"));
+    }
+
+    return {
+      response: {
+        boundary: "Editing a part role does not approve the part or verify its export assets.",
+        circuitBlockPart: mapCircuitBlockPartRow(row),
+        detail
+      },
+      status: "updated"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
  * Reads compact project summaries in stable workbench order.
  */
 async function readProjectSummaries(databasePool: Pool): Promise<ProjectSummary[]> {
@@ -713,10 +2611,10 @@ async function readProjectBomImports(databasePool: Pool, projectId: string): Pro
 /**
  * Reads persisted BOM lines for one BOM import id.
  */
-async function readBomImportLines(databasePool: Pool, bomImportId: string): Promise<BomLine[]> {
+async function readBomImportLines(databasePool: Pool | PoolClient, bomImportId: string): Promise<BomLine[]> {
   const result = await databasePool.query<DatabaseBomLineRow>(
     `
-      SELECT id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at
+      SELECT id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at
       FROM bom_lines
       WHERE bom_import_id = $1
       ORDER BY row_number ASC, id ASC
@@ -745,10 +2643,1343 @@ async function readProjectPartUsages(databasePool: Pool, projectId: string): Pro
 }
 
 /**
+ * Reads confirmed project usage rows for one part with enough context to answer where-used.
+ */
+async function readPartWhereUsed(databasePool: Pool, partId: string): Promise<PartWhereUsedRecord[]> {
+  const result = await databasePool.query<DatabasePartWhereUsedRow>(
+    `
+      SELECT
+        u.id AS usage_id,
+        u.project_id AS usage_project_id,
+        u.project_revision_id AS usage_project_revision_id,
+        u.bom_line_id AS usage_bom_line_id,
+        u.part_id AS usage_part_id,
+        u.usage_context AS usage_context,
+        u.designators AS usage_designators,
+        u.quantity AS usage_quantity,
+        u.usage_status AS usage_status,
+        u.approval_snapshot AS usage_approval_snapshot,
+        u.readiness_snapshot AS usage_readiness_snapshot,
+        u.created_at AS usage_created_at,
+        u.updated_at AS usage_updated_at,
+        p.id AS project_id,
+        p.project_key AS project_key,
+        p.name AS project_name,
+        p.description AS project_description,
+        p.owner AS project_owner,
+        p.status AS project_status,
+        p.created_at AS project_created_at,
+        p.updated_at AS project_updated_at,
+        r.id AS revision_id,
+        r.project_id AS revision_project_id,
+        r.revision_label AS revision_label,
+        r.revision_status AS revision_status,
+        r.source_reference AS revision_source_reference,
+        r.released_at AS revision_released_at,
+        r.created_at AS revision_created_at,
+        r.updated_at AS revision_updated_at,
+        bl.id AS line_id,
+        bl.bom_import_id AS line_bom_import_id,
+        bl.project_id AS line_project_id,
+        bl.project_revision_id AS line_project_revision_id,
+        bl.row_number AS line_row_number,
+        bl.designators AS line_designators,
+        bl.quantity AS line_quantity,
+        bl.raw_mpn AS line_raw_mpn,
+        bl.raw_manufacturer AS line_raw_manufacturer,
+        bl.raw_description AS line_raw_description,
+        bl.raw_supplier_reference AS line_raw_supplier_reference,
+        bl.raw_notes AS line_raw_notes,
+        bl.raw_row_payload AS line_raw_row_payload,
+        bl.matched_part_id AS line_matched_part_id,
+        bl.match_status AS line_match_status,
+        bl.match_confidence_score AS line_match_confidence_score,
+        bl.created_at AS line_created_at,
+        bl.updated_at AS line_updated_at
+      FROM project_part_usages u
+      JOIN projects p ON p.id = u.project_id
+      JOIN project_revisions r ON r.id = u.project_revision_id
+      LEFT JOIN bom_lines bl ON bl.id = u.bom_line_id
+      WHERE u.part_id = $1
+      ORDER BY p.project_key ASC, r.created_at DESC, u.updated_at DESC, u.id ASC
+    `,
+    [partId]
+  );
+
+  return result.rows.map(mapPartWhereUsedRow);
+}
+
+/**
+ * Finds internal parts by id or MPN for the global where-used workspace.
+ */
+async function readWhereUsedPartMatches(databasePool: Pool, query: string): Promise<CircuitBlockPartCatalogSummary[]> {
+  const result = await databasePool.query<DatabaseWhereUsedPartSummaryRow>(
+    `
+      SELECT
+        p.id AS part_id,
+        p.mpn,
+        m.name AS manufacturer_name,
+        p.lifecycle_status,
+        pa.approval_status,
+        prs.readiness_status,
+        prs.connector_class,
+        prs.blocker_count
+      FROM parts p
+      JOIN manufacturers m ON m.id = p.manufacturer_id
+      LEFT JOIN part_approvals pa ON pa.part_id = p.id
+      LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
+      WHERE lower(p.id) = lower($1)
+        OR lower(p.mpn) = lower($1)
+        OR lower(p.mpn) LIKE '%' || lower($1) || '%'
+      ORDER BY
+        CASE
+          WHEN lower(p.id) = lower($1) THEN 0
+          WHEN lower(p.mpn) = lower($1) THEN 1
+          ELSE 2
+        END,
+        m.name ASC,
+        p.mpn ASC,
+        p.id ASC
+      LIMIT 12
+    `,
+    [query]
+  );
+
+  return result.rows.map(mapWhereUsedPartSummaryRow);
+}
+
+/**
+ * Finds circuit blocks by id, key, or name for the global where-used workspace.
+ */
+async function readWhereUsedCircuitBlockMatches(databasePool: Pool, query: string): Promise<CircuitBlockSummary[]> {
+  const result = await databasePool.query<DatabaseCircuitBlockSummaryRow>(
+    `
+      ${CIRCUIT_BLOCK_SUMMARIES_SQL}
+      WHERE lower(cb.id) = lower($1)
+        OR lower(cb.block_key) = lower($1)
+        OR lower(cb.block_key) LIKE '%' || lower($1) || '%'
+        OR lower(cb.name) LIKE '%' || lower($1) || '%'
+      ORDER BY
+        CASE
+          WHEN lower(cb.id) = lower($1) THEN 0
+          WHEN lower(cb.block_key) = lower($1) THEN 1
+          ELSE 2
+        END,
+        cb.block_key ASC,
+        cb.id ASC
+      LIMIT 12
+    `,
+    [query]
+  );
+
+  return result.rows.map(mapCircuitBlockSummaryRow);
+}
+
+/**
+ * Reads circuit block dependencies for matched part ids.
+ */
+async function readWhereUsedCircuitBlockDependenciesForPartIds(databasePool: Pool, partIds: string[]): Promise<WhereUsedCircuitBlockDependencyRecord[]> {
+  if (partIds.length === 0) {
+    return [];
+  }
+
+  const result = await databasePool.query<DatabaseWhereUsedCircuitBlockDependencyRow>(
+    `
+      ${WHERE_USED_CIRCUIT_BLOCK_DEPENDENCIES_SQL}
+      WHERE cbp.part_id = ANY($1::text[])
+      ORDER BY cb.block_key ASC, cbp.is_required DESC, cbp.role ASC, p.mpn ASC, cbp.id ASC
+    `,
+    [partIds]
+  );
+
+  return result.rows.map(mapWhereUsedCircuitBlockDependencyRow);
+}
+
+/**
+ * Reads circuit block dependencies for matched circuit block ids.
+ */
+async function readWhereUsedCircuitBlockDependenciesForBlockIds(databasePool: Pool, circuitBlockIds: string[]): Promise<WhereUsedCircuitBlockDependencyRecord[]> {
+  if (circuitBlockIds.length === 0) {
+    return [];
+  }
+
+  const result = await databasePool.query<DatabaseWhereUsedCircuitBlockDependencyRow>(
+    `
+      ${WHERE_USED_CIRCUIT_BLOCK_DEPENDENCIES_SQL}
+      WHERE cbp.circuit_block_id = ANY($1::text[])
+      ORDER BY cb.block_key ASC, cbp.is_required DESC, cbp.role ASC, p.mpn ASC, cbp.id ASC
+    `,
+    [circuitBlockIds]
+  );
+
+  return result.rows.map(mapWhereUsedCircuitBlockDependencyRow);
+}
+
+/**
+ * Expands matched parts into project usage rows for the global where-used workspace.
+ */
+async function readWhereUsedProjectUsagesForParts(databasePool: Pool, parts: CircuitBlockPartCatalogSummary[]): Promise<WhereUsedProjectUsageRecord[]> {
+  const rows = await Promise.all(
+    parts.map(async (part) => {
+      const usages = await readPartWhereUsed(databasePool, part.partId);
+
+      return usages.map((record) => mapWhereUsedProjectUsageRecord(record, part, null));
+    })
+  );
+
+  return sortWhereUsedProjectUsages(rows.flat());
+}
+
+/**
+ * Expands circuit block dependencies into project usage rows while preserving each block role.
+ */
+async function readWhereUsedProjectUsagesForDependencies(databasePool: Pool, dependencies: WhereUsedCircuitBlockDependencyRecord[]): Promise<WhereUsedProjectUsageRecord[]> {
+  const rows = await Promise.all(
+    dependencies.map(async (dependency) => {
+      const usages = await readPartWhereUsed(databasePool, dependency.part.partId);
+
+      return usages.map((record) => mapWhereUsedProjectUsageRecord(record, dependency.part, dependency));
+    })
+  );
+
+  return sortWhereUsedProjectUsages(rows.flat());
+}
+
+/**
+ * Builds the global where-used response and its honest trust boundary copy.
+ */
+function buildWhereUsedSearchResponse(input: {
+  targetType: WhereUsedTargetType;
+  query: string;
+  supportedTarget: boolean;
+  unsupportedReason: string | null;
+  matchedParts: CircuitBlockPartCatalogSummary[];
+  matchedCircuitBlocks: CircuitBlockSummary[];
+  projectUsages: WhereUsedProjectUsageRecord[];
+  circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
+  assetExports: WhereUsedAssetExportRecord[];
+}): WhereUsedSearchResponse {
+  const hasResults =
+    input.matchedParts.length > 0 ||
+    input.matchedCircuitBlocks.length > 0 ||
+    input.projectUsages.length > 0 ||
+    input.circuitBlockDependencies.length > 0 ||
+    input.assetExports.length > 0;
+
+  return {
+    assetExports: input.assetExports,
+    boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
+    circuitBlockDependencies: input.circuitBlockDependencies,
+    matchedCircuitBlocks: input.matchedCircuitBlocks,
+    matchedParts: input.matchedParts,
+    projectUsages: input.projectUsages,
+    query: input.query,
+    state: hasResults ? "available" : "empty",
+    supportedTarget: input.supportedTarget,
+    targetType: input.targetType,
+    unsupportedReason: input.unsupportedReason
+  };
+}
+
+/**
+ * Reads the latest BOM health review checkpoint: resolved follow-ups or accepted evidence on computed risk findings.
+ */
+async function readProjectBomHealthReviewCheckpointAt(databasePool: Pool | PoolClient, projectId: string): Promise<Date | null> {
+  const riskFindingPattern = `${projectId}:bom-health:%`;
+  const [followUpResult, evidenceResult] = await Promise.all([
+    databasePool.query<{ max: Date | string | null }>(
+      `
+        SELECT MAX(resolved_at) AS max
+        FROM follow_up_records
+        WHERE target_type = 'project'
+          AND target_id = $1
+          AND source_type = 'bom_health'
+          AND status IN ('resolved', 'dismissed')
+          AND resolved_at IS NOT NULL
+      `,
+      [projectId]
+    ),
+    databasePool.query<{ max: Date | string | null }>(
+      `
+        SELECT MAX(ea.updated_at) AS max
+        FROM evidence_attachments ea
+        WHERE ea.target_type = 'risk_finding'
+          AND ea.target_id LIKE $1
+          AND ea.review_status = 'accepted'
+      `,
+      [riskFindingPattern]
+    )
+  ]);
+
+  const candidates: Date[] = [];
+  const followUpMax = followUpResult.rows[0]?.max;
+  const evidenceMax = evidenceResult.rows[0]?.max;
+
+  if (followUpMax) {
+    candidates.push(followUpMax instanceof Date ? followUpMax : new Date(followUpMax));
+  }
+  if (evidenceMax) {
+    candidates.push(evidenceMax instanceof Date ? evidenceMax : new Date(evidenceMax));
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...candidates.map((value) => value.getTime())));
+}
+
+/**
+ * Reads BOM lines with matched-part readiness, CAD, lifecycle, and evidence inputs for health projection.
+ */
+async function readProjectBomHealthRows(databasePool: Pool | PoolClient, projectId: string): Promise<DatabaseProjectBomHealthRow[]> {
+  const result = await databasePool.query<DatabaseProjectBomHealthRow>(
+    `
+      SELECT
+        bl.id,
+        bl.bom_import_id,
+        bl.project_id,
+        bl.project_revision_id,
+        bl.row_number,
+        bl.designators,
+        bl.quantity,
+        bl.raw_mpn,
+        bl.raw_manufacturer,
+        bl.raw_description,
+        bl.raw_supplier_reference,
+        bl.raw_notes,
+        bl.raw_row_payload,
+        bl.matched_part_id,
+        bl.match_status,
+        bl.match_confidence_score,
+        bl.created_at,
+        bl.updated_at,
+        p.lifecycle_status,
+        p.last_updated_at AS matched_part_last_updated_at,
+        pa.approval_status,
+        prs.readiness_status,
+        prs.connector_class,
+        prs.blocker_count,
+        COALESCE(cad_counts.verified_cad_count, 0)::text AS verified_cad_count,
+        COALESCE(cad_counts.file_backed_cad_count, 0)::text AS file_backed_cad_count,
+        COALESCE(cad_counts.referenced_cad_count, 0)::text AS referenced_cad_count,
+        COALESCE(evidence_counts.evidence_count, 0)::text AS evidence_count
+      FROM bom_lines bl
+      LEFT JOIN parts p ON p.id = bl.matched_part_id
+      LEFT JOIN part_approvals pa ON pa.part_id = p.id
+      LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
+      LEFT JOIN (
+        SELECT
+          part_id,
+          SUM(CASE WHEN asset_type IN ('footprint', 'symbol', 'three_d_model') AND export_status = 'verified_for_export' AND validation_status = 'verified' AND storage_key IS NOT NULL AND file_hash IS NOT NULL THEN 1 ELSE 0 END) AS verified_cad_count,
+          SUM(CASE WHEN asset_type IN ('footprint', 'symbol', 'three_d_model') AND storage_key IS NOT NULL AND file_hash IS NOT NULL THEN 1 ELSE 0 END) AS file_backed_cad_count,
+          SUM(CASE WHEN asset_type IN ('footprint', 'symbol', 'three_d_model') AND source_url IS NOT NULL AND (storage_key IS NULL OR file_hash IS NULL) THEN 1 ELSE 0 END) AS referenced_cad_count
+        FROM assets
+        GROUP BY part_id
+      ) cad_counts ON cad_counts.part_id = p.id
+      LEFT JOIN (
+        SELECT
+          bl_inner.id AS bom_line_id,
+          COALESCE(part_evidence.evidence_count, 0) + COALESCE(line_evidence.evidence_count, 0) + COALESCE(usage_evidence.evidence_count, 0) AS evidence_count
+        FROM bom_lines bl_inner
+        LEFT JOIN (
+          SELECT target_id, COUNT(*) AS evidence_count
+          FROM evidence_attachments
+          WHERE target_type = 'part'
+          GROUP BY target_id
+        ) part_evidence ON part_evidence.target_id = bl_inner.matched_part_id
+        LEFT JOIN (
+          SELECT target_id, COUNT(*) AS evidence_count
+          FROM evidence_attachments
+          WHERE target_type = 'bom_line'
+          GROUP BY target_id
+        ) line_evidence ON line_evidence.target_id = bl_inner.id
+        LEFT JOIN project_part_usages usage_inner ON usage_inner.bom_line_id = bl_inner.id
+        LEFT JOIN (
+          SELECT target_id, COUNT(*) AS evidence_count
+          FROM evidence_attachments
+          WHERE target_type = 'project_part_usage'
+          GROUP BY target_id
+        ) usage_evidence ON usage_evidence.target_id = usage_inner.id
+      ) evidence_counts ON evidence_counts.bom_line_id = bl.id
+      WHERE bl.project_id = $1
+      ORDER BY bl.project_revision_id ASC, bl.row_number ASC, bl.id ASC
+    `,
+    [projectId]
+  );
+
+  return result.rows;
+}
+
+/**
+ * Reads evidence rows attached to a project, its child project-memory records, or deterministic risk findings.
+ */
+async function readProjectEvidenceAttachments(databasePool: Pool | PoolClient, projectId: string): Promise<EvidenceAttachment[]> {
+  const result = await databasePool.query<DatabaseEvidenceAttachmentRow>(
+    `
+      SELECT id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at
+      FROM evidence_attachments
+      WHERE (target_type = 'project' AND target_id = $1)
+        OR (target_type = 'bom_import' AND target_id IN (SELECT id FROM bom_imports WHERE project_id = $1))
+        OR (target_type = 'bom_line' AND target_id IN (SELECT id FROM bom_lines WHERE project_id = $1))
+        OR (target_type = 'project_part_usage' AND target_id IN (SELECT id FROM project_part_usages WHERE project_id = $1))
+        OR (target_type = 'part' AND target_id IN (SELECT DISTINCT part_id FROM project_part_usages WHERE project_id = $1))
+        OR (target_type = 'asset' AND target_id IN (
+          SELECT a.id
+          FROM assets a
+          JOIN project_part_usages u ON u.part_id = a.part_id
+          WHERE u.project_id = $1
+        ))
+        OR (target_type = 'risk_finding' AND target_id LIKE $2)
+      ORDER BY created_at DESC, id ASC
+    `,
+    [projectId, `${projectId}:bom-health:%`]
+  );
+
+  return result.rows.map(mapEvidenceAttachmentRow);
+}
+
+/**
+ * Reads global evidence rows using only whitelisted filters from the shared vault contract.
+ */
+async function readEvidenceAttachments(databasePool: Pool | PoolClient, filters: EvidenceAttachmentListFilters): Promise<EvidenceAttachment[]> {
+  const clauses: string[] = [];
+  const values: Array<string> = [];
+
+  if (filters.targetType) {
+    values.push(filters.targetType);
+    clauses.push(`target_type = $${values.length}`);
+  }
+
+  if (filters.evidenceType) {
+    values.push(filters.evidenceType);
+    clauses.push(`evidence_type = $${values.length}`);
+  }
+
+  if (filters.reviewStatus) {
+    values.push(filters.reviewStatus);
+    clauses.push(`review_status = $${values.length}`);
+  }
+
+  if (filters.storageState === "file_backed") {
+    clauses.push("storage_key IS NOT NULL");
+  } else if (filters.storageState === "link_only") {
+    clauses.push("storage_key IS NULL AND source_url IS NOT NULL");
+  } else if (filters.storageState === "note_only") {
+    clauses.push("storage_key IS NULL AND source_url IS NULL AND notes IS NOT NULL");
+  }
+
+  if (filters.sourceSystem) {
+    values.push(filters.sourceSystem.toLowerCase());
+    clauses.push(`LOWER(provenance) = $${values.length}`);
+  }
+
+  if (filters.query) {
+    values.push(`%${filters.query.toLowerCase()}%`);
+    clauses.push(`(
+      LOWER(id) LIKE $${values.length}
+      OR LOWER(target_id) LIKE $${values.length}
+      OR LOWER(title) LIKE $${values.length}
+      OR LOWER(COALESCE(notes, '')) LIKE $${values.length}
+      OR LOWER(COALESCE(provenance, '')) LIKE $${values.length}
+      OR LOWER(COALESCE(source_url, '')) LIKE $${values.length}
+      OR LOWER(COALESCE(storage_key, '')) LIKE $${values.length}
+    )`);
+  }
+
+  const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  const result = await databasePool.query<DatabaseEvidenceAttachmentRow>(
+    `
+      SELECT id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at
+      FROM evidence_attachments
+      ${whereSql}
+      ORDER BY updated_at DESC, created_at DESC, id ASC
+      LIMIT 500
+    `,
+    values
+  );
+
+  return result.rows.map(mapEvidenceAttachmentRow);
+}
+
+/**
+ * Reads follow-up records for an optional target filter in queue-first order.
+ */
+async function readFollowUpsFromDatabase(targetType: FollowUpTargetType, targetId: string): Promise<FollowUpListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (targetType === "project" && !(await projectExists(databasePool, targetId))) {
+      return { status: "not_found" };
+    }
+
+    if (targetType === "circuit_block" && !(await circuitBlockExists(databasePool, targetId))) {
+      return { status: "not_found" };
+    }
+
+    const followUps = await readFollowUpRows(databasePool, targetType, targetId);
+
+    return {
+      response: {
+        followUps,
+        state: followUps.length > 0 ? "available" : "empty",
+        summary: buildFollowUpListSummary(followUps),
+        targetId,
+        targetType
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads persisted follow-up rows after target existence has already been checked.
+ */
+async function readFollowUpRows(databasePool: Pool | PoolClient, targetType: FollowUpTargetType, targetId: string): Promise<FollowUpRecord[]> {
+  const result = await databasePool.query<DatabaseFollowUpRecordRow>(
+    `
+      SELECT id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status, assigned_to, source_inputs, evidence_attachment_ids, resolution_notes, created_at, updated_at, resolved_at
+      FROM follow_up_records
+      WHERE target_type = $1 AND target_id = $2
+      ORDER BY
+        CASE status
+          WHEN 'open' THEN 0
+          WHEN 'in_progress' THEN 1
+          WHEN 'resolved' THEN 2
+          ELSE 3
+        END ASC,
+        CASE severity WHEN 'danger' THEN 0 ELSE 1 END ASC,
+        updated_at DESC,
+        id ASC
+    `,
+    [targetType, targetId]
+  );
+
+  return result.rows.map(mapFollowUpRecordRow);
+}
+
+/**
+ * Upserts computed follow-up seeds while preserving operator-owned workflow fields.
+ */
+async function upsertFollowUpSeeds(client: PoolClient, seeds: FollowUpSeedRecord[], now: Date): Promise<{ createdCount: number; refreshedCount: number }> {
+  if (seeds.length === 0) {
+    return {
+      createdCount: 0,
+      refreshedCount: 0
+    };
+  }
+
+  const targetType = seeds[0]?.targetType ?? "project";
+  const targetId = seeds[0]?.targetId ?? "";
+  const sourceType = seeds[0]?.sourceType ?? "bom_health";
+  const sourceFindingIds = seeds.map((seed) => seed.sourceFindingId);
+  const sourceFindingPlaceholders = sourceFindingIds.map((_, index) => `$${index + 4}`).join(", ");
+  const existingResult = await client.query<{ source_finding_id: string }>(
+    `
+      SELECT source_finding_id
+      FROM follow_up_records
+      WHERE target_type = $1
+        AND target_id = $2
+        AND source_type = $3
+        AND source_finding_id IN (${sourceFindingPlaceholders})
+    `,
+    [targetType, targetId, sourceType, ...sourceFindingIds]
+  );
+  const existingFindingIds = new Set(existingResult.rows.map((row) => row.source_finding_id));
+  let createdCount = 0;
+  let refreshedCount = 0;
+
+  for (const seed of seeds) {
+    if (existingFindingIds.has(seed.sourceFindingId)) {
+      refreshedCount += 1;
+    } else {
+      createdCount += 1;
+    }
+
+    await client.query(
+      `
+        INSERT INTO follow_up_records (id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status, source_inputs, evidence_attachment_ids, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', $10::jsonb, $11::jsonb, $12, $12)
+        ON CONFLICT (target_type, target_id, source_type, source_finding_id) DO UPDATE
+        SET title = EXCLUDED.title,
+          detail = EXCLUDED.detail,
+          next_action = EXCLUDED.next_action,
+          severity = EXCLUDED.severity,
+          source_inputs = EXCLUDED.source_inputs,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
+        buildFollowUpRecordId(seed),
+        seed.targetType,
+        seed.targetId,
+        seed.sourceType,
+        seed.sourceFindingId,
+        seed.title,
+        seed.detail,
+        seed.nextAction,
+        seed.severity,
+        JSON.stringify(seed.sourceInputs),
+        JSON.stringify(seed.evidenceAttachmentIds),
+        now
+      ]
+    );
+  }
+
+  return {
+    createdCount,
+    refreshedCount
+  };
+}
+
+/**
+ * Reads circuit block summaries in stable library order.
+ */
+async function readCircuitBlockSummaries(databasePool: Pool): Promise<CircuitBlockSummary[]> {
+  const result = await databasePool.query<DatabaseCircuitBlockSummaryRow>(
+    `
+      ${CIRCUIT_BLOCK_SUMMARIES_SQL}
+      ORDER BY cb.updated_at DESC, cb.block_key ASC, cb.id ASC
+    `
+  );
+
+  return result.rows.map(mapCircuitBlockSummaryRow);
+}
+
+/**
+ * Reads one circuit block summary by id.
+ */
+async function readCircuitBlockSummary(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<CircuitBlockSummary | null> {
+  const result = await databasePool.query<DatabaseCircuitBlockSummaryRow>(
+    `
+      ${CIRCUIT_BLOCK_SUMMARIES_SQL}
+      WHERE cb.id = $1
+    `,
+    [circuitBlockId]
+  );
+
+  return result.rows[0] ? mapCircuitBlockSummaryRow(result.rows[0]) : null;
+}
+
+/**
+ * Reads linked part roles with current part approval and readiness signals.
+ */
+async function readCircuitBlockPartRecords(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<CircuitBlockPartRecord[]> {
+  const result = await databasePool.query<DatabaseCircuitBlockPartDetailRow>(
+    `
+      SELECT
+        cbp.id,
+        cbp.circuit_block_id,
+        cbp.part_id,
+        cbp.role,
+        cbp.quantity,
+        cbp.is_required,
+        cbp.substitution_policy,
+        cbp.notes,
+        cbp.created_at,
+        cbp.updated_at,
+        p.mpn,
+        m.name AS manufacturer_name,
+        p.lifecycle_status,
+        pa.approval_status,
+        prs.readiness_status,
+        prs.connector_class,
+        prs.blocker_count
+      FROM circuit_block_parts cbp
+      JOIN parts p ON p.id = cbp.part_id
+      JOIN manufacturers m ON m.id = p.manufacturer_id
+      LEFT JOIN part_approvals pa ON pa.part_id = p.id
+      LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
+      WHERE cbp.circuit_block_id = $1
+      ORDER BY cbp.is_required DESC, cbp.role ASC, p.mpn ASC, cbp.id ASC
+    `,
+    [circuitBlockId]
+  );
+
+  return result.rows.map(mapCircuitBlockPartDetailRow);
+}
+
+/**
+ * Reads evidence attached to a circuit block or one of its part-role rows.
+ */
+async function readCircuitBlockEvidenceAttachments(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<EvidenceAttachment[]> {
+  const result = await databasePool.query<DatabaseEvidenceAttachmentRow>(
+    `
+      SELECT id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at
+      FROM evidence_attachments
+      WHERE (target_type = 'circuit_block' AND target_id = $1)
+        OR (target_type = 'circuit_block_part' AND target_id IN (SELECT id FROM circuit_block_parts WHERE circuit_block_id = $1))
+      ORDER BY created_at DESC, id ASC
+    `,
+    [circuitBlockId]
+  );
+
+  return result.rows.map(mapEvidenceAttachmentRow);
+}
+
+/**
+ * Builds one full circuit block detail response from summary, parts, and evidence.
+ */
+async function buildCircuitBlockDetail(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<CircuitBlockDetailResponse | null> {
+  const summary = await readCircuitBlockSummary(databasePool, circuitBlockId);
+
+  if (!summary) {
+    return null;
+  }
+
+  const [parts, evidence, projectDependenciesResult] = await Promise.all([
+    readCircuitBlockPartRecords(databasePool, circuitBlockId),
+    readCircuitBlockEvidenceAttachments(databasePool, circuitBlockId),
+    readCircuitBlockProjectDependenciesFromDatabase(circuitBlockId)
+  ]);
+
+  const projectDependencies = projectDependenciesResult.status === "available" ? projectDependenciesResult.dependencies : [];
+
+  return {
+    boundary: "Circuit blocks preserve reusable design knowledge; linked part approval, readiness, validation, and export status remain independent.",
+    circuitBlock: summary.circuitBlock,
+    evidence,
+    parts,
+    projectDependencies,
+    state: "available",
+    summary
+  };
+}
+
+/**
+ * Resolves one BOM line into a conservative internal-catalog match outcome.
+ */
+async function resolveBomLineMatch(client: PoolClient, line: BomLine): Promise<BomLineMatchOutcome> {
+  const rawMpn = normalizeOptionalText(line.rawMpn);
+
+  if (!rawMpn) {
+    return {
+      matchConfidenceScore: null,
+      matchedPartId: null,
+      matchStatus: "unmatched"
+    };
+  }
+
+  const candidates = await readInternalPartCandidatesByExactMpn(client, rawMpn);
+
+  if (candidates.length === 0) {
+    return {
+      matchConfidenceScore: null,
+      matchedPartId: null,
+      matchStatus: "unmatched"
+    };
+  }
+
+  const rawManufacturer = normalizeOptionalText(line.rawManufacturer);
+
+  if (!rawManufacturer) {
+    return {
+      matchConfidenceScore: candidates.length === 1 ? 0.6 : 0.45,
+      matchedPartId: null,
+      matchStatus: candidates.length === 1 ? "weak_match" : "ambiguous"
+    };
+  }
+
+  const manufacturerMatches = candidates.filter((candidate) => partCandidateMatchesManufacturer(candidate, rawManufacturer));
+
+  if (manufacturerMatches.length === 1) {
+    return {
+      matchConfidenceScore: 1,
+      matchedPartId: manufacturerMatches[0]?.part_id ?? null,
+      matchStatus: "matched"
+    };
+  }
+
+  if (manufacturerMatches.length > 1) {
+    return {
+      matchConfidenceScore: 0.5,
+      matchedPartId: null,
+      matchStatus: "ambiguous"
+    };
+  }
+
+  return {
+    matchConfidenceScore: candidates.length === 1 ? 0.6 : 0.4,
+    matchedPartId: null,
+    matchStatus: "weak_match"
+  };
+}
+
+/**
+ * Reads internal part identity candidates by exact case-insensitive MPN.
+ */
+async function readInternalPartCandidatesByExactMpn(client: PoolClient, mpn: string): Promise<DatabasePartMatchCandidateRow[]> {
+  const result = await client.query<DatabasePartMatchCandidateRow>(
+    `
+      SELECT
+        p.id AS part_id,
+        p.mpn,
+        p.manufacturer_id,
+        m.name AS manufacturer_name,
+        m.aliases AS manufacturer_aliases
+      FROM parts p
+      JOIN manufacturers m ON m.id = p.manufacturer_id
+      WHERE lower(p.mpn) = lower($1)
+      ORDER BY m.name ASC, p.id ASC
+    `,
+    [mpn]
+  );
+
+  return result.rows;
+}
+
+/**
+ * Updates the persisted BOM line with match truth and returns the mapped line.
+ */
+async function updateBomLineMatch(client: PoolClient, line: BomLine, outcome: BomLineMatchOutcome, now: Date): Promise<BomLine> {
+  const result = await client.query<DatabaseBomLineRow>(
+    `
+      UPDATE bom_lines
+      SET matched_part_id = $2,
+        match_status = $3,
+        match_confidence_score = $4,
+        updated_at = $5
+      WHERE id = $1
+      RETURNING id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at
+    `,
+    [line.id, outcome.matchedPartId, outcome.matchStatus, outcome.matchConfidenceScore, now]
+  );
+  const updatedLine = result.rows[0];
+
+  if (!updatedLine) {
+    throw new CatalogStoreError("query_failed", "BOM line matching returned no persisted line row.", new Error("missing_bom_line_match_row"));
+  }
+
+  return mapBomLineRow(updatedLine);
+}
+
+/**
+ * Creates or refreshes the confirmed usage row for one exact BOM line match.
+ */
+async function upsertProjectPartUsageForMatchedLine(client: PoolClient, line: BomLine, partId: string, now: Date): Promise<ProjectPartUsage> {
+  const usageId = await resolveProjectPartUsageId(client, line);
+  const approvalSnapshot = await readPartApprovalSnapshot(client, partId, now);
+  const readinessSnapshot = await readPartReadinessSnapshot(client, partId, now);
+
+  await client.query("DELETE FROM project_part_usages WHERE bom_line_id = $1 AND id <> $2", [line.id, usageId]);
+
+  const result = await client.query<DatabaseProjectPartUsageRow>(
+    `
+      INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'proposed', $9::jsonb, $10::jsonb, $11, $11)
+      ON CONFLICT (id) DO UPDATE
+      SET project_id = EXCLUDED.project_id,
+        project_revision_id = EXCLUDED.project_revision_id,
+        bom_line_id = EXCLUDED.bom_line_id,
+        part_id = EXCLUDED.part_id,
+        usage_context = EXCLUDED.usage_context,
+        designators = EXCLUDED.designators,
+        quantity = EXCLUDED.quantity,
+        usage_status = EXCLUDED.usage_status,
+        approval_snapshot = EXCLUDED.approval_snapshot,
+        readiness_snapshot = EXCLUDED.readiness_snapshot,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, created_at, updated_at
+    `,
+    [
+      usageId,
+      line.projectId,
+      line.projectRevisionId,
+      line.id,
+      partId,
+      buildUsageContext(line),
+      line.designators,
+      line.quantity,
+      JSON.stringify(approvalSnapshot),
+      JSON.stringify(readinessSnapshot),
+      now
+    ]
+  );
+  const usage = result.rows[0];
+
+  if (!usage) {
+    throw new CatalogStoreError("query_failed", "Project part usage upsert returned no persisted row.", new Error("missing_usage_upsert_row"));
+  }
+
+  return mapProjectPartUsageRow(usage);
+}
+
+/**
+ * Deletes stale usage when a line is no longer a confirmed match.
+ */
+async function deleteProjectPartUsageForBomLine(client: PoolClient, bomLineId: string): Promise<void> {
+  await client.query("DELETE FROM project_part_usages WHERE bom_line_id = $1", [bomLineId]);
+}
+
+/**
+ * Reuses an existing usage id when present, otherwise builds a deterministic line-scoped id.
+ */
+async function resolveProjectPartUsageId(client: PoolClient, line: BomLine): Promise<string> {
+  const result = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM project_part_usages
+      WHERE bom_line_id = $1
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [line.id]
+  );
+
+  return result.rows[0]?.id ?? buildProjectPartUsageId(line.id);
+}
+
+/**
+ * Reads persisted approval evidence for usage snapshots without changing part approval state.
+ */
+async function readPartApprovalSnapshot(client: PoolClient, partId: string, capturedAt: Date): Promise<Record<string, unknown>> {
+  const result = await client.query<DatabasePartApprovalSnapshotRow>(
+    `
+      SELECT approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at
+      FROM part_approvals
+      WHERE part_id = $1
+      LIMIT 1
+    `,
+    [partId]
+  );
+  const row = result.rows[0];
+  const capturedAtIso = capturedAt.toISOString();
+
+  if (!row) {
+    return {
+      capturedAt: capturedAtIso,
+      source: "part_approvals",
+      state: "not_recorded"
+    };
+  }
+
+  return {
+    capturedAt: capturedAtIso,
+    decidedAt: row.decided_at ? toIsoTimestamp(row.decided_at) : null,
+    decidedBy: row.decided_by,
+    detail: row.detail,
+    evidence: toStringArray(row.evidence),
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    source: "part_approvals",
+    state: "available",
+    status: row.approval_status,
+    summary: row.summary
+  };
+}
+
+/**
+ * Reads persisted readiness evidence for usage snapshots without changing part readiness state.
+ */
+async function readPartReadinessSnapshot(client: PoolClient, partId: string, capturedAt: Date): Promise<Record<string, unknown>> {
+  const result = await client.query<DatabasePartReadinessSnapshotRow>(
+    `
+      SELECT readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at
+      FROM part_readiness_summaries
+      WHERE part_id = $1
+      LIMIT 1
+    `,
+    [partId]
+  );
+  const row = result.rows[0];
+  const capturedAtIso = capturedAt.toISOString();
+
+  if (!row) {
+    return {
+      capturedAt: capturedAtIso,
+      source: "part_readiness_summaries",
+      state: "not_recorded"
+    };
+  }
+
+  return {
+    blockerCount: toNumber(row.blocker_count),
+    blockerSummary: toStringArray(row.blocker_summary),
+    capturedAt: capturedAtIso,
+    connectorClass: row.connector_class,
+    detail: row.detail,
+    identityStatus: row.identity_status,
+    lastEvaluatedAt: toIsoTimestamp(row.last_evaluated_at),
+    recommendedActions: toStringArray(row.recommended_actions),
+    source: "part_readiness_summaries",
+    state: "available",
+    status: row.readiness_status
+  };
+}
+
+/**
+ * Builds the match-run summary from updated lines and usage/import candidate counts.
+ */
+function buildBomImportMatchSummary(lines: BomLine[], usageCreatedOrUpdatedCount: number, importableExactMpnLineCount: number): BomImportMatchSummary {
+  return {
+    ambiguousLineCount: lines.filter((line) => line.matchStatus === "ambiguous").length,
+    ignoredLineCount: lines.filter((line) => line.matchStatus === "ignored").length,
+    importableExactMpnLineCount,
+    matchedLineCount: lines.filter((line) => line.matchStatus === "matched").length,
+    totalLineCount: lines.length,
+    unmatchedLineCount: lines.filter((line) => line.matchStatus === "unmatched").length,
+    usageCreatedOrUpdatedCount,
+    weakMatchLineCount: lines.filter((line) => line.matchStatus === "weak_match").length
+  };
+}
+
+/**
+ * Builds an import candidate only for exact-MPN rows that remain unmatched after internal matching.
+ */
+function buildLineImportCandidate(line: BomLine): BomLineImportCandidate | null {
+  const rawMpn = normalizeOptionalText(line.rawMpn);
+
+  if (line.matchStatus !== "unmatched" || !rawMpn) {
+    return null;
+  }
+
+  return {
+    bomLineId: line.id,
+    manufacturerName: normalizeOptionalText(line.rawManufacturer),
+    mpn: rawMpn,
+    rowNumber: line.rowNumber
+  };
+}
+
+/**
+ * Checks whether a raw BOM manufacturer exactly matches a canonical manufacturer or alias.
+ */
+function partCandidateMatchesManufacturer(candidate: DatabasePartMatchCandidateRow, rawManufacturer: string): boolean {
+  const manufacturerNames = [candidate.manufacturer_name, ...toStringArray(candidate.manufacturer_aliases)];
+  const normalizedRawManufacturer = normalizeManufacturerName(rawManufacturer);
+
+  return manufacturerNames.some((manufacturerName) => normalizeManufacturerName(manufacturerName) === normalizedRawManufacturer);
+}
+
+/**
+ * Builds a concise usage context from BOM row evidence without implying design approval.
+ */
+function buildUsageContext(line: BomLine): string {
+  const rawDescription = normalizeOptionalText(line.rawDescription);
+
+  return rawDescription ? `BOM row ${line.rowNumber}: ${rawDescription}` : `BOM row ${line.rowNumber}: exact internal match`;
+}
+
+/**
+ * Builds an explainable BOM health response from raw BOM-line and part evidence inputs.
+ */
+function buildProjectBomHealthResponse(
+  projectId: string,
+  rows: DatabaseProjectBomHealthRow[],
+  evidenceAttachmentCount: number,
+  lifecycleReviewCheckpointAt: Date | null
+): ProjectBomHealthResponse {
+  const matchedRows = rows.filter((row) => row.match_status === "matched" && row.matched_part_id);
+  const unmatchedRows = rows.filter((row) => row.match_status === "unmatched");
+  const ambiguousRows = rows.filter((row) => row.match_status === "ambiguous");
+  const weakRows = rows.filter((row) => row.match_status === "weak_match");
+  const ignoredRows = rows.filter((row) => row.match_status === "ignored");
+  const approvalGapRows = matchedRows.filter((row) => row.approval_status !== "approved");
+  const lifecycleRiskRows = matchedRows.filter((row) => row.lifecycle_status !== "active");
+  const lifecycleRegressionRows =
+    lifecycleReviewCheckpointAt === null
+      ? []
+      : matchedRows.filter((row) => {
+          const status = row.lifecycle_status;
+          if (status !== "obsolete" && status !== "not_recommended") {
+            return false;
+          }
+
+          const catalogTouch = parseNullableDate(row.matched_part_last_updated_at);
+          return (
+            catalogTouch !== null && catalogTouch.getTime() > lifecycleReviewCheckpointAt.getTime()
+          );
+        });
+  const missingVerifiedCadRows = matchedRows.filter((row) => toNumber(row.verified_cad_count) < 3);
+  const referencedCadOnlyRows = missingVerifiedCadRows.filter((row) => toNumber(row.referenced_cad_count) > 0 && toNumber(row.file_backed_cad_count) === 0);
+  const connectorGapRows = matchedRows.filter((row) => isConnectorHealthGap(row));
+  const missingEvidenceRows = matchedRows.filter((row) => toNumber(row.evidence_count) === 0);
+  const summary: ProjectBomHealthSummary = {
+    ambiguousLineCount: ambiguousRows.length,
+    approvalGapCount: approvalGapRows.length,
+    connectorBuildabilityGapCount: connectorGapRows.length,
+    evidenceAttachmentCount,
+    ignoredLineCount: ignoredRows.length,
+    lifecycleRiskCount: lifecycleRiskRows.length,
+    lifecycleRegressionCount: lifecycleRegressionRows.length,
+    matchedLineCount: matchedRows.length,
+    missingEvidenceCount: missingEvidenceRows.length,
+    missingVerifiedCadCount: missingVerifiedCadRows.length,
+    referencedCadOnlyCount: referencedCadOnlyRows.length,
+    totalLineCount: rows.length,
+    unmatchedLineCount: unmatchedRows.length,
+    weakMatchLineCount: weakRows.length
+  };
+
+  return {
+    findings: buildProjectBomRiskFindings(
+      projectId,
+      {
+        ambiguousRows,
+        approvalGapRows,
+        connectorGapRows,
+        lifecycleRegressionRows,
+        lifecycleRiskRows,
+        missingEvidenceRows,
+        missingVerifiedCadRows,
+        unmatchedRows,
+        weakRows
+      },
+      lifecycleReviewCheckpointAt
+    ),
+    generatedAt: new Date().toISOString(),
+    lifecycleReviewCheckpointAt: lifecycleReviewCheckpointAt ? toIsoTimestamp(lifecycleReviewCheckpointAt) : null,
+    projectId,
+    state: rows.length > 0 ? "available" : "empty",
+    summary
+  };
+}
+
+/**
+ * Builds one finding per explainable health category that currently has affected BOM rows.
+ */
+function buildProjectBomRiskFindings(
+  projectId: string,
+  groups: {
+    ambiguousRows: DatabaseProjectBomHealthRow[];
+    approvalGapRows: DatabaseProjectBomHealthRow[];
+    connectorGapRows: DatabaseProjectBomHealthRow[];
+    lifecycleRegressionRows: DatabaseProjectBomHealthRow[];
+    lifecycleRiskRows: DatabaseProjectBomHealthRow[];
+    missingEvidenceRows: DatabaseProjectBomHealthRow[];
+    missingVerifiedCadRows: DatabaseProjectBomHealthRow[];
+    unmatchedRows: DatabaseProjectBomHealthRow[];
+    weakRows: DatabaseProjectBomHealthRow[];
+  },
+  lifecycleReviewCheckpointAt: Date | null
+): ProjectBomRiskFinding[] {
+  const findings: ProjectBomRiskFinding[] = [];
+
+  pushFinding(findings, projectId, "unmatched_bom_rows", groups.unmatchedRows, {
+    detail: `${groups.unmatchedRows.length} BOM rows have no confirmed internal part match.`,
+    nextAction: "Import or create internal parts, then rerun exact BOM matching.",
+    severity: "review",
+    title: "Unmatched BOM rows"
+  });
+  pushFinding(findings, projectId, "ambiguous_or_weak_matches", [...groups.ambiguousRows, ...groups.weakRows], {
+    detail: `${groups.ambiguousRows.length} ambiguous and ${groups.weakRows.length} weak rows need human review before they become usage history.`,
+    nextAction: "Resolve manufacturer identity or choose the correct internal part before creating usage.",
+    severity: "review",
+    title: "Ambiguous or weak matches"
+  });
+  pushFinding(findings, projectId, "approval_gap", groups.approvalGapRows, {
+    detail: `${groups.approvalGapRows.length} matched BOM rows point to parts without explicit approved status.`,
+    nextAction: "Review part approval records before reusing these parts in released project revisions.",
+    severity: "review",
+    title: "Part approval gaps"
+  });
+  pushFinding(findings, projectId, "lifecycle_risk", groups.lifecycleRiskRows, {
+    detail: `${groups.lifecycleRiskRows.length} matched BOM rows point to parts whose lifecycle is not active (current catalog state, not the BOM match snapshot).`,
+    nextAction: "Check lifecycle status and confirm whether replacements or approved exceptions are needed.",
+    severity: groups.lifecycleRiskRows.some((row) => row.lifecycle_status === "obsolete") ? "danger" : "review",
+    title: "Lifecycle risk"
+  });
+  pushLifecycleRegressionFinding(findings, projectId, groups.lifecycleRegressionRows, lifecycleReviewCheckpointAt);
+  pushFinding(findings, projectId, "missing_verified_cad", groups.missingVerifiedCadRows, {
+    detail: `${groups.missingVerifiedCadRows.length} matched BOM rows do not have a complete verified file-backed CAD/export set.`,
+    nextAction: "Review symbol, footprint, and 3D model coverage; referenced CAD alone does not unlock export.",
+    severity: "review",
+    title: "Missing verified CAD/export assets"
+  });
+  pushFinding(findings, projectId, "connector_buildability_gap", groups.connectorGapRows, {
+    detail: `${groups.connectorGapRows.length} connector-related rows still have buildability or readiness blockers.`,
+    nextAction: "Inspect mate, accessory, cable, and tooling evidence before layout reuse.",
+    severity: "review",
+    title: "Connector buildability gaps"
+  });
+  pushFinding(findings, projectId, "missing_evidence", groups.missingEvidenceRows, {
+    detail: `${groups.missingEvidenceRows.length} matched BOM rows have no attached project, BOM-line, usage, or part evidence metadata.`,
+    nextAction: "Attach design review notes, links, or file metadata so future reuse decisions have provenance.",
+    severity: "review",
+    title: "Missing decision evidence"
+  });
+
+  return findings;
+}
+
+/**
+ * Adds a risk finding when a category has affected rows.
+ */
+function pushFinding(
+  findings: ProjectBomRiskFinding[],
+  projectId: string,
+  code: ProjectBomRiskFindingCode,
+  rows: DatabaseProjectBomHealthRow[],
+  copy: { detail: string; nextAction: string; severity: ProjectBomRiskFinding["severity"]; title: string }
+): void {
+  if (rows.length === 0) {
+    return;
+  }
+
+  findings.push({
+    affectedBomLineIds: uniqueStrings(rows.map((row) => row.id)),
+    affectedPartIds: uniqueStrings(rows.map((row) => row.matched_part_id).filter((partId): partId is string => Boolean(partId))),
+    code,
+    detail: copy.detail,
+    id: `${projectId}:bom-health:${code}`,
+    inputs: rows.slice(0, 6).map(formatBomHealthInput),
+    nextAction: copy.nextAction,
+    projectId,
+    severity: copy.severity,
+    title: copy.title
+  });
+}
+
+/**
+ * Adds a regression finding when obsolete or not_recommended catalog state moved in after the review checkpoint.
+ */
+function pushLifecycleRegressionFinding(
+  findings: ProjectBomRiskFinding[],
+  projectId: string,
+  rows: DatabaseProjectBomHealthRow[],
+  lifecycleReviewCheckpointAt: Date | null
+): void {
+  if (rows.length === 0 || !lifecycleReviewCheckpointAt) {
+    return;
+  }
+
+  const checkpointIso = toIsoTimestamp(lifecycleReviewCheckpointAt);
+
+  findings.push({
+    affectedBomLineIds: uniqueStrings(rows.map((row) => row.id)),
+    affectedPartIds: uniqueStrings(rows.map((row) => row.matched_part_id).filter((partId): partId is string => Boolean(partId))),
+    code: "lifecycle_risk_changed",
+    detail: `${rows.length} matched BOM rows reference parts that are now obsolete or not recommended, and the catalog part record was touched after the last BOM health review checkpoint (${checkpointIso}).`,
+    id: `${projectId}:bom-health:lifecycle_risk_changed`,
+    inputs: rows.slice(0, 6).map((row) => formatBomHealthLifecycleRegressionInput(row, checkpointIso)),
+    nextAction:
+      "Treat this as a sourcing regression: confirm substitutes, re-approve exceptions with provenance, or update the BOM to a supported MPN.",
+    projectId,
+    severity: rows.some((row) => row.lifecycle_status === "obsolete") ? "danger" : "review",
+    title: "Lifecycle regression since last BOM health review"
+  });
+}
+
+/**
+ * Formats a regression row with catalog touch time relative to the review checkpoint.
+ */
+function formatBomHealthLifecycleRegressionInput(row: DatabaseProjectBomHealthRow, checkpointIso: string): string {
+  const base = formatBomHealthInput(row);
+  const touch = row.matched_part_last_updated_at
+    ? toIsoTimestamp(row.matched_part_last_updated_at as Date | string)
+    : "unknown catalog touch time";
+
+  return `${base} Catalog last touched ${touch}; checkpoint ${checkpointIso}.`;
+}
+
+/**
+ * Formats one compact input line so risk findings stay explainable in the UI.
+ */
+function formatBomHealthInput(row: DatabaseProjectBomHealthRow): string {
+  const rawMpn = row.raw_mpn ?? "unknown MPN";
+  const designators = toStringArray(row.designators);
+  const reference = designators.length > 0 ? designators.join(", ") : `row ${row.row_number}`;
+
+  if (row.match_status !== "matched") {
+    return `${reference}: ${rawMpn} is ${row.match_status}.`;
+  }
+
+  return `${reference}: ${rawMpn}, lifecycle=${row.lifecycle_status ?? "unknown"}, approval=${row.approval_status ?? "missing"}, verifiedCad=${toNumber(row.verified_cad_count)}/3, referencedCad=${toNumber(row.referenced_cad_count)}, evidence=${toNumber(row.evidence_count)}.`;
+}
+
+/**
+ * Detects connector-specific readiness gaps without treating all asset gaps as connector gaps.
+ */
+function isConnectorHealthGap(row: DatabaseProjectBomHealthRow): boolean {
+  if (!row.connector_class || row.connector_class === "non_connector") {
+    return false;
+  }
+
+  return row.readiness_status !== "ready_for_export_review" || toNumber(row.blocker_count ?? 0) > 0;
+}
+
+/**
+ * Converts one computed BOM health finding into assignable project work.
+ */
+function buildProjectBomHealthFollowUpSeed(finding: ProjectBomRiskFinding): FollowUpSeedRecord {
+  return {
+    detail: finding.detail,
+    evidenceAttachmentIds: [],
+    nextAction: finding.nextAction,
+    severity: finding.severity,
+    sourceFindingId: finding.id,
+    sourceInputs: finding.inputs,
+    sourceType: "bom_health",
+    targetId: finding.projectId,
+    targetType: "project",
+    title: finding.title
+  };
+}
+
+/**
+ * Checks whether a required circuit block role still has approval or readiness work.
+ */
+function isCircuitBlockPartReadinessGap(record: CircuitBlockPartRecord): boolean {
+  if (!record.blockPart.isRequired) {
+    return false;
+  }
+
+  return record.part.approvalStatus !== "approved" ||
+    record.part.readinessStatus !== "ready_for_export_review" ||
+    (record.part.blockerCount ?? 0) > 0;
+}
+
+/**
+ * Converts one required circuit role gap into assignable circuit follow-up work.
+ */
+function buildCircuitBlockGapFollowUpSeed(circuitBlockId: string, record: CircuitBlockPartRecord): FollowUpSeedRecord {
+  const blockerCount = record.part.blockerCount ?? 0;
+  const issueSummary = [
+    record.part.approvalStatus === "approved" ? null : `approval=${record.part.approvalStatus ?? "missing"}`,
+    record.part.readinessStatus === "ready_for_export_review" ? null : `readiness=${record.part.readinessStatus ?? "missing"}`,
+    blockerCount > 0 ? `blockers=${blockerCount}` : null
+  ].filter((issue): issue is string => Boolean(issue));
+  const sourceInput = `${record.blockPart.role}: ${record.part.mpn}, manufacturer=${record.part.manufacturerName}, ${issueSummary.join(", ")}.`;
+
+  return {
+    detail: `Required role "${record.blockPart.role}" uses ${record.part.mpn} (${record.part.manufacturerName}) and still has ${issueSummary.join(", ")}.`,
+    evidenceAttachmentIds: [],
+    nextAction: "Resolve linked part approval/readiness blockers or attach supporting circuit evidence before treating this block as reusable for export-bound designs.",
+    severity: record.part.approvalStatus === "approved" ? "review" : "danger",
+    sourceFindingId: `${circuitBlockId}:circuit-gap:${record.blockPart.id}`,
+    sourceInputs: [sourceInput],
+    sourceType: "circuit_block_gap",
+    targetId: circuitBlockId,
+    targetType: "circuit_block",
+    title: `${record.blockPart.role} needs reuse readiness review`
+  };
+}
+
+/**
+ * Returns unique non-empty strings in first-seen order for stable API payloads.
+ */
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+/**
  * Checks whether one project id exists before returning scoped empty child reads.
  */
 async function projectExists(databasePool: Pool | PoolClient, projectId: string): Promise<boolean> {
   const result = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 LIMIT 1", [projectId]);
+
+  return result.rows.length > 0;
+}
+
+/**
+ * Checks whether one internal catalog part exists before returning where-used reads.
+ */
+async function partExists(databasePool: Pool | PoolClient, partId: string): Promise<boolean> {
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
 
   return result.rows.length > 0;
 }
@@ -760,6 +3991,70 @@ async function bomImportExists(databasePool: Pool | PoolClient, bomImportId: str
   const result = await databasePool.query<{ id: string }>("SELECT id FROM bom_imports WHERE id = $1 LIMIT 1", [bomImportId]);
 
   return result.rows.length > 0;
+}
+
+/**
+ * Checks whether one reusable circuit block exists before returning scoped reads or writes.
+ */
+async function circuitBlockExists(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<boolean> {
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM circuit_blocks WHERE id = $1 LIMIT 1", [circuitBlockId]);
+
+  return result.rows.length > 0;
+}
+
+/**
+ * Checks one evidence target before accepting metadata for durable project memory.
+ */
+async function evidenceTargetExists(databasePool: Pool | PoolClient, targetType: EvidenceTargetType, targetId: string): Promise<{ exists: true } | { exists: false; code: string; message: string }> {
+  if (targetType === "risk_finding") {
+    return { exists: true };
+  }
+
+  const tableByTarget: Record<Exclude<EvidenceTargetType, "risk_finding">, { code: string; label: string; table: string }> = {
+    asset: { code: "ASSET_NOT_FOUND", label: "Asset", table: "assets" },
+    bom_import: { code: "BOM_IMPORT_NOT_FOUND", label: "BOM import", table: "bom_imports" },
+    bom_line: { code: "BOM_LINE_NOT_FOUND", label: "BOM line", table: "bom_lines" },
+    circuit_block: { code: "CIRCUIT_BLOCK_NOT_FOUND", label: "Circuit block", table: "circuit_blocks" },
+    circuit_block_part: { code: "CIRCUIT_BLOCK_PART_NOT_FOUND", label: "Circuit block part", table: "circuit_block_parts" },
+    part: { code: "PART_NOT_FOUND", label: "Part", table: "parts" },
+    project: { code: "PROJECT_NOT_FOUND", label: "Project", table: "projects" },
+    project_part_usage: { code: "PROJECT_PART_USAGE_NOT_FOUND", label: "Project part usage", table: "project_part_usages" }
+  };
+  const target = tableByTarget[targetType];
+  const result = await databasePool.query<{ id: string }>(`SELECT id FROM ${target.table} WHERE id = $1 LIMIT 1`, [targetId]);
+
+  if (result.rows.length > 0) {
+    return { exists: true };
+  }
+
+  return {
+    code: target.code,
+    exists: false,
+    message: `${target.label} target not found.`
+  };
+}
+
+/**
+ * Checks related evidence ids before a follow-up references them.
+ */
+async function evidenceAttachmentsExist(databasePool: Pool | PoolClient, evidenceAttachmentIds: string[]): Promise<boolean> {
+  const uniqueEvidenceAttachmentIds = uniqueStrings(evidenceAttachmentIds);
+
+  if (uniqueEvidenceAttachmentIds.length === 0) {
+    return true;
+  }
+
+  const placeholders = uniqueEvidenceAttachmentIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await databasePool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM evidence_attachments
+      WHERE id IN (${placeholders})
+    `,
+    uniqueEvidenceAttachmentIds
+  );
+
+  return result.rows.length === uniqueEvidenceAttachmentIds.length;
 }
 
 /**
@@ -859,6 +4154,101 @@ const PROJECT_SUMMARIES_SQL = `
     FROM project_part_usages
     GROUP BY project_id
   ) usage_summary ON usage_summary.project_id = p.id
+`;
+
+/** CIRCUIT_BLOCK_SUMMARIES_SQL reads reusable circuit rows plus explainable linked-part counts. */
+const CIRCUIT_BLOCK_SUMMARIES_SQL = `
+  SELECT
+    cb.id,
+    cb.block_key,
+    cb.name,
+    cb.description,
+    cb.block_type,
+    cb.owner,
+    cb.status,
+    cb.reuse_scope,
+    cb.constraints,
+    cb.created_at,
+    cb.updated_at,
+    COALESCE(part_summary.total_part_count, '0') AS total_part_count,
+    COALESCE(part_summary.required_part_count, '0') AS required_part_count,
+    COALESCE(part_summary.optional_part_count, '0') AS optional_part_count,
+    COALESCE(part_summary.approved_part_count, '0') AS approved_part_count,
+    COALESCE(part_summary.readiness_gap_count, '0') AS readiness_gap_count,
+    COALESCE(evidence_summary.evidence_attachment_count, '0') AS evidence_attachment_count,
+    COALESCE(usage_summary.project_usage_count, '0') AS project_usage_count
+  FROM circuit_blocks cb
+  LEFT JOIN (
+    SELECT
+      cbp.circuit_block_id,
+      COUNT(*)::text AS total_part_count,
+      SUM(CASE WHEN cbp.is_required THEN 1 ELSE 0 END)::text AS required_part_count,
+      SUM(CASE WHEN cbp.is_required THEN 0 ELSE 1 END)::text AS optional_part_count,
+      SUM(CASE WHEN pa.approval_status = 'approved' THEN 1 ELSE 0 END)::text AS approved_part_count,
+      SUM(CASE WHEN cbp.is_required AND (pa.approval_status IS NULL OR pa.approval_status <> 'approved' OR prs.readiness_status IS NULL OR prs.readiness_status <> 'ready_for_export_review' OR COALESCE(prs.blocker_count, 0) > 0) THEN 1 ELSE 0 END)::text AS readiness_gap_count,
+      SUM(CASE WHEN cbp.is_required AND p.lifecycle_status IN ('obsolete', 'not_recommended') THEN 1 ELSE 0 END)::text AS lifecycle_risk_count,
+      SUM(CASE WHEN cbp.substitution_policy IN ('exact_required', 'do_not_substitute') THEN 1 ELSE 0 END)::text AS strict_substitution_count
+    FROM circuit_block_parts cbp
+    JOIN parts p ON p.id = cbp.part_id
+    LEFT JOIN part_approvals pa ON pa.part_id = cbp.part_id
+    LEFT JOIN part_readiness_summaries prs ON prs.part_id = cbp.part_id
+    GROUP BY cbp.circuit_block_id
+  ) part_summary ON part_summary.circuit_block_id = cb.id
+  LEFT JOIN (
+    SELECT
+      target_id,
+      COUNT(*)::text AS evidence_attachment_count
+    FROM evidence_attachments
+    WHERE target_type = 'circuit_block'
+    GROUP BY target_id
+  ) evidence_summary ON evidence_summary.target_id = cb.id
+  LEFT JOIN (
+    SELECT
+      cbp.circuit_block_id,
+      COUNT(DISTINCT u.id)::text AS project_usage_count
+    FROM circuit_block_parts cbp
+    JOIN project_part_usages u ON u.part_id = cbp.part_id
+    GROUP BY cbp.circuit_block_id
+  ) usage_summary ON usage_summary.circuit_block_id = cb.id
+`;
+
+/** WHERE_USED_CIRCUIT_BLOCK_DEPENDENCIES_SQL reads block roles with block and part context. */
+const WHERE_USED_CIRCUIT_BLOCK_DEPENDENCIES_SQL = `
+  SELECT
+    cb.id AS block_id,
+    cb.block_key AS block_key,
+    cb.name AS block_name,
+    cb.description AS block_description,
+    cb.block_type AS block_type,
+    cb.owner AS block_owner,
+    cb.status AS block_status,
+    cb.reuse_scope AS block_reuse_scope,
+    cb.constraints AS block_constraints,
+    cb.created_at AS block_created_at,
+    cb.updated_at AS block_updated_at,
+    cbp.id,
+    cbp.circuit_block_id,
+    cbp.part_id,
+    cbp.role,
+    cbp.quantity,
+    cbp.is_required,
+    cbp.substitution_policy,
+    cbp.notes,
+    cbp.created_at,
+    cbp.updated_at,
+    p.mpn,
+    m.name AS manufacturer_name,
+    p.lifecycle_status,
+    pa.approval_status,
+    prs.readiness_status,
+    prs.connector_class,
+    prs.blocker_count
+  FROM circuit_block_parts cbp
+  JOIN circuit_blocks cb ON cb.id = cbp.circuit_block_id
+  JOIN parts p ON p.id = cbp.part_id
+  JOIN manufacturers m ON m.id = p.manufacturer_id
+  LEFT JOIN part_approvals pa ON pa.part_id = p.id
+  LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
 `;
 
 /**
@@ -961,6 +4351,9 @@ function mapBomLineRow(row: DatabaseBomLineRow): BomLine {
     createdAt: toIsoTimestamp(row.created_at),
     designators: toStringArray(row.designators),
     id: row.id,
+    instantiatedAt: row.instantiated_at ? toIsoTimestamp(row.instantiated_at) : null,
+    instantiatedFromCircuitBlockId: row.instantiated_from_circuit_block_id,
+    instantiatedFromCircuitBlockPartId: row.instantiated_from_circuit_block_part_id,
     matchConfidenceScore: toNullableNumber(row.match_confidence_score),
     matchedPartId: row.matched_part_id,
     matchStatus: row.match_status,
@@ -976,6 +4369,95 @@ function mapBomLineRow(row: DatabaseBomLineRow): BomLine {
     rowNumber: row.row_number,
     updatedAt: toIsoTimestamp(row.updated_at)
   };
+}
+
+/**
+ * Maps a joined where-used row into usage, project, revision, and optional BOM-line context.
+ */
+function mapPartWhereUsedRow(row: DatabasePartWhereUsedRow): PartWhereUsedRecord {
+  return {
+    bomLine: mapPartWhereUsedBomLine(row),
+    project: mapProjectRow({
+      created_at: row.project_created_at,
+      description: row.project_description,
+      id: row.project_id,
+      name: row.project_name,
+      owner: row.project_owner,
+      project_key: row.project_key,
+      status: row.project_status,
+      updated_at: row.project_updated_at
+    }),
+    projectRevision: mapProjectRevisionRow({
+      created_at: row.revision_created_at,
+      id: row.revision_id,
+      project_id: row.revision_project_id,
+      released_at: row.revision_released_at,
+      revision_label: row.revision_label,
+      revision_status: row.revision_status,
+      source_reference: row.revision_source_reference,
+      updated_at: row.revision_updated_at
+    }),
+    usage: mapProjectPartUsageRow({
+      approval_snapshot: row.usage_approval_snapshot,
+      bom_line_id: row.usage_bom_line_id,
+      created_at: row.usage_created_at,
+      designators: row.usage_designators,
+      id: row.usage_id,
+      part_id: row.usage_part_id,
+      project_id: row.usage_project_id,
+      project_revision_id: row.usage_project_revision_id,
+      quantity: row.usage_quantity,
+      readiness_snapshot: row.usage_readiness_snapshot,
+      updated_at: row.usage_updated_at,
+      usage_context: row.usage_context,
+      usage_status: row.usage_status
+    })
+  };
+}
+
+/**
+ * Maps optional joined BOM-line evidence while failing loudly on inconsistent joined rows.
+ */
+function mapPartWhereUsedBomLine(row: DatabasePartWhereUsedRow): BomLine | null {
+  if (!row.line_id) {
+    return null;
+  }
+
+  if (
+    !row.line_bom_import_id ||
+    !row.line_project_id ||
+    !row.line_project_revision_id ||
+    row.line_row_number === null ||
+    !row.line_match_status ||
+    row.line_created_at === null ||
+    row.line_updated_at === null
+  ) {
+    throw new CatalogStoreError("query_failed", "Part where-used BOM line join returned an incomplete row.", new Error("incomplete_where_used_bom_line"));
+  }
+
+  return mapBomLineRow({
+    bom_import_id: row.line_bom_import_id,
+    created_at: row.line_created_at,
+    designators: row.line_designators,
+    id: row.line_id,
+    match_confidence_score: row.line_match_confidence_score,
+    match_status: row.line_match_status,
+    matched_part_id: row.line_matched_part_id,
+    project_id: row.line_project_id,
+    project_revision_id: row.line_project_revision_id,
+    quantity: row.line_quantity,
+    raw_description: row.line_raw_description,
+    raw_manufacturer: row.line_raw_manufacturer,
+    raw_mpn: row.line_raw_mpn,
+    raw_notes: row.line_raw_notes,
+    raw_row_payload: row.line_raw_row_payload,
+    raw_supplier_reference: row.line_raw_supplier_reference,
+    row_number: row.line_row_number,
+    instantiated_from_circuit_block_id: null,
+    instantiated_from_circuit_block_part_id: null,
+    instantiated_at: null,
+    updated_at: row.line_updated_at
+  });
 }
 
 /**
@@ -997,6 +4479,204 @@ function mapProjectPartUsageRow(row: DatabaseProjectPartUsageRow): ProjectPartUs
     usageContext: row.usage_context,
     usageStatus: row.usage_status
   };
+}
+
+/**
+ * Maps a persisted evidence metadata row into the shared EvidenceAttachment type.
+ */
+function mapEvidenceAttachmentRow(row: DatabaseEvidenceAttachmentRow): EvidenceAttachment {
+  return {
+    createdAt: toIsoTimestamp(row.created_at),
+    evidenceType: row.evidence_type,
+    fileHash: row.file_hash,
+    id: row.id,
+    mimeType: row.mime_type,
+    notes: row.notes,
+    provenance: row.provenance,
+    reviewStatus: row.review_status,
+    sourceUrl: row.source_url,
+    storageKey: row.storage_key,
+    targetId: row.target_id,
+    targetType: row.target_type,
+    title: row.title,
+    updatedAt: toIsoTimestamp(row.updated_at),
+    uploadedBy: row.uploaded_by
+  };
+}
+
+/**
+ * Maps a persisted follow-up row into the shared queue contract.
+ */
+function mapFollowUpRecordRow(row: DatabaseFollowUpRecordRow): FollowUpRecord {
+  return {
+    assignedTo: row.assigned_to,
+    createdAt: toIsoTimestamp(row.created_at),
+    detail: row.detail,
+    evidenceAttachmentIds: toStringArray(row.evidence_attachment_ids),
+    id: row.id,
+    nextAction: row.next_action,
+    resolutionNotes: row.resolution_notes,
+    resolvedAt: row.resolved_at ? toIsoTimestamp(row.resolved_at) : null,
+    severity: row.severity,
+    sourceFindingId: row.source_finding_id,
+    sourceInputs: toStringArray(row.source_inputs),
+    sourceType: row.source_type,
+    status: row.status,
+    targetId: row.target_id,
+    targetType: row.target_type,
+    title: row.title,
+    updatedAt: toIsoTimestamp(row.updated_at)
+  };
+}
+
+/**
+ * Maps a circuit block row into the shared structured-memory type.
+ */
+function mapCircuitBlockRow(row: DatabaseCircuitBlockRow): CircuitBlock {
+  return {
+    blockKey: row.block_key,
+    blockType: row.block_type,
+    constraints: toRecord(row.constraints),
+    createdAt: toIsoTimestamp(row.created_at),
+    description: row.description,
+    id: row.id,
+    name: row.name,
+    owner: row.owner,
+    reuseScope: row.reuse_scope,
+    status: row.status,
+    updatedAt: toIsoTimestamp(row.updated_at)
+  };
+}
+
+/**
+ * Maps one circuit block summary row into explainable list counts.
+ */
+function mapCircuitBlockSummaryRow(row: DatabaseCircuitBlockSummaryRow): CircuitBlockSummary {
+  return {
+    approvedPartCount: toNumber(row.approved_part_count),
+    circuitBlock: mapCircuitBlockRow(row),
+    evidenceAttachmentCount: toNumber(row.evidence_attachment_count),
+    lifecycleRiskCount: toNumber(row.lifecycle_risk_count),
+    optionalPartCount: toNumber(row.optional_part_count),
+    projectUsageCount: toNumber(row.project_usage_count),
+    readinessGapCount: toNumber(row.readiness_gap_count),
+    requiredPartCount: toNumber(row.required_part_count),
+    strictSubstitutionCount: toNumber(row.strict_substitution_count),
+    totalPartCount: toNumber(row.total_part_count)
+  };
+}
+
+/**
+ * Maps one circuit block part role into the shared type.
+ */
+function mapCircuitBlockPartRow(row: DatabaseCircuitBlockPartRow): CircuitBlockPart {
+  return {
+    circuitBlockId: row.circuit_block_id,
+    createdAt: toIsoTimestamp(row.created_at),
+    id: row.id,
+    isRequired: row.is_required,
+    notes: row.notes,
+    partId: row.part_id,
+    quantity: toNullableNumber(row.quantity),
+    role: row.role,
+    substitutionPolicy: row.substitution_policy,
+    updatedAt: toIsoTimestamp(row.updated_at)
+  };
+}
+
+/**
+ * Maps a circuit block part detail row while preserving linked-part readiness truth.
+ */
+function mapCircuitBlockPartDetailRow(row: DatabaseCircuitBlockPartDetailRow): CircuitBlockPartRecord {
+  return {
+    blockPart: mapCircuitBlockPartRow(row),
+    part: {
+      approvalStatus: row.approval_status,
+      blockerCount: row.blocker_count === null ? null : toNumber(row.blocker_count),
+      connectorClass: row.connector_class,
+      lifecycleStatus: row.lifecycle_status,
+      manufacturerName: row.manufacturer_name,
+      mpn: row.mpn,
+      partId: row.part_id,
+      readinessStatus: row.readiness_status
+    }
+  };
+}
+
+/**
+ * Maps a compact part summary for global where-used search results.
+ */
+function mapWhereUsedPartSummaryRow(row: DatabaseWhereUsedPartSummaryRow): CircuitBlockPartCatalogSummary {
+  return {
+    approvalStatus: row.approval_status,
+    blockerCount: row.blocker_count === null ? null : toNumber(row.blocker_count),
+    connectorClass: row.connector_class,
+    lifecycleStatus: row.lifecycle_status,
+    manufacturerName: row.manufacturer_name,
+    mpn: row.mpn,
+    partId: row.part_id,
+    readinessStatus: row.readiness_status
+  };
+}
+
+/**
+ * Maps one circuit block dependency row into the global where-used contract.
+ */
+function mapWhereUsedCircuitBlockDependencyRow(row: DatabaseWhereUsedCircuitBlockDependencyRow): WhereUsedCircuitBlockDependencyRecord {
+  return {
+    blockPart: mapCircuitBlockPartRow(row),
+    circuitBlock: mapCircuitBlockRow({
+      block_key: row.block_key,
+      block_type: row.block_type,
+      constraints: row.block_constraints,
+      created_at: row.block_created_at,
+      description: row.block_description,
+      id: row.block_id,
+      name: row.block_name,
+      owner: row.block_owner,
+      reuse_scope: row.block_reuse_scope,
+      status: row.block_status,
+      updated_at: row.block_updated_at
+    }),
+    part: mapWhereUsedPartSummaryRow({
+      approval_status: row.approval_status,
+      blocker_count: row.blocker_count,
+      connector_class: row.connector_class,
+      lifecycle_status: row.lifecycle_status,
+      manufacturer_name: row.manufacturer_name,
+      mpn: row.mpn,
+      part_id: row.part_id,
+      readiness_status: row.readiness_status
+    })
+  };
+}
+
+/**
+ * Adds part and optional circuit-role context to a confirmed project usage row.
+ */
+function mapWhereUsedProjectUsageRecord(record: PartWhereUsedRecord, part: CircuitBlockPartCatalogSummary, dependency: WhereUsedCircuitBlockDependencyRecord | null): WhereUsedProjectUsageRecord {
+  return {
+    blockPart: dependency?.blockPart ?? null,
+    bomLine: record.bomLine,
+    circuitBlock: dependency?.circuitBlock ?? null,
+    part,
+    project: record.project,
+    projectRevision: record.projectRevision,
+    usage: record.usage
+  };
+}
+
+/**
+ * Sorts global where-used project rows by project, revision recency, role, and usage id.
+ */
+function sortWhereUsedProjectUsages(records: WhereUsedProjectUsageRecord[]): WhereUsedProjectUsageRecord[] {
+  return [...records].sort((left, right) => (
+    left.project.projectKey.localeCompare(right.project.projectKey) ||
+    right.projectRevision.createdAt.localeCompare(left.projectRevision.createdAt) ||
+    (left.circuitBlock?.blockKey ?? "").localeCompare(right.circuitBlock?.blockKey ?? "") ||
+    (left.blockPart?.role ?? "").localeCompare(right.blockPart?.role ?? "") ||
+    left.usage.id.localeCompare(right.usage.id)
+  ));
 }
 
 /**
@@ -1056,6 +4736,13 @@ function normalizeProjectKey(value: string): string {
 }
 
 /**
+ * Normalizes circuit block keys for stable user-facing ids.
+ */
+function normalizeCircuitBlockKey(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/gu, "-");
+}
+
+/**
  * Converts optional text into null when empty.
  */
 function normalizeOptionalText(value: string | null | undefined): string | null {
@@ -1066,6 +4753,25 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
   const trimmedValue = value.trim();
 
   return trimmedValue.length > 0 ? trimmedValue : null;
+}
+
+/**
+ * Normalizes global where-used target type strings while defaulting to part search.
+ */
+function normalizeWhereUsedTargetType(value: string | null | undefined): WhereUsedTargetType {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+    return value;
+  }
+
+  return "part";
+}
+
+/**
+ * Explains target types that are visible but not yet backed by persisted where-used links.
+ * All four target types are now backed, so this always returns null.
+ */
+function getUnsupportedWhereUsedReason(_targetType: WhereUsedTargetType): string | null {
+  return null;
 }
 
 /**
@@ -1084,6 +4790,517 @@ function normalizeBomColumnMapping(mapping: BomImportCreateInput["columnMapping"
 }
 
 /**
+ * Validates and normalizes project metadata edit input.
+ */
+function normalizeProjectUpdateInput(input: ProjectUpdateInput): { ok: true; input: NormalizedProjectUpdateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return {
+      code: "INVALID_PROJECT_UPDATE",
+      message: "Project edits require a name and valid status.",
+      ok: false
+    };
+  }
+
+  const name = normalizeOptionalText(input.name);
+  const description = normalizeOptionalText(input.description) ?? "";
+  const owner = normalizeOptionalText(input.owner);
+
+  if (!name || !isProjectStatus(input.status)) {
+    return {
+      code: "INVALID_PROJECT_UPDATE",
+      message: "Project edits require a non-empty name and supported status.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      description,
+      name,
+      owner,
+      status: input.status
+    },
+    ok: true
+  };
+}
+
+/**
+ * Validates and normalizes project revision edit input.
+ */
+function normalizeProjectRevisionUpdateInput(input: ProjectRevisionUpdateInput): { ok: true; input: NormalizedProjectRevisionUpdateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object" || !isProjectRevisionStatus(input.revisionStatus)) {
+    return {
+      code: "INVALID_PROJECT_REVISION_UPDATE",
+      message: "Project revision edits require a supported revision status.",
+      ok: false
+    };
+  }
+
+  const releasedAt = normalizeReleasedAt(input.releasedAt);
+
+  if (releasedAt === "invalid") {
+    return {
+      code: "INVALID_PROJECT_REVISION_RELEASED_AT",
+      message: "Released-at must be a valid ISO timestamp when provided.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      releasedAt,
+      revisionStatus: input.revisionStatus,
+      sourceReference: normalizeOptionalText(input.sourceReference)
+    },
+    ok: true
+  };
+}
+
+/**
+ * Validates and normalizes circuit block creation input.
+ */
+function normalizeCircuitBlockCreateInput(input: CircuitBlockCreateInput): { ok: true; input: NormalizedCircuitBlockCreateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK",
+      message: "Circuit blocks require a block key, name, and supported block type.",
+      ok: false
+    };
+  }
+
+  const blockKey = normalizeCircuitBlockKey(input.blockKey);
+  const name = normalizeOptionalText(input.name);
+  const description = normalizeOptionalText(input.description) ?? "";
+  const owner = normalizeOptionalText(input.owner);
+  const reuseScope = normalizeOptionalText(input.reuseScope) ?? "";
+  const status = input.status ?? "draft";
+  const constraints = input.constraints && typeof input.constraints === "object" && !Array.isArray(input.constraints) ? input.constraints : {};
+
+  if (!blockKey || !name || !isCircuitBlockType(input.blockType) || !isCircuitBlockStatus(status)) {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK",
+      message: "Circuit blocks require a block key, name, supported type, and valid status.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      blockKey,
+      blockType: input.blockType,
+      constraints,
+      description,
+      name,
+      owner,
+      reuseScope,
+      status
+    },
+    ok: true
+  };
+}
+
+/**
+ * Validates and normalizes circuit block metadata edit input.
+ */
+function normalizeCircuitBlockUpdateInput(input: CircuitBlockUpdateInput): { ok: true; input: NormalizedCircuitBlockUpdateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_UPDATE",
+      message: "Circuit block edits require a name, supported type, and valid status.",
+      ok: false
+    };
+  }
+
+  const name = normalizeOptionalText(input.name);
+  const description = normalizeOptionalText(input.description) ?? "";
+  const owner = normalizeOptionalText(input.owner);
+  const reuseScope = normalizeOptionalText(input.reuseScope) ?? "";
+  const constraints = input.constraints && typeof input.constraints === "object" && !Array.isArray(input.constraints) ? input.constraints : {};
+
+  if (!name || !isCircuitBlockType(input.blockType) || !isCircuitBlockStatus(input.status)) {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_UPDATE",
+      message: "Circuit block edits require a non-empty name, supported type, and valid status.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      blockType: input.blockType,
+      constraints,
+      description,
+      name,
+      owner,
+      reuseScope,
+      status: input.status
+    },
+    ok: true
+  };
+}
+
+/**
+ * Validates and normalizes one circuit block part role input.
+ */
+function normalizeCircuitBlockPartCreateInput(input: CircuitBlockPartCreateInput): { ok: true; input: NormalizedCircuitBlockPartCreateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_PART",
+      message: "Circuit block parts require a part id and role.",
+      ok: false
+    };
+  }
+
+  const partId = normalizeOptionalText(input.partId);
+  const role = normalizeOptionalText(input.role);
+  const quantity = input.quantity === undefined ? null : input.quantity;
+  const substitutionPolicy = input.substitutionPolicy ?? "exact_required";
+
+  if (!partId || !role || (quantity !== null && (!Number.isFinite(quantity) || quantity <= 0)) || !isCircuitBlockPartSubstitutionPolicy(substitutionPolicy)) {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_PART",
+      message: "Circuit block parts require a part id, role, optional positive quantity, and valid substitution policy.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      isRequired: input.isRequired ?? true,
+      notes: normalizeOptionalText(input.notes),
+      partId,
+      quantity,
+      role,
+      substitutionPolicy
+    },
+    ok: true
+  };
+}
+
+/**
+ * Validates and normalizes circuit block part-role edit input.
+ */
+function normalizeCircuitBlockPartUpdateInput(input: CircuitBlockPartUpdateInput): { ok: true; input: NormalizedCircuitBlockPartUpdateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_PART_UPDATE",
+      message: "Circuit block part edits require requirement, quantity, and substitution metadata.",
+      ok: false
+    };
+  }
+
+  const quantity = input.quantity === undefined ? null : input.quantity;
+
+  if (typeof input.isRequired !== "boolean" || (quantity !== null && (!Number.isFinite(quantity) || quantity <= 0)) || !isCircuitBlockPartSubstitutionPolicy(input.substitutionPolicy)) {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_PART_UPDATE",
+      message: "Circuit block part edits require a boolean requirement flag, optional positive quantity, and valid substitution policy.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      isRequired: input.isRequired,
+      notes: normalizeOptionalText(input.notes),
+      quantity,
+      substitutionPolicy: input.substitutionPolicy
+    },
+    ok: true
+  };
+}
+
+/**
+ * Validates and normalizes evidence attachment metadata before database writes.
+ */
+function normalizeEvidenceAttachmentInput(input: EvidenceAttachmentCreateInput): { ok: true; input: Required<EvidenceAttachmentCreateInput> } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object" || !isEvidenceTargetType(input.targetType) || !isEvidenceAttachmentType(input.evidenceType)) {
+    return {
+      code: "INVALID_EVIDENCE_ATTACHMENT",
+      message: "Evidence attachments require a supported targetType and evidenceType.",
+      ok: false
+    };
+  }
+
+  const targetId = normalizeOptionalText(input.targetId);
+  const title = normalizeOptionalText(input.title);
+  const sourceUrl = normalizeOptionalText(input.sourceUrl);
+  const storageKey = normalizeOptionalText(input.storageKey);
+  const fileHash = normalizeOptionalText(input.fileHash);
+  const mimeType = normalizeOptionalText(input.mimeType);
+  const notes = normalizeOptionalText(input.notes);
+  const provenance = normalizeOptionalText(input.provenance) ?? "manual_internal";
+  const reviewStatus = input.reviewStatus ?? "unreviewed";
+
+  if (!targetId || !title || !isEvidenceReviewStatus(reviewStatus)) {
+    return {
+      code: "INVALID_EVIDENCE_ATTACHMENT",
+      message: "Evidence attachments require a target id, title, and valid review status.",
+      ok: false
+    };
+  }
+
+  if (input.evidenceType === "link" && !sourceUrl) {
+    return {
+      code: "EVIDENCE_LINK_REQUIRED",
+      message: "Link evidence requires a sourceUrl.",
+      ok: false
+    };
+  }
+
+  if (input.evidenceType === "file" && !storageKey) {
+    return {
+      code: "EVIDENCE_FILE_REQUIRED",
+      message: "File evidence requires a storageKey.",
+      ok: false
+    };
+  }
+
+  if (input.evidenceType === "note" && !notes) {
+    return {
+      code: "EVIDENCE_NOTE_REQUIRED",
+      message: "Note evidence requires notes.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      evidenceType: input.evidenceType,
+      fileHash,
+      mimeType,
+      notes,
+      provenance,
+      reviewStatus,
+      sourceUrl,
+      storageKey,
+      targetId,
+      targetType: input.targetType,
+      title
+    },
+    ok: true
+  };
+}
+
+/**
+ * Normalizes evidence-vault filters without turning bad query params into SQL predicates.
+ */
+function normalizeEvidenceAttachmentListFilters(filters: EvidenceAttachmentListFilters): EvidenceAttachmentListFilters {
+  return {
+    evidenceType: isEvidenceAttachmentType(filters.evidenceType) ? filters.evidenceType : null,
+    query: normalizeOptionalText(filters.query),
+    reviewStatus: isEvidenceReviewStatus(filters.reviewStatus) ? filters.reviewStatus : null,
+    sourceSystem: normalizeOptionalText(filters.sourceSystem),
+    storageState: isEvidenceStorageState(filters.storageState) ? filters.storageState : null,
+    targetType: isEvidenceTargetType(filters.targetType) ? filters.targetType : null
+  };
+}
+
+/**
+ * Summarizes visible evidence rows without converting review state into validation.
+ */
+function buildEvidenceAttachmentListSummary(attachments: EvidenceAttachment[]): EvidenceAttachmentListResponse["summary"] {
+  return {
+    acceptedCount: attachments.filter((attachment) => attachment.reviewStatus === "accepted").length,
+    fileBackedCount: attachments.filter((attachment) => attachment.storageKey).length,
+    linkOnlyCount: attachments.filter((attachment) => !attachment.storageKey && attachment.sourceUrl).length,
+    noteOnlyCount: attachments.filter((attachment) => !attachment.storageKey && !attachment.sourceUrl && attachment.notes).length,
+    rejectedCount: attachments.filter((attachment) => attachment.reviewStatus === "rejected").length,
+    supersededCount: attachments.filter((attachment) => attachment.reviewStatus === "superseded").length,
+    totalCount: attachments.length,
+    unreviewedCount: attachments.filter((attachment) => attachment.reviewStatus === "unreviewed").length
+  };
+}
+
+/**
+ * Validates evidence review edits while keeping target trust untouched.
+ */
+function normalizeEvidenceAttachmentUpdateInput(input: EvidenceAttachmentUpdateInput): { ok: true; input: Required<EvidenceAttachmentUpdateInput> } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object" || !isEvidenceReviewStatus(input.reviewStatus) || !isOptionalBodyString(input.notes)) {
+    return {
+      code: "INVALID_EVIDENCE_ATTACHMENT_UPDATE",
+      message: "Evidence review edits require a valid review status and optional notes.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      notes: normalizeOptionalText(input.notes),
+      reviewStatus: input.reviewStatus
+    },
+    ok: true
+  };
+}
+
+/**
+ * Summarizes follow-up rows by workflow and severity without hiding source detail.
+ */
+function buildFollowUpListSummary(followUps: FollowUpRecord[]): FollowUpListResponse["summary"] {
+  return {
+    dangerCount: followUps.filter((followUp) => followUp.severity === "danger").length,
+    dismissedCount: followUps.filter((followUp) => followUp.status === "dismissed").length,
+    inProgressCount: followUps.filter((followUp) => followUp.status === "in_progress").length,
+    openCount: followUps.filter((followUp) => followUp.status === "open").length,
+    resolvedCount: followUps.filter((followUp) => followUp.status === "resolved").length,
+    reviewCount: followUps.filter((followUp) => followUp.severity === "review").length,
+    totalCount: followUps.length
+  };
+}
+
+/**
+ * Validates follow-up workflow edits before they reach SQL.
+ */
+function normalizeFollowUpUpdateInput(input: FollowUpUpdateInput): { ok: true; input: NormalizedFollowUpUpdateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object" || !isFollowUpStatus(input.status) || !isOptionalBodyString(input.assignedTo) || !isOptionalBodyString(input.resolutionNotes)) {
+    return {
+      code: "INVALID_FOLLOW_UP_UPDATE",
+      message: "Follow-up edits require a valid status, optional assignee, and optional resolution notes.",
+      ok: false
+    };
+  }
+
+  const evidenceAttachmentIds = normalizeFollowUpEvidenceIds(input.evidenceAttachmentIds);
+
+  if (evidenceAttachmentIds === "invalid") {
+    return {
+      code: "INVALID_FOLLOW_UP_EVIDENCE",
+      message: "Related evidence ids must be strings when provided.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      assignedTo: normalizeOptionalText(input.assignedTo),
+      evidenceAttachmentIds,
+      resolutionNotes: normalizeOptionalText(input.resolutionNotes),
+      status: input.status
+    },
+    ok: true
+  };
+}
+
+/**
+ * Normalizes optional follow-up evidence ids, preserving undefined as "no edit".
+ */
+function normalizeFollowUpEvidenceIds(value: string[] | null | undefined): string[] | undefined | "invalid" {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    return "invalid";
+  }
+
+  return uniqueStrings(value.map((item) => item.trim()));
+}
+
+/**
+ * Checks evidence target type values without accepting arbitrary table names.
+ */
+function isEvidenceTargetType(value: unknown): value is EvidenceTargetType {
+  return value === "part" ||
+    value === "asset" ||
+    value === "project" ||
+    value === "bom_import" ||
+    value === "bom_line" ||
+    value === "project_part_usage" ||
+    value === "risk_finding" ||
+    value === "circuit_block" ||
+    value === "circuit_block_part";
+}
+
+/**
+ * Checks project lifecycle status values before writing request data.
+ */
+function isProjectStatus(value: unknown): value is Project["status"] {
+  return value === "active" || value === "archived" || value === "prototype" || value === "production" || value === "deprecated";
+}
+
+/**
+ * Checks revision lifecycle status values before writing request data.
+ */
+function isProjectRevisionStatus(value: unknown): value is ProjectRevisionStatus {
+  return value === "draft" || value === "in_review" || value === "released" || value === "superseded" || value === "archived";
+}
+
+/**
+ * Checks circuit block category values without accepting arbitrary taxonomy.
+ */
+function isCircuitBlockType(value: unknown): value is CircuitBlockType {
+  return value === "power" || value === "mcu_support" || value === "interface" || value === "protection" || value === "connector_set" || value === "sensor_front_end" || value === "other";
+}
+
+/**
+ * Checks circuit block lifecycle states without inferring part approval.
+ */
+function isCircuitBlockStatus(value: unknown): value is CircuitBlockStatus {
+  return value === "draft" || value === "in_review" || value === "approved" || value === "restricted" || value === "deprecated";
+}
+
+/**
+ * Checks role-level substitution policy values.
+ */
+function isCircuitBlockPartSubstitutionPolicy(value: unknown): value is CircuitBlockPartSubstitutionPolicy {
+  return value === "exact_required" || value === "approved_alternate_allowed" || value === "equivalent_allowed" || value === "do_not_substitute";
+}
+
+/**
+ * Checks evidence attachment type values.
+ */
+function isEvidenceAttachmentType(value: unknown): value is EvidenceAttachmentType {
+  return value === "note" || value === "link" || value === "file";
+}
+
+/**
+ * Checks evidence review state values without inferring approval from accepted evidence.
+ */
+function isEvidenceReviewStatus(value: unknown): value is EvidenceReviewStatus {
+  return value === "unreviewed" || value === "accepted" || value === "rejected" || value === "superseded";
+}
+
+/**
+ * Checks evidence storage filters without implying a stored file is exportable.
+ */
+function isEvidenceStorageState(value: unknown): value is EvidenceStorageState {
+  return value === "file_backed" || value === "link_only" || value === "note_only";
+}
+
+/**
+ * Checks follow-up workflow status values.
+ */
+function isFollowUpStatus(value: unknown): value is FollowUpStatus {
+  return value === "open" || value === "in_progress" || value === "resolved" || value === "dismissed";
+}
+
+/**
+ * Checks optional text inputs without accepting arrays or objects.
+ */
+function isOptionalBodyString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+/**
+ * Converts optional released-at input into a Date while rejecting malformed timestamps.
+ */
+function normalizeReleasedAt(value: string | null | undefined): Date | null | "invalid" {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const date = new Date(normalized);
+
+  return Number.isNaN(date.getTime()) ? "invalid" : date;
+}
+
+/**
  * Builds a deterministic project id from the unique project key.
  */
 function buildProjectId(projectKey: string): string {
@@ -1095,6 +5312,41 @@ function buildProjectId(projectKey: string): string {
  */
 function buildProjectRevisionId(projectId: string, revisionLabel: string): string {
   return `rev-${slugify(projectId)}-${slugify(revisionLabel)}`;
+}
+
+/**
+ * Builds a deterministic usage id from one BOM line id.
+ */
+function buildProjectPartUsageId(bomLineId: string): string {
+  return `usage-${slugify(bomLineId)}`;
+}
+
+/**
+ * Builds a deterministic circuit block id from the block key.
+ */
+function buildCircuitBlockId(blockKey: string): string {
+  return `cblock-${slugify(blockKey)}`;
+}
+
+/**
+ * Builds a deterministic circuit block part-role id.
+ */
+function buildCircuitBlockPartId(circuitBlockId: string, partId: string, role: string): string {
+  return `cbpart-${slugify(circuitBlockId)}-${slugify(partId)}-${slugify(role)}`;
+}
+
+/**
+ * Builds a deterministic follow-up id from target and computed source identity.
+ */
+function buildFollowUpRecordId(seed: FollowUpSeedRecord): string {
+  return `followup-${slugify(seed.targetType)}-${slugify(seed.targetId)}-${slugify(seed.sourceType)}-${slugify(seed.sourceFindingId)}`;
+}
+
+/**
+ * Normalizes manufacturer names for exact case-insensitive alias matching.
+ */
+function normalizeManufacturerName(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLowerCase();
 }
 
 /**
@@ -1126,6 +5378,18 @@ function toIsoTimestamp(value: Date | string): string {
 }
 
 /**
+ * Parses nullable database timestamps for comparisons without treating invalid strings as valid dates.
+ */
+function parseNullableDate(value: unknown): Date | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value as string);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
  * Converts database JSON into a plain record without trusting arbitrary payloads.
  */
 function toRecord(value: unknown): Record<string, unknown> {
@@ -1146,4 +5410,1792 @@ function latestTimestamp(values: Array<string | null>): string {
   return values
     .filter((value): value is string => Boolean(value))
     .sort((first, second) => Date.parse(second) - Date.parse(first))[0] ?? new Date(0).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// P0-FUNC5: Export bundle store functions
+// ---------------------------------------------------------------------------
+
+/** ALTIUM_ASSET_TYPES lists the asset types included in Altium export bundles. */
+const ALTIUM_ASSET_TYPES: AssetType[] = ["footprint", "symbol"];
+
+/** SOLIDWORKS_ASSET_TYPES lists the asset types included in SolidWorks export bundles. */
+const SOLIDWORKS_ASSET_TYPES: AssetType[] = ["three_d_model", "mechanical_drawing"];
+
+/** NEUTRAL_ASSET_TYPES lists all asset types included in neutral export bundles. */
+const NEUTRAL_ASSET_TYPES: AssetType[] = ["datasheet", "footprint", "symbol", "three_d_model", "mechanical_drawing"];
+
+interface DatabaseExportBundleRow {
+  id: string;
+  project_id: string;
+  revision_label: string | null;
+  bundle_format: string;
+  storage_key: string | null;
+  manifest: unknown;
+  part_count: number | string;
+  included_asset_count: number | string;
+  omitted_asset_count: number | string;
+  warning_count: number | string;
+  created_by: string | null;
+  created_at: Date | string;
+}
+
+interface DatabaseBundleAssetRow {
+  part_id: string;
+  part_mpn: string;
+  manufacturer_name: string;
+  asset_id: string;
+  asset_type: string;
+  file_format: string;
+  storage_key: string;
+  file_hash: string | null;
+  provenance: string;
+}
+
+interface DatabaseBundleOmissionRow {
+  part_id: string;
+  part_mpn: string;
+  asset_type: string;
+  omission_reason: string;
+}
+
+/**
+ * Generates a manifest-first export bundle for all verified parts in a project.
+ */
+export async function createExportBundleInDatabase(projectId: string, input: ExportBundleCreateInput, actor: string): Promise<ExportBundleCreateResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const format = input.bundleFormat;
+
+  if (!["altium", "solidworks", "neutral"].includes(format)) {
+    return { status: "invalid", code: "INVALID_BUNDLE_FORMAT", message: "Bundle format must be altium, solidworks, or neutral." };
+  }
+
+  const applicableTypes = format === "altium"
+    ? ALTIUM_ASSET_TYPES
+    : format === "solidworks"
+      ? SOLIDWORKS_ASSET_TYPES
+      : NEUTRAL_ASSET_TYPES;
+
+  const applicableTypeSql = applicableTypes.map((t) => `'${t}'`).join(", ");
+
+  try {
+    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+
+    if (projectCheck.rowCount === 0) {
+      return { status: "not_found" };
+    }
+
+    const usageFilter = input.revisionLabel
+      ? "AND pr.revision_label = $2"
+      : "";
+    const usageParams: unknown[] = input.revisionLabel ? [projectId, input.revisionLabel] : [projectId];
+
+    const usedPartIds = await databasePool.query<{ part_id: string }>(
+      `SELECT DISTINCT ppu.part_id
+         FROM project_part_usages ppu
+         JOIN project_revisions pr ON pr.id = ppu.project_revision_id
+         WHERE ppu.project_id = $1 ${usageFilter}`,
+      usageParams
+    );
+
+    const partIds = usedPartIds.rows.map((r) => r.part_id);
+    const warnings: string[] = [];
+
+    if (partIds.length === 0) {
+      warnings.push("No confirmed part usages found for this project. Add a BOM import and run matching first.");
+    }
+
+    const includedAssets: ExportBundleIncludedAsset[] = [];
+    const omissions: ExportBundleOmission[] = [];
+
+    if (partIds.length > 0) {
+      const partIdPlaceholders = partIds.map((_, i) => `$${i + 1}`).join(", ");
+
+      const verifiedRows = await databasePool.query<DatabaseBundleAssetRow>(
+        `SELECT a.part_id, p.mpn AS part_mpn, m.name AS manufacturer_name,
+                a.id AS asset_id, a.asset_type, a.file_format,
+                a.storage_key, a.file_hash, a.provenance
+           FROM assets a
+           JOIN parts p ON p.id = a.part_id
+           JOIN manufacturers m ON m.id = p.manufacturer_id
+           WHERE a.part_id IN (${partIdPlaceholders})
+             AND a.asset_type IN (${applicableTypeSql})
+             AND a.export_status = 'verified_for_export'
+             AND a.storage_key IS NOT NULL`,
+        partIds
+      );
+
+      const coveredKeys = new Set(verifiedRows.rows.map((r) => `${r.part_id}:${r.asset_type}`));
+
+      for (const row of verifiedRows.rows) {
+        const ext = row.storage_key.split(".").pop() ?? "bin";
+        const bundlePath = `${row.part_mpn}/${row.asset_type}.${ext}`;
+        includedAssets.push({
+          assetId: row.asset_id,
+          assetType: row.asset_type as AssetType,
+          bundlePath,
+          fileFormat: row.file_format as FileFormat,
+          fileHash: row.file_hash,
+          manufacturerName: row.manufacturer_name,
+          partId: row.part_id,
+          partMpn: row.part_mpn,
+          provenance: row.provenance as AssetProvenance,
+          storageKey: row.storage_key
+        });
+      }
+
+      const omissionRows = await databasePool.query<DatabaseBundleOmissionRow>(
+        `SELECT DISTINCT ON (a.part_id, a.asset_type)
+                a.part_id, p.mpn AS part_mpn, a.asset_type,
+                CASE
+                  WHEN a.export_status != 'verified_for_export' THEN 'not_verified_for_export'
+                  WHEN a.storage_key IS NULL AND a.source_url IS NOT NULL THEN 'referenced_only'
+                  WHEN a.storage_key IS NULL THEN 'no_storage_key'
+                  ELSE 'missing'
+                END AS omission_reason
+           FROM assets a
+           JOIN parts p ON p.id = a.part_id
+           WHERE a.part_id IN (${partIdPlaceholders})
+             AND a.asset_type IN (${applicableTypeSql})
+             AND (a.export_status != 'verified_for_export' OR a.storage_key IS NULL)
+           ORDER BY a.part_id, a.asset_type, a.export_status DESC`,
+        partIds
+      );
+
+      for (const row of omissionRows.rows) {
+        const key = `${row.part_id}:${row.asset_type}`;
+        if (!coveredKeys.has(key)) {
+          omissions.push({
+            assetType: row.asset_type as AssetType,
+            partId: row.part_id,
+            partMpn: row.part_mpn,
+            reason: row.omission_reason as ExportBundleOmission["reason"]
+          });
+        }
+      }
+
+      for (const partId of partIds) {
+        for (const assetType of applicableTypes) {
+          const key = `${partId}:${assetType}`;
+          const hasIncluded = coveredKeys.has(key);
+          const hasOmission = omissions.some((o) => o.partId === partId && o.assetType === assetType);
+          if (!hasIncluded && !hasOmission) {
+            const partMpn = verifiedRows.rows.find((r) => r.part_id === partId)?.part_mpn
+              ?? omissionRows.rows.find((r) => r.part_id === partId)?.part_mpn
+              ?? partId;
+            omissions.push({
+              assetType,
+              partId,
+              partMpn,
+              reason: "missing"
+            });
+          }
+        }
+      }
+
+      if (omissions.length > 0) {
+        warnings.push(`${omissions.length} asset${omissions.length === 1 ? "" : "s"} omitted from bundle. See manifest omissions for details.`);
+      }
+    }
+
+    const bundleId = `ebundle-${randomUUID()}`;
+    const generatedAt = new Date().toISOString();
+
+    const manifest: ExportBundleManifest = {
+      bundleFormat: format,
+      bundleId,
+      generatedAt,
+      includedAssets,
+      omissions,
+      projectId,
+      revisionLabel: input.revisionLabel ?? null,
+      warnings
+    };
+
+    const bundle: ExportBundle = {
+      bundleFormat: format,
+      createdAt: generatedAt,
+      createdBy: actor,
+      id: bundleId,
+      includedAssetCount: includedAssets.length,
+      manifest,
+      omittedAssetCount: omissions.length,
+      partCount: partIds.length,
+      projectId,
+      revisionLabel: input.revisionLabel ?? null,
+      storageKey: null,
+      warningCount: warnings.length
+    };
+
+    await databasePool.query(
+      `INSERT INTO export_bundles (id, project_id, revision_label, bundle_format, storage_key, manifest,
+         part_count, included_asset_count, omitted_asset_count, warning_count, created_by, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)`,
+      [
+        bundleId, projectId, input.revisionLabel ?? null, format, null,
+        JSON.stringify(manifest), partIds.length, includedAssets.length,
+        omissions.length, warnings.length, actor, new Date(generatedAt)
+      ]
+    );
+
+    return { status: "created", response: { bundle } };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Export bundle creation failed.", error);
+  }
+}
+
+/**
+ * Reads all export bundles for one project.
+ */
+export async function readExportBundlesFromDatabase(projectId: string): Promise<ExportBundleListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+
+    if (projectCheck.rowCount === 0) {
+      return { status: "not_found" };
+    }
+
+    const rows = await databasePool.query<DatabaseExportBundleRow>(
+      `SELECT id, project_id, revision_label, bundle_format, storage_key, manifest,
+              part_count, included_asset_count, omitted_asset_count, warning_count,
+              created_by, created_at
+         FROM export_bundles
+         WHERE project_id = $1
+         ORDER BY created_at DESC`,
+      [projectId]
+    );
+
+    const bundles: ExportBundle[] = rows.rows.map(mapExportBundleRow);
+
+    return { status: "available", response: { bundles, projectId } };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Export bundle list read failed.", error);
+  }
+}
+
+/**
+ * Maps one export bundle database row into the shared contract.
+ */
+function mapExportBundleRow(row: DatabaseExportBundleRow): ExportBundle {
+  return {
+    bundleFormat: row.bundle_format as ExportBundleFormat,
+    createdAt: toIsoTimestamp(row.created_at),
+    createdBy: row.created_by,
+    id: row.id,
+    includedAssetCount: toNumber(row.included_asset_count),
+    manifest: row.manifest as ExportBundleManifest,
+    omittedAssetCount: toNumber(row.omitted_asset_count),
+    partCount: toNumber(row.part_count),
+    projectId: row.project_id,
+    revisionLabel: row.revision_label,
+    storageKey: row.storage_key,
+    warningCount: toNumber(row.warning_count)
+  };
+}
+
+// ---------------------------------------------------------------------------
+// P1-FUNC6: BOM import diagnostics and revision compare store functions
+// ---------------------------------------------------------------------------
+
+interface DatabaseDiagnosticsRow {
+  line_id: string;
+  row_number: number | string;
+  designators: string[] | null;
+  quantity: string | null;
+  raw_mpn: string | null;
+  raw_manufacturer: string | null;
+  raw_description: string | null;
+  match_status: string;
+  match_confidence_score: string | null;
+  matched_part_id: string | null;
+  matched_part_mpn: string | null;
+  matched_manufacturer_name: string | null;
+}
+
+interface DatabaseRevisionCompareRow {
+  raw_mpn: string | null;
+  raw_manufacturer: string | null;
+  raw_description: string | null;
+  quantity: string | null;
+  designators: string[] | null;
+  match_status: string;
+  matched_part_id: string | null;
+  in_import1: boolean;
+  in_import2: boolean;
+  qty_changed: boolean;
+  match_changed: boolean;
+}
+
+/**
+ * Reads diagnostics for one BOM import: match counts and per-row triage context.
+ */
+export async function readBomImportDiagnosticsFromDatabase(importId: string): Promise<BomImportDiagnosticsReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const importCheck = await databasePool.query<{ id: string; project_id: string }>(
+      "SELECT id, project_id FROM bom_imports WHERE id = $1",
+      [importId]
+    );
+
+    if (importCheck.rowCount === 0) {
+      return { status: "not_found" };
+    }
+
+    const projectId = importCheck.rows[0]!.project_id;
+
+    const rows = await databasePool.query<DatabaseDiagnosticsRow>(
+      `SELECT bl.id AS line_id, bl.row_number, bl.designators, bl.quantity,
+              bl.raw_mpn, bl.raw_manufacturer, bl.raw_description,
+              bl.match_status, bl.match_confidence_score, bl.matched_part_id,
+              p.mpn AS matched_part_mpn, m.name AS matched_manufacturer_name
+         FROM bom_lines bl
+         LEFT JOIN parts p ON p.id = bl.matched_part_id
+         LEFT JOIN manufacturers m ON m.id = p.manufacturer_id
+         WHERE bl.bom_import_id = $1
+         ORDER BY bl.row_number`,
+      [importId]
+    );
+
+    const diagnosticRows: BomImportDiagnosticsRow[] = await Promise.all(
+      rows.rows.map(async (row) => {
+        const matchStatus = row.match_status as BomLineMatchStatus;
+        const triageActions = buildTriageActions(matchStatus, row.raw_mpn);
+        const approvedSubstituteHints = matchStatus !== "matched" && matchStatus !== "ignored" && row.raw_mpn
+          ? await readApprovedSubstituteHintsForRawMpn(databasePool, row.raw_mpn, projectId)
+          : [];
+        if (approvedSubstituteHints.length > 0) {
+          for (const hint of approvedSubstituteHints) {
+            triageActions.push(`Approved substitute available: ${hint.candidatePartMpn} (${hint.candidateManufacturerName}, scope=${hint.scope})`);
+          }
+        }
+
+        return {
+          approvedSubstituteHints,
+          designators: toStringArray(row.designators),
+          lineId: row.line_id,
+          matchConfidenceScore: toNullableNumber(row.match_confidence_score),
+          matchStatus,
+          matchedManufacturerName: row.matched_manufacturer_name,
+          matchedPartId: row.matched_part_id,
+          matchedPartMpn: row.matched_part_mpn,
+          quantity: toNullableNumber(row.quantity),
+          rawDescription: row.raw_description,
+          rawManufacturer: row.raw_manufacturer,
+          rawMpn: row.raw_mpn,
+          rowNumber: toNumber(row.row_number),
+          triageActions
+        };
+      })
+    );
+
+    const counts = {
+      ambiguousCount: diagnosticRows.filter((r) => r.matchStatus === "ambiguous").length,
+      ignoredCount: diagnosticRows.filter((r) => r.matchStatus === "ignored").length,
+      matchedCount: diagnosticRows.filter((r) => r.matchStatus === "matched").length,
+      unmatchedCount: diagnosticRows.filter((r) => r.matchStatus === "unmatched").length,
+      weakMatchCount: diagnosticRows.filter((r) => r.matchStatus === "weak_match").length
+    };
+
+    return {
+      status: "available",
+      response: {
+        importId,
+        projectId,
+        rows: diagnosticRows,
+        ...counts
+      }
+    };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "BOM import diagnostics read failed.", error);
+  }
+}
+
+/**
+ * Compares two BOM imports row-by-row, keyed by normalized MPN.
+ */
+export async function readBomRevisionCompareFromDatabase(projectId: string, importId1: string, importId2: string): Promise<BomRevisionCompareReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  if (importId1 === importId2) {
+    return { status: "invalid", code: "IDENTICAL_IMPORTS", message: "Revision compare requires two different BOM import ids." };
+  }
+
+  try {
+    const importCheck = await databasePool.query<{ id: string; project_id: string }>(
+      "SELECT id, project_id FROM bom_imports WHERE id = ANY($1::text[]) AND project_id = $2",
+      [[importId1, importId2], projectId]
+    );
+
+    if ((importCheck.rowCount ?? 0) === 0) {
+      return { status: "not_found" };
+    }
+
+    if ((importCheck.rowCount ?? 0) < 2) {
+      return { status: "invalid", code: "IMPORT_NOT_IN_PROJECT", message: "Both BOM import ids must belong to the specified project." };
+    }
+
+    const rows = await databasePool.query<DatabaseRevisionCompareRow>(
+      `WITH
+         i1 AS (
+           SELECT COALESCE(LOWER(TRIM(raw_mpn)), '#row-' || row_number::text) AS key,
+                  raw_mpn, raw_manufacturer, raw_description, quantity, designators,
+                  match_status, matched_part_id
+             FROM bom_lines WHERE bom_import_id = $2
+         ),
+         i2 AS (
+           SELECT COALESCE(LOWER(TRIM(raw_mpn)), '#row-' || row_number::text) AS key,
+                  raw_mpn, raw_manufacturer, raw_description, quantity, designators,
+                  match_status, matched_part_id
+             FROM bom_lines WHERE bom_import_id = $3
+         )
+       SELECT
+         COALESCE(i1.raw_mpn, i2.raw_mpn) AS raw_mpn,
+         COALESCE(i1.raw_manufacturer, i2.raw_manufacturer) AS raw_manufacturer,
+         COALESCE(i1.raw_description, i2.raw_description) AS raw_description,
+         COALESCE(i2.quantity, i1.quantity) AS quantity,
+         COALESCE(i2.designators, i1.designators) AS designators,
+         COALESCE(i2.match_status, i1.match_status) AS match_status,
+         COALESCE(i2.matched_part_id, i1.matched_part_id) AS matched_part_id,
+         (i1.key IS NOT NULL) AS in_import1,
+         (i2.key IS NOT NULL) AS in_import2,
+         (i1.quantity IS DISTINCT FROM i2.quantity) AS qty_changed,
+         (i1.match_status IS DISTINCT FROM i2.match_status) AS match_changed
+       FROM i1 FULL OUTER JOIN i2 ON i1.key = i2.key
+       ORDER BY raw_mpn NULLS LAST`,
+      [projectId, importId1, importId2]
+    );
+
+    const compareRows: BomRevisionCompareRow[] = rows.rows.map((row) => {
+      let kind: BomRevisionCompareRow["kind"];
+      let changeDetail: string | null = null;
+
+      if (row.in_import1 && !row.in_import2) {
+        kind = "removed";
+      } else if (!row.in_import1 && row.in_import2) {
+        kind = "added";
+      } else if (row.qty_changed || row.match_changed) {
+        kind = "changed";
+        const details: string[] = [];
+        if (row.qty_changed) details.push("quantity changed");
+        if (row.match_changed) details.push("match status changed");
+        changeDetail = details.join(", ");
+      } else {
+        kind = "unchanged";
+      }
+
+      return {
+        changeDetail,
+        designators: toStringArray(row.designators),
+        kind,
+        matchStatus: row.match_status as BomLineMatchStatus,
+        matchedPartId: row.matched_part_id,
+        quantity: toNullableNumber(row.quantity),
+        rawDescription: row.raw_description,
+        rawManufacturer: row.raw_manufacturer,
+        rawMpn: row.raw_mpn
+      };
+    });
+
+    const addedCount = compareRows.filter((r) => r.kind === "added").length;
+    const removedCount = compareRows.filter((r) => r.kind === "removed").length;
+    const changedCount = compareRows.filter((r) => r.kind === "changed").length;
+    const unchangedCount = compareRows.filter((r) => r.kind === "unchanged").length;
+
+    return {
+      status: "available",
+      response: { addedCount, changedCount, importId1, importId2, projectId, removedCount, rows: compareRows, unchangedCount }
+    };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "BOM revision compare read failed.", error);
+  }
+}
+
+/** AggregatedRevisionLineRow is the union of BOM lines across all imports in one revision. */
+interface AggregatedRevisionLineRow {
+  bom_import_id: string;
+  matched_part_id: string | null;
+  matched_part_mpn: string | null;
+  raw_mpn: string | null;
+  raw_manufacturer: string | null;
+  raw_description: string | null;
+  quantity: string | number | null;
+  designators: string[] | null;
+  match_status: string;
+  row_number: number;
+}
+
+/** AggregatedRevisionLine is the per-identity collapsed view used to diff two revisions. */
+interface AggregatedRevisionLine {
+  identityKey: string;
+  identityKind: ProjectRevisionCompareIdentityKind;
+  matchedPartId: string | null;
+  matchedPartMpn: string | null;
+  rawMpns: Set<string>;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  totalQuantity: number | null;
+  designators: string[];
+  matchStatus: BomLineMatchStatus | null;
+  bomImportIds: Set<string>;
+}
+
+/**
+ * Compares the BOM contents of two project revisions, grouping changes into added/removed/quantity/designator/MPN-swap.
+ */
+export async function readProjectRevisionCompareFromDatabase(
+  projectId: string,
+  fromRevisionId: string,
+  toRevisionId: string
+): Promise<ProjectRevisionCompareReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  if (fromRevisionId === toRevisionId) {
+    return {
+      status: "invalid",
+      code: "IDENTICAL_REVISIONS",
+      message: "Revision compare requires two different revision ids."
+    };
+  }
+
+  try {
+    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+
+    if ((projectCheck.rowCount ?? 0) === 0) {
+      return { status: "not_found", code: "PROJECT_NOT_FOUND", message: "Project was not found." };
+    }
+
+    const revisionCheck = await databasePool.query<{ id: string; project_id: string }>(
+      "SELECT id, project_id FROM project_revisions WHERE project_id = $1 AND id IN ($2, $3)",
+      [projectId, fromRevisionId, toRevisionId]
+    );
+
+    const foundIds = new Set(revisionCheck.rows.map((row) => row.id));
+    if (!foundIds.has(fromRevisionId) || !foundIds.has(toRevisionId)) {
+      return {
+        status: "not_found",
+        code: "REVISIONS_NOT_FOUND",
+        message: "Both revision ids must exist on the specified project."
+      };
+    }
+
+    const [fromLines, toLines] = await Promise.all([
+      readAggregatedRevisionLines(databasePool, fromRevisionId),
+      readAggregatedRevisionLines(databasePool, toRevisionId)
+    ]);
+
+    const rows = diffAggregatedRevisionLines(fromLines, toLines);
+
+    return {
+      status: "available",
+      response: {
+        addedCount: rows.filter((row) => row.changeKind === "added").length,
+        designatorChangedCount: rows.filter((row) => row.changeKind === "designator_changed").length,
+        fromBomImportIds: collectBomImportIds(fromLines),
+        fromRevisionId,
+        mpnSwapCount: rows.filter((row) => row.changeKind === "mpn_swap").length,
+        projectId,
+        quantityChangedCount: rows.filter((row) => row.changeKind === "quantity_changed").length,
+        removedCount: rows.filter((row) => row.changeKind === "removed").length,
+        rows,
+        toBomImportIds: collectBomImportIds(toLines),
+        toRevisionId,
+        unchangedCount: rows.filter((row) => row.changeKind === "unchanged").length
+      }
+    };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Project revision compare read failed.", error);
+  }
+}
+
+/**
+ * Reads BOM lines for one revision and aggregates them by part identity (matched_part_id else normalized raw_mpn).
+ */
+async function readAggregatedRevisionLines(
+  databasePool: Pool | PoolClient,
+  revisionId: string
+): Promise<Map<string, AggregatedRevisionLine>> {
+  const result = await databasePool.query<AggregatedRevisionLineRow>(
+    `SELECT bl.bom_import_id, bl.matched_part_id, p.mpn AS matched_part_mpn,
+            bl.raw_mpn, bl.raw_manufacturer, bl.raw_description,
+            bl.quantity, bl.designators, bl.match_status, bl.row_number
+       FROM bom_lines bl
+       LEFT JOIN parts p ON p.id = bl.matched_part_id
+       WHERE bl.project_revision_id = $1
+       ORDER BY bl.bom_import_id, bl.row_number`,
+    [revisionId]
+  );
+
+  const aggregated = new Map<string, AggregatedRevisionLine>();
+
+  for (const row of result.rows) {
+    const identity = deriveRevisionLineIdentity(row);
+    const existing = aggregated.get(identity.key);
+    const quantity = toNullableNumber(row.quantity ?? null);
+
+    if (!existing) {
+      aggregated.set(identity.key, {
+        bomImportIds: new Set([row.bom_import_id]),
+        designators: toStringArray(row.designators),
+        identityKey: identity.key,
+        identityKind: identity.kind,
+        matchStatus: row.match_status as BomLineMatchStatus,
+        matchedPartId: row.matched_part_id,
+        matchedPartMpn: row.matched_part_mpn,
+        rawDescription: row.raw_description,
+        rawManufacturer: row.raw_manufacturer,
+        rawMpns: row.raw_mpn ? new Set([row.raw_mpn]) : new Set(),
+        totalQuantity: quantity
+      });
+      continue;
+    }
+
+    existing.bomImportIds.add(row.bom_import_id);
+    existing.designators = mergeDesignatorLists(existing.designators, toStringArray(row.designators));
+    if (quantity !== null) {
+      existing.totalQuantity = (existing.totalQuantity ?? 0) + quantity;
+    }
+    if (row.raw_mpn) existing.rawMpns.add(row.raw_mpn);
+    existing.rawManufacturer ??= row.raw_manufacturer;
+    existing.rawDescription ??= row.raw_description;
+    if (existing.matchStatus !== "matched" && row.match_status === "matched") {
+      existing.matchStatus = "matched";
+      existing.matchedPartId ??= row.matched_part_id;
+      existing.matchedPartMpn ??= row.matched_part_mpn;
+    }
+  }
+
+  return aggregated;
+}
+
+/**
+ * Picks an identity key for a BOM line: matched_part_id when present, else normalized raw_mpn, else row-scoped key.
+ */
+function deriveRevisionLineIdentity(row: AggregatedRevisionLineRow): {
+  key: string;
+  kind: ProjectRevisionCompareIdentityKind;
+} {
+  if (row.matched_part_id) {
+    return { key: `part:${row.matched_part_id}`, kind: "matched_part" };
+  }
+
+  const normalizedMpn = row.raw_mpn?.trim().toLowerCase();
+  if (normalizedMpn) {
+    return { key: `mpn:${normalizedMpn}`, kind: "raw_mpn" };
+  }
+
+  return { key: `row:${row.bom_import_id}:${row.row_number}`, kind: "raw_row" };
+}
+
+/**
+ * Merges two designator lists while preserving deterministic order and dropping duplicates.
+ */
+function mergeDesignatorLists(left: string[], right: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const value of [...left, ...right]) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      merged.push(value);
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Diffs two aggregated revision line maps into compare rows with explicit change groupings.
+ */
+function diffAggregatedRevisionLines(
+  fromLines: Map<string, AggregatedRevisionLine>,
+  toLines: Map<string, AggregatedRevisionLine>
+): ProjectRevisionCompareRow[] {
+  const rows: ProjectRevisionCompareRow[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [key, fromLine] of fromLines) {
+    seenKeys.add(key);
+    const toLine = toLines.get(key);
+
+    if (!toLine) {
+      rows.push(buildCompareRow("removed", fromLine, null, null));
+      continue;
+    }
+
+    rows.push(buildChangedOrUnchangedRow(fromLine, toLine));
+  }
+
+  for (const [key, toLine] of toLines) {
+    if (seenKeys.has(key)) continue;
+    rows.push(buildCompareRow("added", null, toLine, null));
+  }
+
+  return rows.sort(compareRowSortKey);
+}
+
+/**
+ * Decides whether a row is an MPN swap, quantity/designator change, or unchanged.
+ */
+function buildChangedOrUnchangedRow(
+  fromLine: AggregatedRevisionLine,
+  toLine: AggregatedRevisionLine
+): ProjectRevisionCompareRow {
+  const quantityChanged = (fromLine.totalQuantity ?? null) !== (toLine.totalQuantity ?? null);
+  const designatorChanged = !designatorListsMatch(fromLine.designators, toLine.designators);
+  const mpnSwap =
+    fromLine.identityKind === "matched_part" &&
+    toLine.identityKind === "matched_part" &&
+    !rawMpnSetsMatch(fromLine.rawMpns, toLine.rawMpns);
+
+  if (mpnSwap) {
+    const fromList = Array.from(fromLine.rawMpns).join(", ") || "(no raw MPN)";
+    const toList = Array.from(toLine.rawMpns).join(", ") || "(no raw MPN)";
+    return buildCompareRow("mpn_swap", fromLine, toLine, `Raw MPN swapped: ${fromList} -> ${toList}`);
+  }
+
+  if (quantityChanged && designatorChanged) {
+    return buildCompareRow(
+      "quantity_changed",
+      fromLine,
+      toLine,
+      `Quantity ${formatQuantity(fromLine.totalQuantity)} -> ${formatQuantity(toLine.totalQuantity)}; designators changed`
+    );
+  }
+
+  if (quantityChanged) {
+    return buildCompareRow(
+      "quantity_changed",
+      fromLine,
+      toLine,
+      `Quantity ${formatQuantity(fromLine.totalQuantity)} -> ${formatQuantity(toLine.totalQuantity)}`
+    );
+  }
+
+  if (designatorChanged) {
+    return buildCompareRow(
+      "designator_changed",
+      fromLine,
+      toLine,
+      `Designators ${formatDesignators(fromLine.designators)} -> ${formatDesignators(toLine.designators)}`
+    );
+  }
+
+  return buildCompareRow("unchanged", fromLine, toLine, null);
+}
+
+/**
+ * Builds one compare row from optional from/to aggregated lines.
+ */
+function buildCompareRow(
+  changeKind: ProjectRevisionCompareChangeKind,
+  fromLine: AggregatedRevisionLine | null,
+  toLine: AggregatedRevisionLine | null,
+  changeDetail: string | null
+): ProjectRevisionCompareRow {
+  const reference = (toLine ?? fromLine)!;
+
+  return {
+    changeDetail,
+    changeKind,
+    from: fromLine ? toCompareSide(fromLine) : null,
+    identityKey: reference.identityKey,
+    identityKind: reference.identityKind,
+    matchedPartId: reference.matchedPartId,
+    rawMpn: pickRawMpnLabel(toLine, fromLine),
+    to: toLine ? toCompareSide(toLine) : null
+  };
+}
+
+/**
+ * Projects the aggregated line into the side payload returned by the API.
+ */
+function toCompareSide(line: AggregatedRevisionLine): ProjectRevisionCompareSide {
+  return {
+    designators: line.designators,
+    matchStatus: line.matchStatus,
+    matchedPartId: line.matchedPartId,
+    matchedPartMpn: line.matchedPartMpn,
+    quantity: line.totalQuantity,
+    rawDescription: line.rawDescription,
+    rawManufacturer: line.rawManufacturer,
+    rawMpn: pickRawMpnLabel(line, null)
+  };
+}
+
+/**
+ * Picks the most specific raw MPN label for a row, preferring the to-side, then from-side.
+ */
+function pickRawMpnLabel(primary: AggregatedRevisionLine | null, secondary: AggregatedRevisionLine | null): string | null {
+  for (const candidate of [primary, secondary]) {
+    if (!candidate) continue;
+    const first = candidate.rawMpns.values().next();
+    if (!first.done) return first.value;
+  }
+  return null;
+}
+
+/**
+ * Returns true when two normalized designator sets match exactly.
+ */
+function designatorListsMatch(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+/**
+ * Returns true when two raw-MPN sets contain the same case-insensitive entries.
+ */
+function rawMpnSetsMatch(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false;
+  const normalize = (value: string) => value.trim().toLowerCase();
+  const leftNormalized = new Set(Array.from(left, normalize));
+  for (const value of right) {
+    if (!leftNormalized.has(normalize(value))) return false;
+  }
+  return true;
+}
+
+/**
+ * Formats a quantity value or "?" when unknown.
+ */
+function formatQuantity(quantity: number | null): string {
+  return quantity === null ? "?" : String(quantity);
+}
+
+/**
+ * Formats a designator list compactly for the change detail string.
+ */
+function formatDesignators(designators: string[]): string {
+  return designators.length === 0 ? "(none)" : designators.join(", ");
+}
+
+/**
+ * Returns a deterministic sort key so the API output stays stable across runs.
+ */
+function compareRowSortKey(left: ProjectRevisionCompareRow, right: ProjectRevisionCompareRow): number {
+  const order: Record<ProjectRevisionCompareChangeKind, number> = {
+    added: 0,
+    removed: 1,
+    mpn_swap: 2,
+    quantity_changed: 3,
+    designator_changed: 4,
+    unchanged: 5
+  };
+  if (order[left.changeKind] !== order[right.changeKind]) {
+    return order[left.changeKind] - order[right.changeKind];
+  }
+  const leftLabel = left.rawMpn ?? left.identityKey;
+  const rightLabel = right.rawMpn ?? right.identityKey;
+  return leftLabel.localeCompare(rightLabel);
+}
+
+/**
+ * Collects the unique BOM import ids that contributed to one side of the compare.
+ */
+function collectBomImportIds(lines: Map<string, AggregatedRevisionLine>): string[] {
+  const ids = new Set<string>();
+  for (const line of lines.values()) {
+    for (const id of line.bomImportIds) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids).sort();
+}
+
+/**
+ * Reads projects that have confirmed usages overlapping with a circuit block's part roles.
+ */
+export async function readCircuitBlockProjectDependenciesFromDatabase(blockId: string): Promise<CircuitBlockProjectDependenciesReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const blockCheck = await databasePool.query<{ id: string }>("SELECT id FROM circuit_blocks WHERE id = $1", [blockId]);
+
+    if ((blockCheck.rowCount ?? 0) === 0) {
+      return { status: "not_found" };
+    }
+
+    const rows = await databasePool.query<DatabaseCircuitBlockProjectDependencyRow>(
+      `
+        SELECT
+          p.id AS project_id,
+          p.project_key,
+          p.name AS project_name,
+          p.status AS project_status,
+          p.created_at AS project_created_at,
+          p.updated_at AS project_updated_at,
+          COUNT(DISTINCT ppu.part_id)::text AS matched_part_count,
+          (SELECT COUNT(*)::text FROM circuit_block_parts WHERE circuit_block_id = $1) AS total_block_part_count
+        FROM circuit_block_parts cbp
+        JOIN project_part_usages ppu ON ppu.part_id = cbp.part_id
+        JOIN projects p ON p.id = ppu.project_id
+        WHERE cbp.circuit_block_id = $1
+        GROUP BY p.id, p.project_key, p.name, p.status, p.created_at, p.updated_at
+        ORDER BY COUNT(DISTINCT ppu.part_id) DESC, p.project_key ASC
+      `,
+      [blockId]
+    );
+
+    const dependencies: CircuitBlockProjectDependency[] = rows.rows.map((row) => ({
+      matchedPartCount: toNumber(row.matched_part_count),
+      project: {
+        createdAt: toIsoTimestamp(row.project_created_at),
+        description: "",
+        id: row.project_id,
+        name: row.project_name,
+        owner: null,
+        projectKey: row.project_key,
+        status: row.project_status as Project["status"],
+        updatedAt: toIsoTimestamp(row.project_updated_at)
+      },
+      totalBlockPartCount: toNumber(row.total_block_part_count)
+    }));
+
+    return { dependencies, status: "available" };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Circuit block project dependencies read failed.", error);
+  }
+}
+
+/** DatabaseAssetExportRow is one asset-in-bundle row from a JSONB manifest query. */
+interface DatabaseAssetExportRow {
+  bundle_id: string;
+  bundle_format: string;
+  bundle_created_at: Date | string;
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  asset_id: string;
+  asset_type: string;
+  part_mpn: string;
+  manufacturer_name: string;
+  file_format: string | null;
+}
+
+/**
+ * Finds export bundles that included assets for parts matching the query.
+ */
+async function readWhereUsedAssetExports(databasePool: Pool, parts: CircuitBlockPartCatalogSummary[]): Promise<WhereUsedAssetExportRecord[]> {
+  if (parts.length === 0) {
+    return [];
+  }
+
+  const mpns = parts.map((p) => p.mpn);
+
+  const result = await databasePool.query<DatabaseAssetExportRow>(
+    `
+      SELECT
+        eb.id AS bundle_id,
+        eb.bundle_format,
+        eb.created_at AS bundle_created_at,
+        eb.project_id,
+        proj.project_key,
+        proj.name AS project_name,
+        asset_item->>'assetId' AS asset_id,
+        asset_item->>'assetType' AS asset_type,
+        asset_item->>'partMpn' AS part_mpn,
+        asset_item->>'manufacturerName' AS manufacturer_name,
+        asset_item->>'fileFormat' AS file_format
+      FROM export_bundles eb
+      JOIN projects proj ON proj.id = eb.project_id,
+      LATERAL jsonb_array_elements(eb.manifest->'includedAssets') AS asset_item
+      WHERE asset_item->>'partMpn' = ANY($1::text[])
+      ORDER BY eb.created_at DESC
+      LIMIT 50
+    `,
+    [mpns]
+  );
+
+  return result.rows.map((row) => ({
+    assetId: row.asset_id,
+    assetType: row.asset_type,
+    bundleCreatedAt: toIsoTimestamp(row.bundle_created_at),
+    bundleFormat: row.bundle_format as WhereUsedAssetExportRecord["bundleFormat"],
+    bundleId: row.bundle_id,
+    fileFormat: row.file_format,
+    manufacturerName: row.manufacturer_name,
+    partMpn: row.part_mpn,
+    projectId: row.project_id,
+    projectKey: row.project_key,
+    projectName: row.project_name
+  }));
+}
+
+/**
+ * Finds connector parts and their mates for the global where-used connector-set search.
+ */
+async function readWhereUsedConnectorMatches(databasePool: Pool, query: string): Promise<CircuitBlockPartCatalogSummary[]> {
+  const connectors = await databasePool.query<DatabaseWhereUsedPartSummaryRow>(
+    `
+      SELECT
+        p.id AS part_id,
+        p.mpn,
+        m.name AS manufacturer_name,
+        p.lifecycle_status,
+        pa.approval_status,
+        prs.readiness_status,
+        prs.connector_class,
+        prs.blocker_count
+      FROM parts p
+      JOIN manufacturers m ON m.id = p.manufacturer_id
+      LEFT JOIN part_approvals pa ON pa.part_id = p.id
+      LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
+      WHERE prs.connector_class IS NOT NULL
+        AND (LOWER(p.id) = LOWER($1) OR LOWER(p.mpn) = LOWER($1) OR LOWER(p.mpn) LIKE '%' || LOWER($1) || '%')
+      ORDER BY
+        CASE WHEN LOWER(p.mpn) = LOWER($1) THEN 0 ELSE 1 END,
+        p.mpn ASC
+      LIMIT 12
+    `,
+    [query]
+  );
+
+  const matchedConnectors = connectors.rows.map(mapWhereUsedPartSummaryRow);
+
+  if (matchedConnectors.length === 0) {
+    return [];
+  }
+
+  const connectorPartIds = matchedConnectors.map((c) => c.partId);
+
+  const mates = await databasePool.query<DatabaseWhereUsedPartSummaryRow>(
+    `
+      SELECT DISTINCT
+        p.id AS part_id,
+        p.mpn,
+        m.name AS manufacturer_name,
+        p.lifecycle_status,
+        pa.approval_status,
+        prs.readiness_status,
+        prs.connector_class,
+        prs.blocker_count
+      FROM mate_relations mr
+      JOIN parts p ON p.id = mr.mate_part_id
+      JOIN manufacturers m ON m.id = p.manufacturer_id
+      LEFT JOIN part_approvals pa ON pa.part_id = p.id
+      LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
+      WHERE mr.part_id = ANY($1::text[])
+        AND mr.relationship_type IN ('best_mate', 'alternate_mate')
+      ORDER BY p.mpn ASC
+      LIMIT 24
+    `,
+    [connectorPartIds]
+  );
+
+  const mateIds = new Set(matchedConnectors.map((c) => c.partId));
+  const dedupedMates = mates.rows.map(mapWhereUsedPartSummaryRow).filter((m) => !mateIds.has(m.partId));
+
+  return [...matchedConnectors, ...dedupedMates];
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC13: Part substitution management
+// ---------------------------------------------------------------------------
+
+/** SUBSTITUTION_BOUNDARY_COPY is the trust boundary surfaced wherever substitutions appear. */
+const SUBSTITUTION_BOUNDARY_COPY =
+  "Approved substitutions are decision records signed off by an engineer. They do not change part approval, validation, lifecycle, or export readiness.";
+
+/** DatabasePartSubstitutionRow is one persisted substitution record joined with both catalog identities. */
+interface DatabasePartSubstitutionRow {
+  id: string;
+  original_part_id: string;
+  substitute_part_id: string;
+  scope: PartSubstitutionScope;
+  project_id: string | null;
+  signoff_notes: string;
+  approved_by: string;
+  approval_status: PartSubstitutionStatus;
+  created_at: Date | string;
+  revoked_at: Date | string | null;
+  revoked_by: string | null;
+  original_part_mpn: string;
+  original_manufacturer_name: string;
+  substitute_part_mpn: string;
+  substitute_manufacturer_name: string;
+  project_name: string | null;
+}
+
+/**
+ * Persists one engineering-signed-off substitution after validating both parts and (when scoped) the project.
+ */
+export async function createPartSubstitutionInDatabase(
+  originalPartId: string,
+  input: PartSubstitutionCreateInput,
+  approvedBy: string
+): Promise<PartSubstitutionCreateResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const validation = validatePartSubstitutionInput(originalPartId, input);
+  if (validation) {
+    return validation;
+  }
+
+  const scope: PartSubstitutionScope = input.scope;
+  const projectId = scope === "project" ? input.projectId ?? null : null;
+  const signoffNotes = (input.signoffNotes ?? "").trim();
+
+  try {
+    const partsCheck = await databasePool.query<{ id: string }>(
+      "SELECT id FROM parts WHERE id IN ($1, $2)",
+      [originalPartId, input.substitutePartId]
+    );
+    const foundIds = new Set(partsCheck.rows.map((row) => row.id));
+    if (!foundIds.has(originalPartId)) {
+      return { status: "not_found", code: "ORIGINAL_PART_NOT_FOUND", message: "The original part does not exist." };
+    }
+    if (!foundIds.has(input.substitutePartId)) {
+      return { status: "not_found", code: "SUBSTITUTE_PART_NOT_FOUND", message: "The substitute part does not exist." };
+    }
+
+    if (projectId !== null) {
+      const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+      if (projectCheck.rowCount === 0) {
+        return { status: "not_found", code: "PROJECT_NOT_FOUND", message: "Scoped project not found." };
+      }
+    }
+
+    const duplicateCheck = await databasePool.query<{ id: string }>(
+      `SELECT id FROM part_substitutions
+         WHERE approval_status = 'approved'
+           AND original_part_id = $1
+           AND substitute_part_id = $2
+           AND COALESCE(project_id, '') = COALESCE($3, '')`,
+      [originalPartId, input.substitutePartId, projectId]
+    );
+    if ((duplicateCheck.rowCount ?? 0) > 0) {
+      return {
+        status: "conflict",
+        message: "An approved substitution already exists for this original/substitute/scope combination."
+      };
+    }
+
+    const id = `psub-${randomUUID()}`;
+    const now = new Date();
+    await databasePool.query(
+      `INSERT INTO part_substitutions
+         (id, original_part_id, substitute_part_id, scope, project_id, signoff_notes, approved_by, approval_status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', $8)`,
+      [id, originalPartId, input.substitutePartId, scope, projectId, signoffNotes, approvedBy, now]
+    );
+
+    const summary = await readOnePartSubstitutionSummary(databasePool, id);
+    if (!summary) {
+      throw new CatalogStoreError("query_failed", "Substitution insert returned no row.", new Error("missing_substitution_row"));
+    }
+
+    return {
+      status: "created",
+      response: {
+        boundary: SUBSTITUTION_BOUNDARY_COPY,
+        substitution: summary
+      }
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads every active and revoked substitution that touches one part as either side.
+ */
+export async function readPartSubstitutionsForPartFromDatabase(partId: string): Promise<PartSubstitutionListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    if (partCheck.rowCount === 0) {
+      return { status: "not_found" };
+    }
+
+    const result = await databasePool.query<DatabasePartSubstitutionRow>(
+      `${PART_SUBSTITUTION_SELECT_SQL}
+         WHERE ps.original_part_id = $1 OR ps.substitute_part_id = $1
+         ORDER BY ps.approval_status ASC, ps.created_at DESC`,
+      [partId]
+    );
+    const summaries = result.rows.map(mapPartSubstitutionSummary);
+
+    return {
+      status: "available",
+      response: {
+        active: summaries.filter((entry) => entry.substitution.approvalStatus === "approved"),
+        boundary: SUBSTITUTION_BOUNDARY_COPY,
+        partId,
+        revoked: summaries.filter((entry) => entry.substitution.approvalStatus === "revoked")
+      }
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Marks one previously-approved substitution as revoked while preserving the audit trail.
+ */
+export async function revokePartSubstitutionInDatabase(
+  substitutionId: string,
+  revokedBy: string
+): Promise<PartSubstitutionRevokeResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const existing = await databasePool.query<{ id: string; approval_status: PartSubstitutionStatus }>(
+      "SELECT id, approval_status FROM part_substitutions WHERE id = $1",
+      [substitutionId]
+    );
+    if (existing.rowCount === 0) {
+      return { status: "not_found" };
+    }
+    if (existing.rows[0]!.approval_status === "revoked") {
+      return {
+        status: "invalid",
+        code: "ALREADY_REVOKED",
+        message: "This substitution has already been revoked."
+      };
+    }
+
+    const now = new Date();
+    await databasePool.query(
+      "UPDATE part_substitutions SET approval_status = 'revoked', revoked_at = $2, revoked_by = $3 WHERE id = $1",
+      [substitutionId, now, revokedBy]
+    );
+
+    const summary = await readOnePartSubstitutionSummary(databasePool, substitutionId);
+    if (!summary) {
+      throw new CatalogStoreError("query_failed", "Substitution revoke returned no row.", new Error("missing_substitution_row"));
+    }
+
+    return {
+      status: "revoked",
+      response: {
+        boundary: SUBSTITUTION_BOUNDARY_COPY,
+        substitution: summary
+      }
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Validates incoming substitution input against the obvious self/scope/projectId rules.
+ */
+function validatePartSubstitutionInput(
+  originalPartId: string,
+  input: PartSubstitutionCreateInput
+): { status: "invalid"; code: string; message: string } | null {
+  if (!originalPartId || originalPartId.trim() === "") {
+    return { status: "invalid", code: "ORIGINAL_PART_ID_REQUIRED", message: "Original part id is required." };
+  }
+  if (!input.substitutePartId || input.substitutePartId.trim() === "") {
+    return { status: "invalid", code: "SUBSTITUTE_PART_ID_REQUIRED", message: "Substitute part id is required." };
+  }
+  if (input.substitutePartId === originalPartId) {
+    return { status: "invalid", code: "SELF_SUBSTITUTION", message: "A part cannot be its own substitute." };
+  }
+  if (input.scope !== "global" && input.scope !== "project") {
+    return { status: "invalid", code: "INVALID_SCOPE", message: "scope must be 'global' or 'project'." };
+  }
+  if (input.scope === "project" && (!input.projectId || input.projectId.trim() === "")) {
+    return {
+      status: "invalid",
+      code: "PROJECT_ID_REQUIRED",
+      message: "projectId is required for project-scoped substitutions."
+    };
+  }
+  if (input.scope === "global" && input.projectId) {
+    return {
+      status: "invalid",
+      code: "PROJECT_ID_NOT_ALLOWED",
+      message: "projectId must be omitted for global substitutions."
+    };
+  }
+  return null;
+}
+
+/**
+ * Reads one substitution row joined with catalog identity for both sides.
+ */
+async function readOnePartSubstitutionSummary(
+  databasePool: Pool | PoolClient,
+  substitutionId: string
+): Promise<PartSubstitutionSummary | null> {
+  const result = await databasePool.query<DatabasePartSubstitutionRow>(
+    `${PART_SUBSTITUTION_SELECT_SQL} WHERE ps.id = $1`,
+    [substitutionId]
+  );
+  return result.rows[0] ? mapPartSubstitutionSummary(result.rows[0]) : null;
+}
+
+/** PART_SUBSTITUTION_SELECT_SQL is the shared join used wherever substitutions are read. */
+const PART_SUBSTITUTION_SELECT_SQL = `
+  SELECT
+    ps.id, ps.original_part_id, ps.substitute_part_id, ps.scope, ps.project_id,
+    ps.signoff_notes, ps.approved_by, ps.approval_status, ps.created_at, ps.revoked_at, ps.revoked_by,
+    op.mpn AS original_part_mpn, om.name AS original_manufacturer_name,
+    sp.mpn AS substitute_part_mpn, sm.name AS substitute_manufacturer_name,
+    pr.name AS project_name
+  FROM part_substitutions ps
+  JOIN parts op ON op.id = ps.original_part_id
+  JOIN manufacturers om ON om.id = op.manufacturer_id
+  JOIN parts sp ON sp.id = ps.substitute_part_id
+  JOIN manufacturers sm ON sm.id = sp.manufacturer_id
+  LEFT JOIN projects pr ON pr.id = ps.project_id
+`;
+
+/**
+ * Maps a database substitution row into the shared summary type.
+ */
+function mapPartSubstitutionSummary(row: DatabasePartSubstitutionRow): PartSubstitutionSummary {
+  const substitution: PartSubstitution = {
+    approvalStatus: row.approval_status,
+    approvedBy: row.approved_by,
+    createdAt: toIsoTimestamp(row.created_at),
+    id: row.id,
+    originalPartId: row.original_part_id,
+    projectId: row.project_id,
+    revokedAt: row.revoked_at ? toIsoTimestamp(row.revoked_at) : null,
+    revokedBy: row.revoked_by,
+    scope: row.scope,
+    signoffNotes: row.signoff_notes,
+    substitutePartId: row.substitute_part_id
+  };
+  return {
+    originalManufacturerName: row.original_manufacturer_name,
+    originalPartMpn: row.original_part_mpn,
+    projectName: row.project_name,
+    substituteManufacturerName: row.substitute_manufacturer_name,
+    substitutePartMpn: row.substitute_part_mpn,
+    substitution
+  };
+}
+
+/**
+ * Looks up approved substitutions whose either side matches a raw BOM MPN, scoped to a project + global.
+ */
+async function readApprovedSubstituteHintsForRawMpn(
+  databasePool: Pool | PoolClient,
+  rawMpn: string,
+  projectId: string
+): Promise<ApprovedSubstituteHint[]> {
+  const normalized = rawMpn.trim();
+  if (!normalized) {
+    return [];
+  }
+  const result = await databasePool.query<{
+    id: string;
+    scope: PartSubstitutionScope;
+    approved_by: string;
+    signoff_notes: string;
+    candidate_part_id: string;
+    candidate_part_mpn: string;
+    candidate_manufacturer_name: string;
+  }>(
+    `WITH matched AS (
+       SELECT id FROM parts WHERE LOWER(mpn) = LOWER($1)
+     )
+     SELECT ps.id, ps.scope, ps.approved_by, ps.signoff_notes,
+            sp.id AS candidate_part_id, sp.mpn AS candidate_part_mpn, sm.name AS candidate_manufacturer_name
+       FROM part_substitutions ps
+       JOIN matched m ON m.id = ps.original_part_id
+       JOIN parts sp ON sp.id = ps.substitute_part_id
+       JOIN manufacturers sm ON sm.id = sp.manufacturer_id
+       WHERE ps.approval_status = 'approved'
+         AND (ps.scope = 'global' OR ps.project_id = $2)
+     UNION
+     SELECT ps.id, ps.scope, ps.approved_by, ps.signoff_notes,
+            op.id AS candidate_part_id, op.mpn AS candidate_part_mpn, om.name AS candidate_manufacturer_name
+       FROM part_substitutions ps
+       JOIN matched m ON m.id = ps.substitute_part_id
+       JOIN parts op ON op.id = ps.original_part_id
+       JOIN manufacturers om ON om.id = op.manufacturer_id
+       WHERE ps.approval_status = 'approved'
+         AND (ps.scope = 'global' OR ps.project_id = $2)`,
+    [normalized, projectId]
+  );
+  return result.rows.map((row) => ({
+    approvedBy: row.approved_by,
+    candidateManufacturerName: row.candidate_manufacturer_name,
+    candidatePartId: row.candidate_part_id,
+    candidatePartMpn: row.candidate_part_mpn,
+    scope: row.scope,
+    signoffNotes: row.signoff_notes,
+    substitutionId: row.id
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// P1-FUNC11: Circuit block instantiation into project BOM
+// ---------------------------------------------------------------------------
+
+/** DatabaseCircuitBlockInstantiationRow is the persisted instantiation envelope. */
+interface DatabaseCircuitBlockInstantiationRow {
+  id: string;
+  circuit_block_id: string;
+  project_id: string;
+  project_revision_id: string;
+  bom_import_id: string;
+  include_optional: boolean;
+  designator_prefix: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: Date | string;
+}
+
+/** DatabaseCircuitBlockPartLookupRow is the part-role row used to build instantiated BOM lines. */
+interface DatabaseCircuitBlockPartLookupRow {
+  id: string;
+  circuit_block_id: string;
+  part_id: string;
+  role: string;
+  quantity: string | number | null;
+  is_required: boolean;
+  notes: string | null;
+  part_mpn: string;
+  part_manufacturer_name: string;
+}
+
+/**
+ * Generates a synthetic BOM import for one circuit block instantiation, with confirmed-match BOM lines and usage records.
+ */
+export async function instantiateCircuitBlockIntoProjectBomInDatabase(
+  projectId: string,
+  input: CircuitBlockInstantiationCreateInput,
+  createdBy: string
+): Promise<CircuitBlockInstantiationCreateResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const validation = validateInstantiationInput(input);
+  if (validation) {
+    return validation;
+  }
+
+  const includeOptional = input.includeOptional === true;
+  const designatorPrefix = normalizeDesignatorPrefix(input.designatorPrefix ?? null);
+  const notes = (input.notes ?? null)?.trim() || null;
+
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    if (!(await projectExists(client, projectId))) {
+      await client.query("ROLLBACK");
+      return { status: "not_found", code: "PROJECT_NOT_FOUND", message: "Project not found." };
+    }
+
+    const revisionResult = await client.query<{ id: string; project_id: string }>(
+      "SELECT id, project_id FROM project_revisions WHERE id = $1 AND project_id = $2",
+      [input.projectRevisionId, projectId]
+    );
+    if (revisionResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return {
+        status: "not_found",
+        code: "PROJECT_REVISION_NOT_FOUND",
+        message: "Project revision not found on this project."
+      };
+    }
+
+    const blockResult = await client.query<{ id: string; name: string; block_key: string }>(
+      "SELECT id, name, block_key FROM circuit_blocks WHERE id = $1",
+      [input.circuitBlockId]
+    );
+    if (blockResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return { status: "not_found", code: "CIRCUIT_BLOCK_NOT_FOUND", message: "Circuit block not found." };
+    }
+    const block = blockResult.rows[0]!;
+
+    const blockPartsResult = await client.query<DatabaseCircuitBlockPartLookupRow>(
+      `SELECT cbp.id, cbp.circuit_block_id, cbp.part_id, cbp.role, cbp.quantity, cbp.is_required, cbp.notes,
+              p.mpn AS part_mpn, m.name AS part_manufacturer_name
+         FROM circuit_block_parts cbp
+         JOIN parts p ON p.id = cbp.part_id
+         JOIN manufacturers m ON m.id = p.manufacturer_id
+         WHERE cbp.circuit_block_id = $1
+         ORDER BY cbp.is_required DESC, cbp.role ASC, cbp.id ASC`,
+      [input.circuitBlockId]
+    );
+    const allRoles = blockPartsResult.rows;
+    const eligibleRoles = includeOptional ? allRoles : allRoles.filter((row) => row.is_required);
+
+    if (eligibleRoles.length === 0) {
+      await client.query("ROLLBACK");
+      return {
+        status: "invalid",
+        code: "CIRCUIT_BLOCK_HAS_NO_ELIGIBLE_PARTS",
+        message: includeOptional
+          ? "The circuit block has no part roles to instantiate."
+          : "The circuit block has no required part roles. Toggle includeOptional to instantiate optional parts."
+      };
+    }
+
+    const now = new Date();
+    const bomImportId = `bomimp-${randomUUID()}`;
+    const importSummary = {
+      circuitBlockId: input.circuitBlockId,
+      circuitBlockKey: block.block_key,
+      circuitBlockName: block.name,
+      createdBy: "p1-func11",
+      includeOptional,
+      instantiatedRoleCount: eligibleRoles.length,
+      matchStatus: "processed",
+      persistedLineCount: eligibleRoles.length
+    };
+    const bomImportResult = await client.query<DatabaseBomImportRow>(
+      `INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'manual', NULL, 'processed', '{}'::jsonb, $5::jsonb, $6, $7, $7)
+         RETURNING id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at`,
+      [
+        bomImportId,
+        projectId,
+        input.projectRevisionId,
+        `Circuit block: ${block.name} (${block.block_key})`,
+        JSON.stringify(importSummary),
+        createdBy,
+        now
+      ]
+    );
+    const bomImportRow = bomImportResult.rows[0];
+
+    if (!bomImportRow) {
+      await client.query("ROLLBACK");
+      throw new CatalogStoreError("query_failed", "Circuit block instantiation produced no BOM import row.", new Error("missing_bom_import_row"));
+    }
+
+    const savedLines: BomLine[] = [];
+
+    for (let index = 0; index < eligibleRoles.length; index += 1) {
+      const role = eligibleRoles[index]!;
+      const rowNumber = index + 1;
+      const quantity = toNullableNumber(role.quantity ?? null);
+      const designators = buildInstantiatedDesignators(designatorPrefix, rowNumber, quantity);
+      const rawRowPayload = {
+        circuitBlockId: input.circuitBlockId,
+        circuitBlockPartId: role.id,
+        circuitBlockPartRole: role.role,
+        instantiationOrigin: "p1-func11",
+        isRequired: role.is_required
+      };
+      const lineResult = await client.query<DatabaseBomLineRow>(
+        `INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12::jsonb, $13, 'matched', 1, $14, $15, $16, $16, $16)
+           RETURNING id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at`,
+        [
+          `bomline-${randomUUID()}`,
+          bomImportId,
+          projectId,
+          input.projectRevisionId,
+          rowNumber,
+          designators,
+          quantity,
+          role.part_mpn,
+          role.part_manufacturer_name,
+          `Instantiated from circuit block ${block.name} role: ${role.role}`,
+          role.notes,
+          JSON.stringify(rawRowPayload),
+          role.part_id,
+          input.circuitBlockId,
+          role.id,
+          now
+        ]
+      );
+      const lineRow = lineResult.rows[0];
+
+      if (!lineRow) {
+        await client.query("ROLLBACK");
+        throw new CatalogStoreError("query_failed", "Circuit block instantiation produced no BOM line row.", new Error("missing_bom_line_row"));
+      }
+
+      const persistedLine = mapBomLineRow(lineRow);
+      savedLines.push(persistedLine);
+      await upsertProjectPartUsageForMatchedLine(client, persistedLine, role.part_id, now);
+    }
+
+    const instantiationId = `cbinst-${randomUUID()}`;
+    const instantiationResult = await client.query<DatabaseCircuitBlockInstantiationRow>(
+      `INSERT INTO circuit_block_instantiations (id, circuit_block_id, project_id, project_revision_id, bom_import_id, include_optional, designator_prefix, notes, created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, circuit_block_id, project_id, project_revision_id, bom_import_id, include_optional, designator_prefix, notes, created_by, created_at`,
+      [
+        instantiationId,
+        input.circuitBlockId,
+        projectId,
+        input.projectRevisionId,
+        bomImportId,
+        includeOptional,
+        designatorPrefix,
+        notes,
+        createdBy,
+        now
+      ]
+    );
+    const instantiationRow = instantiationResult.rows[0];
+
+    if (!instantiationRow) {
+      await client.query("ROLLBACK");
+      throw new CatalogStoreError("query_failed", "Circuit block instantiation produced no record row.", new Error("missing_instantiation_row"));
+    }
+
+    await client.query("UPDATE project_revisions SET updated_at = $2 WHERE id = $1", [input.projectRevisionId, now]);
+    await client.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [projectId, now]);
+    await client.query("COMMIT");
+
+    return {
+      status: "created",
+      response: {
+        bomImport: mapBomImportRow(bomImportRow),
+        bomLines: savedLines,
+        boundary:
+          "Instantiated BOM lines mark these parts as confirmed usage. They do not change part approval, readiness, or export verification.",
+        instantiation: mapCircuitBlockInstantiationRow(instantiationRow),
+        matchedLineCount: savedLines.length,
+        skippedOptionalCount: includeOptional ? 0 : allRoles.length - eligibleRoles.length
+      }
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw toProjectMemoryStoreError(error);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Validates instantiation input for required identifiers and supplied prefix shape.
+ */
+function validateInstantiationInput(
+  input: CircuitBlockInstantiationCreateInput
+): { status: "invalid"; code: string; message: string } | null {
+  if (!input.circuitBlockId || input.circuitBlockId.trim() === "") {
+    return { status: "invalid", code: "CIRCUIT_BLOCK_ID_REQUIRED", message: "circuitBlockId is required." };
+  }
+  if (!input.projectRevisionId || input.projectRevisionId.trim() === "") {
+    return { status: "invalid", code: "PROJECT_REVISION_ID_REQUIRED", message: "projectRevisionId is required." };
+  }
+  if (input.designatorPrefix !== undefined && input.designatorPrefix !== null) {
+    if (typeof input.designatorPrefix !== "string") {
+      return { status: "invalid", code: "INVALID_DESIGNATOR_PREFIX", message: "designatorPrefix must be a string." };
+    }
+    if (input.designatorPrefix.length > 16) {
+      return {
+        status: "invalid",
+        code: "INVALID_DESIGNATOR_PREFIX",
+        message: "designatorPrefix must be 16 characters or fewer."
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Normalizes a designator prefix, returning null when blank.
+ */
+function normalizeDesignatorPrefix(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * Builds the designator list for one instantiated BOM line.
+ * Auto-numbers when a prefix is provided so multi-quantity roles get distinct designators.
+ */
+function buildInstantiatedDesignators(prefix: string | null, rowNumber: number, quantity: number | null): string[] {
+  if (!prefix) {
+    return [];
+  }
+  const count = quantity && Number.isFinite(quantity) && quantity > 0 ? Math.floor(quantity) : 1;
+  const designators: string[] = [];
+  const baseIndex = rowNumber === 1 ? 1 : (rowNumber - 1) * 1 + 1;
+  for (let offset = 0; offset < count; offset += 1) {
+    designators.push(`${prefix}${baseIndex + offset}`);
+  }
+  return designators;
+}
+
+/**
+ * Maps a persisted instantiation row into the shared CircuitBlockInstantiation type.
+ */
+function mapCircuitBlockInstantiationRow(row: DatabaseCircuitBlockInstantiationRow): CircuitBlockInstantiation {
+  return {
+    bomImportId: row.bom_import_id,
+    circuitBlockId: row.circuit_block_id,
+    createdAt: toIsoTimestamp(row.created_at),
+    createdBy: row.created_by,
+    designatorPrefix: row.designator_prefix,
+    id: row.id,
+    includeOptional: row.include_optional,
+    notes: row.notes,
+    projectId: row.project_id,
+    projectRevisionId: row.project_revision_id
+  };
+}
+
+/**
+ * Builds triage action hints for a BOM line based on its match status.
+ */
+function buildTriageActions(matchStatus: BomLineMatchStatus, rawMpn: string | null): string[] {
+  switch (matchStatus) {
+    case "matched":
+      return [];
+    case "unmatched":
+      return rawMpn ? ["Import this part from a provider", "Add part manually if it exists internally"] : ["Add MPN to this row, then re-run matching"];
+    case "weak_match":
+      return ["Review candidate parts and confirm the correct match", "Re-run matching after adding manufacturer info"];
+    case "ambiguous":
+      return ["Review duplicate MPN candidates and confirm the correct part", "Resolve duplicate parts in the catalog first"];
+    case "ignored":
+      return ["Un-ignore this row if it requires a part match"];
+    default:
+      return [];
+  }
 }
