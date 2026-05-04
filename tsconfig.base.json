@@ -21,11 +21,20 @@
     "noImplicitReturns": true,
     "noUncheckedIndexedAccess": true,
     "paths": {
+      "@/*": [
+        "apps/web/src/*"
+      ],
       "@ee-library/shared": [
         "packages/shared/src/index.ts"
       ],
+      "@ee-library/shared/*": [
+        "packages/shared/src/*"
+      ],
       "@ee-library/ui": [
         "packages/ui/src/index.ts"
+      ],
+      "@ee-library/db": [
+        "packages/db/src/index.ts"
       ]
     },
     "resolveJsonModule": true,

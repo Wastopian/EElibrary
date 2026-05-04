@@ -2,14 +2,50 @@
  * File header: Defines the worker-side provider adapter boundary and registry.
  */
 
-import type { Asset, DatasheetRevision, Manufacturer, Package, Part, PartMetric, SourceRecord } from "@ee-library/shared";
+import type {
+  AccessoryRequirement,
+  Asset,
+  AssetPromotionAuditRecord,
+  AssetValidationRecord,
+  CableCompatibility,
+  CompanionRecommendation,
+  ConnectorFamily,
+  ConnectorFamilyConflict,
+  DatasheetRevision,
+  GenerationWorkflow,
+  Manufacturer,
+  MateRelation,
+  Package,
+  Part,
+  PartMetric,
+  ProviderLookupCandidateBase,
+  ReviewRecord,
+  SimilarPartRelation,
+  SourceExtractionSignal,
+  SourceRecord
+} from "@ee-library/shared/types";
+import { jlcpartsProviderAdapter } from "./providers/jlcparts-provider";
 import { localCatalogProviderAdapter } from "./providers/local-catalog-provider";
 
 /** ProviderPartRequest describes the minimum lookup input for future provider fetches. */
 export interface ProviderPartRequest {
-  /** Manufacturer part number requested by the ingestion worker. */
-  mpn: string;
+  /** Manufacturer part number requested by the ingestion worker when the import is MPN-driven. */
+  mpn?: string;
+  /** Provider-specific exact part identifier, such as an LCSC code, when intake selected a provider key. */
+  providerPartId?: string;
   /** Optional manufacturer hint used only to narrow provider lookup. */
+  manufacturerName?: string;
+  /** Optional provider product URL retained as intake context or lookup source. */
+  providerUrl?: string;
+  /** Optional datasheet URL retained as intake context for later traceability. */
+  datasheetUrl?: string;
+}
+
+/** ProviderExactLookupRequest describes one explicit exact-match provider candidate lookup. */
+export interface ProviderExactLookupRequest {
+  /** Exact lookup text entered by the caller. */
+  query: string;
+  /** Optional manufacturer hint used only for exact provider disambiguation. */
   manufacturerName?: string;
 }
 
@@ -29,6 +65,8 @@ export interface NormalizedProviderPart {
   manufacturer: Manufacturer;
   /** Canonical package record. */
   package: Package;
+  /** Optional connector family record for connector parts. */
+  connectorFamily: ConnectorFamily | null;
   /** Canonical part record. */
   part: Part;
   /** Source record preserving the raw payload. */
@@ -39,6 +77,28 @@ export interface NormalizedProviderPart {
   metrics: PartMetric[];
   /** Asset registry records parsed from the provider payload. */
   assets: Asset[];
+  /** Best and alternate mate connector relationships parsed from the provider payload. */
+  mateRelations: MateRelation[];
+  /** Required, optional, and tooling accessory relationships parsed from the provider payload. */
+  accessoryRequirements: AccessoryRequirement[];
+  /** Compatible cable relationships parsed from the provider payload. */
+  cableCompatibilities: CableCompatibility[];
+  /** Connector-family ambiguity evidence parsed or derived for stronger connector warnings. */
+  connectorFamilyConflicts: ConnectorFamilyConflict[];
+  /** Similar-part recommendations parsed from the provider payload. */
+  similarPartRelations: SimilarPartRelation[];
+  /** Companion recommendations parsed from the provider payload. */
+  companionRecommendations: CompanionRecommendation[];
+  /** Datasheet-driven generation workflows parsed from the provider payload. */
+  generationWorkflows: GenerationWorkflow[];
+  /** Explicit review records parsed from the provider payload when local fixtures include them. */
+  reviewRecords: ReviewRecord[];
+  /** Explicit validation evidence parsed from fixtures or future validation jobs. */
+  validationRecords: AssetValidationRecord[];
+  /** Historical export-promotion audits parsed only when fixture data explicitly includes them. */
+  promotionAudits: AssetPromotionAuditRecord[];
+  /** Structured source extraction signals parsed or mapped for missing-CAD readiness. */
+  extractionSignals: SourceExtractionSignal[];
 }
 
 /** ProviderAdapter defines the worker boundary for provider-specific ingestion logic. */
@@ -47,6 +107,8 @@ export interface ProviderAdapter {
   id: string;
   /** Display-ready adapter name for logs and admin screens. */
   name: string;
+  /** Finds exact-match provider candidates without persisting any catalog rows. */
+  findExactPartCandidates: (request: ProviderExactLookupRequest) => Promise<ProviderLookupCandidateBase[]>;
   /** Lists supported local requests when the adapter can enumerate records. */
   listAvailablePartRequests: () => Promise<ProviderPartRequest[]>;
   /** Fetches raw source payloads without normalizing in the fetch step. */
@@ -56,4 +118,4 @@ export interface ProviderAdapter {
 }
 
 /** providerAdapters registers worker-only provider implementations. */
-export const providerAdapters: ProviderAdapter[] = [localCatalogProviderAdapter];
+export const providerAdapters: ProviderAdapter[] = [localCatalogProviderAdapter, jlcpartsProviderAdapter];

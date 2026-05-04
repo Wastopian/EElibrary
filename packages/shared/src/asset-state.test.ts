@@ -4,26 +4,35 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deriveAssetState, getExportAvailability, isValidatedDownloadableAsset } from "./index";
+import { deriveAssetState, getExportAvailability, isValidatedDownloadableAsset, withCanonicalAssetTruth } from "./index";
 import type { Asset, PartSearchRecord } from "./index";
 
 /** baseAsset supplies a complete asset shape for focused state tests. */
-const baseAsset: Asset = {
+const baseAssetRow = {
   assetState: "missing",
+  assetStatus: "missing",
   assetType: "three_d_model",
   fileFormat: "step",
   fileHash: null,
+  generationMethod: null,
+  generationSourceAssetId: null,
   id: "asset-test",
   lastUpdatedAt: "2026-04-12T00:00:00.000Z",
   licenseMode: "unknown",
   partId: "part-test",
   previewStatus: "not_available",
   providerId: "test-provider",
+  provenance: "manual_internal",
   sourceRecordId: "source-test",
   sourceUrl: null,
   storageKey: null,
   validationStatus: "not_validated"
-};
+} satisfies Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus">;
+
+/** buildAsset keeps canonical truth fields aligned after individual test overrides. */
+function buildAsset(overrides: Partial<Asset> = {}): Asset {
+  return withCanonicalAssetTruth({ ...baseAssetRow, ...overrides });
+}
 
 /**
  * Verifies asset state derivation does not treat references as downloads.
@@ -40,21 +49,22 @@ test("deriveAssetState distinguishes missing, referenced, downloaded, validated,
  * Verifies export helpers require validation plus captured file evidence.
  */
 test("isValidatedDownloadableAsset requires validated state, storage key, hash, and verified status", () => {
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "referenced", validationStatus: "needs_review" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "downloaded", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "not_validated" }), false);
-  assert.equal(isValidatedDownloadableAsset({ ...baseAsset, assetState: "validated", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" }), true);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "referenced", validationStatus: "needs_review" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "downloaded", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "not_validated" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "validated", assetStatus: "validated", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "validated", assetStatus: "verified_for_export", fileHash: null, storageKey: "assets/test.step", validationStatus: "verified" })), false);
+  assert.equal(isValidatedDownloadableAsset(buildAsset({ assetState: "validated", assetStatus: "verified_for_export", fileHash: "sha256:test", storageKey: "assets/test.step", validationStatus: "verified" })), true);
 });
 
 /**
  * Verifies export availability stays disabled for referenced-only assets.
  */
 test("getExportAvailability disables neutral CAD for referenced-only STEP assets", () => {
-  const referencedStepAsset: Asset = {
-    ...baseAsset,
+  const referencedStepAsset = buildAsset({
     assetState: "referenced",
     sourceUrl: "https://example.com/model.step",
     validationStatus: "needs_review"
-  };
+  });
   const record = buildRecord([referencedStepAsset]);
 
   assert.equal(getExportAvailability(record).find((action) => action.id === "neutral_cad")?.available, false);
@@ -66,7 +76,42 @@ test("getExportAvailability disables neutral CAD for referenced-only STEP assets
 function buildRecord(assets: Asset[]): PartSearchRecord {
   return {
     assets,
+    accessoryRequirements: [],
+    buildableMatingSet: {
+      alternateMates: [],
+      bestMate: null,
+      cableAssumptions: [],
+      cableOptions: [],
+      confidenceBreakdown: {
+        bestMateScore: null,
+        cableScore: null,
+        directEvidenceCount: 0,
+        evidenceCount: 0,
+        inferredEvidenceCount: 0,
+        optionalAccessoryScore: null,
+        overallScore: null,
+        requiredAccessoryScore: null,
+        toolingScore: null,
+        uncertainEvidenceCount: 0,
+        verifiedEvidenceCount: 0
+      },
+      confidenceScore: null,
+      familyConflicts: [],
+      optionalAccessories: [],
+      requiredAccessories: [],
+      toolingRequirements: [],
+      warningDetails: [],
+      warnings: []
+    },
+    cableCompatibilities: [],
+    companionRecommendations: [],
+    connectorFamily: null,
+    connectorFamilyConflicts: [],
     datasheetRevision: null,
+    duplicateCandidates: [],
+    extractionSignals: [],
+    generationRequests: [],
+    generationWorkflows: [],
     lastUpdatedAt: "2026-04-12T00:00:00.000Z",
     manufacturer: {
       aliases: [],
@@ -74,7 +119,18 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       name: "Test Manufacturer",
       website: null
     },
+    mateRelations: [],
     metrics: [],
+    approval: {
+      decidedAt: null,
+      decidedBy: null,
+      detail: "Approval has not been requested.",
+      evidence: [],
+      lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+      partId: "part-test",
+      status: "not_requested",
+      summary: "Approval not requested"
+    },
     package: {
       bodyHeightMm: null,
       bodyLengthMm: null,
@@ -86,6 +142,8 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
     },
     part: {
       category: "Test",
+      connectorFamilyId: null,
+      description: "",
       id: "part-test",
       lastUpdatedAt: "2026-04-12T00:00:00.000Z",
       lifecycleStatus: "unknown",
@@ -94,6 +152,25 @@ function buildRecord(assets: Asset[]): PartSearchRecord {
       packageId: "pkg-test",
       trustScore: 0
     },
-    sources: []
+    issues: [],
+    promotionAudits: [],
+    readinessSummary: {
+      blockerCount: 0,
+      blockerSummary: [],
+      connectorClass: "non_connector",
+      detail: "Whole-part readiness has not been evaluated yet.",
+      identityStatus: "unknown",
+      label: "Readiness unknown",
+      lastEvaluatedAt: "2026-04-12T00:00:00.000Z",
+      partId: "part-test",
+      recommendedActions: [],
+      status: "unknown"
+    },
+    reviewRecords: [],
+    riskFlags: [],
+    similarParts: [],
+    sourceReconciliation: null,
+    sources: [],
+    validationRecords: []
   };
 }

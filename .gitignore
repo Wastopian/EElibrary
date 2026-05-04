@@ -16,3 +16,6 @@ coverage/
 Thumbs.db
 *.log
 *.tsbuildinfo
+
+# Claude Code worktree metadata and per-session checkouts.
+.claude/

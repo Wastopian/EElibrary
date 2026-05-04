@@ -1,0 +1,496 @@
+/**
+ * File header: Renders the global where-used workspace from project-memory usage and circuit-block records.
+ */
+
+import Link from "next/link";
+import React from "react";
+import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
+import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
+import { fetchApiHealth, fetchWhereUsedSearch, isApiClientError } from "../../lib/api-client";
+import type { ApiHealth } from "../../lib/api-client";
+import type { BadgeTone } from "@ee-library/ui";
+import type { CircuitBlockPartSubstitutionPolicy, ProjectPartUsageStatus, WhereUsedAssetExportRecord, WhereUsedCircuitBlockDependencyRecord, WhereUsedProjectUsageRecord, WhereUsedSearchResponse, WhereUsedTargetType } from "@ee-library/shared/types";
+
+export const dynamic = "force-dynamic";
+
+/** WhereUsedPageSearchParams mirrors the GET query that drives the where-used workspace. */
+type WhereUsedPageSearchParams = {
+  q?: string | string[];
+  targetType?: string | string[];
+};
+
+/** WhereUsedPageState separates first-load, ready, and setup-failure rendering. */
+type WhereUsedPageState =
+  | { health: ApiHealth | null; query: string; status: "idle"; targetType: WhereUsedTargetType }
+  | { health: ApiHealth | null; response: WhereUsedSearchResponse; status: "ready" }
+  | { code: string; health: ApiHealth | null; message: string; query: string; status: "setup_required"; targetType: WhereUsedTargetType };
+
+/** WhereUsedPageProps carries Next.js search params as an awaited value in this app version. */
+interface WhereUsedPageProps {
+  searchParams: Promise<WhereUsedPageSearchParams>;
+}
+
+/**
+ * Renders global where-used search without treating historical usage as approval.
+ */
+export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps) {
+  const resolvedSearchParams = await searchParams;
+  const query = readSingleParam(resolvedSearchParams.q);
+  const targetType = readWhereUsedTargetType(readSingleParam(resolvedSearchParams.targetType));
+  const pageState = await loadWhereUsedPage(targetType, query);
+  const jumpItems = [
+    { href: "#where-used-search-heading", label: "Search" },
+    { href: "#where-used-results-heading", label: "Results" },
+    { href: "#where-used-boundaries-heading", label: "Boundaries" }
+  ];
+
+  return (
+    <main className="projects-layout">
+      <section className="projects-hero">
+        <div className="projects-hero__layout">
+          <div className="projects-hero__copy">
+            <p className="app-kicker">Where-used</p>
+            <h1>Usage and dependency search</h1>
+            <p className="projects-hero__lede">
+              Search confirmed project usage and circuit block dependencies from persisted engineering memory.
+            </p>
+            <div className="projects-hero__status">
+              <StatusBadge label="Historical context only" tone="review" />
+              <StatusBadge label={pageState.health ? `API ${pageState.health.status}` : "API health unavailable"} tone={pageState.health ? "info" : "review"} />
+              <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
+            </div>
+          </div>
+          {pageState.status === "ready" ? <WhereUsedSnapshot response={pageState.response} /> : <WhereUsedIdleSnapshot />}
+        </div>
+      </section>
+
+      <WorkspaceJumpNav ariaLabel="Where-used sections" items={jumpItems} />
+
+      <section className="detail-section" aria-labelledby="where-used-search-heading">
+        <SectionHeading id="where-used-search-heading" index="01" subtitle="All four target types are now backed: parts, circuit blocks, connector sets, and assets via export bundles." title="Search memory" />
+        <SectionPanel description="Search by internal part id, MPN, circuit block id, or circuit block key." title="Where-used lookup">
+          <WhereUsedSearchForm query={pageState.status === "ready" ? pageState.response.query : pageState.query} targetType={pageState.status === "ready" ? pageState.response.targetType : pageState.targetType} />
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="where-used-results-heading">
+        <SectionHeading id="where-used-results-heading" index="02" subtitle="Results are grouped around confirmed project usage and reusable-circuit roles." title="Results" />
+        <SectionPanel description="Historical usage and dependency context does not approve reuse, validate assets, or unlock export." title={getResultsTitle(pageState)}>
+          <WhereUsedResults state={pageState} />
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="where-used-boundaries-heading">
+        <SectionHeading id="where-used-boundaries-heading" index="03" subtitle="Where-used is input for engineering review, not a trust shortcut." title="Boundaries" />
+        <div className="projects-truth-rail projects-truth-rail--compact">
+          <div>
+            <span>Confirmed usage</span>
+            <strong>Project usage starts from matched BOM rows.</strong>
+            <p>Weak or ambiguous BOM rows stay out of confirmed history until matching evidence is strong enough.</p>
+          </div>
+          <div>
+            <span>Circuit roles</span>
+            <strong>Block membership is dependency context.</strong>
+            <p>A block role does not approve the part, validate evidence, or make the part export-ready.</p>
+          </div>
+          <div>
+            <span>Connector sets</span>
+            <strong>Connector-set search returns the connector and its mates.</strong>
+            <p>Project usages and block roles are shown for the matched connector and any linked best-mate or alternate-mate parts.</p>
+          </div>
+          <div>
+            <span>Asset exports</span>
+            <strong>Asset search returns export bundles that included the part's assets.</strong>
+            <p>Results come from export bundle manifests. A part appearing in an export bundle does not mean the part is approved or that the design is released.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Loads the where-used response only after the user provides a query.
+ */
+async function loadWhereUsedPage(targetType: WhereUsedTargetType, query: string): Promise<WhereUsedPageState> {
+  const healthPromise = fetchApiHealth().catch(() => null);
+
+  if (query.trim().length === 0) {
+    return {
+      health: await healthPromise,
+      query,
+      status: "idle",
+      targetType
+    };
+  }
+
+  try {
+    const [health, response] = await Promise.all([healthPromise, fetchWhereUsedSearch(targetType, query)]);
+
+    return {
+      health,
+      response,
+      status: "ready"
+    };
+  } catch (error) {
+    if (isApiClientError(error)) {
+      return {
+        code: error.code,
+        health: await healthPromise,
+        message: error.message,
+        query,
+        status: "setup_required",
+        targetType
+      };
+    }
+
+    return {
+      code: "API_UNAVAILABLE",
+      health: await healthPromise,
+      message: "The API could not be reached, so where-used memory cannot be read.",
+      query,
+      status: "setup_required",
+      targetType
+    };
+  }
+}
+
+/**
+ * Renders the search controls as a simple GET form so the result URL is shareable.
+ */
+function WhereUsedSearchForm({ query, targetType }: { query: string; targetType: WhereUsedTargetType }) {
+  return (
+    <form className="where-used-search-form" method="get">
+      <label>
+        <span>Target</span>
+        <select defaultValue={targetType} name="targetType">
+          <option value="part">Part</option>
+          <option value="circuit_block">Circuit block</option>
+          <option value="connector_set">Connector set</option>
+          <option value="asset">Asset</option>
+        </select>
+      </label>
+      <label className="where-used-search-form__query">
+        <span>Query</span>
+        <input defaultValue={query} name="q" placeholder="TPS7A02DBVR or ALPHA-POWER" type="search" />
+      </label>
+      <button className="button-primary" type="submit">Search</button>
+    </form>
+  );
+}
+
+/**
+ * Renders a neutral snapshot before the first search.
+ */
+function WhereUsedIdleSnapshot() {
+  return (
+    <div className="projects-stat-grid">
+      <WhereUsedStat label="Targets" tone="info" value="4" />
+      <WhereUsedStat label="Backed now" tone="verified" value="4" />
+      <WhereUsedStat label="Trust" tone="review" value="Bounded" />
+      <WhereUsedStat label="Export" tone="neutral" value="No change" />
+    </div>
+  );
+}
+
+/**
+ * Renders result counts without collapsing them into a reuse score.
+ */
+function WhereUsedSnapshot({ response }: { response: WhereUsedSearchResponse }) {
+  return (
+    <div className="projects-stat-grid">
+      <WhereUsedStat label="Part matches" tone="info" value={response.matchedParts.length.toString()} />
+      <WhereUsedStat label="Block matches" tone="info" value={response.matchedCircuitBlocks.length.toString()} />
+      <WhereUsedStat label="Project usages" tone={response.projectUsages.length > 0 ? "verified" : "neutral"} value={response.projectUsages.length.toString()} />
+      <WhereUsedStat label="Block roles" tone={response.circuitBlockDependencies.length > 0 ? "review" : "neutral"} value={response.circuitBlockDependencies.length.toString()} />
+      {response.assetExports.length > 0 && <WhereUsedStat label="Export bundles" tone="verified" value={response.assetExports.length.toString()} />}
+    </div>
+  );
+}
+
+/**
+ * Renders one compact count tile.
+ */
+function WhereUsedStat({ label, tone, value }: { label: string; tone: BadgeTone; value: string }) {
+  return (
+    <div className={`projects-stat projects-stat--${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+/**
+ * Renders the correct results state for idle, setup, unsupported, empty, and populated searches.
+ */
+function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
+  if (state.status === "idle") {
+    return <EmptyState title="Start a where-used search" body="Choose a backed target and search for an internal part id, MPN, circuit block id, or circuit block key." />;
+  }
+
+  if (state.status === "setup_required") {
+    return <EmptyState title="Connect project memory" body={`${state.code}: ${state.message}`} />;
+  }
+
+  const { response } = state;
+
+  if (!response.supportedTarget) {
+    return <EmptyState title={`${formatWhereUsedTargetType(response.targetType)} where-used is not backed yet`} body={response.unsupportedReason ?? "This target needs persisted where-used links before results can be claimed."} />;
+  }
+
+  if (response.state === "empty") {
+    return <EmptyState title="No where-used records found" body={`No persisted ${formatWhereUsedTargetType(response.targetType).toLowerCase()} usage or dependency records matched "${response.query}".`} />;
+  }
+
+  return (
+    <div className="where-used-global-results">
+      <p className="where-used-panel__boundary">
+        <strong>Trust boundary:</strong> {response.boundary}
+      </p>
+      <WhereUsedMatchSummary response={response} />
+      {response.projectUsages.length > 0
+        ? <WhereUsedProjectUsageTable records={response.projectUsages} />
+        : response.assetExports.length === 0
+          ? <EmptyState title="No confirmed project usage" body="Matched identities may still appear in circuit block dependencies or export bundles even when no project BOM has confirmed usage yet." />
+          : null}
+      {response.circuitBlockDependencies.length > 0 ? <WhereUsedCircuitDependencyTable records={response.circuitBlockDependencies} /> : null}
+      {response.assetExports.length > 0 ? <WhereUsedAssetExportTable records={response.assetExports} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Renders matched identities before detailed rows.
+ */
+function WhereUsedMatchSummary({ response }: { response: WhereUsedSearchResponse }) {
+  if (response.matchedParts.length === 0 && response.matchedCircuitBlocks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="where-used-match-grid">
+      {response.matchedParts.map((part) => (
+        <div className="where-used-match" key={part.partId}>
+          <span>Part</span>
+          <Link href={`/parts/${encodeURIComponent(part.partId)}`}>{part.mpn}</Link>
+          <p>{part.manufacturerName} · readiness {part.readinessStatus ?? "unknown"} · approval {part.approvalStatus ?? "missing"}</p>
+        </div>
+      ))}
+      {response.matchedCircuitBlocks.map((summary) => (
+        <div className="where-used-match" key={summary.circuitBlock.id}>
+          <span>Circuit block</span>
+          <Link href={`/circuit-blocks/${encodeURIComponent(summary.circuitBlock.id)}`}>{summary.circuitBlock.blockKey}</Link>
+          <p>{summary.circuitBlock.name} · {summary.totalPartCount} roles · {summary.readinessGapCount} readiness gaps</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Renders confirmed project usage rows with project, revision, BOM, and optional circuit role context.
+ */
+function WhereUsedProjectUsageTable({ records }: { records: WhereUsedProjectUsageRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Revision</th>
+            <th>Part</th>
+            <th>Usage</th>
+            <th>Circuit role</th>
+            <th>BOM row</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record) => (
+            <tr key={`${record.usage.id}:${record.blockPart?.id ?? "part"}`}>
+              <td>
+                <Link href={`/projects/${encodeURIComponent(record.project.id)}`}>{record.project.projectKey}</Link>
+                <p>{record.project.name}</p>
+              </td>
+              <td>
+                <span>{record.projectRevision.revisionLabel}</span>
+                <p>{formatUsageStatus(record.usage.usageStatus)}</p>
+              </td>
+              <td>
+                <Link href={`/parts/${encodeURIComponent(record.part.partId)}`}>{record.part.mpn}</Link>
+                <p>{record.part.manufacturerName}</p>
+              </td>
+              <td>
+                <span>{record.usage.designators.length > 0 ? record.usage.designators.join(", ") : "No designator"}</span>
+                <p>Quantity {record.usage.quantity ?? "unknown"}</p>
+              </td>
+              <td>
+                {record.circuitBlock && record.blockPart ? (
+                  <>
+                    <Link href={`/circuit-blocks/${encodeURIComponent(record.circuitBlock.id)}`}>{record.circuitBlock.blockKey}</Link>
+                    <p>{record.blockPart.role}</p>
+                  </>
+                ) : (
+                  <span>Direct part usage</span>
+                )}
+              </td>
+              <td>
+                <span>{record.bomLine ? `Row ${record.bomLine.rowNumber}` : "No BOM row"}</span>
+                <p>{record.bomLine?.rawMpn ?? record.usage.usageContext ?? "Confirmed usage record"}</p>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Renders circuit block dependency rows independently from project usage.
+ */
+function WhereUsedCircuitDependencyTable({ records }: { records: WhereUsedCircuitBlockDependencyRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Circuit block</th>
+            <th>Role</th>
+            <th>Part</th>
+            <th>Requirement</th>
+            <th>Part state</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record) => (
+            <tr key={record.blockPart.id}>
+              <td>
+                <Link href={`/circuit-blocks/${encodeURIComponent(record.circuitBlock.id)}`}>{record.circuitBlock.blockKey}</Link>
+                <p>{record.circuitBlock.name}</p>
+              </td>
+              <td>
+                <span>{record.blockPart.role}</span>
+                <p>{formatSubstitutionPolicy(record.blockPart.substitutionPolicy)}</p>
+              </td>
+              <td>
+                <Link href={`/parts/${encodeURIComponent(record.part.partId)}`}>{record.part.mpn}</Link>
+                <p>{record.part.manufacturerName}</p>
+              </td>
+              <td>
+                <span>{record.blockPart.isRequired ? "Required" : "Optional"}</span>
+                <p>Quantity {record.blockPart.quantity ?? "not fixed"}</p>
+              </td>
+              <td>
+                <span>{record.part.approvalStatus ?? "approval missing"}</span>
+                <p>{record.part.readinessStatus ?? "readiness unknown"} · blockers {record.part.blockerCount ?? "unknown"}</p>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Renders export bundle rows that included assets for the matched part.
+ */
+function WhereUsedAssetExportTable({ records }: { records: WhereUsedAssetExportRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <h4 className="form-section-label">Export bundle inclusions</h4>
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Bundle format</th>
+            <th>Part MPN</th>
+            <th>Asset type</th>
+            <th>Generated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record, i) => (
+            <tr key={`${record.bundleId}-${record.assetId}-${i}`}>
+              <td>
+                <Link href={`/projects/${encodeURIComponent(record.projectId)}`}>{record.projectKey}</Link>
+                <p>{record.projectName}</p>
+              </td>
+              <td>
+                <StatusBadge label={record.bundleFormat} tone="info" />
+              </td>
+              <td className="ui-mono">{record.partMpn}</td>
+              <td>{record.assetType.replace(/_/gu, " ")}</td>
+              <td className="ui-mono">{new Date(record.bundleCreatedAt).toLocaleDateString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Builds the result panel title from current page state.
+ */
+function getResultsTitle(state: WhereUsedPageState): string {
+  if (state.status === "idle") {
+    return "No search yet";
+  }
+
+  if (state.status === "setup_required") {
+    return "Where-used unavailable";
+  }
+
+  if (!state.response.supportedTarget) {
+    return "Planned target";
+  }
+
+  return state.response.state === "available" ? `Results for ${state.response.query}` : "No persisted matches";
+}
+
+/**
+ * Reads the first string value from a Next.js search param.
+ */
+function readSingleParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) {
+    return value[0]?.trim() ?? "";
+  }
+
+  return value?.trim() ?? "";
+}
+
+/**
+ * Parses where-used target types while defaulting invalid query strings to part.
+ */
+function readWhereUsedTargetType(value: string): WhereUsedTargetType {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+    return value;
+  }
+
+  return "part";
+}
+
+/**
+ * Formats target labels for page copy.
+ */
+function formatWhereUsedTargetType(targetType: WhereUsedTargetType): string {
+  if (targetType === "circuit_block") return "Circuit block";
+  if (targetType === "connector_set") return "Connector set (with mates)";
+  if (targetType === "asset") return "Asset (export bundles)";
+  return "Part";
+}
+
+/**
+ * Formats project usage status values for operators.
+ */
+function formatUsageStatus(status: ProjectPartUsageStatus): string {
+  return status.replace(/_/gu, " ");
+}
+
+/**
+ * Formats circuit block substitution policy values.
+ */
+function formatSubstitutionPolicy(policy: CircuitBlockPartSubstitutionPolicy): string {
+  return policy.replace(/_/gu, " ");
+}

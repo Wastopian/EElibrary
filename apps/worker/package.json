@@ -3,11 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./provider-acquisition-jobs": "./src/provider-acquisition-jobs.ts",
+    "./provider-enrichment-jobs": "./src/provider-enrichment-jobs.ts",
+    "./provider-part-import": "./src/provider-part-import.ts",
+    "./provider-part-lookup": "./src/provider-part-lookup.ts"
+  },
   "scripts": {
+    "acquisition-jobs": "tsx src/index.ts acquisition-jobs",
     "build": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx src/index.ts status",
+    "drain-acquisition-jobs": "tsx src/index.ts drain-acquisition-jobs",
+    "enqueue-catalog": "tsx src/index.ts enqueue-catalog",
+    "dev": "tsx src/index.ts daemon",
+    "enrichment-jobs": "tsx src/index.ts enrichment-jobs",
+    "generate:drafts": "tsx src/index.ts generate-drafts",
     "ingest": "tsx src/index.ts ingest",
+    "ingest:jlcparts": "tsx src/index.ts ingest jlcparts",
+    "imports": "tsx src/index.ts imports",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "operations": "tsx src/index.ts operations",
+    "recompute:readiness": "tsx src/index.ts recompute-readiness",
+    "status": "tsx src/index.ts status",
+    "test": "node ../../scripts/run-tests.mjs src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

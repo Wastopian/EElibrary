@@ -1,31 +1,86 @@
 /**
- * File header: Provides provider-neutral search, lookup, formatting, and export helpers.
+ * File header: Provides seed fallback search and detail helpers.
  */
 
-import { assets, datasheetRevisions, manufacturers, partMetrics, partPackages, parts, sourceRecords } from "./seed";
-import { isValidatedDownloadableAsset } from "./asset-state";
+import { filterPartRecords, getSearchFacetsFromRecords } from "./catalog-runtime";
+import { buildBuildableMatingSet } from "./connector-intelligence";
+import { derivePartProjection } from "./part-readiness";
+import {
+  accessoryRequirements,
+  assetPromotionAudits,
+  assetValidationRecords,
+  assets,
+  cableCompatibilities,
+  companionRecommendations,
+  connectorFamilyConflicts,
+  connectorFamilies,
+  datasheetRevisions,
+  generationRequests,
+  generationWorkflows,
+  manufacturers,
+  mateRelations,
+  partMetrics,
+  partPackages,
+  parts,
+  reviewRecords,
+  similarPartRelations,
+  sourceExtractionSignals,
+  sourceRecords
+} from "./seed";
 import type {
-  Asset,
-  AssetType,
-  CadAvailabilityFilter,
-  ExportAvailability,
-  PartMetric,
+  AccessoryRequirement,
+  CableCompatibility,
+  MateRelation,
   PartSearchFilters,
   PartSearchRecord,
   SearchFacets
 } from "./types";
 
-/** CAD asset types that can eventually participate in ECAD or MCAD export flows. */
-const CAD_ASSET_TYPES = new Set<AssetType>(["footprint", "symbol", "three_d_model"]);
+export { filterPartRecords, formatAssetAvailabilityStatus, formatAssetExportStatus, formatAssetStatus, formatMetricLabel, formatMetricValue, getExportAvailability, getSearchFacetsFromRecords, getVerifiedCadAssetCount } from "./catalog-runtime";
+export { buildBuildableMatingSet } from "./connector-intelligence";
 
-/** manufacturerById speeds up joins while keeping seed data normalized. */
+/** manufacturerById supports deterministic joining from seed tables. */
 const manufacturerById = new Map(manufacturers.map((manufacturer) => [manufacturer.id, manufacturer]));
 
-/** packageById speeds up joins while keeping package data normalized. */
+/** packageById supports deterministic joining from seed tables. */
 const packageById = new Map(partPackages.map((partPackage) => [partPackage.id, partPackage]));
 
+/** connectorFamilyById supports deterministic connector family lookups. */
+const connectorFamilyById = new Map(connectorFamilies.map((family) => [family.id, family]));
+
 /**
- * Builds a joined search record while skipping malformed seed rows.
+ * Builds all provider-neutral records from the seed fallback catalog.
+ */
+export function getAllPartRecords(): PartSearchRecord[] {
+  return parts.flatMap((part) => {
+    const record = buildPartSearchRecord(part.id);
+    return record ? [record] : [];
+  });
+}
+
+/**
+ * Returns one joined seed fallback detail record by canonical part identifier.
+ */
+export function getPartDetail(partId: string): PartSearchRecord | undefined {
+  return getAllPartRecords().find((record) => record.part.id === partId);
+}
+
+/**
+ * Searches the seed fallback catalog with provider-neutral filters.
+ */
+export function searchParts(filters: PartSearchFilters = {}): PartSearchRecord[] {
+  return filterPartRecords(getAllPartRecords(), filters);
+}
+
+/**
+ * Builds the provider-neutral search facets exposed by the API.
+ */
+export function getSearchFacets(): SearchFacets {
+  return getSearchFacetsFromRecords(getAllPartRecords());
+}
+
+/**
+ * Builds one joined seed record while preserving provenance and relationship data.
  */
 function buildPartSearchRecord(partId: string): PartSearchRecord | null {
   const part = parts.find((candidate) => candidate.id === partId);
@@ -41,233 +96,118 @@ function buildPartSearchRecord(partId: string): PartSearchRecord | null {
     return null;
   }
 
-  const partAssets = assets.filter((asset) => asset.partId === part.id);
+  const partAssets = sortById(assets.filter((asset) => asset.partId === part.id));
   const partDatasheetRevision = selectLatestDatasheetRevision(part.id);
-  const metrics = partMetrics.filter((metric) => metric.partId === part.id);
-  const sources = sourceRecords.filter((sourceRecord) => sourceRecord.partId === part.id);
+  const partMateRelations = sortRelationsByConfidence(mateRelations.filter((relation) => relation.partId === part.id));
+  const partAccessories = sortRelationsByConfidence(accessoryRequirements.filter((requirement) => requirement.partId === part.id));
+  const partCables = sortRelationsByConfidence(cableCompatibilities.filter((compatibility) => compatibility.partId === part.id));
+  const partFamilyConflicts = sortRelationsByConfidence(connectorFamilyConflicts.filter((conflict) => conflict.partId === part.id));
+  const partMetricsForRecord = sortById(partMetrics.filter((metric) => metric.partId === part.id));
+  const partSources = sourceRecords.filter((sourceRecord) => sourceRecord.partId === part.id).sort((left, right) => Date.parse(right.sourceLastSeenAt) - Date.parse(left.sourceLastSeenAt) || left.id.localeCompare(right.id));
+  const partExtractionSignals = sourceExtractionSignals.filter((signal) => signal.partId === part.id).sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt) || left.id.localeCompare(right.id));
+  const partSimilarParts = sortRelationsByConfidence(similarPartRelations.filter((relation) => relation.partId === part.id));
+  const partCompanions = sortRelationsByConfidence(companionRecommendations.filter((recommendation) => recommendation.partId === part.id));
+  const partWorkflows = sortRelationsByConfidence(generationWorkflows.filter((workflow) => workflow.partId === part.id));
+  const partGenerationRequests = generationRequests.filter((request) => request.partId === part.id).sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt) || right.id.localeCompare(left.id));
+  const partReviewRecords = reviewRecords.filter((review) => review.partId === part.id).sort((left, right) => Date.parse(right.reviewedAt) - Date.parse(left.reviewedAt) || right.id.localeCompare(left.id));
+  const partValidationRecords = assetValidationRecords.filter((validation) => validation.partId === part.id).sort((left, right) => Date.parse(right.validatedAt) - Date.parse(left.validatedAt) || right.id.localeCompare(left.id));
+  const partPromotionAudits = assetPromotionAudits.filter((audit) => audit.partId === part.id).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id));
+  const buildableMatingSet = buildBuildableMatingSet(partMateRelations, partAccessories, partCables, partFamilyConflicts);
+  const projection = derivePartProjection({
+    accessoryRequirements: partAccessories,
+    assets: partAssets,
+    buildableMatingSet,
+    datasheetRevision: partDatasheetRevision,
+    duplicateCandidates: [],
+    extractionSignals: partExtractionSignals,
+    generationRequests: partGenerationRequests,
+    generationWorkflows: partWorkflows,
+    mateRelations: partMateRelations,
+    metrics: partMetricsForRecord,
+    part,
+    promotionAudits: partPromotionAudits,
+    reviewRecords: partReviewRecords,
+    sourceReconciliation: null,
+    sources: partSources,
+    validationRecords: partValidationRecords
+  });
 
   return {
+    approval: projection.approval,
+    accessoryRequirements: partAccessories,
     assets: partAssets,
+    buildableMatingSet,
+    cableCompatibilities: partCables,
+    companionRecommendations: partCompanions,
+    connectorFamilyConflicts: partFamilyConflicts,
+    connectorFamily: part.connectorFamilyId ? connectorFamilyById.get(part.connectorFamilyId) ?? null : null,
     datasheetRevision: partDatasheetRevision,
-    manufacturer,
-    metrics,
-    package: packageRecord,
-    part,
+    duplicateCandidates: [],
+    extractionSignals: partExtractionSignals,
+    generationRequests: partGenerationRequests,
+    generationWorkflows: partWorkflows,
+    issues: projection.issues,
+    promotionAudits: partPromotionAudits,
+    reviewRecords: partReviewRecords,
+    readinessSummary: projection.readinessSummary,
+    riskFlags: projection.riskFlags,
     lastUpdatedAt: latestTimestamp([
       part.lastUpdatedAt,
       ...partAssets.map((asset) => asset.lastUpdatedAt),
-      ...metrics.map((metric) => metric.lastUpdatedAt),
+      ...partMetricsForRecord.map((metric) => metric.lastUpdatedAt),
       ...(partDatasheetRevision ? [partDatasheetRevision.lastUpdatedAt] : []),
-      ...sources.map((sourceRecord) => sourceRecord.lastUpdatedAt)
+      ...partSources.map((sourceRecord) => sourceRecord.lastUpdatedAt),
+      ...partExtractionSignals.map((signal) => signal.lastUpdatedAt),
+      ...partReviewRecords.map((review) => review.lastUpdatedAt),
+      ...partValidationRecords.map((validation) => validation.lastUpdatedAt),
+      ...partPromotionAudits.map((audit) => audit.createdAt)
     ]),
-    sources
+    manufacturer,
+    mateRelations: partMateRelations,
+    metrics: partMetricsForRecord,
+    package: packageRecord,
+    part,
+    similarParts: partSimilarParts,
+    sourceReconciliation: null,
+    sources: partSources,
+    validationRecords: partValidationRecords
   };
 }
 
 /**
- * Returns every joined seed record for web and API consumers.
- */
-export function getAllPartRecords(): PartSearchRecord[] {
-  return parts.flatMap((part) => {
-    const record = buildPartSearchRecord(part.id);
-    return record ? [record] : [];
-  });
-}
-
-/**
- * Finds one joined part detail record by internal identifier.
- */
-export function getPartDetail(partId: string): PartSearchRecord | undefined {
-  return getAllPartRecords().find((record) => record.part.id === partId);
-}
-
-/**
- * Searches seed records with provider-neutral filters from the search page or API.
- */
-export function searchParts(filters: PartSearchFilters = {}): PartSearchRecord[] {
-  return filterPartRecords(getAllPartRecords(), filters);
-}
-
-/**
- * Builds the provider-neutral search facets exposed by the API.
- */
-export function getSearchFacets(): SearchFacets {
-  return getSearchFacetsFromRecords(getAllPartRecords());
-}
-
-/**
- * Builds provider-neutral search facets from joined records.
- */
-export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchFacets {
-  return {
-    categories: Array.from(new Set(records.map((record) => record.part.category))).sort(),
-    lifecycleStatuses: ["active", "not_recommended", "obsolete", "unknown"],
-    manufacturers: uniqueBy(records.map((record) => record.manufacturer), (manufacturer) => manufacturer.id),
-    packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id)
-  };
-}
-
-/**
- * Filters joined part records with provider-neutral search filters.
- */
-export function filterPartRecords(records: PartSearchRecord[], filters: PartSearchFilters = {}): PartSearchRecord[] {
-  const normalizedQuery = filters.query?.trim().toLowerCase();
-
-  return records.filter((record) => {
-    const hasQueryMatch = normalizedQuery ? recordMatchesQuery(record, normalizedQuery) : true;
-    const hasManufacturerMatch = filters.manufacturerId ? record.part.manufacturerId === filters.manufacturerId : true;
-    const hasCategoryMatch = filters.category ? record.part.category === filters.category : true;
-    const hasPackageMatch = filters.packageId ? record.part.packageId === filters.packageId : true;
-    const hasLifecycleMatch = filters.lifecycleStatus ? record.part.lifecycleStatus === filters.lifecycleStatus : true;
-    const hasCadMatch = matchesCadAvailability(record.assets, filters.cadAvailability ?? "any");
-
-    return hasQueryMatch && hasManufacturerMatch && hasCategoryMatch && hasPackageMatch && hasLifecycleMatch && hasCadMatch;
-  });
-}
-
-/**
- * Formats a metric key into a readable label while keeping the raw key available in code.
- */
-export function formatMetricLabel(metricKey: string): string {
-  return metricKey
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-/**
- * Formats normalized metric values without changing their underlying units.
- */
-export function formatMetricValue(metric: PartMetric): string {
-  if (metric.metricValue !== null) {
-    return `${formatMetricNumber(metric.metricValue)} ${metric.unit}`;
-  }
-
-  if (metric.minValue !== null && metric.maxValue !== null) {
-    return `${formatMetricNumber(metric.minValue)}-${formatMetricNumber(metric.maxValue)} ${metric.unit}`;
-  }
-
-  if (metric.minValue !== null) {
-    return `>= ${formatMetricNumber(metric.minValue)} ${metric.unit}`;
-  }
-
-  if (metric.maxValue !== null) {
-    return `<= ${formatMetricNumber(metric.maxValue)} ${metric.unit}`;
-  }
-
-  return `Unknown ${metric.unit}`;
-}
-
-/**
- * Calculates export availability from real validated downloadable assets only.
- */
-export function getExportAvailability(record: PartSearchRecord): ExportAvailability[] {
-  const exportableAssets = record.assets.filter(isValidatedDownloadableAsset);
-  const hasFootprint = exportableAssets.some((asset) => asset.assetType === "footprint");
-  const hasSymbol = exportableAssets.some((asset) => asset.assetType === "symbol");
-  const hasThreeDModel = exportableAssets.some((asset) => asset.assetType === "three_d_model");
-  const hasStepModel = exportableAssets.some((asset) => asset.assetType === "three_d_model" && asset.fileFormat === "step");
-
-  return [
-    {
-      available: hasFootprint && hasSymbol,
-      id: "altium",
-      label: "Altium bundle",
-      reason: hasFootprint && hasSymbol ? "Validated footprint and symbol files are available." : "Requires validated downloadable footprint and symbol assets."
-    },
-    {
-      available: hasThreeDModel,
-      id: "solidworks",
-      label: "SolidWorks bundle",
-      reason: hasThreeDModel ? "A validated downloadable 3D model is available." : "Requires a validated downloadable 3D model asset."
-    },
-    {
-      available: hasStepModel,
-      id: "neutral_cad",
-      label: "Neutral CAD package",
-      reason: hasStepModel ? "A validated downloadable STEP model is available." : "Requires a validated downloadable STEP model asset."
-    }
-  ];
-}
-
-/**
- * Checks whether a joined record matches free-text engineering search.
- */
-function recordMatchesQuery(record: PartSearchRecord, normalizedQuery: string): boolean {
-  const haystack = [
-    record.part.mpn,
-    record.part.category,
-    record.manufacturer.name,
-    record.package.packageName,
-    ...record.manufacturer.aliases
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  return haystack.includes(normalizedQuery);
-}
-
-/**
- * Selects the newest datasheet revision for a part using revision dates when available.
+ * Selects the newest datasheet revision for a part without mutating seed data.
  */
 function selectLatestDatasheetRevision(partId: string) {
   const revisions = datasheetRevisions.filter((revision) => revision.partId === partId);
 
   return (
-    revisions.sort((first, second) => {
-      const firstDate = first.revisionDate ? Date.parse(first.revisionDate) : 0;
-      const secondDate = second.revisionDate ? Date.parse(second.revisionDate) : 0;
+    [...revisions]
+      .sort((first, second) => {
+        const firstDate = Date.parse(first.revisionDate ?? first.lastUpdatedAt);
+        const secondDate = Date.parse(second.revisionDate ?? second.lastUpdatedAt);
 
-      return secondDate - firstDate;
-    })[0] ?? null
+        return secondDate - firstDate || first.id.localeCompare(second.id);
+      })[0] ?? null
   );
 }
 
 /**
- * Checks whether the asset list matches the requested CAD availability filter.
+ * Sorts relationship-like objects by confidence and stable identifier.
  */
-function matchesCadAvailability(assetsForPart: Asset[], availability: CadAvailabilityFilter): boolean {
-  if (availability === "any") {
-    return true;
-  }
+function sortRelationsByConfidence<TValue extends { confidenceScore: number; id: string }>(values: TValue[]): TValue[] {
+  return [...values].sort((left, right) => right.confidenceScore - left.confidenceScore || left.id.localeCompare(right.id));
+}
 
-  const hasAvailableCadAsset = assetsForPart.some((asset) => CAD_ASSET_TYPES.has(asset.assetType) && isValidatedDownloadableAsset(asset));
-
-  return availability === "available" ? hasAvailableCadAsset : !hasAvailableCadAsset;
+/**
+ * Sorts identifier-bearing records in a deterministic order.
+ */
+function sortById<TValue extends { id: string }>(values: TValue[]): TValue[] {
+  return [...values].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /**
  * Returns the newest ISO timestamp in a set of timestamp strings.
  */
 function latestTimestamp(timestamps: string[]): string {
-  return timestamps.sort((first, second) => Date.parse(second) - Date.parse(first))[0] ?? new Date(0).toISOString();
-}
-
-/**
- * Returns a deterministic list of records by identifier.
- */
-function uniqueBy<TValue>(values: TValue[], getKey: (value: TValue) => string): TValue[] {
-  const seen = new Set<string>();
-
-  return values.filter((value) => {
-    const key = getKey(value);
-
-    if (seen.has(key)) {
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
-}
-
-/**
- * Formats numbers compactly for dense engineering tables.
- */
-function formatMetricNumber(value: number): string {
-  if (Number.isInteger(value)) {
-    return value.toString();
-  }
-
-  return value.toPrecision(4).replace(/\.?0+$/u, "");
+  return [...timestamps].sort((first, second) => Date.parse(second) - Date.parse(first))[0] ?? new Date(0).toISOString();
 }

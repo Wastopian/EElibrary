@@ -3,18 +3,26 @@
  */
 
 import Link from "next/link";
-import { EmptyState } from "@ee-library/ui";
 
 /**
  * Renders a recovery path when a part cannot be found.
  */
 export default function NotFound() {
   return (
-    <div className="error-shell">
-      <EmptyState body="The requested part is not in the current seeded records." title="Part not found" />
-      <Link className="button-link" href="/">
-        Return to search
-      </Link>
-    </div>
+    <section className="workspace-state">
+      <div className="workspace-state__card">
+        <p className="workspace-state__eyebrow">Route state</p>
+        <h1>Part not found</h1>
+        <p>The requested part is not available in the current catalog window. Return to the search workspace and use the quick readiness flow or filters to locate another record.</p>
+        <div className="workspace-state__actions">
+          <Link className="button-link" href="/">
+            Return to search
+          </Link>
+          <Link className="button-link button-link--quiet" href="/admin">
+            Open admin queue
+          </Link>
+        </div>
+      </div>
+    </section>
   );
 }

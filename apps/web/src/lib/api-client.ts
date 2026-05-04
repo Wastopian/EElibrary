@@ -2,21 +2,142 @@
  * File header: Provides the web app's provider-neutral API access layer.
  */
 
-import type { ApiEnvelope, PartSearchFilters, PartSearchRecord, SearchFacets } from "@ee-library/shared";
+import type {
+  ApiEnvelope,
+  ApiErrorEnvelope,
+  AssetPromotionInput,
+  AssetPromotionResponse,
+  BomImportCreateInput,
+  BomImportCreateResponse,
+  BomImportDiagnosticsResponse,
+  BomImportMatchResponse,
+  BomImportPreviewInput,
+  BomImportPreviewResponse,
+  BomRevisionCompareResponse,
+  CircuitBlockCreateInput,
+  CircuitBlockCreateResponse,
+  CircuitBlockDetailResponse,
+  CircuitBlockInstantiationCreateInput,
+  CircuitBlockInstantiationCreateResponse,
+  CircuitBlockListResponse,
+  CircuitBlockProjectDependency,
+  CircuitBlockPartCreateInput,
+  CircuitBlockPartCreateResponse,
+  CircuitBlockPartUpdateInput,
+  CircuitBlockPartUpdateResponse,
+  CircuitBlockUpdateInput,
+  CircuitBlockUpdateResponse,
+  EvidenceAttachmentCreateInput,
+  EvidenceAttachmentCreateResponse,
+  EvidenceAttachmentFileUploadInput,
+  EvidenceAttachmentListFilters,
+  EvidenceAttachmentListResponse,
+  EvidenceAttachmentUpdateInput,
+  EvidenceAttachmentUpdateResponse,
+  ExportBundleCreateInput,
+  ExportBundleCreateResponse,
+  ExportBundleListResponse,
+  FollowUpListResponse,
+  FollowUpSyncResponse,
+  FollowUpUpdateInput,
+  FollowUpUpdateResponse,
+  GenerationRequestCreateInput,
+  GenerationRequestCreateResponse,
+  GenerationTargetAssetType,
+  PartDetailResponse,
+  PartSubstitutionCreateInput,
+  PartSubstitutionCreateResponse,
+  PartSubstitutionListResponse,
+  PartSubstitutionRevokeResponse,
+  PartWhereUsedResponse,
+  PartIssueCode,
+  PartIssueWorkflowUpdateInput,
+  PartIssueWorkflowUpdateResponse,
+  ProjectDetailResponse,
+  ProjectBomHealthResponse,
+  ProjectCreateInput,
+  ProjectCreateResponse,
+  ProjectEvidenceAttachmentsResponse,
+  ProjectFleetRiskResponse,
+  ProjectListResponse,
+  ProjectRevisionCompareResponse,
+  ProjectRevisionUpdateInput,
+  ProjectRevisionUpdateResponse,
+  ProjectUpdateInput,
+  ProjectUpdateResponse,
+  PartSearchFilters,
+  PartSearchRecord,
+  ProviderAcquisitionJobCreateInput,
+  ProviderAcquisitionJobDetailResponse,
+  ProviderLookupCandidate,
+  ProviderLookupRequestInput,
+  ProviderImportCreateInput,
+  ProviderImportCreateResponse,
+  ReviewActionInput,
+  ReviewActionResponse,
+  SourceReconciliationUpdateInput,
+  SourceReconciliationUpdateResponse,
+  SearchFacets,
+  WhereUsedSearchResponse,
+  WhereUsedTargetType
+} from "@ee-library/shared/types";
+import type { SystemHealthResponse } from "@ee-library/shared/system-health-types";
+
+/** ApiHealth describes the lightweight operational status response from the API. */
+export interface ApiHealth {
+  /** Dependency status values are deliberately plain strings from the API boundary. */
+  dependencies: {
+    database: "connected" | "not_configured" | "unavailable";
+    objectStorage: string;
+    queue: string;
+  };
+  /** Service name returned by the API. */
+  service: string;
+  /** Top-level health label returned by the API. */
+  status: string;
+}
+
+/** ApiClientError preserves machine-readable API error details for route-level recovery UI. */
+export class ApiClientError extends Error {
+  /** User-facing API action that failed. */
+  readonly action: string;
+  /** Machine-readable API error code. */
+  readonly code: string;
+  /** HTTP status returned by the API. */
+  readonly statusCode: number;
+
+  /**
+   * Creates a typed API error with enough detail for setup and degraded-state rendering.
+   */
+  constructor(action: string, statusCode: number, code: string, message: string) {
+    super(`${action} failed (${code}): ${message}`);
+    this.name = "ApiClientError";
+    this.action = action;
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * Checks whether an unknown failure carries API error metadata.
+ */
+export function isApiClientError(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError;
+}
 
 /**
  * Fetches provider-neutral search facets from the API boundary.
  */
 export async function fetchSearchFacets(): Promise<SearchFacets> {
-  const envelope = await fetchApi<ApiEnvelope<SearchFacets>>("/parts/facets");
+  const envelope = await fetchSearchFacetsEnvelope();
 
   return envelope.data;
 }
 
 /**
- * Fetches search results from the API boundary.
+ * Fetches search facets and preserves catalog source metadata.
  */
-export async function fetchPartSearch(filters: PartSearchFilters): Promise<PartSearchRecord[]> {
+export async function fetchSearchFacetsEnvelope(filters: PartSearchFilters = {}): Promise<ApiEnvelope<SearchFacets>> {
   const searchParams = new URLSearchParams();
 
   appendSearchParam(searchParams, "q", filters.query);
@@ -25,9 +146,592 @@ export async function fetchPartSearch(filters: PartSearchFilters): Promise<PartS
   appendSearchParam(searchParams, "packageId", filters.packageId);
   appendSearchParam(searchParams, "lifecycleStatus", filters.lifecycleStatus);
   appendSearchParam(searchParams, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  appendSearchParam(searchParams, "providerPartId", filters.providerPartId);
+  appendSearchParam(searchParams, "providerUrl", filters.providerUrl);
+  appendSearchParam(searchParams, "datasheetUrl", filters.datasheetUrl);
+  appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
+  appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
+  appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
+  const query = searchParams.toString();
+
+  return fetchApi<ApiEnvelope<SearchFacets>>(`/parts/facets${query ? `?${query}` : ""}`);
+}
+
+/**
+ * Fetches search results from the API boundary.
+ */
+export async function fetchPartSearch(filters: PartSearchFilters): Promise<PartSearchRecord[]> {
+  const envelope = await fetchPartSearchEnvelope(filters);
+
+  return envelope.data;
+}
+
+/**
+ * Fetches search records and preserves catalog source metadata.
+ */
+export async function fetchPartSearchEnvelope(filters: PartSearchFilters): Promise<ApiEnvelope<PartSearchRecord[]>> {
+  const searchParams = new URLSearchParams();
+
+  appendSearchParam(searchParams, "q", filters.query);
+  appendSearchParam(searchParams, "manufacturerId", filters.manufacturerId);
+  appendSearchParam(searchParams, "category", filters.category);
+  appendSearchParam(searchParams, "packageId", filters.packageId);
+  appendSearchParam(searchParams, "lifecycleStatus", filters.lifecycleStatus);
+  appendSearchParam(searchParams, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
+  appendSearchParam(searchParams, "providerPartId", filters.providerPartId);
+  appendSearchParam(searchParams, "providerUrl", filters.providerUrl);
+  appendSearchParam(searchParams, "datasheetUrl", filters.datasheetUrl);
+  appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
+  appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
+  appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
+  appendSearchParam(searchParams, "page", filters.page && filters.page > 1 ? filters.page.toString() : undefined);
+  appendSearchParam(searchParams, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
+  appendSearchParam(searchParams, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
 
   const query = searchParams.toString();
-  const envelope = await fetchApi<ApiEnvelope<PartSearchRecord[]>>(`/parts${query ? `?${query}` : ""}`);
+
+  return fetchApi<ApiEnvelope<PartSearchRecord[]>>(`/parts${query ? `?${query}` : ""}`);
+}
+
+/**
+ * Fetches API health for homepage status without failing the whole page if the API is down.
+ */
+export async function fetchApiHealth(): Promise<ApiHealth | null> {
+  try {
+    return await fetchApi<ApiHealth>("/health");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches the system-health payload that drives the WorkerStatusBanner. Returns null on
+ * transport failure so the landing page can render an "API unreachable" state without
+ * crashing.
+ */
+export async function fetchSystemHealth(): Promise<SystemHealthResponse | null> {
+  try {
+    return await fetchApi<SystemHealthResponse>("/system/health");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches the read-only project-memory list envelope so pages can render source state honestly.
+ */
+export async function fetchProjectListEnvelope(): Promise<ApiEnvelope<ProjectListResponse>> {
+  return fetchApi<ApiEnvelope<ProjectListResponse>>("/projects");
+}
+
+/**
+ * Fetches the read-only project-memory list without hiding planned capability states.
+ */
+export async function fetchProjectList(): Promise<ProjectListResponse> {
+  const envelope = await fetchProjectListEnvelope();
+
+  return envelope.data;
+}
+
+/**
+ * Fetches the cross-project risk dashboard with explainable counts only.
+ */
+export async function fetchProjectFleetRisk(): Promise<ProjectFleetRiskResponse> {
+  const envelope = await fetchApi<ApiEnvelope<ProjectFleetRiskResponse>>("/projects/health-summary");
+  return envelope.data;
+}
+
+/**
+ * Creates a DB-backed project memory root and first revision.
+ */
+export async function createProject(input: ProjectCreateInput): Promise<ProjectCreateResponse> {
+  const response = await fetch(buildApiUrl("/projects"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates project metadata while keeping BOM, approval, validation, and export state separate.
+ */
+export async function updateProject(projectId: string, input: ProjectUpdateInput): Promise<ProjectUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates revision metadata without remapping BOM rows or creating usage records.
+ */
+export async function updateProjectRevision(projectId: string, revisionId: string, input: ProjectRevisionUpdateInput): Promise<ProjectRevisionUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project revision update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectRevisionUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches one project-memory detail record from the API boundary.
+ */
+export async function fetchProjectDetail(projectId: string): Promise<ProjectDetailResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project detail request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches explainable BOM health for one project.
+ */
+export async function fetchProjectBomHealth(projectId: string): Promise<ProjectBomHealthResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-health`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project BOM health request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectBomHealthResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches evidence metadata attached to one project or its project-memory children.
+ */
+export async function fetchProjectEvidenceAttachments(projectId: string): Promise<ProjectEvidenceAttachmentsResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/evidence`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project evidence request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectEvidenceAttachmentsResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Parses a CSV BOM through the API without creating database records.
+ */
+export async function previewBomImport(input: BomImportPreviewInput): Promise<BomImportPreviewResponse> {
+  const response = await fetch(buildApiUrl("/bom-imports/preview"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import preview");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportPreviewResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Persists a mapped CSV BOM into one project without running part matching.
+ */
+export async function createBomImport(projectId: string, input: BomImportCreateInput): Promise<BomImportCreateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-imports`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Runs deterministic internal matching for one persisted BOM import.
+ */
+export async function matchBomImportRows(bomImportId: string): Promise<BomImportMatchResponse> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/match`), {
+    body: JSON.stringify({}),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import match");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Persists one evidence attachment metadata row without implying validation or approval.
+ */
+export async function createEvidenceAttachment(input: EvidenceAttachmentCreateInput): Promise<EvidenceAttachmentCreateResponse> {
+  const response = await fetch(buildApiUrl("/evidence-attachments"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Evidence attachment create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<EvidenceAttachmentCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches global evidence vault rows with provider-neutral filters.
+ */
+export async function fetchEvidenceAttachments(filters: EvidenceAttachmentListFilters = {}): Promise<EvidenceAttachmentListResponse> {
+  const searchParams = new URLSearchParams();
+
+  appendSearchParam(searchParams, "targetType", filters.targetType ?? undefined);
+  appendSearchParam(searchParams, "evidenceType", filters.evidenceType ?? undefined);
+  appendSearchParam(searchParams, "reviewStatus", filters.reviewStatus ?? undefined);
+  appendSearchParam(searchParams, "storageState", filters.storageState ?? undefined);
+  appendSearchParam(searchParams, "sourceSystem", filters.sourceSystem ?? undefined);
+  appendSearchParam(searchParams, "q", filters.query ?? undefined);
+
+  const query = searchParams.toString();
+  const envelope = await fetchApi<ApiEnvelope<EvidenceAttachmentListResponse>>(`/evidence-attachments${query ? `?${query}` : ""}`);
+
+  return envelope.data;
+}
+
+/**
+ * Uploads a local evidence file and persists file-backed evidence metadata.
+ */
+export async function uploadEvidenceAttachmentFile(input: EvidenceAttachmentFileUploadInput): Promise<EvidenceAttachmentCreateResponse> {
+  const response = await fetch(buildApiUrl("/evidence-attachments/files"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Evidence file upload");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<EvidenceAttachmentCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates evidence review metadata without changing validation, approval, or export state.
+ */
+export async function updateEvidenceAttachment(evidenceAttachmentId: string, input: EvidenceAttachmentUpdateInput): Promise<EvidenceAttachmentUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/evidence-attachments/${encodeURIComponent(evidenceAttachmentId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Evidence attachment update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<EvidenceAttachmentUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches project follow-up work generated from persisted BOM health findings.
+ */
+export async function fetchProjectFollowUps(projectId: string): Promise<FollowUpListResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/follow-ups`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project follow-ups request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<FollowUpListResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Refreshes project follow-up records from current BOM health findings.
+ */
+export async function syncProjectFollowUps(projectId: string): Promise<FollowUpSyncResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/follow-ups`), {
+    body: JSON.stringify({}),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project follow-ups sync");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<FollowUpSyncResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches circuit block follow-up work generated from required role readiness gaps.
+ */
+/**
+ * Fetches projects that have confirmed usages overlapping with a circuit block's part roles.
+ */
+export async function fetchCircuitBlockProjectDependencies(circuitBlockId: string): Promise<CircuitBlockProjectDependency[]> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/project-dependencies`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return [];
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block project dependencies");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<{ dependencies: CircuitBlockProjectDependency[] }>;
+
+  return envelope.data.dependencies;
+}
+
+export async function fetchCircuitBlockFollowUps(circuitBlockId: string): Promise<FollowUpListResponse | null> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/follow-ups`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block follow-ups request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<FollowUpListResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Refreshes circuit block follow-up records from current required-role readiness gaps.
+ */
+export async function syncCircuitBlockFollowUps(circuitBlockId: string): Promise<FollowUpSyncResponse> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/follow-ups`), {
+    body: JSON.stringify({}),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block follow-ups sync");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<FollowUpSyncResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates a follow-up workflow row without mutating the source finding.
+ */
+export async function updateFollowUp(followUpId: string, input: FollowUpUpdateInput): Promise<FollowUpUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/follow-ups/${encodeURIComponent(followUpId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Follow-up update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<FollowUpUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches the reusable circuit block library from project-memory persistence.
+ */
+export async function fetchCircuitBlocks(): Promise<CircuitBlockListResponse> {
+  const envelope = await fetchApi<ApiEnvelope<CircuitBlockListResponse>>("/circuit-blocks");
+
+  return envelope.data;
+}
+
+/**
+ * Creates one structured circuit block without adding part roles.
+ */
+export async function createCircuitBlock(input: CircuitBlockCreateInput): Promise<CircuitBlockCreateResponse> {
+  const response = await fetch(buildApiUrl("/circuit-blocks"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates circuit block metadata without changing linked-part approval or export truth.
+ */
+export async function updateCircuitBlock(circuitBlockId: string, input: CircuitBlockUpdateInput): Promise<CircuitBlockUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches one circuit block detail with linked part roles and evidence.
+ */
+export async function fetchCircuitBlockDetail(circuitBlockId: string): Promise<CircuitBlockDetailResponse | null> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block detail request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Adds or refreshes a part role inside one circuit block.
+ */
+export async function createCircuitBlockPart(circuitBlockId: string, input: CircuitBlockPartCreateInput): Promise<CircuitBlockPartCreateResponse> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/parts`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block part create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockPartCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates circuit block part-role metadata without changing the linked part identity.
+ */
+export async function updateCircuitBlockPart(circuitBlockId: string, circuitBlockPartId: string, input: CircuitBlockPartUpdateInput): Promise<CircuitBlockPartUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/parts/${encodeURIComponent(circuitBlockPartId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block part update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockPartUpdateResponse>;
 
   return envelope.data;
 }
@@ -35,7 +739,7 @@ export async function fetchPartSearch(filters: PartSearchFilters): Promise<PartS
 /**
  * Fetches one component detail record from the API boundary.
  */
-export async function fetchPartDetail(partId: string): Promise<PartSearchRecord | null> {
+export async function fetchPartDetail(partId: string): Promise<PartDetailResponse | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}`), {
     cache: "no-store"
   });
@@ -45,12 +749,252 @@ export async function fetchPartDetail(partId: string): Promise<PartSearchRecord 
   }
 
   if (!response.ok) {
-    throw new Error(`API request failed with ${response.status}`);
+    throw await buildApiError(response, "Part detail request");
   }
 
-  const envelope = (await response.json()) as ApiEnvelope<PartSearchRecord>;
+  const envelope = (await response.json()) as ApiEnvelope<PartDetailResponse>;
 
   return envelope.data;
+}
+
+/**
+ * Fetches confirmed where-used history for one internal part without changing detail truth.
+ */
+export async function fetchPartWhereUsed(partId: string): Promise<PartWhereUsedResponse | null> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/usages`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part where-used request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartWhereUsedResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches global where-used search results for project-memory targets.
+ */
+export async function fetchWhereUsedSearch(targetType: WhereUsedTargetType, query: string): Promise<WhereUsedSearchResponse> {
+  const params = new URLSearchParams({
+    q: query,
+    targetType
+  });
+  const envelope = await fetchApi<ApiEnvelope<WhereUsedSearchResponse>>(`/where-used?${params.toString()}`);
+
+  return envelope.data;
+}
+
+/**
+ * Runs one provider catalog import through the API using the shared worker import path.
+ */
+export async function requestProviderImport(input: ProviderImportCreateInput): Promise<ProviderImportCreateResponse> {
+  const response = await fetch(buildApiUrl("/imports/provider"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderImportCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Runs an explicit exact-match provider candidate lookup without changing normal catalog search behavior.
+ */
+export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupCandidate[]> {
+  const response = await fetch(buildApiUrl("/provider-lookups"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider lookup");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupCandidate[]>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates one admin-gated provider acquisition job from an exact-match provider candidate.
+ */
+export async function requestProviderAcquisitionJob(input: ProviderAcquisitionJobCreateInput): Promise<ProviderAcquisitionJobDetailResponse> {
+  const response = await fetch(buildApiUrl("/provider-acquisition-jobs"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider acquisition job");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderAcquisitionJobDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Reads one admin-gated provider acquisition job for client polling.
+ */
+export async function fetchProviderAcquisitionJob(jobId: string): Promise<ProviderAcquisitionJobDetailResponse> {
+  const response = await fetch(buildApiUrl(`/provider-acquisition-jobs/${encodeURIComponent(jobId)}`), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Provider acquisition job");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProviderAcquisitionJobDetailResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates a DB-backed generation request through the API without simulating completion.
+ */
+export async function createGenerationRequest(partId: string, targetAssetType: GenerationTargetAssetType): Promise<GenerationRequestCreateResponse> {
+  const body: GenerationRequestCreateInput = { targetAssetType };
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/generation-requests`), {
+    body: JSON.stringify(body),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Generation request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<GenerationRequestCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates a DB-backed review action through the API without implying automatic export readiness.
+ */
+export async function createReviewAction(partId: string, input: ReviewActionInput): Promise<ReviewActionResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/reviews`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Review action");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ReviewActionResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Explicitly promotes an approved asset into verified-for-export when rules allow it.
+ */
+export async function createAssetPromotion(partId: string, assetId: string): Promise<AssetPromotionResponse> {
+  const body: AssetPromotionInput = { assetId };
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/asset-promotions`), {
+    body: JSON.stringify(body),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Asset promotion");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<AssetPromotionResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates operator workflow state for one part issue through the API.
+ */
+export async function updatePartIssueWorkflow(
+  partId: string,
+  issueCode: PartIssueCode,
+  input: PartIssueWorkflowUpdateInput
+): Promise<PartIssueWorkflowUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/issues/${encodeURIComponent(issueCode)}/workflow`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Issue workflow update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartIssueWorkflowUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates source-conflict reconciliation state through the API.
+ */
+export async function updateSourceReconciliation(
+  partId: string,
+  input: SourceReconciliationUpdateInput
+): Promise<SourceReconciliationUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/source-reconciliation`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Source reconciliation update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<SourceReconciliationUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches a short-lived HS256 token from the Next.js /api/token route for API POST calls.
+ * Works from both server components (absolute URL) and client components (relative URL).
+ */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const base =
+      typeof globalThis.window === "undefined"
+        ? (process.env["NEXTAUTH_URL"] ?? "http://localhost:3000")
+        : "";
+    const res = await fetch(`${base}/api/token`, { cache: "no-store" });
+    if (!res.ok) return {};
+    const { token } = (await res.json()) as { token: string };
+    return { Authorization: `Bearer ${token}` };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -62,7 +1006,7 @@ async function fetchApi<TResponse>(path: string): Promise<TResponse> {
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed with ${response.status}`);
+    throw await buildApiError(response, "API request");
   }
 
   return (await response.json()) as TResponse;
@@ -73,6 +1017,197 @@ async function fetchApi<TResponse>(path: string): Promise<TResponse> {
  */
 function buildApiUrl(path: string): string {
   return new URL(path, getApiBaseUrl()).toString();
+}
+
+/**
+ * Builds an operational error message from the API error envelope when available.
+ */
+async function buildApiError(response: Response, action: string): Promise<Error> {
+  const fallbackMessage = `${action} failed with HTTP ${response.status}`;
+
+  try {
+    const errorEnvelope = (await response.json()) as Partial<ApiErrorEnvelope> | { error?: unknown };
+    const envelopeError = errorEnvelope.error;
+    const errorCode = typeof envelopeError === "object" && envelopeError !== null && "code" in envelopeError && typeof envelopeError.code === "string" ? envelopeError.code : `HTTP_${response.status}`;
+    const errorMessage = typeof envelopeError === "object" && envelopeError !== null && "message" in envelopeError && typeof envelopeError.message === "string" ? envelopeError.message : fallbackMessage;
+
+    return new ApiClientError(action, response.status, errorCode, errorMessage);
+  } catch {
+    return new ApiClientError(action, response.status, `HTTP_${response.status}`, fallbackMessage);
+  }
+}
+
+/**
+ * Fetches active and revoked substitution history for one catalog part.
+ */
+export async function fetchPartSubstitutions(partId: string): Promise<PartSubstitutionListResponse> {
+  const envelope = await fetchApi<ApiEnvelope<PartSubstitutionListResponse>>(`/parts/${encodeURIComponent(partId)}/substitutions`);
+  return envelope.data;
+}
+
+/**
+ * Creates one approved substitution for a catalog part.
+ */
+export async function createPartSubstitution(
+  partId: string,
+  input: PartSubstitutionCreateInput
+): Promise<PartSubstitutionCreateResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/substitutions`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part substitution create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartSubstitutionCreateResponse>;
+  return envelope.data;
+}
+
+/**
+ * Revokes one previously-approved substitution while preserving audit history.
+ */
+export async function revokePartSubstitution(substitutionId: string): Promise<PartSubstitutionRevokeResponse> {
+  const response = await fetch(buildApiUrl(`/substitutions/${encodeURIComponent(substitutionId)}/revoke`), {
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part substitution revoke");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartSubstitutionRevokeResponse>;
+  return envelope.data;
+}
+
+/**
+ * Generates BOM lines for one circuit block instantiation against a project revision.
+ */
+export async function instantiateCircuitBlockIntoBom(
+  projectId: string,
+  input: CircuitBlockInstantiationCreateInput
+): Promise<CircuitBlockInstantiationCreateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/circuit-block-instantiations`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block instantiation");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockInstantiationCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates a manifest-first export bundle for verified parts in a project.
+ */
+export async function createExportBundle(projectId: string, input: ExportBundleCreateInput): Promise<ExportBundleCreateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/export-bundles`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Export bundle create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ExportBundleCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches all export bundles for a project.
+ */
+export async function fetchProjectExportBundles(projectId: string): Promise<ExportBundleListResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/export-bundles`), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Export bundle list");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ExportBundleListResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches match-status diagnostics for one BOM import.
+ */
+export async function fetchBomImportDiagnostics(importId: string): Promise<BomImportDiagnosticsResponse> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(importId)}/diagnostics`), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import diagnostics");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportDiagnosticsResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches a side-by-side comparison between two BOM imports.
+ */
+export async function fetchBomRevisionCompare(projectId: string, importId1: string, importId2: string): Promise<BomRevisionCompareResponse> {
+  const params = new URLSearchParams({ importId1, importId2, projectId });
+  const response = await fetch(buildApiUrl(`/bom-compare?${params.toString()}`), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM revision compare");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomRevisionCompareResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches a revision-vs-revision BOM diff for one project.
+ */
+export async function fetchProjectRevisionCompare(
+  projectId: string,
+  fromRevisionId: string,
+  toRevisionId: string
+): Promise<ProjectRevisionCompareResponse> {
+  const params = new URLSearchParams({ from: fromRevisionId, to: toRevisionId });
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/revisions/compare?${params.toString()}`), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project revision compare");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectRevisionCompareResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Builds the API download URL for one asset so the UI can link directly to the redirect endpoint.
+ */
+export function buildAssetDownloadUrl(partId: string, assetId: string): string {
+  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+}
+
+/**
+ * Builds the API URL that streams an export bundle file from local storage.
+ * Returns null when the bundle is manifest-only (no captured storage key).
+ */
+export function buildExportBundleDownloadUrl(storageKey: string | null): string | null {
+  if (!storageKey) return null;
+  return `${getApiBaseUrl()}/storage/${encodeURIComponent(storageKey)}`;
 }
 
 /**

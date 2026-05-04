@@ -9,68 +9,275 @@ export type LifecycleStatus = "active" | "not_recommended" | "obsolete" | "unkno
 export type MetricUnit = "V" | "A" | "F" | "H" | "ohm" | "mm" | "Hz" | "deg C";
 
 /** Asset kinds match the MVP asset registry without naming a specific provider. */
-export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model";
+export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model" | "mechanical_drawing";
+
+/** EngineeringAssetClass names first-class asset classes used by the detail API. */
+export type EngineeringAssetClass = AssetType;
 
 /** File formats describe storage content without implying availability. */
-export type FileFormat = "pdf" | "step" | "kicad_mod" | "kicad_sym" | "unknown";
+export type FileFormat = "pdf" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
 
 /** License modes prevent the UI from promising redistribution when it is not known. */
 export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown";
 
+/** Provenance makes source trust explicit without assuming correctness. */
+export type AssetProvenance = "official" | "trusted_external" | "generated" | "manual_internal";
+
+/** AssetAvailabilityStatus answers whether an asset actually exists locally or only as a reference. */
+export type AssetAvailabilityStatus = "missing" | "referenced" | "downloaded" | "validated" | "failed";
+
+/** AssetReviewStatus keeps engineering review separate from storage and export readiness. */
+export type AssetReviewStatus = "not_reviewed" | "review_required" | "approved" | "rejected" | "changes_requested";
+
+/** AssetExportStatus prevents vague export claims when only partial or referenced evidence exists. */
+export type AssetExportStatus = "not_exportable" | "partially_exportable" | "verified_for_export";
+
+/** AssetState is the legacy storage-field name retained while migrations carry compatibility columns. */
+export type AssetState = AssetAvailabilityStatus;
+
+/** AssetStatus is the legacy combined status retained for older fixtures and rows. */
+export type AssetStatus = AssetAvailabilityStatus | "reviewed" | "verified_for_export";
+
 /** Validation status describes trust in the asset or metadata. */
 export type ValidationStatus = "verified" | "needs_review" | "not_validated" | "failed";
+
+/** AssetValidationType names reviewable evidence without claiming a broad validation engine. */
+export type AssetValidationType = "file_integrity" | "footprint_geometry" | "symbol_pin_mapping" | "three_d_geometry" | "manual_engineering_review";
+
+/** AssetPromotionOutcome records whether an export-promotion attempt succeeded or was denied. */
+export type AssetPromotionOutcome = "promoted" | "denied";
 
 /** Preview status describes whether a visual preview can be rendered. */
 export type PreviewStatus = "ready" | "pending" | "not_available";
 
-/** AssetState tracks the concrete file lifecycle without implying fake availability. */
-export type AssetState = "missing" | "referenced" | "downloaded" | "validated" | "failed";
+/** Connector relationship types model mating and accessory intelligence. */
+export type ConnectorRelationshipType =
+  | "best_mate"
+  | "alternate_mate"
+  | "requires_accessory"
+  | "optional_accessory"
+  | "supports_cable"
+  | "tooling_requirement";
+
+/** ConnectorClass keeps connector-specific filtering explicit without leaking provider categories into the UI. */
+export type ConnectorClass = "connector" | "accessory" | "tooling" | "cable" | "non_connector";
+
+/** ConnectorRelationCompatibilityStatus keeps mate and accessory certainty explicit instead of flattening it into one score. */
+export type ConnectorRelationCompatibilityStatus = "verified" | "probable" | "uncertain" | "rejected";
+
+/** ConnectorEvidenceKind keeps direct provider evidence distinct from weaker family-inference paths. */
+export type ConnectorEvidenceKind = "provider_direct" | "datasheet_reference" | "family_inference" | "manual_review" | "catalog_fixture";
+
+/** CableShieldingRequirement keeps cable-side shielding assumptions explicit instead of flattening them into notes. */
+export type CableShieldingRequirement = "shielded" | "unshielded" | "either" | "unknown";
+
+/** CableTerminationStyle keeps cable-side termination assumptions queryable and reviewable. */
+export type CableTerminationStyle = "idc" | "crimp" | "solder" | "unknown";
+
+/** CableCompatibilityStatus keeps cable support honest when the evidence is tentative or rejected. */
+export type CableCompatibilityStatus = "verified" | "probable" | "uncertain" | "rejected";
+
+/** PartIdentityStatus keeps record identity confidence explicit instead of inferring certainty from one field. */
+export type PartIdentityStatus = "confirmed" | "low_confidence" | "unknown";
+
+/** PartReadinessStatus is the whole-part readiness state exposed by API and UI. */
+export type PartReadinessStatus = "ready_for_export_review" | "needs_attention" | "blocked" | "unknown";
+
+/** PartApprovalStatus keeps part approval separate from asset review and export verification. */
+export type PartApprovalStatus = "approved" | "pending_review" | "not_requested" | "not_applicable";
+
+/** PartIssueSeverity distinguishes hard blockers from follow-up work. */
+export type PartIssueSeverity = "error" | "warning";
+
+/** PartIssueWorkflowStatus keeps operational queue workflow separate from the underlying evidence. */
+export type PartIssueWorkflowStatus = "open" | "in_review" | "resolved" | "ignored";
+
+/** PartIssueCode names backend-derived part-level queue and blocker categories. */
+export type PartIssueCode =
+  | "low_confidence_identity"
+  | "pending_approval"
+  | "missing_verified_cad"
+  | "missing_datasheet"
+  | "missing_connector_mate"
+  | "missing_connector_accessories"
+  | "connector_low_confidence"
+  | "lifecycle_risk"
+  | "source_conflict"
+  | "duplicate_candidate";
+
+/** PartRiskFlagCode names compact risk chips shown in detail and admin surfaces. */
+export type PartRiskFlagCode =
+  | "lifecycle_not_active"
+  | "generated_assets_present"
+  | "source_conflict"
+  | "connector_low_confidence"
+  | "partial_readiness_data";
+
+/** Generation targets for datasheet-driven CAD creation workflows. */
+export type GenerationTargetAssetType = "footprint" | "symbol" | "three_d_model";
+
+/** Datasheet extraction status tracks reviewed source material without claiming full PDF parsing. */
+export type DatasheetExtractionStatus = "not_available" | "available" | "needs_review";
+
+/** Workflow status for generated asset pipelines from requestability through review. */
+export type GenerationWorkflowState = "unavailable" | "available_to_request" | "requested" | "queued" | "processing" | "generated" | "review_required" | "approved" | "failed";
+
+/** GenerationStatus keeps existing workflow fields aligned with the Phase 3B state model. */
+export type GenerationStatus = GenerationWorkflowState;
+
+/** GenerationRequestStatus is the persisted state for user-created generation requests. */
+export type GenerationRequestStatus = Exclude<GenerationWorkflowState, "unavailable" | "available_to_request">;
+
+/** ReviewTargetType names the durable entities that can receive engineering review outcomes. */
+export type ReviewTargetType = "asset" | "generation_workflow";
+
+/** ReviewOutcome records explicit reviewer decisions without inferring export verification. */
+export type ReviewOutcome = "approved" | "rejected" | "changes_requested";
+
+/** ReviewState is the resolved status shown by API/UI for reviewable targets. */
+export type ReviewState = "pending_review" | "approved" | "rejected" | "changes_requested" | "verified_for_export" | "not_required";
+
+/** SourceImportStatus makes provider import outcomes queryable without provider-specific strings. */
+export type SourceImportStatus = "imported" | "failed";
+
+/** ProviderLookupMatchType keeps Phase 1 provider lookup results strictly exact-match only. */
+export type ProviderLookupMatchType = "exact_mpn" | "exact_provider_part_id";
+
+/** ProviderAcquisitionJobStatus is the durable queued-to-terminal lifecycle for provider acquisition. */
+export type ProviderAcquisitionJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+/** ProviderAcquisitionJobEventType keeps the first queued-job event stream coarse and explicit. */
+export type ProviderAcquisitionJobEventType = ProviderAcquisitionJobStatus;
+
+/** PartAcquisitionSummaryState keeps part-detail acquisition history explicit without changing search records. */
+export type PartAcquisitionSummaryState = "available" | "legacy_source_only" | "not_recorded" | "unavailable";
+
+/** ProviderEnrichmentJobType keeps Phase 2C.1 explicit while only datasheet capture is supported. */
+export type ProviderEnrichmentJobType = "datasheet_capture";
+
+/** ProviderEnrichmentJobStatus is the durable queued-to-terminal lifecycle for provider enrichment work. */
+export type ProviderEnrichmentJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+/** ProviderEnrichmentJobEventType keeps enrichment lifecycle events coarse and aligned with job status. */
+export type ProviderEnrichmentJobEventType = ProviderEnrichmentJobStatus;
+
+/** PartEnrichmentSummaryState keeps part-detail enrichment visibility explicit without changing readiness truth. */
+export type PartEnrichmentSummaryState = "available" | "not_recorded" | "unavailable";
+
+/** SourceReconciliationStatus records how an operator has handled mixed provider/source evidence. */
+export type SourceReconciliationStatus = "unreviewed" | "canonical_source_selected" | "mixed_sources_accepted";
+
+/** ProjectStatus names planned project-memory lifecycle states without implying BOM workflows are shipped. */
+export type ProjectStatus = "active" | "archived" | "prototype" | "production" | "deprecated";
+
+/** ProjectRevisionStatus keeps released and in-review project revisions distinct for future where-used views. */
+export type ProjectRevisionStatus = "draft" | "in_review" | "released" | "superseded" | "archived";
+
+/** BomSourceFormat records the source file family for a planned BOM import. */
+export type BomSourceFormat = "csv" | "xlsx" | "json" | "eda_export" | "manual";
+
+/** BomImportStatus tracks intake progress before matching rows to confirmed internal parts. */
+export type BomImportStatus = "uploaded" | "mapping_required" | "mapped" | "processing" | "processed" | "failed";
+
+/** BomLineMatchStatus prevents weak or ambiguous BOM rows from becoming confirmed usage. */
+export type BomLineMatchStatus = "unmatched" | "matched" | "ambiguous" | "weak_match" | "ignored";
+
+/** ProjectPartUsageStatus distinguishes historical context from released, reusable project usage. */
+export type ProjectPartUsageStatus = "proposed" | "in_review" | "used" | "released" | "deprecated";
+
+/** CircuitBlockType names reusable circuit categories without forcing provider taxonomy into the UI. */
+export type CircuitBlockType = "power" | "mcu_support" | "interface" | "protection" | "connector_set" | "sensor_front_end" | "other";
+
+/** CircuitBlockStatus keeps block review state separate from part approval and export readiness. */
+export type CircuitBlockStatus = "draft" | "in_review" | "approved" | "restricted" | "deprecated";
+
+/** CircuitBlockPartSubstitutionPolicy records how strictly one role must use its linked part. */
+export type CircuitBlockPartSubstitutionPolicy = "exact_required" | "approved_alternate_allowed" | "equivalent_allowed" | "do_not_substitute";
+
+/** ProjectBomRiskFindingCode names explainable project BOM health gaps. */
+export type ProjectBomRiskFindingCode =
+  | "unmatched_bom_rows"
+  | "ambiguous_or_weak_matches"
+  | "approval_gap"
+  | "lifecycle_risk"
+  | "lifecycle_risk_changed"
+  | "missing_verified_cad"
+  | "connector_buildability_gap"
+  | "missing_evidence";
+
+/** ProjectBomRiskSeverity keeps risk badges direct without opaque scoring. */
+export type ProjectBomRiskSeverity = "review" | "danger";
+
+/** EvidenceTargetType names durable entities that can receive engineering evidence. */
+export type EvidenceTargetType = "part" | "asset" | "project" | "bom_import" | "bom_line" | "project_part_usage" | "risk_finding" | "circuit_block" | "circuit_block_part";
+
+/** EvidenceAttachmentType distinguishes metadata-only notes, links, and stored files. */
+export type EvidenceAttachmentType = "note" | "link" | "file";
+
+/** EvidenceReviewStatus keeps evidence review separate from validation, approval, and export. */
+export type EvidenceReviewStatus = "unreviewed" | "accepted" | "rejected" | "superseded";
+
+/** EvidenceStorageState distinguishes link-only, note-only, and file-backed evidence rows. */
+export type EvidenceStorageState = "file_backed" | "link_only" | "note_only";
+
+/** FollowUpTargetType names objects that can own assignable follow-up work. */
+export type FollowUpTargetType = "project" | "circuit_block";
+
+/** FollowUpSourceType names computed sources that can seed persistent follow-up records. */
+export type FollowUpSourceType = "bom_health" | "circuit_block_gap";
+
+/** FollowUpStatus tracks work lifecycle without changing readiness or approval state. */
+export type FollowUpStatus = "open" | "in_progress" | "resolved" | "dismissed";
+
+/** FollowUpSeverity mirrors explainable finding severity without opaque scoring. */
+export type FollowUpSeverity = ProjectBomRiskSeverity;
+
+/** SourceExtractionSignalType names explicit source material extracted for CAD recovery. */
+export type SourceExtractionSignalType = "package_mechanical_dimensions" | "pin_table" | "mechanical_drawing";
+
+/** SourceExtractionStatus keeps extraction evidence honest and review-aware. */
+export type SourceExtractionStatus = "available" | "needs_review" | "not_available";
+
+/** SourceExtractionSource identifies the source class without leaking provider-specific parsers. */
+export type SourceExtractionSource = "provider_structured_metadata" | "datasheet_metadata" | "asset_reference" | "manual_internal";
 
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
-  /** Stable identifier used by internal records. */
   id: string;
-  /** Official or display-ready manufacturer name. */
   name: string;
-  /** Search aliases that should never replace the official name. */
   aliases: string[];
-  /** Public manufacturer website when known. */
   website: string | null;
 }
 
 /** Package is the normalized physical package entity from the data model. */
 export interface Package {
-  /** Stable package identifier used by part records. */
   id: string;
-  /** Display-ready package name such as SOT-23-5 or 0603. */
   packageName: string;
-  /** Pin or terminal count when the package exposes one. */
   pinCount: number | null;
-  /** Normalized terminal pitch in millimeters. */
   pitchMm: number | null;
-  /** Normalized body length in millimeters. */
   bodyLengthMm: number | null;
-  /** Normalized body width in millimeters. */
   bodyWidthMm: number | null;
-  /** Normalized body height in millimeters. */
   bodyHeightMm: number | null;
+}
+
+/** ConnectorFamily groups mechanically compatible connector lines. */
+export interface ConnectorFamily {
+  id: string;
+  name: string;
+  series: string;
+  description: string;
 }
 
 /** Part is the normalized catalog entity that search results are built around. */
 export interface Part {
-  /** Stable part identifier used across the monorepo. */
   id: string;
-  /** Manufacturer part number displayed as the primary engineering identifier. */
   mpn: string;
-  /** Foreign key back to the normalized manufacturer. */
+  description: string;
   manufacturerId: string;
-  /** Coarse engineering category used by filters. */
   category: string;
-  /** Lifecycle state with unknown kept distinct from active. */
   lifecycleStatus: LifecycleStatus;
-  /** Foreign key back to the normalized package record. */
   packageId: string;
-  /** Normalized trust score from 0 to 1. */
+  connectorFamilyId: string | null;
   trustScore: number;
   /** ISO timestamp for the latest canonical record update. */
   lastUpdatedAt: string;
@@ -78,166 +285,1641 @@ export interface Part {
 
 /** SourceRecord preserves raw provider payload provenance for normalized records. */
 export interface SourceRecord {
-  /** Stable source record identifier. */
   id: string;
-  /** Opaque provider identifier. */
   providerId: string;
-  /** Provider-specific part key used for deterministic upserts. */
   providerPartKey: string;
-  /** Canonical part identifier when the payload has been normalized. */
   partId: string | null;
-  /** Provider source URL when one exists. */
   sourceUrl: string | null;
-  /** ISO timestamp for when the raw payload was fetched. */
   fetchedAt: string;
-  /** Raw provider payload retained for provenance and later audits. */
   rawPayload: unknown;
-  /** ISO timestamp for when this payload was normalized. */
   normalizedAt: string | null;
-  /** ISO timestamp for the latest source record update. */
+  sourceLastSeenAt: string;
+  sourceLastImportedAt: string | null;
+  importStatus: SourceImportStatus;
+  importErrorDetails: string | null;
   lastUpdatedAt: string;
+}
+
+/** ProviderImportDiagnostic is the compact debug view for provider import health. */
+export interface ProviderImportDiagnostic {
+  id: string;
+  providerId: string;
+  providerPartKey: string;
+  partId: string | null;
+  sourceUrl: string | null;
+  importStatus: SourceImportStatus;
+  importErrorDetails: string | null;
+  sourceLastSeenAt: string;
+  sourceLastImportedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** SourceExtractionSignal stores one structured readiness signal for CAD recovery. */
+export interface SourceExtractionSignal {
+  id: string;
+  partId: string;
+  sourceRecordId: string | null;
+  datasheetRevisionId: string | null;
+  assetId: string | null;
+  signalType: SourceExtractionSignalType;
+  extractionStatus: SourceExtractionStatus;
+  confidenceScore: number;
+  extractionSource: SourceExtractionSource;
+  notes: string | null;
+  lastUpdatedAt: string;
+}
+
+/** Project is the planned top-level project-memory root for BOM and where-used history. */
+export interface Project {
+  id: string;
+  projectKey: string;
+  name: string;
+  description: string;
+  owner: string | null;
+  status: ProjectStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ProjectRevision scopes BOM imports and usage records to a concrete project revision. */
+export interface ProjectRevision {
+  id: string;
+  projectId: string;
+  revisionLabel: string;
+  revisionStatus: ProjectRevisionStatus;
+  sourceReference: string | null;
+  releasedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** BomImport stores upload and mapping provenance before any row is treated as matched. */
+export interface BomImport {
+  id: string;
+  projectId: string;
+  projectRevisionId: string;
+  sourceFilename: string;
+  sourceFormat: BomSourceFormat;
+  storageKey: string | null;
+  importStatus: BomImportStatus;
+  columnMapping: Record<string, unknown>;
+  importSummary: Record<string, unknown>;
+  importedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** BomLine preserves raw and mapped BOM row evidence with explicit match state. */
+export interface BomLine {
+  id: string;
+  bomImportId: string;
+  projectId: string;
+  projectRevisionId: string;
+  rowNumber: number;
+  designators: string[];
+  quantity: number | null;
+  rawMpn: string | null;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  rawSupplierReference: string | null;
+  rawNotes: string | null;
+  rawRowPayload: Record<string, unknown>;
+  matchedPartId: string | null;
+  matchStatus: BomLineMatchStatus;
+  matchConfidenceScore: number | null;
+  /** Circuit block id when this BOM line was generated by instantiating a reusable block. */
+  instantiatedFromCircuitBlockId: string | null;
+  /** Specific block-part role id this line was instantiated from, when applicable. */
+  instantiatedFromCircuitBlockPartId: string | null;
+  /** ISO timestamp when the line was instantiated from a block, when applicable. */
+  instantiatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ProjectPartUsage records confirmed internal usage for future where-used search. */
+export interface ProjectPartUsage {
+  id: string;
+  projectId: string;
+  projectRevisionId: string;
+  bomLineId: string | null;
+  partId: string;
+  usageContext: string | null;
+  designators: string[];
+  quantity: number | null;
+  usageStatus: ProjectPartUsageStatus;
+  approvalSnapshot: Record<string, unknown>;
+  readinessSnapshot: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ProjectCreateInput is the first write path for project-memory records from the web app. */
+export interface ProjectCreateInput {
+  projectKey: string;
+  name: string;
+  description?: string | null;
+  owner?: string | null;
+  status?: ProjectStatus;
+  initialRevisionLabel?: string | null;
+}
+
+/** ProjectUpdateInput edits project metadata without changing BOM matching or trust state. */
+export interface ProjectUpdateInput {
+  name: string;
+  description?: string | null;
+  owner?: string | null;
+  status: ProjectStatus;
+}
+
+/** ProjectCreateResponse returns the created project and its first revision. */
+export interface ProjectCreateResponse {
+  project: Project;
+  initialRevision: ProjectRevision;
+  detail: ProjectDetailResponse;
+}
+
+/** ProjectUpdateResponse returns the updated project detail and trust-boundary copy. */
+export interface ProjectUpdateResponse {
+  project: Project;
+  detail: ProjectDetailResponse;
+  boundary: string;
+}
+
+/** ProjectRevisionUpdateInput edits revision metadata without remapping BOM rows. */
+export interface ProjectRevisionUpdateInput {
+  revisionStatus: ProjectRevisionStatus;
+  sourceReference?: string | null;
+  releasedAt?: string | null;
+}
+
+/** ProjectRevisionUpdateResponse returns a refreshed project detail after revision edits. */
+export interface ProjectRevisionUpdateResponse {
+  revision: ProjectRevision;
+  detail: ProjectDetailResponse;
+  boundary: string;
+}
+
+/** BomColumnMapping maps source CSV headers into canonical BOM line fields. */
+export interface BomColumnMapping {
+  mpn?: string | null;
+  manufacturer?: string | null;
+  quantity?: string | null;
+  designators?: string | null;
+  description?: string | null;
+  notes?: string | null;
+  supplierReference?: string | null;
+}
+
+/** BomImportPreviewRow preserves one parsed CSV row before any database writes happen. */
+export interface BomImportPreviewRow {
+  rowNumber: number;
+  values: Record<string, string>;
+}
+
+/** BomImportPreviewInput carries file content for a no-write preview parse. CSV is plain text; XLSX is base64-encoded binary. */
+export interface BomImportPreviewInput {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  rawContent: string;
+}
+
+/** BomImportPreviewResponse returns headers, preview rows, and suggested mapping without persistence. */
+export interface BomImportPreviewResponse {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  headers: string[];
+  rowsPreview: BomImportPreviewRow[];
+  rowCount: number;
+  skippedBlankRowCount: number;
+  suggestedMapping: BomColumnMapping;
+  warnings: string[];
+}
+
+/** BomImportCreateInput persists a parsed and mapped CSV BOM into project memory. */
+export interface BomImportCreateInput extends BomImportPreviewInput {
+  projectRevisionId?: string | null;
+  revisionLabel?: string | null;
+  columnMapping: BomColumnMapping;
+}
+
+/** BomImportPersistSummary reports saved BOM rows without implying part matching has run. */
+export interface BomImportPersistSummary {
+  persistedLineCount: number;
+  skippedBlankRowCount: number;
+  mappedFieldCount: number;
+  matchStatus: "unmatched";
+}
+
+/** BomImportCreateResponse returns saved import metadata plus a bounded preview of saved lines. */
+export interface BomImportCreateResponse {
+  bomImport: BomImport;
+  lineCount: number;
+  linesPreview: BomLine[];
+  summary: BomImportPersistSummary;
+}
+
+/** BomImportMatchSummary reports one deterministic matching pass without hiding weak rows. */
+export interface BomImportMatchSummary {
+  totalLineCount: number;
+  matchedLineCount: number;
+  unmatchedLineCount: number;
+  ambiguousLineCount: number;
+  weakMatchLineCount: number;
+  ignoredLineCount: number;
+  usageCreatedOrUpdatedCount: number;
+  importableExactMpnLineCount: number;
+}
+
+/** BomLineImportCandidate routes unmatched exact-MPN rows toward the existing provider import flow. */
+export interface BomLineImportCandidate {
+  bomLineId: string;
+  rowNumber: number;
+  mpn: string;
+  manufacturerName: string | null;
+}
+
+/** BomImportMatchResponse returns updated lines, import metadata, usage previews, and import candidates. */
+export interface BomImportMatchResponse {
+  bomImport: BomImport;
+  importCandidates: BomLineImportCandidate[];
+  linesPreview: BomLine[];
+  summary: BomImportMatchSummary;
+  usagesPreview: ProjectPartUsage[];
+}
+
+/** ProjectMemoryReadState distinguishes populated reads from configured-but-empty project memory. */
+export type ProjectMemoryReadState = "available" | "empty";
+
+/** ProjectMemoryCapabilityState labels foundations and planned workflows without presenting plans as shipped. */
+export type ProjectMemoryCapabilityState = "foundation" | "planned";
+
+/** ProjectMemoryCapability names one project-memory capability and whether it is foundation-only or planned. */
+export interface ProjectMemoryCapability {
+  id: "project_records" | "bom_import_records" | "bom_upload" | "bom_matching" | "where_used" | "bom_health" | "evidence_vault" | "circuit_blocks";
+  label: string;
+  state: ProjectMemoryCapabilityState;
+  detail: string;
+}
+
+/** ProjectSummary is the compact project row used by project-list API reads. */
+export interface ProjectSummary {
+  project: Project;
+  revisionCount: number;
+  bomImportCount: number;
+  usageCount: number;
+  latestActivityAt: string;
+}
+
+/** ProjectListResponse is the read-only project-memory list contract. */
+export interface ProjectListResponse {
+  state: ProjectMemoryReadState;
+  projects: ProjectSummary[];
+  capabilities: ProjectMemoryCapability[];
+}
+
+/** ProjectFleetRiskRow reports per-project explainable BOM risk counts for the fleet dashboard. */
+export interface ProjectFleetRiskRow {
+  project: Project;
+  /** BOM lines that did not match any internal part. */
+  unmatchedLineCount: number;
+  /** BOM lines that matched weakly or ambiguously and need review. */
+  weakOrAmbiguousLineCount: number;
+  /** Confirmed-usage parts that lack an approved approval record. */
+  approvalGapCount: number;
+  /** Confirmed-usage parts whose lifecycle is obsolete or not_recommended. */
+  lifecycleRiskCount: number;
+  /** Confirmed-usage parts missing a complete verified file-backed CAD set. */
+  missingVerifiedCadCount: number;
+  /** Open follow-up records targeting this project. */
+  openFollowUpCount: number;
+  /** Sum of every count column above; transparent additive total, not an opaque score. */
+  totalRiskCount: number;
+}
+
+/** ProjectFleetRiskResponse is the explainable cross-project risk dashboard payload. */
+export interface ProjectFleetRiskResponse {
+  state: ProjectMemoryReadState;
+  rows: ProjectFleetRiskRow[];
+  /** Trust-boundary copy explaining what counts mean and what they do not unlock. */
+  boundary: string;
+}
+
+/** ProjectDetailResponse is the read-only project-memory detail contract. */
+export interface ProjectDetailResponse {
+  state: "available";
+  project: Project;
+  summary: ProjectSummary;
+  revisions: ProjectRevision[];
+  bomImports: BomImport[];
+  usages: ProjectPartUsage[];
+  capabilities: ProjectMemoryCapability[];
+}
+
+/** ProjectRevisionsResponse returns persisted revisions for one project. */
+export interface ProjectRevisionsResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  revisions: ProjectRevision[];
+}
+
+/** ProjectBomImportsResponse returns persisted BOM import records for one project. */
+export interface ProjectBomImportsResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  bomImports: BomImport[];
+}
+
+/** BomImportLinesResponse returns raw and mapped BOM rows for one persisted BOM import. */
+export interface BomImportLinesResponse {
+  state: ProjectMemoryReadState;
+  bomImportId: string;
+  lines: BomLine[];
+}
+
+/** ProjectPartUsagesResponse returns confirmed persisted usage records for one project. */
+export interface ProjectPartUsagesResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  usages: ProjectPartUsage[];
+}
+
+/** PartWhereUsedRecord joins confirmed usage to the project context that created it. */
+export interface PartWhereUsedRecord {
+  usage: ProjectPartUsage;
+  project: Project;
+  projectRevision: ProjectRevision;
+  bomLine: BomLine | null;
+}
+
+/** PartWhereUsedResponse answers where one internal part has confirmed project usage. */
+export interface PartWhereUsedResponse {
+  state: ProjectMemoryReadState;
+  partId: string;
+  usages: PartWhereUsedRecord[];
+}
+
+/** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
+export type WhereUsedTargetType = "part" | "circuit_block" | "connector_set" | "asset";
+
+/** WhereUsedProjectUsageRecord joins global where-used rows to part and optional circuit-role context. */
+export interface WhereUsedProjectUsageRecord {
+  usage: ProjectPartUsage;
+  project: Project;
+  projectRevision: ProjectRevision;
+  bomLine: BomLine | null;
+  part: CircuitBlockPartCatalogSummary;
+  circuitBlock: CircuitBlock | null;
+  blockPart: CircuitBlockPart | null;
+}
+
+/** WhereUsedCircuitBlockDependencyRecord shows one circuit block role that depends on an internal part. */
+export interface WhereUsedCircuitBlockDependencyRecord {
+  circuitBlock: CircuitBlock;
+  blockPart: CircuitBlockPart;
+  part: CircuitBlockPartCatalogSummary;
+}
+
+/** WhereUsedAssetExportRecord reports one export bundle that included an asset matching the search query. */
+export interface WhereUsedAssetExportRecord {
+  bundleId: string;
+  bundleFormat: ExportBundleFormat;
+  bundleCreatedAt: string;
+  projectId: string;
+  projectKey: string;
+  projectName: string;
+  assetId: string;
+  assetType: string;
+  partMpn: string;
+  manufacturerName: string;
+  fileFormat: string | null;
+}
+
+/** WhereUsedSearchResponse powers the global where-used workspace without implying approved reuse. */
+export interface WhereUsedSearchResponse {
+  state: ProjectMemoryReadState;
+  targetType: WhereUsedTargetType;
+  query: string;
+  supportedTarget: boolean;
+  unsupportedReason: string | null;
+  matchedParts: CircuitBlockPartCatalogSummary[];
+  matchedCircuitBlocks: CircuitBlockSummary[];
+  projectUsages: WhereUsedProjectUsageRecord[];
+  circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
+  assetExports: WhereUsedAssetExportRecord[];
+  boundary: string;
+}
+
+/** ProjectBomHealthSummary counts explainable BOM health inputs without compressing them into a score. */
+export interface ProjectBomHealthSummary {
+  totalLineCount: number;
+  matchedLineCount: number;
+  unmatchedLineCount: number;
+  ambiguousLineCount: number;
+  weakMatchLineCount: number;
+  ignoredLineCount: number;
+  approvalGapCount: number;
+  lifecycleRiskCount: number;
+  /** Matched rows whose catalog lifecycle is obsolete or not_recommended and the part record was touched after the review checkpoint (zero when no checkpoint exists). */
+  lifecycleRegressionCount: number;
+  missingVerifiedCadCount: number;
+  referencedCadOnlyCount: number;
+  connectorBuildabilityGapCount: number;
+  missingEvidenceCount: number;
+  evidenceAttachmentCount: number;
+}
+
+/** ProjectBomRiskFinding explains one project BOM health gap with affected records and next action. */
+export interface ProjectBomRiskFinding {
+  id: string;
+  projectId: string;
+  code: ProjectBomRiskFindingCode;
+  severity: ProjectBomRiskSeverity;
+  title: string;
+  detail: string;
+  nextAction: string;
+  affectedBomLineIds: string[];
+  affectedPartIds: string[];
+  inputs: string[];
+}
+
+/** ProjectBomHealthResponse returns the derived health dashboard for one project. */
+export interface ProjectBomHealthResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  generatedAt: string;
+  /** Latest resolved/dismissed BOM health follow-up or accepted risk-finding evidence review time; regressions compare catalog part touch time after this instant. */
+  lifecycleReviewCheckpointAt: string | null;
+  summary: ProjectBomHealthSummary;
+  findings: ProjectBomRiskFinding[];
+}
+
+/** EvidenceAttachment preserves decision evidence metadata without changing trust state. */
+export interface EvidenceAttachment {
+  id: string;
+  targetType: EvidenceTargetType;
+  targetId: string;
+  evidenceType: EvidenceAttachmentType;
+  title: string;
+  sourceUrl: string | null;
+  storageKey: string | null;
+  fileHash: string | null;
+  mimeType: string | null;
+  notes: string | null;
+  provenance: string;
+  reviewStatus: EvidenceReviewStatus;
+  uploadedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** EvidenceAttachmentCreateInput creates metadata-only decision evidence for a supported target. */
+export interface EvidenceAttachmentCreateInput {
+  targetType: EvidenceTargetType;
+  targetId: string;
+  evidenceType: EvidenceAttachmentType;
+  title: string;
+  sourceUrl?: string | null;
+  storageKey?: string | null;
+  fileHash?: string | null;
+  mimeType?: string | null;
+  notes?: string | null;
+  provenance?: string | null;
+  reviewStatus?: EvidenceReviewStatus;
+}
+
+/** EvidenceAttachmentCreateResponse returns the persisted evidence row and trust boundary copy. */
+export interface EvidenceAttachmentCreateResponse {
+  attachment: EvidenceAttachment;
+  boundary: string;
+}
+
+/** EvidenceAttachmentFileUploadInput carries a browser-selected file through the API storage layer. */
+export interface EvidenceAttachmentFileUploadInput {
+  targetType: EvidenceTargetType;
+  targetId: string;
+  title: string;
+  fileName: string;
+  contentBase64: string;
+  mimeType?: string | null;
+  notes?: string | null;
+  provenance?: string | null;
+  reviewStatus?: EvidenceReviewStatus;
+}
+
+/** EvidenceAttachmentUpdateInput changes evidence review metadata without changing target trust state. */
+export interface EvidenceAttachmentUpdateInput {
+  reviewStatus: EvidenceReviewStatus;
+  notes?: string | null;
+}
+
+/** EvidenceAttachmentUpdateResponse returns the edited evidence row and trust-boundary copy. */
+export interface EvidenceAttachmentUpdateResponse {
+  attachment: EvidenceAttachment;
+  boundary: string;
+}
+
+/** EvidenceAttachmentListFilters are provider-neutral filters for the evidence vault. */
+export interface EvidenceAttachmentListFilters {
+  targetType?: EvidenceTargetType | null;
+  evidenceType?: EvidenceAttachmentType | null;
+  reviewStatus?: EvidenceReviewStatus | null;
+  storageState?: EvidenceStorageState | null;
+  sourceSystem?: string | null;
+  query?: string | null;
+}
+
+/** EvidenceAttachmentListSummary counts visible evidence rows by storage and review state. */
+export interface EvidenceAttachmentListSummary {
+  totalCount: number;
+  fileBackedCount: number;
+  linkOnlyCount: number;
+  noteOnlyCount: number;
+  unreviewedCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  supersededCount: number;
+}
+
+/** EvidenceAttachmentListResponse powers the global evidence vault workspace. */
+export interface EvidenceAttachmentListResponse {
+  state: ProjectMemoryReadState;
+  filters: EvidenceAttachmentListFilters;
+  summary: EvidenceAttachmentListSummary;
+  attachments: EvidenceAttachment[];
+  boundary: string;
+}
+
+/** ProjectEvidenceAttachmentsResponse lists evidence attached to a project or its project-memory children. */
+export interface ProjectEvidenceAttachmentsResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  attachments: EvidenceAttachment[];
+}
+
+/** FollowUpRecord stores assignable work derived from computed engineering-memory gaps. */
+export interface FollowUpRecord {
+  id: string;
+  targetType: FollowUpTargetType;
+  targetId: string;
+  sourceType: FollowUpSourceType;
+  sourceFindingId: string;
+  title: string;
+  detail: string;
+  nextAction: string;
+  severity: FollowUpSeverity;
+  status: FollowUpStatus;
+  assignedTo: string | null;
+  sourceInputs: string[];
+  evidenceAttachmentIds: string[];
+  resolutionNotes: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+}
+
+/** FollowUpListSummary counts work lifecycle states without rolling them into a score. */
+export interface FollowUpListSummary {
+  totalCount: number;
+  openCount: number;
+  inProgressCount: number;
+  resolvedCount: number;
+  dismissedCount: number;
+  dangerCount: number;
+  reviewCount: number;
+}
+
+/** FollowUpListResponse returns persisted follow-up queues for projects or circuit blocks. */
+export interface FollowUpListResponse {
+  state: ProjectMemoryReadState;
+  targetType: FollowUpTargetType | null;
+  targetId: string | null;
+  followUps: FollowUpRecord[];
+  summary: FollowUpListSummary;
+}
+
+/** FollowUpSyncResponse reports generated or refreshed follow-ups from computed inputs. */
+export interface FollowUpSyncResponse {
+  targetType: FollowUpTargetType;
+  targetId: string;
+  createdCount: number;
+  refreshedCount: number;
+  followUps: FollowUpRecord[];
+  boundary: string;
+}
+
+/** FollowUpUpdateInput changes work ownership/status without changing underlying readiness truth. */
+export interface FollowUpUpdateInput {
+  status: FollowUpStatus;
+  assignedTo?: string | null;
+  resolutionNotes?: string | null;
+  evidenceAttachmentIds?: string[] | null;
+}
+
+/** FollowUpUpdateResponse returns the edited follow-up and trust-boundary copy. */
+export interface FollowUpUpdateResponse {
+  followUp: FollowUpRecord;
+  boundary: string;
+}
+
+/** CircuitBlock stores a reusable circuit as structured engineering memory. */
+export interface CircuitBlock {
+  id: string;
+  blockKey: string;
+  name: string;
+  description: string;
+  blockType: CircuitBlockType;
+  owner: string | null;
+  status: CircuitBlockStatus;
+  reuseScope: string;
+  constraints: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** CircuitBlockPart stores one part role inside a reusable circuit block. */
+export interface CircuitBlockPart {
+  id: string;
+  circuitBlockId: string;
+  partId: string;
+  role: string;
+  quantity: number | null;
+  isRequired: boolean;
+  substitutionPolicy: CircuitBlockPartSubstitutionPolicy;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** CircuitBlockPartCatalogSummary keeps block detail honest about current linked-part state. */
+export interface CircuitBlockPartCatalogSummary {
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  lifecycleStatus: LifecycleStatus;
+  approvalStatus: PartApprovalStatus | null;
+  readinessStatus: PartReadinessStatus | null;
+  connectorClass: ConnectorClass | null;
+  blockerCount: number | null;
+}
+
+/** CircuitBlockPartRecord joins a block role to the current catalog summary for that part. */
+export interface CircuitBlockPartRecord {
+  blockPart: CircuitBlockPart;
+  part: CircuitBlockPartCatalogSummary;
+}
+
+/** CircuitBlockSummary reports list-level counts without converting them into opaque readiness scores. */
+export interface CircuitBlockSummary {
+  circuitBlock: CircuitBlock;
+  totalPartCount: number;
+  requiredPartCount: number;
+  optionalPartCount: number;
+  approvedPartCount: number;
+  readinessGapCount: number;
+  lifecycleRiskCount: number;
+  strictSubstitutionCount: number;
+  evidenceAttachmentCount: number;
+  projectUsageCount: number;
+}
+
+/** CircuitBlockProjectDependency records a project whose confirmed usages overlap with a circuit block's part roles. */
+export interface CircuitBlockProjectDependency {
+  project: Project;
+  matchedPartCount: number;
+  totalBlockPartCount: number;
+}
+
+/** CircuitBlockListResponse returns the reusable circuit library. */
+export interface CircuitBlockListResponse {
+  state: ProjectMemoryReadState;
+  circuitBlocks: CircuitBlockSummary[];
+}
+
+/** CircuitBlockDetailResponse returns one circuit block with parts, evidence, project dependencies, and trust boundaries. */
+export interface CircuitBlockDetailResponse {
+  state: "available";
+  circuitBlock: CircuitBlock;
+  summary: CircuitBlockSummary;
+  parts: CircuitBlockPartRecord[];
+  evidence: EvidenceAttachment[];
+  projectDependencies: CircuitBlockProjectDependency[];
+  boundary: string;
+}
+
+/** CircuitBlockInstantiation records one event of generating BOM lines from a reusable circuit block. */
+export interface CircuitBlockInstantiation {
+  id: string;
+  circuitBlockId: string;
+  projectId: string;
+  projectRevisionId: string;
+  bomImportId: string;
+  includeOptional: boolean;
+  designatorPrefix: string | null;
+  notes: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/** CircuitBlockInstantiationCreateInput requests a new BOM import from a reusable circuit block. */
+export interface CircuitBlockInstantiationCreateInput {
+  circuitBlockId: string;
+  projectRevisionId: string;
+  /** When true, optional block-part roles are also instantiated. Required parts are always included. */
+  includeOptional?: boolean;
+  /** Optional designator prefix; when set, designators are auto-generated as "<prefix>1, <prefix>2, ..." per quantity. */
+  designatorPrefix?: string | null;
+  notes?: string | null;
+}
+
+/** CircuitBlockInstantiationCreateResponse returns the new BOM import, lines, and instantiation record. */
+export interface CircuitBlockInstantiationCreateResponse {
+  instantiation: CircuitBlockInstantiation;
+  bomImport: BomImport;
+  bomLines: BomLine[];
+  matchedLineCount: number;
+  skippedOptionalCount: number;
+  boundary: string;
+}
+
+/** CircuitBlockCreateInput creates a structured reusable circuit record. */
+export interface CircuitBlockCreateInput {
+  blockKey: string;
+  name: string;
+  description?: string | null;
+  blockType: CircuitBlockType;
+  owner?: string | null;
+  status?: CircuitBlockStatus;
+  reuseScope?: string | null;
+  constraints?: Record<string, unknown> | null;
+}
+
+/** CircuitBlockUpdateInput edits reusable circuit metadata without changing linked part trust. */
+export interface CircuitBlockUpdateInput {
+  name: string;
+  description?: string | null;
+  blockType: CircuitBlockType;
+  owner?: string | null;
+  status: CircuitBlockStatus;
+  reuseScope?: string | null;
+  constraints?: Record<string, unknown> | null;
+}
+
+/** CircuitBlockCreateResponse returns the saved block and its empty detail shell. */
+export interface CircuitBlockCreateResponse {
+  circuitBlock: CircuitBlock;
+  detail: CircuitBlockDetailResponse;
+  boundary: string;
+}
+
+/** CircuitBlockUpdateResponse returns the updated block and refreshed detail shell. */
+export interface CircuitBlockUpdateResponse {
+  circuitBlock: CircuitBlock;
+  detail: CircuitBlockDetailResponse;
+  boundary: string;
+}
+
+/** CircuitBlockPartCreateInput links one internal part into a circuit block role. */
+export interface CircuitBlockPartCreateInput {
+  partId: string;
+  role: string;
+  quantity?: number | null;
+  isRequired?: boolean;
+  substitutionPolicy?: CircuitBlockPartSubstitutionPolicy;
+  notes?: string | null;
+}
+
+/** CircuitBlockPartUpdateInput edits role metadata without changing the linked part identity. */
+export interface CircuitBlockPartUpdateInput {
+  quantity?: number | null;
+  isRequired: boolean;
+  substitutionPolicy: CircuitBlockPartSubstitutionPolicy;
+  notes?: string | null;
+}
+
+/** CircuitBlockPartCreateResponse returns the saved role and refreshed block detail. */
+export interface CircuitBlockPartCreateResponse {
+  circuitBlockPart: CircuitBlockPart;
+  detail: CircuitBlockDetailResponse;
+  boundary: string;
+}
+
+/** CircuitBlockPartUpdateResponse returns the updated role and refreshed block detail. */
+export interface CircuitBlockPartUpdateResponse {
+  circuitBlockPart: CircuitBlockPart;
+  detail: CircuitBlockDetailResponse;
+  boundary: string;
 }
 
 /** PartMetric stores one normalized datasheet metric with confidence and provenance. */
 export interface PartMetric {
-  /** Stable metric identifier. */
   id: string;
-  /** Foreign key back to the part this metric describes. */
   partId: string;
-  /** Machine-readable metric name such as input_voltage_max. */
   metricKey: string;
-  /** Single normalized value when the datasheet gives one. */
   metricValue: number | null;
-  /** Normalized unit for the value or range. */
   unit: MetricUnit;
-  /** Lower bound when the metric is a range. */
   minValue: number | null;
-  /** Upper bound when the metric is a range. */
   maxValue: number | null;
-  /** Confidence score from 0 to 1 for this normalized metric. */
   confidenceScore: number;
-  /** Datasheet revision that supplied or validated this metric. */
   sourceRevisionId: string;
-  /** Source record that supplied the metric normalization. */
   sourceRecordId: string | null;
-  /** ISO timestamp for the latest metric update. */
   lastUpdatedAt: string;
 }
 
 /** Asset tracks metadata, storage, validation, preview, and source provenance for files. */
 export interface Asset {
-  /** Stable asset identifier. */
   id: string;
-  /** Foreign key back to the part this asset belongs to. */
   partId: string;
-  /** Provider-neutral asset category. */
   assetType: AssetType;
-  /** Provider-neutral file format. */
   fileFormat: FileFormat;
-  /** Storage key when a real file exists, otherwise null for metadata-only records. */
   storageKey: string | null;
-  /** Content hash when a real file has been captured and hashed. */
   fileHash: string | null;
-  /** Opaque provider or source identifier used only for provenance. */
   providerId: string | null;
-  /** Redistribution status for the asset. */
   licenseMode: LicenseMode;
-  /** Validation state for the asset metadata or file. */
-  validationStatus: ValidationStatus;
-  /** Preview readiness for UI rendering. */
-  previewStatus: PreviewStatus;
-  /** Concrete asset file lifecycle state. */
+  provenance: AssetProvenance;
+  availabilityStatus: AssetAvailabilityStatus;
+  reviewStatus: AssetReviewStatus;
+  exportStatus: AssetExportStatus;
+  /** Legacy availability mirror for older code paths and migrations. */
   assetState: AssetState;
-  /** Provider source URL for a referenced asset when known. */
+  /** Legacy combined review/export mirror for older code paths and migrations. */
+  assetStatus: AssetStatus;
+  generationMethod: string | null;
+  generationSourceAssetId: string | null;
+  validationStatus: ValidationStatus;
+  previewStatus: PreviewStatus;
   sourceUrl: string | null;
-  /** Source record that supplied the asset metadata. */
   sourceRecordId: string | null;
-  /** ISO timestamp for the latest asset update. */
   lastUpdatedAt: string;
 }
 
 /** DatasheetRevision stores parsed datasheet revision metadata and parse confidence. */
 export interface DatasheetRevision {
-  /** Stable datasheet revision identifier. */
   id: string;
-  /** Foreign key back to the part this datasheet describes. */
   partId: string;
-  /** Human-readable revision label from the datasheet. */
   revisionLabel: string;
-  /** ISO date string when the revision date is known. */
   revisionDate: string | null;
-  /** Page count when it has been parsed or verified. */
   pageCount: number | null;
-  /** Linked asset identifier for the PDF metadata or file. */
   fileAssetId: string | null;
-  /** Confidence score from 0 to 1 for the parsed datasheet revision. */
   parseConfidence: number;
-  /** Source record that supplied the datasheet revision. */
+  pinTableStatus: DatasheetExtractionStatus;
   sourceRecordId: string | null;
-  /** ISO timestamp for the latest datasheet revision update. */
   lastUpdatedAt: string;
+}
+
+/** MateRelation stores best/alternate mating connector relationships. */
+export interface MateRelation {
+  id: string;
+  partId: string;
+  matePartId: string;
+  relationshipType: "best_mate" | "alternate_mate";
+  compatibilityStatus: ConnectorRelationCompatibilityStatus;
+  evidenceKind: ConnectorEvidenceKind;
+  confidenceScore: number;
+  sourceRevisionId: string;
+  sourceRecordId: string | null;
+  notes: string | null;
+}
+
+/** AccessoryRequirement stores required, optional, and tooling accessory relationships. */
+export interface AccessoryRequirement {
+  id: string;
+  partId: string;
+  accessoryPartId: string;
+  relationshipType: "requires_accessory" | "optional_accessory" | "tooling_requirement";
+  compatibilityStatus: ConnectorRelationCompatibilityStatus;
+  evidenceKind: ConnectorEvidenceKind;
+  confidenceScore: number;
+  sourceRevisionId: string;
+  sourceRecordId: string | null;
+  notes: string | null;
+}
+
+/** CableCompatibility tracks compatible cables for connector parts. */
+export interface CableCompatibility {
+  id: string;
+  partId: string;
+  cablePartId: string;
+  relationshipType: "supports_cable";
+  wireGaugeMin: number | null;
+  wireGaugeMax: number | null;
+  shieldingRequirement: CableShieldingRequirement;
+  terminationStyle: CableTerminationStyle;
+  compatibilityStatus: CableCompatibilityStatus;
+  confidenceScore: number;
+  sourceRevisionId: string;
+  sourceRecordId: string | null;
+  notes: string | null;
+}
+
+/** ConnectorFamilyConflictType distinguishes near-match variants from true family confusion. */
+export type ConnectorFamilyConflictType = "near_match_variant" | "family_confusion";
+
+/** ConnectorFamilyConflict stores one persisted connector-family ambiguity candidate. */
+export interface ConnectorFamilyConflict {
+  id: string;
+  partId: string;
+  candidatePartId: string;
+  candidateConnectorFamilyId: string | null;
+  conflictType: ConnectorFamilyConflictType;
+  confidenceScore: number;
+  summary: string;
+  detail: string;
+  sourceRecordId: string | null;
+  lastUpdatedAt: string;
+}
+
+/** SimilarPartRelation stores cross-suggested alternatives with confidence. */
+export interface SimilarPartRelation {
+  id: string;
+  partId: string;
+  similarPartId: string;
+  confidenceScore: number;
+  reason: string;
+}
+
+/** CompanionRecommendation stores frequently paired companion components. */
+export interface CompanionRecommendation {
+  id: string;
+  partId: string;
+  companionPartId: string;
+  confidenceScore: number;
+  usageContext: string;
+}
+
+/** GenerationWorkflow tracks datasheet-driven CAD generation opportunities and status. */
+export interface GenerationWorkflow {
+  id: string;
+  partId: string;
+  targetAssetType: GenerationTargetAssetType;
+  sourceDatasheetRevisionId: string | null;
+  sourceAssetId: string | null;
+  generationStatus: GenerationStatus;
+  confidenceScore: number;
+  outputAssetId: string | null;
+}
+
+/** GenerationRequest persists an explicit request without implying the output exists. */
+export interface GenerationRequest {
+  id: string;
+  partId: string;
+  targetAssetType: GenerationTargetAssetType;
+  sourceDatasheetRevisionId: string | null;
+  sourceAssetId: string | null;
+  requestStatus: GenerationRequestStatus;
+  requestedAt: string;
+  requestedBy: string;
+  workflowId: string | null;
+  lastUpdatedAt: string;
+}
+
+/** ReviewRecord persists one explicit asset or workflow review decision. */
+export interface ReviewRecord {
+  id: string;
+  partId: string;
+  targetType: ReviewTargetType;
+  assetId: string | null;
+  generationWorkflowId: string | null;
+  outcome: ReviewOutcome;
+  reviewer: string;
+  notes: string | null;
+  reviewedAt: string;
+  lastUpdatedAt: string;
+}
+
+/** AssetValidationRecord persists one concrete validation evidence item for an asset. */
+export interface AssetValidationRecord {
+  id: string;
+  partId: string;
+  assetId: string;
+  validationStatus: ValidationStatus;
+  validationType: AssetValidationType;
+  validationNotes: string | null;
+  validatedAt: string;
+  validator: string;
+  lastUpdatedAt: string;
+}
+
+/** AssetPromotionAuditRecord persists one explicit export-promotion attempt. */
+export interface AssetPromotionAuditRecord {
+  id: string;
+  partId: string;
+  assetId: string;
+  priorExportStatus: AssetExportStatus;
+  newExportStatus: AssetExportStatus;
+  promotionOutcome: AssetPromotionOutcome;
+  blockerReasons: string[];
+  validationRecordId: string | null;
+  actor: string;
+  createdAt: string;
+}
+
+/** ReviewStatusSummary is the API-ready latest review state for one target. */
+export interface ReviewStatusSummary {
+  targetType: ReviewTargetType;
+  targetId: string;
+  state: ReviewState;
+  latestReview: ReviewRecord | null;
+}
+
+/** AssetValidationSummary exposes latest validation evidence without making the UI infer it. */
+export interface AssetValidationSummary {
+  assetId: string;
+  latestValidation: AssetValidationRecord | null;
+  label: string;
+  reason: string;
+}
+
+/** AssetPromotionSummary exposes promotion history and current blocker reasons for one asset. */
+export interface AssetPromotionSummary {
+  assetId: string;
+  latestPromotion: AssetPromotionAuditRecord | null;
+  promotionHistory: AssetPromotionAuditRecord[];
+  canPromote: boolean;
+  blockerReasons: string[];
+  label: string;
+}
+
+/** SourceReadinessRequirement names the source material checked before a request can be made. */
+export type SourceReadinessRequirement = "package_mechanical_data" | "pin_table_data" | "mechanical_drawing";
+
+/** GenerationSourceReadiness explains whether a target has enough reviewed source material. */
+export interface GenerationSourceReadiness {
+  targetAssetType: GenerationTargetAssetType;
+  requiredMaterial: SourceReadinessRequirement;
+  ready: boolean;
+  reasons: string[];
+  sourceDatasheetRevisionId: string | null;
+  sourceAssetId: string | null;
+  extractionSignalIds: string[];
+  extractionConfidence: number;
+}
+
+/** AssetClassReadiness summarizes the best concrete evidence for one asset class. */
+export type AssetClassReadiness = "export_ready" | "validated_file" | "downloaded_file" | "reference_only" | "missing" | "failed";
+
+/** AssetClassSummary groups all assets for one class and identifies the best candidate. */
+export interface AssetClassSummary {
+  assetType: EngineeringAssetClass;
+  assets: Asset[];
+  bestAsset: Asset | null;
+  readiness: AssetClassReadiness;
+}
+
+/** BundleReadinessState names the honest export readiness state shown by API and UI. */
+export type BundleReadinessState = "bundle_ready" | "partial_bundle" | "references_only" | "no_usable_assets";
+
+/** BundleReadinessSummary describes bundle readiness without implying nonexistent files. */
+export interface BundleReadinessSummary {
+  state: BundleReadinessState;
+  label: string;
+  reason: string;
+  verifiedCadAssetCount: number;
+  fileBackedCadAssetCount: number;
+  referencedAssetCount: number;
+  exportActions: ExportAvailability[];
+}
+
+/** AssetGenerationOption is the typed request foundation for a missing asset workflow. */
+export interface AssetGenerationOption {
+  targetAssetType: GenerationTargetAssetType;
+  label: string;
+  reason: string;
+  actionLabel: string;
+  canRequest: boolean;
+  workflowStatus: GenerationWorkflowState;
+  workflowStatusLabel: string;
+  sourceReadiness: GenerationSourceReadiness;
+  latestRequest: GenerationRequest | null;
+  workflow: GenerationWorkflow | null;
+  workflowId: string | null;
+  generationStatus: GenerationStatus;
+  confidenceScore: number;
+  sourceAssetId: string | null;
+  sourceDatasheetRevisionId: string | null;
+}
+
+/** ConnectorWarningCode keeps compatibility concerns structured instead of flattening everything into one string list. */
+export type ConnectorWarningCode =
+  | "support_without_best_mate"
+  | "best_mate_low_confidence"
+  | "near_match_alternates"
+  | "family_confusion"
+  | "missing_accessory_coverage"
+  | "required_accessory_low_confidence"
+  | "tooling_low_confidence"
+  | "cable_without_best_mate"
+  | "cable_low_confidence";
+
+/** ConnectorWarningTone keeps connector warnings visually aligned with existing review and danger surfaces. */
+export type ConnectorWarningTone = "review" | "danger";
+
+/** ConnectorWarning stores one structured connector-compatibility concern for detail, search, and admin surfaces. */
+export interface ConnectorWarning {
+  code: ConnectorWarningCode;
+  summary: string;
+  detail: string;
+  tone: ConnectorWarningTone;
+}
+
+/** ConnectorCableAssumptionType identifies the kind of cable-side assumption extracted from stored notes. */
+export type ConnectorCableAssumptionType = "wire_gauge" | "shielding" | "termination_style" | "environment";
+
+/** ConnectorCableAssumption keeps cable constraints explicit without pretending they were fully validated. */
+export interface ConnectorCableAssumption {
+  cablePartId: string;
+  sourceNote: string;
+  summary: string;
+  type: ConnectorCableAssumptionType;
+}
+
+/** ConnectorConfidenceBreakdown exposes how the buildable-set confidence was derived across relationship groups. */
+export interface ConnectorConfidenceBreakdown {
+  bestMateScore: number | null;
+  cableScore: number | null;
+  directEvidenceCount: number;
+  evidenceCount: number;
+  inferredEvidenceCount: number;
+  optionalAccessoryScore: number | null;
+  overallScore: number | null;
+  requiredAccessoryScore: number | null;
+  toolingScore: number | null;
+  uncertainEvidenceCount: number;
+  verifiedEvidenceCount: number;
+}
+
+/** BuildableMatingSet is the API-ready recommendation for procurement-friendly assembly. */
+export interface BuildableMatingSet {
+  bestMate: MateRelation | null;
+  alternateMates: MateRelation[];
+  cableAssumptions: ConnectorCableAssumption[];
+  familyConflicts: ConnectorFamilyConflict[];
+  optionalAccessories: AccessoryRequirement[];
+  requiredAccessories: AccessoryRequirement[];
+  toolingRequirements: AccessoryRequirement[];
+  cableOptions: CableCompatibility[];
+  /** Aggregate relationship confidence for the current buildable set, or null when no evidence exists. */
+  confidenceScore: number | null;
+  /** Relationship-group confidence makes the overall score auditable instead of opaque. */
+  confidenceBreakdown: ConnectorConfidenceBreakdown;
+  /** Compact warnings when connector evidence is incomplete or low-confidence. */
+  warnings: string[];
+  /** Structured warning details power richer connector review surfaces without UI-only heuristics. */
+  warningDetails: ConnectorWarning[];
 }
 
 /** CAD availability filters let search distinguish exportable records from unavailable ones. */
 export type CadAvailabilityFilter = "any" | "available" | "unavailable";
 
-/** PartSearchFilters contains provider-neutral filters used by web and API. */
+/** PartSearchSort names stable SQL-backed search sort modes. */
+export type PartSearchSort = "mpn_asc" | "mpn_desc" | "updated_desc" | "trust_desc";
+
+/** PartSearchFilters are provider-neutral search filters accepted by API and UI. */
 export interface PartSearchFilters {
-  /** Free-text query matching MPN, manufacturer, aliases, package, or category. */
   query?: string | undefined;
-  /** Optional manufacturer identifier filter. */
   manufacturerId?: string | undefined;
-  /** Optional category filter. */
   category?: string | undefined;
-  /** Optional package identifier filter. */
   packageId?: string | undefined;
-  /** Optional lifecycle status filter. */
   lifecycleStatus?: LifecycleStatus | undefined;
-  /** Optional CAD file availability filter. */
   cadAvailability?: CadAvailabilityFilter | undefined;
+  providerPartId?: string | undefined;
+  providerUrl?: string | undefined;
+  datasheetUrl?: string | undefined;
+  readinessStatus?: PartReadinessStatus | undefined;
+  approvalStatus?: PartApprovalStatus | undefined;
+  connectorClass?: ConnectorClass | undefined;
+  /** One-based result page used by SQL-backed search. */
+  page?: number | undefined;
+  /** Bounded page size used by SQL-backed search. */
+  pageSize?: number | undefined;
+  /** Stable sort mode used by SQL-backed search. */
+  sort?: PartSearchSort | undefined;
 }
 
-/** PartSearchRecord is the joined record shape consumed by API and web search. */
+/** PartReadinessSummary exposes whole-part readiness as API truth instead of UI-only inference. */
+export interface PartReadinessSummary {
+  partId: string;
+  status: PartReadinessStatus;
+  label: string;
+  detail: string;
+  identityStatus: PartIdentityStatus;
+  connectorClass: ConnectorClass;
+  blockerCount: number;
+  blockerSummary: string[];
+  recommendedActions: string[];
+  lastEvaluatedAt: string;
+}
+
+/** PartApproval exposes part-level approval separately from asset review and export promotion. */
+export interface PartApproval {
+  partId: string;
+  status: PartApprovalStatus;
+  summary: string;
+  detail: string;
+  evidence: string[];
+  decidedBy: string | null;
+  decidedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** PartDuplicateCandidate stores one DB-backed possible duplicate match for an existing part. */
+export interface PartDuplicateCandidate {
+  id: string;
+  partId: string;
+  duplicatePartId: string;
+  duplicatePartMpn: string;
+  duplicateManufacturerName: string;
+  detectionSource: string;
+  confidenceScore: number;
+  summary: string;
+  detail: string;
+  lastUpdatedAt: string;
+}
+
+/** PartIssue stores one backend-derived blocker or follow-up task for a part record. */
+export interface PartIssue {
+  id: string;
+  partId: string;
+  code: PartIssueCode;
+  severity: PartIssueSeverity;
+  status: PartIssueWorkflowStatus;
+  assignedTo: string | null;
+  resolutionNotes: string | null;
+  resolvedAt: string | null;
+  summary: string;
+  detail: string;
+  source: string;
+  lastUpdatedAt: string;
+}
+
+/** PartRiskFlag stores one compact risk chip for dense search/detail/admin rendering. */
+export interface PartRiskFlag {
+  id: string;
+  partId: string;
+  code: PartRiskFlagCode;
+  label: string;
+  detail: string;
+  tone: "review" | "danger";
+  lastUpdatedAt: string;
+}
+
+/** SourceReconciliationRecord stores operator-selected source handling for source-conflict follow-up. */
+export interface SourceReconciliationRecord {
+  partId: string;
+  preferredSourceRecordId: string | null;
+  resolutionStatus: SourceReconciliationStatus;
+  notes: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+/** SearchPagination describes a bounded result window without changing result truth. */
+export interface SearchPagination {
+  page: number;
+  pageSize: number;
+  totalRecords: number;
+  totalPages: number;
+  sort: PartSearchSort;
+}
+
+/** PartSearchRecord is the joined record shape consumed by API and web search/detail pages. */
 export interface PartSearchRecord {
-  /** Normalized part row. */
   part: Part;
-  /** Joined manufacturer row. */
   manufacturer: Manufacturer;
-  /** Joined package row. */
   package: Package;
-  /** Metrics linked to the part. */
+  connectorFamily: ConnectorFamily | null;
   metrics: PartMetric[];
-  /** Assets linked to the part. */
   assets: Asset[];
-  /** Latest datasheet revision when one is known. */
   datasheetRevision: DatasheetRevision | null;
-  /** Source records that contributed to this canonical part. */
   sources: SourceRecord[];
+  mateRelations: MateRelation[];
+  accessoryRequirements: AccessoryRequirement[];
+  cableCompatibilities: CableCompatibility[];
+  connectorFamilyConflicts: ConnectorFamilyConflict[];
+  buildableMatingSet: BuildableMatingSet;
+  similarParts: SimilarPartRelation[];
+  companionRecommendations: CompanionRecommendation[];
+  generationWorkflows: GenerationWorkflow[];
+  generationRequests: GenerationRequest[];
+  extractionSignals: SourceExtractionSignal[];
+  reviewRecords: ReviewRecord[];
+  validationRecords: AssetValidationRecord[];
+  promotionAudits: AssetPromotionAuditRecord[];
+  readinessSummary: PartReadinessSummary;
+  approval: PartApproval;
+  duplicateCandidates: PartDuplicateCandidate[];
+  issues: PartIssue[];
+  riskFlags: PartRiskFlag[];
+  sourceReconciliation: SourceReconciliationRecord | null;
   /** ISO timestamp for the latest joined record update. */
   lastUpdatedAt: string;
 }
 
-/** SearchFacets contains provider-neutral filter data served by the API. */
-export interface SearchFacets {
-  /** Manufacturers available to the search filter rail. */
-  manufacturers: Manufacturer[];
-  /** Categories available to the search filter rail. */
-  categories: string[];
-  /** Packages available to the search filter rail. */
-  packages: Package[];
-  /** Lifecycle states available to the search filter rail. */
-  lifecycleStatuses: LifecycleStatus[];
+/** RelatedPartSummary provides lightweight display data for relationship sections. */
+export interface RelatedPartSummary {
+  id: string;
+  mpn: string;
+  manufacturerName: string;
+  category: string;
 }
 
-/** ExportAvailability records whether a bundle can be created from real files. */
+/** PartAcquisitionSummary exposes detail-safe acquisition/job provenance without leaking internal user ids. */
+export interface PartAcquisitionSummary {
+  /** State explains whether the detail page has job history, only legacy source evidence, or no acquisition record. */
+  state: PartAcquisitionSummaryState;
+  /** Provider id from the latest matching acquisition or source evidence when available. */
+  providerId: string | null;
+  /** Provider-specific part key attached to the latest matching acquisition or source row when available. */
+  providerPartKey: string | null;
+  /** Exact lookup that created the latest acquisition job, or null when no job record exists. */
+  requestedLookup: string | null;
+  /** Manufacturer part number shown in the acquisition summary when it is recorded or can be safely inferred from the canonical part. */
+  mpn: string | null;
+  /** Manufacturer name shown in the acquisition summary when it is recorded or can be safely inferred from the canonical part. */
+  manufacturerName: string | null;
+  /** Provider source URL for the latest acquisition or source evidence when available. */
+  sourceUrl: string | null;
+  /** Latest matching acquisition job status, or null when no acquisition job exists for this part. */
+  lastJobStatus: ProviderAcquisitionJobStatus | null;
+  /** When the latest matching acquisition job was requested, or null when no job is recorded. */
+  requestedAt: string | null;
+  /** When the latest matching acquisition job completed, or null when it has not completed or was never recorded. */
+  completedAt: string | null;
+  /** Public detail routes do not expose raw internal requester ids, so this stays null until a safe display label exists. */
+  requestedBy: string | null;
+  /** Human-readable reason for unavailable or legacy/no-history states. */
+  reason: string | null;
+}
+
+/** ProviderEnrichmentJob stores one background enrichment attempt without implying approval or export readiness. */
+export interface ProviderEnrichmentJob {
+  id: string;
+  partId: string;
+  sourceAcquisitionJobId: string;
+  jobType: ProviderEnrichmentJobType;
+  jobStatus: ProviderEnrichmentJobStatus;
+  requestedBy: string;
+  requestedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  lastUpdatedAt: string;
+}
+
+/** ProviderEnrichmentJobEvent records one coarse lifecycle event for a background enrichment job. */
+export interface ProviderEnrichmentJobEvent {
+  id: string;
+  jobId: string;
+  eventType: ProviderEnrichmentJobEventType;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+/** PartEnrichmentJobSummary is the detail-safe view of one enrichment job on the public part detail route. */
+export interface PartEnrichmentJobSummary {
+  id: string;
+  jobType: ProviderEnrichmentJobType;
+  jobStatus: ProviderEnrichmentJobStatus;
+  requestedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  lastUpdatedAt: string;
+}
+
+/** PartEnrichmentSummary exposes read-only enrichment activity without changing approval or export truth. */
+export interface PartEnrichmentSummary {
+  /** State explains whether enrichment jobs are recorded, absent, or unavailable for this detail response. */
+  state: PartEnrichmentSummaryState;
+  /** Recorded enrichment jobs in newest-first order. */
+  jobs: PartEnrichmentJobSummary[];
+  /** Latest recorded enrichment status, or null when no jobs exist. */
+  latestJobStatus: ProviderEnrichmentJobStatus | null;
+  /** Count of queued or running enrichment jobs still in progress for this part. */
+  activeJobCount: number;
+  /** Human-readable reason for unavailable or no-history states. */
+  reason: string | null;
+}
+
+/** PartDetailResponse enriches the base record with resolved related-part summaries. */
+export interface PartDetailResponse {
+  record: PartSearchRecord;
+  relatedPartSummaries: RelatedPartSummary[];
+  assetGroups: AssetClassSummary[];
+  bundleReadiness: BundleReadinessSummary;
+  generationOptions: AssetGenerationOption[];
+  assetReviewStatuses: ReviewStatusSummary[];
+  workflowReviewStatuses: ReviewStatusSummary[];
+  assetValidationSummaries: AssetValidationSummary[];
+  assetPromotionSummaries: AssetPromotionSummary[];
+  acquisitionSummary: PartAcquisitionSummary;
+  enrichmentSummary: PartEnrichmentSummary;
+}
+
+/** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */
+export interface GenerationRequestCreateInput {
+  targetAssetType: GenerationTargetAssetType;
+}
+
+/** GenerationRequestCreateResponse returns the persisted request and refreshed workflow summary. */
+export interface GenerationRequestCreateResponse {
+  request: GenerationRequest;
+  generationOption: AssetGenerationOption;
+}
+
+/** ReviewActionInput is the minimal local/dev-safe body for asset and workflow review decisions. */
+export interface ReviewActionInput {
+  targetType: ReviewTargetType;
+  targetId: string;
+  outcome: ReviewOutcome;
+  notes?: string | null;
+}
+
+/** ReviewActionResponse returns the persisted review plus the updated target when applicable. */
+export interface ReviewActionResponse {
+  review: ReviewRecord;
+  updatedAsset?: Asset;
+  updatedWorkflow?: GenerationWorkflow;
+}
+
+/** PartIssueWorkflowUpdateInput is the operator-facing body for issue assignment and resolve/reopen actions. */
+export interface PartIssueWorkflowUpdateInput {
+  status: PartIssueWorkflowStatus;
+  assignedTo?: string | null;
+  resolutionNotes?: string | null;
+}
+
+/** PartIssueWorkflowUpdateResponse returns the updated issue workflow state from the API. */
+export interface PartIssueWorkflowUpdateResponse {
+  issue: PartIssue;
+}
+
+/** SourceReconciliationUpdateInput stores operator reconciliation state for source-conflict follow-up. */
+export interface SourceReconciliationUpdateInput {
+  resolutionStatus: SourceReconciliationStatus;
+  preferredSourceRecordId?: string | null;
+  notes?: string | null;
+}
+
+/** SourceReconciliationUpdateResponse returns the latest persisted source reconciliation record. */
+export interface SourceReconciliationUpdateResponse {
+  reconciliation: SourceReconciliationRecord;
+}
+
+/** AssetPromotionInput is the explicit request to promote one reviewed asset for export. */
+export interface AssetPromotionInput {
+  assetId: string;
+}
+
+/** AssetPromotionResponse returns the asset after an explicit export-verification promotion. */
+export interface AssetPromotionResponse {
+  updatedAsset: Asset;
+  promotionAudit: AssetPromotionAuditRecord;
+}
+
+/** ProviderImportCreateInput is the operator-facing body for one provider catalog import. */
+export interface ProviderImportCreateInput {
+  /** Registered provider adapter id, such as jlcparts or local-catalog. */
+  providerId: string;
+  /** Manufacturer part number; used when providerPartId is not provided. */
+  mpn?: string | null;
+  /** Provider-specific part identifier (for example an LCSC code) when it differs from MPN. */
+  providerPartId?: string | null;
+  /** Optional provider product URL that can be used as lookup context or parsed for a provider key. */
+  providerUrl?: string | null;
+  /** Optional datasheet URL retained as operator context for intake and later traceability. */
+  datasheetUrl?: string | null;
+  /** Optional manufacturer hint for providers that support disambiguation. */
+  manufacturerName?: string | null;
+}
+
+/** ProviderImportOutcome labels whether the import created a new source row or refreshed an existing one. */
+export type ProviderImportOutcome = "new_import" | "refreshed_existing";
+
+/** ProviderLookupRequestInput is the explicit exact-match lookup body for supported providers. */
+export interface ProviderLookupRequestInput {
+  /** Exact lookup text entered by the user, such as an MPN or supported provider part id. */
+  query: string;
+  /** Optional manufacturer hint retained only for exact provider disambiguation. */
+  manufacturerName?: string | null;
+}
+
+/** ProviderLookupCandidateBase is the provider-neutral exact-match row produced before auth-derived import gating. */
+export interface ProviderLookupCandidateBase {
+  providerId: string;
+  providerPartKey: string;
+  manufacturerName: string;
+  mpn: string;
+  package: string;
+  sourceUrl: string | null;
+  matchType: ProviderLookupMatchType;
+  matchConfidence: number;
+}
+
+/** ProviderLookupCandidate adds request-time import gating without leaking auth rules into worker adapters. */
+export interface ProviderLookupCandidate extends ProviderLookupCandidateBase {
+  /** True only when the current request context could use the existing admin-gated import route. */
+  importAllowed: boolean;
+}
+
+/** ProviderAcquisitionJob stores one admin-gated provider intake job without implying part approval. */
+export interface ProviderAcquisitionJob {
+  id: string;
+  providerId: string;
+  providerPartKey: string;
+  requestedLookup: string;
+  manufacturerName: string | null;
+  mpn: string | null;
+  package: string | null;
+  sourceUrl: string | null;
+  matchType: ProviderLookupMatchType;
+  matchConfidence: number;
+  jobStatus: ProviderAcquisitionJobStatus;
+  requestedBy: string;
+  requestedAt: string;
+  partId: string | null;
+  importOutcome: ProviderImportOutcome | null;
+  previousImportStatus: SourceImportStatus | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** ProviderAcquisitionJobEvent records coarse queue lifecycle transitions and error context. */
+export interface ProviderAcquisitionJobEvent {
+  id: string;
+  jobId: string;
+  eventType: ProviderAcquisitionJobEventType;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+/** ProviderAcquisitionJobCreateInput is the admin-facing intake body built from an exact lookup candidate. */
+export interface ProviderAcquisitionJobCreateInput {
+  providerId: string;
+  providerPartKey: string;
+  requestedLookup: string;
+  manufacturerName?: string | null;
+  mpn?: string | null;
+  package?: string | null;
+  sourceUrl?: string | null;
+  matchType: ProviderLookupMatchType;
+  matchConfidence: number;
+}
+
+/** ProviderAcquisitionJobDetailResponse returns one job plus its coarse lifecycle events. */
+export interface ProviderAcquisitionJobDetailResponse {
+  job: ProviderAcquisitionJob;
+  events: ProviderAcquisitionJobEvent[];
+}
+
+/** ProviderImportCreateResponse summarizes one successful provider import without implying CAD readiness. */
+export interface ProviderImportCreateResponse {
+  partId: string;
+  providerId: string;
+  providerPartKey: string;
+  importStatus: SourceImportStatus;
+  requestedLookup: string;
+  /** Whether a prior source row existed for this provider + part key. */
+  outcome: ProviderImportOutcome;
+  /** Prior source row import status, or null when no prior row existed. */
+  previousImportStatus: SourceImportStatus | null;
+}
+
+/** SearchFacets contains the provider-neutral filter data for the search surface. */
+export interface SearchFacets {
+  manufacturers: Manufacturer[];
+  categories: string[];
+  packages: Package[];
+  lifecycleStatuses: LifecycleStatus[];
+  readinessStatuses: PartReadinessStatus[];
+  approvalStatuses: PartApprovalStatus[];
+  connectorClasses: ConnectorClass[];
+  /** Optional per-facet counts for DB-backed and seed-fallback consistency checks. */
+  counts?: {
+    manufacturers: Record<string, number>;
+    categories: Record<string, number>;
+    packages: Record<string, number>;
+    lifecycleStatuses: Record<LifecycleStatus, number>;
+    cadAvailability: Record<CadAvailabilityFilter, number>;
+    readinessStatuses: Record<PartReadinessStatus, number>;
+    approvalStatuses: Record<PartApprovalStatus, number>;
+    connectorClasses: Record<ConnectorClass, number>;
+  };
+}
+
+/** ExportAvailability describes one export action and why it is enabled or disabled. */
 export interface ExportAvailability {
-  /** Stable export target identifier. */
   id: "altium" | "solidworks" | "neutral_cad";
-  /** User-facing target name. */
   label: string;
-  /** True only when required validated downloadable assets exist. */
+  /** True only when required verified file-backed assets exist. */
   available: boolean;
-  /** Human-readable availability reason for disabled actions or audit text. */
   reason: string;
 }
 
@@ -246,8 +1928,286 @@ export type CatalogDataSource = "database" | "seed_fallback";
 
 /** ApiEnvelope defines the typed JSON response envelope used by apps/api. */
 export interface ApiEnvelope<TData> {
-  /** Response data returned by the API service. */
   data: TData;
-  /** Backing catalog source when the route serves catalog data. */
   source?: CatalogDataSource;
+  /** Optional pagination metadata for paged search responses. */
+  pagination?: SearchPagination;
+  /** Explicit degraded-state warnings, such as allowed local seed fallback. */
+  warnings?: string[];
+}
+
+/** ApiErrorEnvelope defines typed error responses used by apps/api. */
+export interface ApiErrorEnvelope {
+  error: {
+    /** Stable machine-readable API error code. */
+    code: string;
+    /** User-facing explanation that avoids implying healthy DB-backed data. */
+    message: string;
+  };
+  /** Explicit degraded-state warnings when applicable. */
+  warnings?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// P0-FUNC5: Export bundle types
+// ---------------------------------------------------------------------------
+
+/** ExportBundleFormat names the three export target environments. */
+export type ExportBundleFormat = "altium" | "solidworks" | "neutral";
+
+/** ExportBundleIncludedAsset describes one verified file-backed asset included in a bundle. */
+export interface ExportBundleIncludedAsset {
+  partId: string;
+  partMpn: string;
+  manufacturerName: string;
+  assetId: string;
+  assetType: AssetType;
+  fileFormat: FileFormat;
+  storageKey: string;
+  fileHash: string | null;
+  provenance: AssetProvenance;
+  bundlePath: string;
+}
+
+/** ExportBundleOmission records why a part asset was excluded from a bundle. */
+export interface ExportBundleOmission {
+  partId: string;
+  partMpn: string;
+  assetType: AssetType;
+  reason: "not_verified_for_export" | "no_storage_key" | "referenced_only" | "missing" | "format_not_applicable";
+}
+
+/** ExportBundleManifest is the deterministic record of what is and is not in a bundle. */
+export interface ExportBundleManifest {
+  bundleId: string;
+  bundleFormat: ExportBundleFormat;
+  projectId: string;
+  revisionLabel: string | null;
+  generatedAt: string;
+  includedAssets: ExportBundleIncludedAsset[];
+  omissions: ExportBundleOmission[];
+  warnings: string[];
+}
+
+/** ExportBundle is the persisted bundle record with its manifest. */
+export interface ExportBundle {
+  id: string;
+  projectId: string;
+  revisionLabel: string | null;
+  bundleFormat: ExportBundleFormat;
+  storageKey: string | null;
+  manifest: ExportBundleManifest;
+  partCount: number;
+  includedAssetCount: number;
+  omittedAssetCount: number;
+  warningCount: number;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/** ExportBundleCreateInput specifies the format and optional revision scope for a new bundle. */
+export interface ExportBundleCreateInput {
+  bundleFormat: ExportBundleFormat;
+  revisionLabel?: string | null;
+}
+
+/** ExportBundleCreateResponse is returned when a bundle is generated. */
+export interface ExportBundleCreateResponse {
+  bundle: ExportBundle;
+}
+
+/** ExportBundleListResponse lists all bundles for a project. */
+export interface ExportBundleListResponse {
+  bundles: ExportBundle[];
+  projectId: string;
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC13: Part substitution management types
+// ---------------------------------------------------------------------------
+
+/** PartSubstitutionScope decides whether a substitution applies globally or to one project only. */
+export type PartSubstitutionScope = "global" | "project";
+
+/** PartSubstitutionStatus lets engineers revoke a previously-approved substitution while keeping history. */
+export type PartSubstitutionStatus = "approved" | "revoked";
+
+/** PartSubstitution is the persisted engineering-signed-off substitution record. */
+export interface PartSubstitution {
+  id: string;
+  originalPartId: string;
+  substitutePartId: string;
+  scope: PartSubstitutionScope;
+  projectId: string | null;
+  signoffNotes: string;
+  approvedBy: string;
+  approvalStatus: PartSubstitutionStatus;
+  createdAt: string;
+  revokedAt: string | null;
+  revokedBy: string | null;
+}
+
+/** PartSubstitutionSummary joins one substitution row to the catalog identity of both sides for display. */
+export interface PartSubstitutionSummary {
+  substitution: PartSubstitution;
+  originalPartMpn: string;
+  originalManufacturerName: string;
+  substitutePartMpn: string;
+  substituteManufacturerName: string;
+  /** Optional project name for project-scoped substitutions; null when scope is global. */
+  projectName: string | null;
+}
+
+/** PartSubstitutionListResponse lists every substitution that touches one part as either side. */
+export interface PartSubstitutionListResponse {
+  partId: string;
+  active: PartSubstitutionSummary[];
+  revoked: PartSubstitutionSummary[];
+  boundary: string;
+}
+
+/** PartSubstitutionCreateInput captures the engineering decision: alternate, scope, sign-off. */
+export interface PartSubstitutionCreateInput {
+  substitutePartId: string;
+  scope: PartSubstitutionScope;
+  projectId?: string | null;
+  signoffNotes?: string | null;
+}
+
+/** PartSubstitutionCreateResponse returns the persisted substitution and the trust boundary. */
+export interface PartSubstitutionCreateResponse {
+  substitution: PartSubstitutionSummary;
+  boundary: string;
+}
+
+/** PartSubstitutionRevokeResponse returns the revoked substitution and the trust boundary. */
+export interface PartSubstitutionRevokeResponse {
+  substitution: PartSubstitutionSummary;
+  boundary: string;
+}
+
+// ---------------------------------------------------------------------------
+// P1-FUNC6: BOM import diagnostics and revision compare types
+// ---------------------------------------------------------------------------
+
+/** BomImportDiagnosticsRow describes one BOM line with match context and triage hints. */
+export interface BomImportDiagnosticsRow {
+  lineId: string;
+  rowNumber: number;
+  designators: string[];
+  quantity: number | null;
+  rawMpn: string | null;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  matchStatus: BomLineMatchStatus;
+  matchConfidenceScore: number | null;
+  matchedPartId: string | null;
+  matchedPartMpn: string | null;
+  matchedManufacturerName: string | null;
+  triageActions: string[];
+  /** Approved substitutions that map this row's raw MPN onto an internal catalog part. */
+  approvedSubstituteHints: ApprovedSubstituteHint[];
+}
+
+/** ApprovedSubstituteHint surfaces an approved substitution that may explain or rescue a BOM line. */
+export interface ApprovedSubstituteHint {
+  substitutionId: string;
+  /** The approved substitute part the engineer can pivot to (or that this row already represents). */
+  candidatePartId: string;
+  candidatePartMpn: string;
+  candidateManufacturerName: string;
+  scope: PartSubstitutionScope;
+  approvedBy: string;
+  signoffNotes: string;
+}
+
+/** BomImportDiagnosticsResponse provides a full match-status breakdown for one BOM import. */
+export interface BomImportDiagnosticsResponse {
+  importId: string;
+  projectId: string;
+  matchedCount: number;
+  unmatchedCount: number;
+  ambiguousCount: number;
+  weakMatchCount: number;
+  ignoredCount: number;
+  rows: BomImportDiagnosticsRow[];
+}
+
+/** BomRevisionCompareRow describes one BOM line in a side-by-side revision diff. */
+export interface BomRevisionCompareRow {
+  kind: "added" | "removed" | "changed" | "unchanged";
+  rawMpn: string | null;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  quantity: number | null;
+  designators: string[];
+  matchStatus: BomLineMatchStatus;
+  matchedPartId: string | null;
+  changeDetail: string | null;
+}
+
+/** BomRevisionCompareResponse is the diff between two BOM imports. */
+export interface BomRevisionCompareResponse {
+  projectId: string;
+  importId1: string;
+  importId2: string;
+  addedCount: number;
+  removedCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  rows: BomRevisionCompareRow[];
+}
+
+/** ProjectRevisionCompareChangeKind groups what kind of change a row represents in a revision-level diff. */
+export type ProjectRevisionCompareChangeKind =
+  | "added"
+  | "removed"
+  | "quantity_changed"
+  | "designator_changed"
+  | "mpn_swap"
+  | "unchanged";
+
+/** ProjectRevisionCompareIdentityKind reports what evidence keyed two rows together across revisions. */
+export type ProjectRevisionCompareIdentityKind = "matched_part" | "raw_mpn" | "raw_row";
+
+/** ProjectRevisionCompareSide is one revision-side snapshot of an aggregated BOM line. */
+export interface ProjectRevisionCompareSide {
+  rawMpn: string | null;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  quantity: number | null;
+  designators: string[];
+  matchStatus: BomLineMatchStatus | null;
+  matchedPartId: string | null;
+  matchedPartMpn: string | null;
+}
+
+/** ProjectRevisionCompareRow describes one BOM identity in a revision-vs-revision diff. */
+export interface ProjectRevisionCompareRow {
+  changeKind: ProjectRevisionCompareChangeKind;
+  identityKind: ProjectRevisionCompareIdentityKind;
+  /** Stable per-row key derived from matched_part_id when present, otherwise normalized raw_mpn. */
+  identityKey: string;
+  matchedPartId: string | null;
+  rawMpn: string | null;
+  from: ProjectRevisionCompareSide | null;
+  to: ProjectRevisionCompareSide | null;
+  changeDetail: string | null;
+}
+
+/** ProjectRevisionCompareResponse is the diff between two project revisions. */
+export interface ProjectRevisionCompareResponse {
+  projectId: string;
+  fromRevisionId: string;
+  toRevisionId: string;
+  /** BOM import ids that contributed BOM lines on each side, for transparency. */
+  fromBomImportIds: string[];
+  toBomImportIds: string[];
+  addedCount: number;
+  removedCount: number;
+  quantityChangedCount: number;
+  designatorChangedCount: number;
+  mpnSwapCount: number;
+  unchangedCount: number;
+  rows: ProjectRevisionCompareRow[];
 }

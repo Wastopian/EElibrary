@@ -10,7 +10,7 @@ const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url));
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   outputFileTracingRoot: workspaceRoot,
-  transpilePackages: ["@ee-library/shared", "@ee-library/ui"]
+  transpilePackages: ["@ee-library/db", "@ee-library/shared", "@ee-library/ui"]
 };
 
 export default nextConfig;

@@ -2,10 +2,10 @@
  * File header: Defines reusable dark-mode UI primitives without provider-specific logic.
  */
 
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 /** BadgeTone maps domain state into visual emphasis without embedding domain rules. */
-export type BadgeTone = "neutral" | "info" | "verified" | "review" | "danger";
+export type BadgeTone = "neutral" | "info" | "verified" | "review" | "danger" | "generated";
 
 /** StatusBadgeProps defines a concise status label for dense engineering screens. */
 export interface StatusBadgeProps {
@@ -21,6 +21,8 @@ export interface SectionPanelProps {
   title: string;
   /** Optional short description or provenance hint. */
   description?: string;
+  /** Optional visual tone for default or technical surfaces. */
+  tone?: "default" | "technical";
   /** Panel body content. */
   children: ReactNode;
 }
@@ -61,6 +63,8 @@ export interface AssetCardProps {
   validationLabel: string;
   /** Preview readiness label. */
   previewLabel: string;
+  /** Optional review-state label for reviewer-facing workflows. */
+  reviewLabel?: string;
   /** Availability label derived from real storage state. */
   availabilityLabel: string;
   /** Availability tone selected by the consuming domain layer. */
@@ -69,6 +73,8 @@ export interface AssetCardProps {
   validationTone: BadgeTone;
   /** Preview tone selected by the consuming domain layer. */
   previewTone: BadgeTone;
+  /** Optional review tone selected by the consuming domain layer. */
+  reviewTone?: BadgeTone;
   /** Optional source attribution label supplied by the domain layer. */
   sourceLabel?: string;
   /** Optional last-updated label supplied by the domain layer. */
@@ -92,12 +98,41 @@ export function StatusBadge({ label, tone = "neutral" }: StatusBadgeProps) {
   return <span className={`ui-badge ui-badge--${tone}`}>{label}</span>;
 }
 
+/** SectionHeadingProps renders an editorial section title for workspace pages. */
+export interface SectionHeadingProps {
+  /** Stable id for aria-labelledby. */
+  id: string;
+  /** Short section index label such as "01". */
+  index: string;
+  /** Primary section title. */
+  title: string;
+  /** Optional supporting line under the title. */
+  subtitle?: string;
+}
+
+/**
+ * Renders a numbered section heading for long-form detail layouts.
+ */
+export function SectionHeading({ id, index, subtitle, title }: SectionHeadingProps) {
+  return (
+    <header className="ui-section-heading" id={id}>
+      <span aria-hidden className="ui-section-heading__index">
+        {index}
+      </span>
+      <div>
+        <h2 className="ui-section-heading__title">{title}</h2>
+        {subtitle ? <p className="ui-section-heading__subtitle">{subtitle}</p> : null}
+      </div>
+    </header>
+  );
+}
+
 /**
  * Renders a reusable panel with optional context copy.
  */
-export function SectionPanel({ children, description, title }: SectionPanelProps) {
+export function SectionPanel({ children, description, title, tone = "default" }: SectionPanelProps) {
   return (
-    <section className="ui-panel">
+    <section className={`ui-panel ui-panel--${tone}`}>
       <div className="ui-panel__header">
         <h2>{title}</h2>
         {description ? <p>{description}</p> : null}
@@ -129,8 +164,8 @@ export function MetricTable({ rows }: MetricTableProps) {
         <thead>
           <tr>
             <th>Metric</th>
-            <th>Normalized value</th>
-            <th>Confidence</th>
+            <th>Value</th>
+            <th>Source confidence</th>
           </tr>
         </thead>
         <tbody>
@@ -158,6 +193,8 @@ export function AssetCard({
   fileFormat,
   previewLabel,
   previewTone,
+  reviewLabel,
+  reviewTone = "neutral",
   sourceLabel,
   title,
   updatedLabel,
@@ -166,20 +203,48 @@ export function AssetCard({
 }: AssetCardProps) {
   return (
     <article className="ui-asset-card">
-      <div>
-        <h3>{title}</h3>
-        <p className="ui-mono">{fileFormat}</p>
+      <div className="ui-asset-card__header">
+        <div className="ui-asset-card__identity">
+          <span className="ui-asset-card__eyebrow">Asset class</span>
+          <h3>{title}</h3>
+        </div>
+        <span className="ui-asset-card__format ui-mono">{fileFormat}</span>
       </div>
-      <div className="ui-asset-card__badges">
-        <StatusBadge label={validationLabel} tone={validationTone} />
-        <StatusBadge label={previewLabel} tone={previewTone} />
-        <StatusBadge label={availabilityLabel} tone={availabilityTone} />
+      <div className="ui-asset-card__status-grid">
+        <div className="ui-asset-card__status-item">
+          <span className="ui-asset-card__status-label">Validation</span>
+          <StatusBadge label={validationLabel} tone={validationTone} />
+        </div>
+        {reviewLabel ? (
+          <div className="ui-asset-card__status-item">
+            <span className="ui-asset-card__status-label">Review</span>
+            <StatusBadge label={reviewLabel} tone={reviewTone} />
+          </div>
+        ) : null}
+        <div className="ui-asset-card__status-item">
+          <span className="ui-asset-card__status-label">Preview</span>
+          <StatusBadge label={previewLabel} tone={previewTone} />
+        </div>
+        <div className="ui-asset-card__status-item">
+          <span className="ui-asset-card__status-label">Availability</span>
+          <StatusBadge label={availabilityLabel} tone={availabilityTone} />
+        </div>
       </div>
       {sourceLabel || updatedLabel ? (
-        <div className="ui-asset-card__meta">
-          {sourceLabel ? <span>{sourceLabel}</span> : null}
-          {updatedLabel ? <span>{updatedLabel}</span> : null}
-        </div>
+        <dl className="ui-asset-card__meta">
+          {sourceLabel ? (
+            <div>
+              <dt>Source</dt>
+              <dd>{sourceLabel}</dd>
+            </div>
+          ) : null}
+          {updatedLabel ? (
+            <div>
+              <dt>Updated</dt>
+              <dd>{updatedLabel}</dd>
+            </div>
+          ) : null}
+        </dl>
       ) : null}
     </article>
   );

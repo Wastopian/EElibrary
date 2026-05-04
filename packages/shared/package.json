@@ -9,13 +9,60 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./asset-state": {
+      "types": "./src/asset-state.ts",
+      "default": "./src/asset-state.ts"
+    },
+    "./asset-resolution": {
+      "types": "./src/asset-resolution.ts",
+      "default": "./src/asset-resolution.ts"
+    },
+    "./catalog-runtime": {
+      "types": "./src/catalog-runtime.ts",
+      "default": "./src/catalog-runtime.ts"
+    },
+    "./connector-intelligence": {
+      "types": "./src/connector-intelligence.ts",
+      "default": "./src/connector-intelligence.ts"
+    },
+    "./normalization": {
+      "types": "./src/normalization.ts",
+      "default": "./src/normalization.ts"
+    },
+    "./review-workflow": {
+      "types": "./src/review-workflow.ts",
+      "default": "./src/review-workflow.ts"
+    },
+    "./search": {
+      "types": "./src/search.ts",
+      "default": "./src/search.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./file-storage": {
+      "types": "./src/file-storage.ts",
+      "default": "./src/file-storage.ts"
+    },
+    "./part-readiness": {
+      "types": "./src/part-readiness.ts",
+      "default": "./src/part-readiness.ts"
+    },
+    "./system-health-types": {
+      "types": "./src/system-health-types.ts",
+      "default": "./src/system-health-types.ts"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/*.test.ts",
+    "test": "node ../../scripts/run-tests.mjs src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }
