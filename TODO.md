@@ -1,7 +1,7 @@
 # EE Library - Engineering Memory TODO
 
-**Updated**: 2026-05-03 (FUNC7+FUNC8+FUNC9+FUNC10+FUNC11+FUNC12+FUNC13 complete)
-**Working branch**: `codex/fix-catalog-repository-typecheck`
+**Updated**: 2026-05-03 (through FUNC14 complete; merged onto `main`)
+**Working branch**: `main` (includes merge of `cursor/2026-05-03-7o4u-787f9` engineering-memory track)
 **Purpose**: Turn the shipped part-readiness foundation into a private engineering memory system for hardware teams.
 
 **Worktree register**: dated entries live in [`REGISTER.md`](REGISTER.md) (repo root).
@@ -42,7 +42,7 @@ What is **not** shipped yet:
 - ~~Circuit block instantiation into a project BOM.~~ Shipped via FUNC11.
 - ~~Export bundle download as a zip/archive from the site UI.~~ Shipped via FUNC10.
 - ~~Aggregate project health fleet view across all projects.~~ Shipped via FUNC12.
-- Lifecycle risk change monitoring and alerting.
+- ~~Lifecycle risk change monitoring and alerting.~~ Shipped via FUNC14 (BOM health `lifecycle_risk_changed` finding when catalog moves after review checkpoint).
 - ~~Part substitution management with engineering sign-off.~~ Shipped via FUNC13.
 - Approval batch workflow from project BOM context.
 - Connector set catalog view browsable by family and mate pairs.
@@ -222,7 +222,7 @@ These are the highest-value tasks remaining to make the product a daily-use engi
 - Web UI: new `PartSubstitutionPanel` mounted on the part detail page as section 04b ("Approved substitutes"), right after Alternates. Provides the create form (substitute id + scope + optional project + sign-off notes), shows active substitutes with a Revoke link, and shows revoked history with the revoker + date. The panel surfaces direction (`this -> alternate` vs `alternate -> this`) so engineers see substitutions where the current part is the alternate as well. `BomDiagnosticsPanel` now renders an inline `Substitute: <MPN> (<scope>)` info badge per matching hint inside the diagnostics row's status cell.
 - Tests: three new pg-mem cases — create happy path + self-substitution + missing-part + duplicate, list-from-both-sides + revoke + double-revoke, and BOM diagnostics surfacing `approvedSubstituteHints` on a seeded weak BOM line whose raw MPN maps onto an approved substitution. Migration discovery picks up the new SQL file. All workspaces typecheck. API/web/shared/migration suites green (120 / 81 / 47 / 9).
 
-### P2-FUNC14 — Lifecycle Risk Change Monitoring
+### P2-FUNC14 — Lifecycle Risk Change Monitoring — DONE 2026-05-03
 
 **Priority**: P2
 **Why it matters**: A part approved today can become obsolete or not_recommended next quarter. Projects using it should surface that change without manual catalog audits.
@@ -231,6 +231,14 @@ These are the highest-value tasks remaining to make the product a daily-use engi
 - `/projects/:projectId/bom-health` recalculates lifecycle risk from current part state, not the snapshot at matching time.
 - A new `lifecycle_risk_changed` finding fires when a confirmed usage part moves to obsolete/not_recommended after the last BOM health review.
 - Follow-up sync includes lifecycle change findings so risk is assignable.
+
+**Completion notes**:
+- BOM health SQL now exposes `matched_part_last_updated_at` on joined rows so regressions tie to **when the catalog row last changed**, not the BOM import snapshot.
+- `readProjectBomHealthReviewCheckpointAt` defines the review baseline as the latest of: resolved/dismissed `follow_up_records` for this project with `source_type = 'bom_health'`, and accepted `evidence_attachments` tied to `risk_finding` targets for this project’s BOM-health findings.
+- `buildProjectBomHealthResponse` classifies **lifecycle regression** rows: matched lines where lifecycle is `obsolete` or `not_recommended`, catalog `last_updated_at` is after the checkpoint, and the row is not already counted in the standing `lifecycle_risk` bucket for the same pass (dedupe via grouping).
+- `pushLifecycleRegressionFinding` emits finding code `lifecycle_risk_changed` with explainable inputs and severity driven by obsolete vs not_recommended.
+- Shared type `ProjectBomRiskFindingCode` includes `lifecycle_risk_changed`.
+- Tests: pg-mem case `project memory store surfaces lifecycle_risk_changed when catalog moves after a BOM health review checkpoint` in `apps/api/src/project-memory-store.test.ts`.
 
 ### P2-FUNC15 — Connector Set Catalog View
 
