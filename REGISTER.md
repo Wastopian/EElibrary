@@ -19,4 +19,4 @@ Uncommitted and untracked work registered in git status at register time include
 
 ### Follow-ups
 
-- `docs/IMPLEMENTATION_STATUS.md` and `README.md` still describe several memory workflows as planned; align them with `TODO.md` **Current Reality** when doing the next doc sync pass.
+- If public docs drift from shipped behavior, align `README.md` with `docs/IMPLEMENTATION_STATUS.md` (source of truth); active tasks stay in root `TODO.md`.

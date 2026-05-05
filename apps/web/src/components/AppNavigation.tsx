@@ -78,6 +78,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           match: { path: "/catalog", type: "path" }
         },
         {
+          description: "Compare up to four parts side-by-side on key specs and readiness.",
+          href: "/compare",
+          label: "Compare",
+          match: { path: "/compare", type: "path" }
+        },
+        {
           description: "Open internal project memory and persisted BOM usage.",
           href: "/projects",
           label: "Projects",
@@ -100,6 +106,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           href: "/circuit-blocks",
           label: "Circuit blocks",
           match: { path: "/circuit-blocks", type: "path" }
+        },
+        {
+          description: "Browse connector families, mate pairs, and confirmed project usage.",
+          href: "/connector-sets",
+          label: "Connector sets",
+          match: { path: "/connector-sets", type: "path" }
         },
         {
           description: "Review, promotion, failed import, and follow-up queues.",

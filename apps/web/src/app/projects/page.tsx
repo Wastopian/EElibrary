@@ -31,7 +31,7 @@ type ProjectsDashboardState =
     };
 
 /**
- * Renders the project-memory dashboard without implying BOM upload or where-used workflows are shipped.
+ * Renders the project-memory dashboard (fleet risk, BOM import/match, revision compare, export bundles, etc.).
  */
 export default async function ProjectsPage() {
   const dashboardState = await loadProjectsDashboard();

@@ -4,33 +4,32 @@ This document is forward-looking. For what is already shipped in the repo, use `
 
 EE Library is being built as a **private engineering memory system for hardware teams**, not a public catalog replacement. Provider and catalog data are input; the long-term product value is the internal record of parts, BOMs, connectors, reusable circuit blocks, evidence, approvals, and risk over time.
 
-The current implemented foundation is part readiness plus first project/BOM intake:
+The current implemented foundation is **part readiness** plus a full **project/BOM engineering-memory** track (matching, usage, where-used, BOM health, evidence, circuit blocks, export bundles, connector catalog, approval batch). See `docs/IMPLEMENTATION_STATUS.md` for the live matrix.
 
 ```txt
 search -> import exact MPN when needed -> inspect -> trust -> export
-project -> upload CSV BOM -> map columns -> preserve raw/mapped rows
+project -> BOM intake -> match -> usage -> health / where-used / evidence / reuse -> export when verified
 ```
 
-The next major direction is project memory:
+The next major direction is **workbench depth** without losing honesty:
 
 ```txt
-project/BOM intake -> where-used history -> BOM health review -> evidence-backed reuse and follow-up
+asset preview and trust -> compare and selection tools -> calculators and BOM-adjacent utilities
 ```
 
 ---
 
-## Roadmap Priority
+## Roadmap Priority (next)
 
-Near-term roadmap priority is:
+After the FUNC1–FUNC18 wave (history: `docs/TODO_COMPLETED_ARCHIVE.md`), near-term product priority follows `AGENTS.md` and root `TODO.md`:
 
-1. BOM row matching
-2. part-to-project usage history
-3. where-used search
-4. BOM health dashboard
-5. evidence attachments
-6. circuit block records
+1. **Asset registry and preview (incremental)** — FUNC17 ships **stored PDF** iframe preview when preview state + storage align; extend next with non-PDF honesty rules (STEP/thumbnails only when real previews exist).
+2. **Export adapters** — keep bundle generation deterministic and visible end-to-end.
+3. **Validation and trust scoring** — surface evidence without conflating approval and export.
+4. **Compare (incremental)** — FUNC18 ships `/compare` for metrics/readiness/bundle gate; add connector/CAD depth when data contracts are ready.
+5. **BOM tools and calculators** — only after the above stay trustworthy.
 
-Project records plus CSV BOM upload and column mapping now have a first shipped foundation. The remaining items are planned and should not be presented as fully shipped until `docs/IMPLEMENTATION_STATUS.md` records the implementation surface.
+`docs/IMPLEMENTATION_STATUS.md` is the source of truth for what is already shipped; this section is forward-looking only.
 
 ---
 

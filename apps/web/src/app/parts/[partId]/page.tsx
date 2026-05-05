@@ -11,7 +11,8 @@ import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
-import { buildAssetDownloadUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
+import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
 import {
   assetTrustStageTone,
   formatAssetPromotionBlockers,
@@ -170,9 +171,14 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
   return (
     <main className="detail-layout">
-      <Link className="back-link" href="/catalog">
-        &larr; Back to catalog search
-      </Link>
+      <div className="detail-nav-links">
+        <Link className="back-link" href="/catalog">
+          &larr; Back to catalog search
+        </Link>
+        <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
+          Compare workspace
+        </Link>
+      </div>
 
       <section className="detail-section" aria-labelledby="overview-heading">
         <SectionHeading
@@ -1498,6 +1504,7 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
         validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetExportStatus(bestAsset.exportStatus)}`}
         validationTone={validationTone(bestAsset.validationStatus)}
       />
+      <AssetInlinePreview asset={bestAsset} partId={bestAsset.partId} />
       <div className="asset-review-card__snapshot">
         <div>
           <span>Class state</span>

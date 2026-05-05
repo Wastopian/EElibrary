@@ -1,13 +1,32 @@
 # EE Library
 
-EE Library is a private engineering memory system for hardware teams.
+EE Library helps hardware teams reuse trusted parts, review BOM risk, validate CAD readiness, and preserve the engineering decisions that usually disappear into old projects, emails, spreadsheets, and tribal knowledge.
 
-It is meant to preserve what a team has learned about parts, BOMs, connectors, reusable circuits, evidence, approvals, and design risk over time. Public catalog data is useful input, but the durable value is the internal truth that accumulates around real engineering decisions.
+It is a private engineering memory system, not a public component search clone. Public catalog data from providers is useful input, but the durable value is the internal truth that accumulates around real designs: where a part was used, why it was approved, which CAD files were trusted, what connector set worked, which circuit pattern was reused, and which risks remain open.
+
+EE Library is not trying to replace DigiKey, Mouser, Arrow, TraceParts, SnapEDA, or other public databases. Those tools help find parts. EE Library helps a team decide whether a part is trusted, reusable, approved, risky, blocked, or ready for export.
+
+## Problems It Solves
+
+EE Library is built to answer practical engineering questions:
+
+- Have we used this part before?
+- Is this part approved for new designs?
+- Can we trust the datasheet source, symbol, footprint, 3D model, and pin mapping?
+- Is this BOM carrying lifecycle, sourcing, CAD, approval, connector, or evidence risk?
+- What connector mates, contacts, backshells, cables, and tooling are required?
+- Which parts, circuits, and connector sets are known-good for reuse?
+- Why was this part selected, restricted, substituted, or blocked?
+
+Catalog presence is not treated as success. EE Library keeps part identity, datasheet evidence, connector buildability, asset truth, approval state, provenance, and export readiness separate so uncertain metadata never looks certain.
+
+## Core Workflows
 
 The first implemented slice is a part readiness loop:
 
 ```txt
 search -> import exact MPN when needed -> inspect -> trust -> export
+
 ```
 
 The broader product direction is:
@@ -22,7 +41,14 @@ Catalog presence is not treated as success. EE Library keeps part identity, data
 
 ## Product Direction
 
-These are the high-value workflows EE Library is being shaped around. Some have working foundations today; others are planned and should not be read as fully implemented yet.
+These are the high-value workflows EE Library is built around. Most have **shipped** foundations today—see [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for exact boundaries. Basic **`/compare`** is shipped; **deeper compare** (connector/CAD-first matrices) and **calculators** remain planned until listed there.
+
+- **Find prior use before choosing a part**
+- **Separate imported data from reviewed, approved, and export-ready truth**
+- **Validate CAD assets with evidence instead of assuming availability means trust**
+- **Confirm connector buildability before procurement orders half a connector set**
+- **Reuse proven circuit blocks with context, constraints, and known risks**
+- **Review BOM health before lifecycle, sourcing, CAD, or approval gaps become schedule problems**
 
 - **Project/BOM import and where-used history**: import project BOMs, remember what was used where, and make prior engineering decisions searchable.
 - **Part readiness, approval, and internal reuse**: distinguish imported, reviewed, approved, reusable, and export-ready parts.
@@ -41,41 +67,55 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - Teams that repeatedly reuse known-good connectors, circuits, and parts across projects and want those decisions preserved.
 - Organizations that use public provider data as intake, but need private project history and review decisions to become the source of truth.
 
-## What Ships Today
+## Problems It Solves
 
-- `/` and `/catalog` open directly into the catalog workbench.
-- `/projects` opens project memory, supports project creation, and shows persisted project/revision/BOM/usage foundations.
-- Project detail pages support CSV BOM preview, column mapping, and persistence of raw/mapped BOM rows.
-- Dense catalog search supports MPN, manufacturer, provider id, package, lifecycle, CAD, readiness, approval, connector, and sort filters.
-- Exact no-match MPN searches show one direct "Import exact MPN" action from configured providers.
-- Supported MVP import providers are `local-catalog` for deterministic development fixtures and `jlcparts` for JLCPCB/LCSC metadata.
-- Part detail pages now start with an answer-first use decision, datasheet state, CAD/export state, provenance, and next action.
-- A shared next-action model maps readiness issues to concrete follow-ups in catalog rows and detail pages.
-- Connector buildable-set projection shows best mate, required accessories, optional accessories, cables, and confidence warnings.
-- Asset truth, validation, review, and explicit verified-for-export promotion stay separate from whole-part approval.
-- Admin surfaces review, promotion, failed import, validation, and issue-driven operations queues.
-- `/system/health` reports API, database, storage, worker heartbeat, and async queue state.
+- “Have we used this part before?”
+- “Is this part approved for new designs?”
+- “Can I trust the footprint, symbol, 3D model, and datasheet source?”
+- “Which BOM lines are obsolete, risky, unapproved, or missing evidence?”
+- “What connector mates, contacts, backshells, cables, and tooling are required?”
+- “Why was this part selected, blocked, replaced, or restricted?”
 
-## Planned High-Value Additions
 
-These workflows are intentionally called out as planned additions, not current shipped behavior.
+## Current Capabilities
 
-- **BOM row matching and usage creation**: match imported BOM rows to internal parts and create confirmed usage history only when evidence supports it.
-- **Where-used search**: answer where a part, connector set, asset, or circuit block has appeared before.
-- **Circuit blocks**: store reusable circuits with their approved parts, evidence, design notes, constraints, and known risks.
-- **Evidence vault**: collect datasheets, validation reports, review notes, source snapshots, file hashes, and approval history in one auditable place.
-- **BOM health dashboard**: review lifecycle, sourcing, approval, CAD/export, evidence, connector, and reuse risk across a matched project BOM.
+**Catalog and parts**
 
-## Near-Term Roadmap
+- `/` and `/catalog` open into the dense catalog workbench (filters: readiness, approval, CAD, lifecycle, connector class, sort, etc.).
+- Exact no-match MPN searches expose a direct **Import exact MPN** path for configured providers (`local-catalog`, `jlcparts`).
+- Part detail is answer-first: use decision, datasheet and CAD/export state, connector buildable set, provenance, approved substitutes, next actions.
+- Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
 
-Near-term work should turn the current part-readiness foundation into project-level memory without blurring what is already shipped.
+**Project and BOM memory**
 
-1. Add BOM row matching that keeps unmatched, weak, and ambiguous rows separate from confirmed usage.
-2. Add where-used history for parts, connector sets, assets, and eventually circuit blocks.
-3. Build evidence-vault primitives for datasheets, validation reports, review notes, source snapshots, file hashes, and approvals.
-4. Define reusable circuit blocks as structured engineering objects tied to parts, evidence, constraints, and project reuse.
-5. Add a BOM health dashboard that summarizes approval, lifecycle, CAD/export, evidence, connector, and reuse risk.
-6. Continue tightening the current search -> inspect -> trust -> export loop so part readiness remains the reliable foundation.
+- `/projects`: create projects and revisions, CSV and **XLSX** BOM preview, column mapping, persisted raw/mapped BOM rows.
+- **Row matching** creates confirmed `project_part_usages` only when deterministic internal identity matches; weak/unmatched rows stay distinct.
+- BOM **health/diagnostics**, **fleet risk** on the dashboard, **revision compare**, **follow-ups**, **lifecycle regression** findings, **substitution** hints, **approval batch** from project context, and **export bundle** history with downloads when file-backed keys exist.
+
+**Engineering workspaces**
+
+- **`/compare`** — up to four parts via `?parts=id1,id2,…`: key metrics, lifecycle, trust, readiness, approval, and export bundle gate in one table (add ids from part detail “Compare workspace” or the URL).
+- **Asset PDF preview** on part detail — when a stored datasheet PDF is `previewStatus: ready`, an inline frame appears (reference-only PDFs stay download / open in new tab only).
+- `/where-used` across parts, circuit blocks, connector sets (mates), and assets (bundle manifests).
+- `/evidence` vault with filters, review, and storage-backed attachments tied to projects, BOM lines, parts, findings, and blocks.
+- `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
+- `/connector-sets`: browse connector families, mate pairs, and project usage counts.
+- `/admin` queues; authenticated shell via `/sign-in`; `/system/health` for API, DB, storage, worker.
+
+Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+
+## Still Planned (not shipped)
+
+These remain product direction; they are **not** in the implementation-status matrix as shipped features (or are only **partial** there).
+
+- **Deeper compare** (connector/CAD-first matrix beyond key metrics and bundle gate).
+- **Tools / EE calculators** page.
+- **Subcategory** search facets until backed by persisted catalog data.
+- **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation beyond current worker foundations.
+
+## Near-Term Product Priority
+
+After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED_ARCHIVE.md`](docs/TODO_COMPLETED_ARCHIVE.md)), the next high-leverage build follows [`AGENTS.md`](AGENTS.md) and root [`TODO.md`](TODO.md): deepen **asset preview**, then **export** reliability, **validation/trust**, then **deeper compare** and BOM-adjacent **tools**—without blurring shipped vs planned behavior.
 
 ## What EE Library Is Not
 
@@ -84,16 +124,15 @@ Near-term work should turn the current part-readiness foundation into project-le
 - It is not an automatic claim that imported provider data is approved, validated, or export-ready.
 - It is not a loose notes app for circuits, connectors, and review decisions.
 - It is not a production CAD generator today.
-- It is not allowed to present planned matching, where-used, circuit block, evidence vault, or BOM health workflows as shipped behavior.
+- It is not allowed to present **tools/calculators** or **deep compare** (connector/CAD-first matrices) as shipped until those capabilities exist and are listed in `docs/IMPLEMENTATION_STATUS.md`. A basic part compare route is listed when present.
 
 ## Current Boundaries
 
-- compare and tools pages are intentionally hidden until they are functional
-- subcategory search facets are still planned and should not be surfaced until persisted data exists
-- exact-MPN import is not broad live provider search
-- imported does not mean approved, CAD-verified, or export-ready
-- BOM upload/mapping exists for CSV, but matching, where-used history, circuit blocks, evidence vault, and BOM health dashboards are planned additions
-- multi-provider conflict resolution, broad datasheet extraction, and production-grade automatic CAD generation remain planned work
+- **`/compare`** (basic readiness metrics) is in the workspace sidebar. **`/tools`** (calculators) stays out of primary navigation until that route exists.
+- Exact-MPN import is not broad live distributor search.
+- Imported does not mean approved, CAD-verified, or export-ready.
+- BOM upload preserves raw context; matching and usage follow explicit operator actions and deterministic rules—weak rows do not silently become confirmed usage.
+- Multi-provider conflict handling is **partial**; richer merge policy and extraction/generation depth remain **planned** (see implementation status).
 
 ## Monorepo Layout
 
@@ -162,16 +201,14 @@ The web app defaults to `http://127.0.0.1:3000`; the API defaults to `http://127
 5. Open the part detail page.
 6. Read the use decision first, then inspect datasheet, CAD/export assets, provenance, and audit history as needed.
 
-## Future Project Memory Loop
+## Project memory loop (today)
 
-This is the intended project-level loop once planned project/BOM features exist:
-
-1. Import a project BOM and preserve each original row, designator, quantity, note, and source file reference.
-2. Match BOM rows to existing internal parts or create exact-MPN intake follow-up.
-3. Review where each part, connector set, asset, or circuit block has been used before.
-4. Check readiness, approval, validation evidence, connector buildability, CAD/export status, and lifecycle risk.
-5. Reuse approved parts and circuit blocks when evidence supports it; create follow-up work when it does not.
-6. Save the final decisions back into project history so the next design starts with memory instead of rediscovery.
+1. Import a project BOM (CSV or XLSX) and preserve each original row, designator, quantity, note, and source file reference.
+2. Match BOM rows to existing internal parts where identity is exact, or route unmatched lines through catalog intake and substitutes.
+3. Use **where-used** and **connector sets** to see prior project usage and mate context.
+4. Review BOM **health**, **fleet risk**, **revision compare**, **lifecycle regression**, and **approval gaps**; run **approval batch** when bulk decisions are appropriate.
+5. Attach **evidence**, manage **follow-ups**, reuse **circuit blocks** or instantiate them into the BOM when roles match.
+6. Generate **export bundles** when verified file-backed assets exist; decisions remain recorded for the next design.
 
 ## Product Rules
 

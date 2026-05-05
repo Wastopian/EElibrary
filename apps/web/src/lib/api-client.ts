@@ -5,6 +5,9 @@
 import type {
   ApiEnvelope,
   ApiErrorEnvelope,
+  ApprovalBatchCandidatesResponse,
+  ApprovalBatchRequest,
+  ApprovalBatchResponse,
   AssetPromotionInput,
   AssetPromotionResponse,
   BomImportCreateInput,
@@ -27,6 +30,8 @@ import type {
   CircuitBlockPartUpdateResponse,
   CircuitBlockUpdateInput,
   CircuitBlockUpdateResponse,
+  ConnectorClass,
+  ConnectorSetListResponse,
   EvidenceAttachmentCreateInput,
   EvidenceAttachmentCreateResponse,
   EvidenceAttachmentFileUploadInput,
@@ -1195,10 +1200,64 @@ export async function fetchProjectRevisionCompare(
 }
 
 /**
+ * Fetches the connector-set catalog grouped by connector_class with mate context.
+ */
+export async function fetchConnectorSetCatalog(filters: { connectorClass?: ConnectorClass; query?: string } = {}): Promise<ConnectorSetListResponse> {
+  const params = new URLSearchParams();
+  if (filters.connectorClass) params.set("connectorClass", filters.connectorClass);
+  if (filters.query && filters.query.trim().length > 0) params.set("q", filters.query.trim());
+  const path = params.size > 0 ? `/connector-sets?${params.toString()}` : "/connector-sets";
+  const envelope = await fetchApi<ApiEnvelope<ConnectorSetListResponse>>(path);
+  return envelope.data;
+}
+
+/**
+ * Fetches the project-scoped approval candidate queue.
+ */
+export async function fetchApprovalBatchCandidates(projectId: string): Promise<ApprovalBatchCandidatesResponse> {
+  const envelope = await fetchApi<ApiEnvelope<ApprovalBatchCandidatesResponse>>(`/projects/${encodeURIComponent(projectId)}/approval-candidates`);
+  return envelope.data;
+}
+
+/**
+ * Applies a bulk approval action triggered from a project BOM context.
+ */
+export async function applyApprovalBatch(projectId: string, input: ApprovalBatchRequest): Promise<ApprovalBatchResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/approval-batch`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Approval batch");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ApprovalBatchResponse>;
+  return envelope.data;
+}
+
+/**
  * Builds the API download URL for one asset so the UI can link directly to the redirect endpoint.
  */
 export function buildAssetDownloadUrl(partId: string, assetId: string): string {
   return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+}
+
+const MAX_COMPARE_PARTS = 4;
+
+/**
+ * Builds the part-compare workspace URL with up to four distinct catalog part ids.
+ */
+export function buildCompareUrl(partIds: string[]): string {
+  const unique = [...new Set(partIds.map((id) => id.trim()).filter(Boolean))].slice(0, MAX_COMPARE_PARTS);
+
+  if (unique.length === 0) {
+    return "/compare";
+  }
+
+  return `/compare?parts=${unique.map(encodeURIComponent).join(",")}`;
 }
 
 /**
