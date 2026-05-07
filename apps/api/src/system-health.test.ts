@@ -86,7 +86,7 @@ test("buildSystemHealth marks worker online when heartbeat is fresh", async () =
   assert.equal(health.worker.status, "online");
 });
 
-test("buildSystemHealth returns acquisition and enrichment queue counts", async () => {
+test("buildSystemHealth returns acquisition, enrichment, and export bundle assembly queue counts", async () => {
   const heartbeat = "2026-04-26T00:00:55.000Z";
   const fakePool = makeFakePool(async (text) => {
     if (text.trim().startsWith("SELECT 1")) {
@@ -101,6 +101,9 @@ test("buildSystemHealth returns acquisition and enrichment queue counts", async 
     if (text.includes("provider_enrichment_jobs")) {
       return { rowCount: 1, rows: [{ failed: 1, pending: 4 }] };
     }
+    if (text.includes("export_bundles")) {
+      return { rowCount: 1, rows: [{ failed: "1", pending: "2" }] };
+    }
     return { rowCount: 0, rows: [] };
   });
 
@@ -112,8 +115,37 @@ test("buildSystemHealth returns acquisition and enrichment queue counts", async 
 
   assert.deepEqual(health.queues, {
     acquisition: { failed: 2, pending: 3 },
-    enrichment: { failed: 1, pending: 4 }
+    enrichment: { failed: 1, pending: 4 },
+    exportBundleAssembly: { failed: 1, pending: 2 }
   });
+});
+
+test("buildSystemHealth zeros export bundle assembly counts when the table query throws", async () => {
+  const heartbeat = "2026-04-26T00:00:55.000Z";
+  const fakePool = makeFakePool(async (text) => {
+    if (text.trim().startsWith("SELECT 1")) {
+      return { rowCount: 1, rows: [{ "?column?": 1 }] };
+    }
+    if (text.includes("worker_heartbeats")) {
+      return { rowCount: 1, rows: [{ last_seen_at: heartbeat }] };
+    }
+    if (text.includes("provider_acquisition_jobs") || text.includes("provider_enrichment_jobs")) {
+      return { rowCount: 1, rows: [{ failed: 0, pending: 0 }] };
+    }
+    if (text.includes("export_bundles")) {
+      throw new Error("relation does not exist");
+    }
+    return { rowCount: 0, rows: [] };
+  });
+
+  const health = await buildSystemHealth({
+    now: () => new Date("2026-04-26T00:01:00.000Z").getTime(),
+    pool: fakePool as never,
+    staleAfterSeconds: 30
+  });
+
+  // Pre-migration deploys must not break the system page; the table lookup soft-fails to zeroes.
+  assert.deepEqual(health.queues.exportBundleAssembly, { failed: 0, pending: 0 });
 });
 
 test("buildSystemHealth marks database unavailable when ping fails but stays well-formed", async () => {
@@ -132,6 +164,7 @@ test("buildSystemHealth marks database unavailable when ping fails but stays wel
   assert.equal(health.worker.lastSeenAt, null);
   assert.deepEqual(health.queues, {
     acquisition: { failed: 0, pending: 0 },
-    enrichment: { failed: 0, pending: 0 }
+    enrichment: { failed: 0, pending: 0 },
+    exportBundleAssembly: { failed: 0, pending: 0 }
   });
 });

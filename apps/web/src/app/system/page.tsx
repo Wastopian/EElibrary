@@ -170,6 +170,12 @@ function SystemQueueTable({ health }: { health: SystemHealthResponse }) {
       failed: health.queues.enrichment.failed,
       pending: health.queues.enrichment.pending,
       queue: "Enrichment"
+    },
+    {
+      description: "Pending export bundles waiting for the worker daemon to copy verified asset bytes; failed rows expose `assembly_error` JSONB for diagnostic detail.",
+      failed: health.queues.exportBundleAssembly.failed,
+      pending: health.queues.exportBundleAssembly.pending,
+      queue: "Export bundle assembly"
     }
   ];
 
@@ -280,8 +286,8 @@ function SystemRecoveryCard({
  */
 function summarizeQueues(health: SystemHealthResponse): { failed: number; pending: number } {
   return {
-    failed: health.queues.acquisition.failed + health.queues.enrichment.failed,
-    pending: health.queues.acquisition.pending + health.queues.enrichment.pending
+    failed: health.queues.acquisition.failed + health.queues.enrichment.failed + health.queues.exportBundleAssembly.failed,
+    pending: health.queues.acquisition.pending + health.queues.enrichment.pending + health.queues.exportBundleAssembly.pending
   };
 }
 

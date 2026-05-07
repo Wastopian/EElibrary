@@ -16,6 +16,7 @@ test("system page renders health summary, worker warning, and queue recovery", a
     if (url.pathname === "/system/health") {
       return jsonResponse(buildSystemHealth({
         acquisitionPending: 3,
+        bundleAssemblyPending: 2,
         enrichmentFailed: 1,
         objectStorageStatus: "not_configured",
         workerStatus: "offline"
@@ -36,6 +37,7 @@ test("system page renders health summary, worker warning, and queue recovery", a
     assert.match(html, /Worker daemon is offline/u);
     assert.match(html, /Acquisition/u);
     assert.match(html, /Enrichment/u);
+    assert.match(html, /Export bundle assembly/u);
     assert.match(html, /Needs review/u);
     assert.match(html, /Open Admin queues/u);
   } finally {
@@ -98,6 +100,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 function buildSystemHealth({
   acquisitionFailed = 0,
   acquisitionPending = 0,
+  bundleAssemblyFailed = 0,
+  bundleAssemblyPending = 0,
   enrichmentFailed = 0,
   enrichmentPending = 0,
   objectStorageStatus = "connected",
@@ -105,6 +109,8 @@ function buildSystemHealth({
 }: {
   acquisitionFailed?: number;
   acquisitionPending?: number;
+  bundleAssemblyFailed?: number;
+  bundleAssemblyPending?: number;
   enrichmentFailed?: number;
   enrichmentPending?: number;
   objectStorageStatus?: SystemHealthResponse["objectStorage"]["status"];
@@ -122,6 +128,10 @@ function buildSystemHealth({
       enrichment: {
         failed: enrichmentFailed,
         pending: enrichmentPending
+      },
+      exportBundleAssembly: {
+        failed: bundleAssemblyFailed,
+        pending: bundleAssemblyPending
       }
     },
     worker: {

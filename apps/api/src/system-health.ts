@@ -48,7 +48,9 @@ export async function buildSystemHealth(deps: SystemHealthDeps = {}): Promise<Sy
   const databaseStatus: ServiceConnectionStatus = pool ? await pingDatabase(pool) : "not_configured";
   const workerHeartbeat = pool && databaseStatus === "connected" ? await readLatestHeartbeat(pool) : null;
   const workerLiveness = computeWorkerLiveness(workerHeartbeat, now(), staleAfterSeconds);
-  const queueCounts = pool && databaseStatus === "connected" ? await readQueueCounts(pool) : { acquisition: { pending: 0, failed: 0 }, enrichment: { pending: 0, failed: 0 } };
+  const queueCounts = pool && databaseStatus === "connected"
+    ? await readQueueCounts(pool)
+    : { acquisition: { pending: 0, failed: 0 }, enrichment: { pending: 0, failed: 0 }, exportBundleAssembly: { pending: 0, failed: 0 } };
 
   return {
     api: { status: "ok" },
@@ -115,14 +117,16 @@ export function computeWorkerLiveness(lastSeenAt: Date | null, nowMs: number, st
  * Reads queue counts when the relevant tables exist. Returns zeroed counts on missing tables.
  */
 async function readQueueCounts(pool: Pool): Promise<SystemHealthResponse["queues"]> {
-  const [acquisition, enrichment] = await Promise.all([
+  const [acquisition, enrichment, exportBundleAssembly] = await Promise.all([
     readQueueCount(pool, "provider_acquisition_jobs"),
-    readQueueCount(pool, "provider_enrichment_jobs")
+    readQueueCount(pool, "provider_enrichment_jobs"),
+    readExportBundleAssemblyCount(pool)
   ]);
 
   return {
     acquisition,
-    enrichment
+    enrichment,
+    exportBundleAssembly
   };
 }
 
@@ -137,6 +141,33 @@ async function readQueueCount(pool: Pool, tableName: "provider_acquisition_jobs"
           COUNT(*) FILTER (WHERE job_status IN ('queued', 'running')) AS pending,
           COUNT(*) FILTER (WHERE job_status = 'failed') AS failed
         FROM ${tableName}
+      `
+    );
+    const row = result.rows[0];
+
+    return {
+      failed: readCount(row?.failed),
+      pending: readCount(row?.pending)
+    };
+  } catch {
+    return { failed: 0, pending: 0 };
+  }
+}
+
+/**
+ * Reads the export bundle assembly queue counts. Distinct from the provider job tables because
+ * `export_bundles` uses an `assembly_status` column instead of the `job_status` vocabulary, and
+ * `not_required` rows must not inflate either count. Returns zeros when the table is missing so
+ * `/system` stays usable before migration 031 is applied.
+ */
+async function readExportBundleAssemblyCount(pool: Pool): Promise<{ pending: number; failed: number }> {
+  try {
+    const result = await pool.query<{ pending: string | number; failed: string | number }>(
+      `
+        SELECT
+          COUNT(*) FILTER (WHERE assembly_status = 'pending') AS pending,
+          COUNT(*) FILTER (WHERE assembly_status = 'assembly_failed') AS failed
+        FROM export_bundles
       `
     );
     const row = result.rows[0];
