@@ -4,11 +4,31 @@
 
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
-import { buildExportBundleDownloadUrl, createExportBundle, isApiClientError } from "../lib/api-client";
+import { buildExportBundleDownloadUrl, createExportBundle, fetchProjectExportBundles, isApiClientError } from "../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { ExportBundle, ExportBundleAssemblyStatus, ExportBundleFormat, ExportBundleListResponse, ProjectRevision } from "@ee-library/shared/types";
+
+/**
+ * BUNDLE_AUTO_REFRESH_INTERVAL_MS controls how often the panel re-fetches the bundle list while
+ * one or more bundles are still in `pending` assembly. Slightly under the worker daemon's 30s
+ * tick so a bundle that finishes assembly is reflected in the UI within one polling cycle of the
+ * daemon completing rather than two. Idle panels (no pending bundles) do not poll at all.
+ */
+export const BUNDLE_AUTO_REFRESH_INTERVAL_MS = 8_000;
+
+/**
+ * Returns true when at least one bundle row is still in `pending` assembly and therefore the
+ * panel should keep polling the API for updates. Pulled out of the component so the polling rule
+ * can be exercised in unit tests without a DOM.
+ *
+ * `not_required` bundles never poll (no work to do); `assembled` and `assembly_failed` are
+ * terminal states and also do not poll. Only `pending` rows trigger refreshes.
+ */
+export function shouldAutoRefreshBundleAssembly(bundles: readonly ExportBundle[]): boolean {
+  return bundles.some((bundle) => bundle.assemblyStatus === "pending");
+}
 
 /** ExportBundlePanelProps scopes bundle generation to one project. */
 export interface ExportBundlePanelProps {
@@ -37,6 +57,46 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
   const [bundleList, setBundleList] = useState<ExportBundle[]>(bundles.bundles);
   const [format, setFormat] = useState<ExportBundleFormat>("neutral");
   const [revisionLabel, setRevisionLabel] = useState<string>("");
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState<boolean>(false);
+  const isFetchingRef = useRef<boolean>(false);
+
+  // Poll the bundle list while any bundle is still in `pending` assembly so the operator does not
+  // have to manually reload to see the worker daemon's progress. The effect re-runs whenever the
+  // bundle list changes; once every bundle has settled (assembled / assembly_failed / not_required)
+  // the interval clears and the panel goes idle. A ref guards against overlapping fetches when a
+  // request is slower than the polling interval.
+  useEffect(() => {
+    if (!shouldAutoRefreshBundleAssembly(bundleList)) {
+      setIsAutoRefreshing(false);
+      return;
+    }
+
+    setIsAutoRefreshing(true);
+
+    const refreshBundleList = async () => {
+      if (isFetchingRef.current) {
+        return;
+      }
+
+      isFetchingRef.current = true;
+      try {
+        const refreshed = await fetchProjectExportBundles(projectId);
+        setBundleList(refreshed.bundles);
+      } catch {
+        // Soft-fail: keep polling on the next interval. The next successful fetch will reconcile.
+      } finally {
+        isFetchingRef.current = false;
+      }
+    };
+
+    const interval = setInterval(() => {
+      void refreshBundleList();
+    }, BUNDLE_AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [bundleList, projectId]);
 
   const generateBundle = useCallback(async () => {
     setCreateState({ kind: "creating" });
@@ -125,7 +185,19 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
       </div>
 
       <div className="export-bundle-panel__history">
-        <h4 className="form-section-label">Bundle history</h4>
+        <div className="export-bundle-panel__history-header">
+          <h4 className="form-section-label">Bundle history</h4>
+          {isAutoRefreshing && (
+            <span
+              className="text-muted"
+              role="status"
+              aria-live="polite"
+              title="Polling while one or more bundles are still being assembled by the worker."
+            >
+              Refreshing assembly status…
+            </span>
+          )}
+        </div>
         {bundleList.length === 0 ? (
           <EmptyState
             title="No bundles yet"
