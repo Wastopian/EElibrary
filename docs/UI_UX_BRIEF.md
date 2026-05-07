@@ -56,6 +56,8 @@ The product should feel **precise, trustworthy, efficient, and operational**.
 - dense data should feel organized, not buried
 - blockers should be obvious
 - uncertainty should be visible, not hidden behind polished UI language
+- cross-workspace actions should use plain labels so operators do not need to understand query strings or internal route structure
+- system health, setup-required states, and empty workspaces should give visible next actions instead of expecting terminal, URL, or backend knowledge
 - the product should reward serious use, not just first impressions
 
 ---
@@ -438,6 +440,23 @@ Required modules:
 Notes:
 - admin pages should optimize for clarity and throughput, not style flourishes
 - this should feel like an operations cockpit, not a prettier spreadsheet
+- queue scoping should support plain search and understandable work-state filters before exposing backend-shaped identifiers
+
+## System Health
+Purpose:
+- make API, database, storage, worker, and queued-job readiness easy to inspect intentionally
+
+Required modules:
+- service status cards
+- worker heartbeat state
+- acquisition and enrichment queue counts
+- raw health endpoint access for maintainers
+- plain recovery links back to Catalog, Admin queues, and setup checks
+
+Notes:
+- system health should be discoverable from the shell without becoming a noisy dashboard
+- health states must remain operational signals, not trust or export signals
+- recovery copy should be useful to non-software-savvy operators while still giving maintainers enough detail to fix setup
 
 ---
 

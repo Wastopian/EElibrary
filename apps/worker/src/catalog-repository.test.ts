@@ -61,6 +61,27 @@ test("persistNormalizedPartRows persists connector relationships and generation 
 });
 
 /**
+ * Verifies preview_status is only persisted as ready for embeddable local artifacts.
+ */
+test("persistNormalizedPartRows downgrades ready preview for non-embeddable assets", async () => {
+  const calls: QueryCall[] = [];
+  const client = {
+    async query(text: string, values?: unknown[]) {
+      calls.push({ text, values });
+      return { rows: [] };
+    }
+  } as unknown as PoolClient;
+  const normalizedPart = buildNormalizedConnectorPart();
+
+  await persistNormalizedPartRows(client, normalizedPart);
+
+  const assetCall = calls.find((call) => call.text.includes("INSERT INTO assets"));
+  assert.ok(assetCall);
+  // preview_status positional value in the INSERT value list.
+  assert.equal(assetCall.values?.[16], "not_available");
+});
+
+/**
  * Verifies repeated source imports update the same deterministic rows with freshness fields.
  */
 test("persistNormalizedPartRows upserts source import freshness metadata", async () => {

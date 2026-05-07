@@ -8,8 +8,9 @@ import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
-import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../../lib/detail-view-model";
+import { buildCatalogTrustLineageBadges } from "../../lib/trust-lineage";
 import { importUiCopy } from "../../lib/import-ui-copy";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CadAvailabilityFilter, CatalogDataSource, ConnectorClass, LifecycleStatus, PartApprovalStatus, PartReadinessStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
@@ -30,6 +31,7 @@ type PageSearchParams = {
   providerPartId?: string | string[];
   providerUrl?: string | string[];
   q?: string | string[];
+  parts?: string | string[];
   readinessStatus?: string | string[];
   sort?: string | string[];
 };
@@ -90,6 +92,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const page = readPositiveInteger(readSingleParam(resolvedSearchParams?.page));
   const pageSize = readPositiveInteger(readSingleParam(resolvedSearchParams?.pageSize));
   const sort = readSearchSort(readSingleParam(resolvedSearchParams?.sort));
+  const compareParts = parseComparePartIds(readSingleParam(resolvedSearchParams?.parts));
   const filters: PartSearchFilters = {
     approvalStatus,
     cadAvailability,
@@ -119,7 +122,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const resultRange = buildResultRange(pagination, results.length);
   const quickLookupState = buildQuickLookupState(buildLookupValue(query, providerPartId, providerUrl, datasheetUrl), results, pagination);
   const noMatchProviderLookup = buildNoMatchProviderLookup(query, source, buildSearchHref(filters, 1));
-  const catalogResultRows = buildCatalogResultRows(results);
+  const catalogResultRows = buildCatalogResultRows(results, compareParts);
   const activeFilterPills = buildActiveFilterPills({
     approvalStatus,
     cadAvailability,
@@ -1324,7 +1327,7 @@ function buildSearchHref(filters: PartSearchFilters, page: number): string {
 /**
  * Builds presentation rows for the list/table catalog results view without leaking backend shapes.
  */
-function buildCatalogResultRows(records: PartSearchRecord[]) {
+function buildCatalogResultRows(records: PartSearchRecord[], compareParts: string[]) {
   return records.map((record) => {
     const exportReadiness = getSearchExportReadiness(record);
     const assetTruth = getAssetTruthSummary(record);
@@ -1335,6 +1338,10 @@ function buildCatalogResultRows(records: PartSearchRecord[]) {
     const topBlocker = record.readinessSummary.blockerSummary[0] ?? record.readinessSummary.recommendedActions[0] ?? "No immediate blocker derived from this record.";
     const riskLabel = record.riskFlags[0]?.label ? "Risk flag" : "Top blocker";
 
+    const compareAddHref = buildCompareUrl(
+      [...new Set([...compareParts, record.part.id])].slice(0, 4)
+    );
+
     return {
       approvalDetail: record.approval.detail,
       approvalLabel: record.approval.summary,
@@ -1343,6 +1350,7 @@ function buildCatalogResultRows(records: PartSearchRecord[]) {
       assetTruthLabel: assetTruth.label,
       cadExportLabel: exportReadiness.label,
       cadExportTone: exportReadiness.tone,
+      compareAddHref,
       category: record.part.category,
       description: record.part.description,
       connectorSignalDetail: connectorHint?.detail ?? recoveryStatus.detail,
@@ -1369,10 +1377,18 @@ function buildCatalogResultRows(records: PartSearchRecord[]) {
           : record.approval.summary,
       riskLabel,
       topBlocker,
+      trustLineageBadges: buildCatalogTrustLineageBadges(record),
       trustScore: record.part.trustScore,
       trustTone: scoreTone(record.part.trustScore)
     };
   });
+}
+
+function parseComparePartIds(parts: string | undefined): string[] {
+  if (!parts || !parts.trim()) {
+    return [];
+  }
+  return [...new Set(parts.split(",").map((segment) => segment.trim()).filter(Boolean))].slice(0, 4);
 }
 
 /**

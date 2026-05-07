@@ -5,8 +5,15 @@
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { BomCsvParseError, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
+import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
 import type {
+  ApprovalBatchAction,
+  ApprovalBatchCandidate,
+  ApprovalBatchCandidatesResponse,
+  ApprovalBatchOutcome,
+  ApprovalBatchRequest,
+  ApprovalBatchResponse,
   AssetProvenance,
   AssetType,
   BomImport,
@@ -22,6 +29,14 @@ import type {
   BomLineMatchStatus,
   BomRevisionCompareResponse,
   BomRevisionCompareRow,
+  ConnectorClass,
+  ConnectorSetClassGroup,
+  ConnectorSetEntry,
+  ConnectorSetListResponse,
+  ConnectorSetMatePair,
+  LifecycleStatus,
+  PartApprovalStatus,
+  PartReadinessStatus,
   ProjectRevisionCompareChangeKind,
   ProjectRevisionCompareIdentityKind,
   ProjectRevisionCompareResponse,
@@ -60,8 +75,11 @@ import type {
   EvidenceStorageState,
   EvidenceTargetType,
   ExportBundle,
+  ExportBundleAssemblyError,
+  ExportBundleAssemblyStatus,
   ExportBundleCreateInput,
   ExportBundleCreateResponse,
+  ExportBundleFileAvailability,
   ExportBundleFormat,
   ExportBundleIncludedAsset,
   ExportBundleListResponse,
@@ -345,6 +363,24 @@ export type CircuitBlockProjectDependenciesReadResult =
   | { status: "not_configured" }
   | { status: "not_found" };
 
+/** ConnectorSetListReadResult reports connector-set catalog availability. */
+export type ConnectorSetListReadResult =
+  | { status: "available"; response: ConnectorSetListResponse }
+  | { status: "not_configured" };
+
+/** ApprovalBatchCandidatesReadResult reports the project-scoped approval candidate queue. */
+export type ApprovalBatchCandidatesReadResult =
+  | { status: "available"; response: ApprovalBatchCandidatesResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** ApprovalBatchActionResult reports the outcome of a bulk approval action triggered from project context. */
+export type ApprovalBatchActionResult =
+  | { status: "applied"; response: ApprovalBatchResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
 /** ProjectMemoryCapability list labels read foundations and planned workflows for honest API consumers. */
 const PROJECT_MEMORY_CAPABILITIES: ProjectMemoryCapability[] = [
   {
@@ -482,6 +518,8 @@ interface DatabaseProjectPartUsageRow {
   project_revision_id: string;
   bom_line_id: string | null;
   part_id: string;
+  part_mpn?: string;
+  manufacturer_name?: string;
   usage_context: string | null;
   designators: unknown;
   quantity: string | number | null;
@@ -2631,10 +2669,27 @@ async function readBomImportLines(databasePool: Pool | PoolClient, bomImportId: 
 async function readProjectPartUsages(databasePool: Pool, projectId: string): Promise<ProjectPartUsage[]> {
   const result = await databasePool.query<DatabaseProjectPartUsageRow>(
     `
-      SELECT id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, created_at, updated_at
-      FROM project_part_usages
+      SELECT
+        u.id,
+        u.project_id,
+        u.project_revision_id,
+        u.bom_line_id,
+        u.part_id,
+        p.mpn AS part_mpn,
+        m.name AS manufacturer_name,
+        u.usage_context,
+        u.designators,
+        u.quantity,
+        u.usage_status,
+        u.approval_snapshot,
+        u.readiness_snapshot,
+        u.created_at,
+        u.updated_at
+      FROM project_part_usages u
+      JOIN parts p ON p.id = u.part_id
+      JOIN manufacturers m ON m.id = p.manufacturer_id
       WHERE project_id = $1
-      ORDER BY updated_at DESC, id ASC
+      ORDER BY u.updated_at DESC, u.id ASC
     `,
     [projectId]
   );
@@ -4470,7 +4525,9 @@ function mapProjectPartUsageRow(row: DatabaseProjectPartUsageRow): ProjectPartUs
     createdAt: toIsoTimestamp(row.created_at),
     designators: toStringArray(row.designators),
     id: row.id,
+    ...(row.manufacturer_name !== undefined ? { manufacturerName: row.manufacturer_name } : {}),
     partId: row.part_id,
+    ...(row.part_mpn !== undefined ? { partMpn: row.part_mpn } : {}),
     projectId: row.project_id,
     projectRevisionId: row.project_revision_id,
     quantity: toNullableNumber(row.quantity),
@@ -5431,11 +5488,16 @@ interface DatabaseExportBundleRow {
   revision_label: string | null;
   bundle_format: string;
   storage_key: string | null;
+  archive_storage_key: string | null;
   manifest: unknown;
   part_count: number | string;
   included_asset_count: number | string;
   omitted_asset_count: number | string;
   warning_count: number | string;
+  assembly_status: string | null;
+  assembly_error: unknown;
+  assembly_completed_at: Date | string | null;
+  assembly_attempt_count: number | string | null;
   created_by: string | null;
   created_at: Date | string;
 }
@@ -5461,8 +5523,16 @@ interface DatabaseBundleOmissionRow {
 
 /**
  * Generates a manifest-first export bundle for all verified parts in a project.
+ *
+ * When `storage` is provided, an archive payload is also written so download links can
+ * point at a concrete file. Storage write failures are surfaced as manifest warnings.
  */
-export async function createExportBundleInDatabase(projectId: string, input: ExportBundleCreateInput, actor: string): Promise<ExportBundleCreateResult> {
+export async function createExportBundleInDatabase(
+  projectId: string,
+  input: ExportBundleCreateInput,
+  actor: string,
+  storage?: FileStorageClient
+): Promise<ExportBundleCreateResult> {
   const databasePool = getProjectMemoryDatabasePool();
 
   if (!databasePool) {
@@ -5617,10 +5687,33 @@ export async function createExportBundleInDatabase(projectId: string, input: Exp
       warnings
     };
 
+    let storageKey: string | null = null;
+    if (storage) {
+      const nextStorageKey = buildExportBundleStorageKey(projectId, format, generatedAt, bundleId);
+      try {
+        await storage.write(nextStorageKey, buildExportBundleArchiveContent(manifest));
+        storageKey = nextStorageKey;
+      } catch (error) {
+        const detail = error instanceof Error && error.message.trim().length > 0
+          ? error.message.trim()
+          : "unknown storage write failure";
+        warnings.push(`Bundle archive write failed (${detail}). Manifest is still persisted for audit and regeneration.`);
+      }
+    }
+
+    const assemblyStatus: ExportBundleAssemblyStatus = includedAssets.length === 0 ? "not_required" : "pending";
+
     const bundle: ExportBundle = {
+      archiveAvailability: "manifest_only",
+      archiveStorageKey: null,
+      assemblyAttemptCount: 0,
+      assemblyCompletedAt: null,
+      assemblyError: null,
+      assemblyStatus,
       bundleFormat: format,
       createdAt: generatedAt,
       createdBy: actor,
+      fileAvailability: storageKey ? "available" : "manifest_only",
       id: bundleId,
       includedAssetCount: includedAssets.length,
       manifest,
@@ -5628,18 +5721,20 @@ export async function createExportBundleInDatabase(projectId: string, input: Exp
       partCount: partIds.length,
       projectId,
       revisionLabel: input.revisionLabel ?? null,
-      storageKey: null,
+      storageKey,
       warningCount: warnings.length
     };
 
     await databasePool.query(
       `INSERT INTO export_bundles (id, project_id, revision_label, bundle_format, storage_key, manifest,
-         part_count, included_asset_count, omitted_asset_count, warning_count, created_by, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)`,
+         part_count, included_asset_count, omitted_asset_count, warning_count, created_by, created_at,
+         assembly_status, assembly_error, assembly_completed_at, assembly_attempt_count, archive_storage_key)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NULL, NULL, 0, NULL)`,
       [
-        bundleId, projectId, input.revisionLabel ?? null, format, null,
+        bundleId, projectId, input.revisionLabel ?? null, format, storageKey,
         JSON.stringify(manifest), partIds.length, includedAssets.length,
-        omissions.length, warnings.length, actor, new Date(generatedAt)
+        omissions.length, warnings.length, actor, new Date(generatedAt),
+        assemblyStatus
       ]
     );
 
@@ -5650,9 +5745,57 @@ export async function createExportBundleInDatabase(projectId: string, input: Exp
 }
 
 /**
- * Reads all export bundles for one project.
+ * Builds a deterministic storage key for one generated export bundle archive.
  */
-export async function readExportBundlesFromDatabase(projectId: string): Promise<ExportBundleListReadResult> {
+function buildExportBundleStorageKey(
+  projectId: string,
+  format: ExportBundleFormat,
+  generatedAtIso: string,
+  bundleId: string
+): string {
+  const timestamp = generatedAtIso.replace(/[-:.TZ]/gu, "");
+  return `export-bundles/${projectId}/${timestamp}-${format}-${bundleId}.json`;
+}
+
+/**
+ * Serializes a deterministic manifest archive payload for storage.
+ */
+function buildExportBundleArchiveContent(manifest: ExportBundleManifest): Buffer {
+  const includedAssets = [...manifest.includedAssets].sort((left, right) =>
+    left.bundlePath.localeCompare(right.bundlePath)
+    || left.assetId.localeCompare(right.assetId)
+  );
+  const omissions = [...manifest.omissions].sort((left, right) =>
+    left.partMpn.localeCompare(right.partMpn)
+    || left.assetType.localeCompare(right.assetType)
+    || left.reason.localeCompare(right.reason)
+  );
+  const payload = {
+    bundleId: manifest.bundleId,
+    bundleFormat: manifest.bundleFormat,
+    generatedAt: manifest.generatedAt,
+    includedAssets,
+    omissions,
+    projectId: manifest.projectId,
+    revisionLabel: manifest.revisionLabel,
+    warnings: [...manifest.warnings]
+  };
+
+  return Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Reads all export bundles for one project.
+ *
+ * `storage` is optional; when provided, each bundle's `fileAvailability` is computed by
+ * checking whether the storage backend can still find the file. When omitted, all bundles
+ * fall back to `manifest_only` (the manifest still survives storage loss) so the UI never
+ * advertises a download link for a file the API cannot serve.
+ */
+export async function readExportBundlesFromDatabase(
+  projectId: string,
+  storage?: FileStorageClient
+): Promise<ExportBundleListReadResult> {
   const databasePool = getProjectMemoryDatabasePool();
 
   if (!databasePool) {
@@ -5667,8 +5810,9 @@ export async function readExportBundlesFromDatabase(projectId: string): Promise<
     }
 
     const rows = await databasePool.query<DatabaseExportBundleRow>(
-      `SELECT id, project_id, revision_label, bundle_format, storage_key, manifest,
+      `SELECT id, project_id, revision_label, bundle_format, storage_key, archive_storage_key, manifest,
               part_count, included_asset_count, omitted_asset_count, warning_count,
+              assembly_status, assembly_error, assembly_completed_at, assembly_attempt_count,
               created_by, created_at
          FROM export_bundles
          WHERE project_id = $1
@@ -5676,7 +5820,15 @@ export async function readExportBundlesFromDatabase(projectId: string): Promise<
       [projectId]
     );
 
-    const bundles: ExportBundle[] = rows.rows.map(mapExportBundleRow);
+    const bundles: ExportBundle[] = await Promise.all(
+      rows.rows.map(async (row) => {
+        const [fileAvailability, archiveAvailability] = await Promise.all([
+          resolveExportBundleFileAvailability(row.storage_key, storage),
+          resolveExportBundleFileAvailability(row.archive_storage_key, storage)
+        ]);
+        return mapExportBundleRow(row, fileAvailability, archiveAvailability);
+      })
+    );
 
     return { status: "available", response: { bundles, projectId } };
   } catch (error) {
@@ -5685,13 +5837,55 @@ export async function readExportBundlesFromDatabase(projectId: string): Promise<
 }
 
 /**
+ * Resolves the honest file-availability state for one bundle row given the storage backend.
+ *
+ * - `null` storage_key → `manifest_only` (no file write was attempted).
+ * - storage_key present + no storage client passed → `manifest_only` (we cannot prove
+ *   the file is reachable, so we refuse to advertise a download link).
+ * - storage_key present + storage reports the file exists → `available`.
+ * - storage_key present + storage reports the file is missing → `file_missing`.
+ *
+ * Exported for direct unit testing; production callers reach it through
+ * {@link readExportBundlesFromDatabase}.
+ */
+export async function resolveExportBundleFileAvailability(
+  storageKey: string | null,
+  storage: FileStorageClient | undefined
+): Promise<ExportBundleFileAvailability> {
+  if (!storageKey) {
+    return "manifest_only";
+  }
+
+  if (!storage) {
+    return "manifest_only";
+  }
+
+  try {
+    return (await storage.exists(storageKey)) ? "available" : "file_missing";
+  } catch {
+    return "file_missing";
+  }
+}
+
+/**
  * Maps one export bundle database row into the shared contract.
  */
-function mapExportBundleRow(row: DatabaseExportBundleRow): ExportBundle {
+function mapExportBundleRow(
+  row: DatabaseExportBundleRow,
+  fileAvailability: ExportBundleFileAvailability,
+  archiveAvailability: ExportBundleFileAvailability
+): ExportBundle {
   return {
+    archiveAvailability,
+    archiveStorageKey: row.archive_storage_key,
+    assemblyAttemptCount: toNumber(row.assembly_attempt_count ?? 0),
+    assemblyCompletedAt: row.assembly_completed_at ? toIsoTimestamp(row.assembly_completed_at) : null,
+    assemblyError: parseExportBundleAssemblyError(row.assembly_error),
+    assemblyStatus: normalizeExportBundleAssemblyStatus(row.assembly_status),
     bundleFormat: row.bundle_format as ExportBundleFormat,
     createdAt: toIsoTimestamp(row.created_at),
     createdBy: row.created_by,
+    fileAvailability,
     id: row.id,
     includedAssetCount: toNumber(row.included_asset_count),
     manifest: row.manifest as ExportBundleManifest,
@@ -5701,6 +5895,48 @@ function mapExportBundleRow(row: DatabaseExportBundleRow): ExportBundle {
     revisionLabel: row.revision_label,
     storageKey: row.storage_key,
     warningCount: toNumber(row.warning_count)
+  };
+}
+
+/**
+ * Normalizes a raw DB string into the typed assembly status, defaulting to `not_required` for
+ * legacy rows persisted before migration 031.
+ */
+function normalizeExportBundleAssemblyStatus(raw: string | null): ExportBundleAssemblyStatus {
+  if (raw === "pending" || raw === "assembled" || raw === "assembly_failed" || raw === "not_required") {
+    return raw;
+  }
+
+  return "not_required";
+}
+
+/**
+ * Parses one persisted JSONB telemetry record back into the structured assembly error contract.
+ *
+ * Returns null when the column is empty or the value is not a recognizable telemetry object so the
+ * UI never shows an unexplained "failure" badge built from corrupted data.
+ */
+function parseExportBundleAssemblyError(raw: unknown): ExportBundleAssemblyError | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  const phaseRaw = typeof candidate["phase"] === "string" ? candidate["phase"] : null;
+  const phase = phaseRaw === "fetch_asset" || phaseRaw === "write_asset" || phaseRaw === "unknown" ? phaseRaw : null;
+  const message = typeof candidate["message"] === "string" ? candidate["message"] : null;
+  const failedAt = typeof candidate["failedAt"] === "string" ? candidate["failedAt"] : null;
+
+  if (!phase || !message || !failedAt) {
+    return null;
+  }
+
+  return {
+    failedAssetId: typeof candidate["failedAssetId"] === "string" ? candidate["failedAssetId"] : null,
+    failedAt,
+    failedBundlePath: typeof candidate["failedBundlePath"] === "string" ? candidate["failedBundlePath"] : null,
+    message,
+    phase
   };
 }
 
@@ -7198,4 +7434,540 @@ function buildTriageActions(matchStatus: BomLineMatchStatus, rawMpn: string | nu
     default:
       return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC15: Connector set catalog view
+// ---------------------------------------------------------------------------
+
+/** CONNECTOR_SET_BOUNDARY_COPY explains that the catalog view does not approve reuse or unlock export. */
+const CONNECTOR_SET_BOUNDARY_COPY =
+  "Connector set browsing is reference context. Listing a connector or mate pair does not approve the part, validate evidence, or unlock export readiness.";
+
+/** ConnectorSetMaxConnectors caps the per-listing connector count so the page stays bounded. */
+const CONNECTOR_SET_MAX_CONNECTORS = 200;
+
+/** DatabaseConnectorRow is one connector part row joined to its current readiness/approval state. */
+interface DatabaseConnectorRow {
+  part_id: string;
+  mpn: string;
+  manufacturer_name: string;
+  lifecycle_status: LifecycleStatus | null;
+  approval_status: PartApprovalStatus | null;
+  readiness_status: PartReadinessStatus | null;
+  connector_class: ConnectorClass | null;
+  blocker_count: string | number | null;
+  project_usage_count: string | number;
+}
+
+/** DatabaseConnectorMateRow is one mate or alternate-mate row joined to its target part state. */
+interface DatabaseConnectorMateRow {
+  primary_part_id: string;
+  mate_part_id: string;
+  mate_mpn: string;
+  mate_manufacturer_name: string;
+  mate_lifecycle_status: LifecycleStatus | null;
+  mate_approval_status: PartApprovalStatus | null;
+  mate_readiness_status: PartReadinessStatus | null;
+  mate_connector_class: ConnectorClass | null;
+  relationship_type: "best_mate" | "alternate_mate";
+  confidence_score: string | number | null;
+  project_usage_count: string | number;
+}
+
+/**
+ * Reads the connector set catalog grouped by `connector_class`, optionally filtered.
+ * Reuses existing `parts`, `manufacturers`, `part_readiness_summaries`, `part_approvals`,
+ * `mate_relations`, and `project_part_usages` tables. No new schema is created here.
+ */
+export async function readConnectorSetCatalogFromDatabase(
+  filters: { connectorClass?: ConnectorClass | null; query?: string | null } = {}
+): Promise<ConnectorSetListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const connectorClassFilter = filters.connectorClass ?? null;
+  const queryFilter = (filters.query ?? "").trim();
+  const sqlParams: (string | number | null)[] = [];
+
+  const whereClauses = ["prs.connector_class IS NOT NULL", "prs.connector_class <> 'non_connector'"];
+  if (connectorClassFilter) {
+    sqlParams.push(connectorClassFilter);
+    whereClauses.push(`prs.connector_class = $${sqlParams.length}`);
+  }
+  if (queryFilter.length > 0) {
+    sqlParams.push(queryFilter);
+    const placeholder = `$${sqlParams.length}`;
+    whereClauses.push(`(LOWER(p.mpn) LIKE '%' || LOWER(${placeholder}) || '%' OR LOWER(m.name) LIKE '%' || LOWER(${placeholder}) || '%')`);
+  }
+  sqlParams.push(CONNECTOR_SET_MAX_CONNECTORS);
+  const limitPlaceholder = `$${sqlParams.length}`;
+
+  try {
+    const connectors = await databasePool.query<DatabaseConnectorRow>(
+      `
+        SELECT
+          p.id AS part_id,
+          p.mpn,
+          m.name AS manufacturer_name,
+          p.lifecycle_status,
+          pa.approval_status,
+          prs.readiness_status,
+          prs.connector_class,
+          prs.blocker_count,
+          COALESCE(usage_counts.usage_count, 0)::text AS project_usage_count
+        FROM parts p
+        JOIN manufacturers m ON m.id = p.manufacturer_id
+        JOIN part_readiness_summaries prs ON prs.part_id = p.id
+        LEFT JOIN part_approvals pa ON pa.part_id = p.id
+        LEFT JOIN (
+          SELECT part_id, COUNT(*) AS usage_count
+          FROM project_part_usages
+          GROUP BY part_id
+        ) usage_counts ON usage_counts.part_id = p.id
+        WHERE ${whereClauses.join(" AND ")}
+        ORDER BY prs.connector_class ASC, m.name ASC, p.mpn ASC
+        LIMIT ${limitPlaceholder}
+      `,
+      sqlParams
+    );
+
+    const connectorEntries = connectors.rows.map(mapConnectorRow);
+    const connectorIds = connectorEntries.map((entry) => entry.partId);
+
+    let mateRows: DatabaseConnectorMateRow[] = [];
+    if (connectorIds.length > 0) {
+      const mateResult = await databasePool.query<DatabaseConnectorMateRow>(
+        `
+          SELECT
+            mr.part_id AS primary_part_id,
+            mp.id AS mate_part_id,
+            mp.mpn AS mate_mpn,
+            mm.name AS mate_manufacturer_name,
+            mp.lifecycle_status AS mate_lifecycle_status,
+            mpa.approval_status AS mate_approval_status,
+            mprs.readiness_status AS mate_readiness_status,
+            mprs.connector_class AS mate_connector_class,
+            mr.relationship_type,
+            mr.confidence_score,
+            COALESCE(mate_usage.usage_count, 0)::text AS project_usage_count
+          FROM mate_relations mr
+          JOIN parts mp ON mp.id = mr.mate_part_id
+          JOIN manufacturers mm ON mm.id = mp.manufacturer_id
+          LEFT JOIN part_approvals mpa ON mpa.part_id = mp.id
+          LEFT JOIN part_readiness_summaries mprs ON mprs.part_id = mp.id
+          LEFT JOIN (
+            SELECT part_id, COUNT(*) AS usage_count
+            FROM project_part_usages
+            GROUP BY part_id
+          ) mate_usage ON mate_usage.part_id = mp.id
+          WHERE mr.part_id = ANY($1::text[])
+            AND mr.relationship_type IN ('best_mate', 'alternate_mate')
+          ORDER BY mr.part_id ASC,
+            CASE mr.relationship_type WHEN 'best_mate' THEN 0 ELSE 1 END,
+            mp.mpn ASC
+        `,
+        [connectorIds]
+      );
+      mateRows = mateResult.rows;
+    }
+
+    const matesByConnector = new Map<string, ConnectorSetMatePair[]>();
+    for (const row of mateRows) {
+      const list = matesByConnector.get(row.primary_part_id) ?? [];
+      list.push(mapConnectorMateRow(row));
+      matesByConnector.set(row.primary_part_id, list);
+    }
+
+    const enriched = connectorEntries.map((entry) => ({
+      ...entry,
+      matePairs: matesByConnector.get(entry.partId) ?? []
+    }));
+
+    const groupsMap = new Map<ConnectorClass, ConnectorSetEntry[]>();
+    for (const entry of enriched) {
+      const list = groupsMap.get(entry.connectorClass) ?? [];
+      list.push(entry);
+      groupsMap.set(entry.connectorClass, list);
+    }
+
+    const groups: ConnectorSetClassGroup[] = Array.from(groupsMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([connectorClass, entries]) => ({ connectorClass, entries }));
+
+    const totalMatePairCount = enriched.reduce((sum, entry) => sum + entry.matePairs.length, 0);
+
+    return {
+      status: "available",
+      response: {
+        boundary: CONNECTOR_SET_BOUNDARY_COPY,
+        connectorClassFilter,
+        groups,
+        query: queryFilter.length > 0 ? queryFilter : null,
+        state: enriched.length > 0 ? "available" : "empty",
+        totalConnectorCount: enriched.length,
+        totalMatePairCount
+      }
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Maps a connector row into a typed list entry without mate context.
+ */
+function mapConnectorRow(row: DatabaseConnectorRow): ConnectorSetEntry {
+  return {
+    approvalStatus: row.approval_status,
+    blockerCount: row.blocker_count === null ? null : toNumber(row.blocker_count),
+    connectorClass: (row.connector_class ?? "connector") as ConnectorClass,
+    lifecycleStatus: (row.lifecycle_status ?? "unknown") as LifecycleStatus,
+    manufacturerName: row.manufacturer_name,
+    matePairs: [],
+    mpn: row.mpn,
+    partId: row.part_id,
+    projectUsageCount: toNumber(row.project_usage_count),
+    readinessStatus: row.readiness_status
+  };
+}
+
+/**
+ * Maps a mate row into a typed mate-pair record for the catalog response.
+ */
+function mapConnectorMateRow(row: DatabaseConnectorMateRow): ConnectorSetMatePair {
+  return {
+    confidenceScore: row.confidence_score === null ? null : toNumber(row.confidence_score),
+    matePartApprovalStatus: row.mate_approval_status,
+    matePartConnectorClass: row.mate_connector_class,
+    matePartId: row.mate_part_id,
+    matePartLifecycleStatus: (row.mate_lifecycle_status ?? "unknown") as LifecycleStatus,
+    matePartReadinessStatus: row.mate_readiness_status,
+    mateManufacturerName: row.mate_manufacturer_name,
+    mateMpn: row.mate_mpn,
+    projectUsageCount: toNumber(row.project_usage_count),
+    relationshipType: row.relationship_type
+  };
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC16: Approval batch workflow from project BOM context
+// ---------------------------------------------------------------------------
+
+/** APPROVAL_BATCH_BOUNDARY_COPY clarifies that approval changes do not validate or export. */
+const APPROVAL_BATCH_BOUNDARY_COPY =
+  "Bulk approval records project context as the trigger. Approval state does not validate evidence, finalize CAD, or unlock export. Triggering this action records part-level approval rows only.";
+
+/** APPROVAL_BATCH_MAX_PARTS caps a single batch so a runaway request cannot rewrite the catalog. */
+const APPROVAL_BATCH_MAX_PARTS = 200;
+
+/** DatabaseApprovalBatchSourceRow is one (part_id, bom_line_id, designators) source row collected before aggregation. */
+interface DatabaseApprovalBatchSourceRow {
+  part_id: string;
+  bom_line_id: string | null;
+  designators: unknown;
+}
+
+/** DatabaseApprovalBatchPartRow is one catalog identity joined to its current approval/lifecycle state. */
+interface DatabaseApprovalBatchPartRow {
+  part_id: string;
+  mpn: string;
+  manufacturer_name: string;
+  approval_status: PartApprovalStatus | null;
+  lifecycle_status: LifecycleStatus | null;
+  readiness_status: PartReadinessStatus | null;
+}
+
+/**
+ * Reads the project-scoped approval candidate queue: matched usage parts whose approval is missing.
+ *
+ * Source rows come from BOM lines (matched_part_id with match_status='matched') and confirmed
+ * project_part_usages. Aggregation runs in JS to keep the SQL portable across pg-mem and Postgres.
+ */
+export async function readApprovalBatchCandidatesFromDatabase(projectId: string): Promise<ApprovalBatchCandidatesReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await projectExists(databasePool, projectId))) {
+      return { status: "not_found" };
+    }
+
+    const sourceRows = await databasePool.query<DatabaseApprovalBatchSourceRow>(
+      `
+        SELECT bl.matched_part_id AS part_id, bl.id AS bom_line_id, bl.designators
+        FROM bom_lines bl
+        WHERE bl.project_id = $1
+          AND bl.match_status = 'matched'
+          AND bl.matched_part_id IS NOT NULL
+        UNION ALL
+        SELECT ppu.part_id, ppu.bom_line_id, ppu.designators
+        FROM project_part_usages ppu
+        WHERE ppu.project_id = $1
+      `,
+      [projectId]
+    );
+
+    const aggregated = new Map<string, { bomLineIds: Set<string>; designators: Set<string> }>();
+    for (const row of sourceRows.rows) {
+      if (!row.part_id) continue;
+      const bucket = aggregated.get(row.part_id) ?? { bomLineIds: new Set<string>(), designators: new Set<string>() };
+      if (row.bom_line_id) bucket.bomLineIds.add(row.bom_line_id);
+      for (const designator of toStringArray(row.designators)) {
+        bucket.designators.add(designator);
+      }
+      aggregated.set(row.part_id, bucket);
+    }
+
+    const candidates: ApprovalBatchCandidate[] = [];
+    for (const [partId, bucket] of aggregated.entries()) {
+      const partRow = await databasePool.query<DatabaseApprovalBatchPartRow>(
+        `
+          SELECT
+            p.id AS part_id,
+            p.mpn,
+            m.name AS manufacturer_name,
+            pa.approval_status,
+            p.lifecycle_status,
+            prs.readiness_status
+          FROM parts p
+          JOIN manufacturers m ON m.id = p.manufacturer_id
+          LEFT JOIN part_approvals pa ON pa.part_id = p.id
+          LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
+          WHERE p.id = $1
+          LIMIT 1
+        `,
+        [partId]
+      );
+      const row = partRow.rows[0];
+      if (!row) continue;
+      const approvalStatus = row.approval_status ?? null;
+      if (approvalStatus === "approved") continue;
+      candidates.push({
+        approvalStatus,
+        bomLineCount: bucket.bomLineIds.size,
+        bomLineIds: Array.from(bucket.bomLineIds).sort(),
+        designators: Array.from(bucket.designators).sort().slice(0, 24),
+        lifecycleStatus: row.lifecycle_status,
+        manufacturerName: row.manufacturer_name,
+        mpn: row.mpn,
+        partId: row.part_id,
+        readinessStatus: row.readiness_status
+      });
+    }
+
+    candidates.sort((a, b) => (a.manufacturerName ?? "").localeCompare(b.manufacturerName ?? "") || a.mpn.localeCompare(b.mpn));
+    const limited = candidates.slice(0, APPROVAL_BATCH_MAX_PARTS);
+
+    return {
+      status: "available",
+      response: {
+        boundary: APPROVAL_BATCH_BOUNDARY_COPY,
+        candidates: limited,
+        generatedAt: new Date().toISOString(),
+        projectId,
+        state: limited.length > 0 ? "available" : "empty"
+      }
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Applies a bulk approval action triggered from a project BOM context.
+ *
+ * `approve` upserts an `approved` row in `part_approvals` with project-context evidence.
+ * `flag_for_review` upserts a `pending_review` row with the same evidence.
+ *
+ * Approval is the only state changed; readiness, asset validation, and export verification are not touched.
+ * Approval triggered by this batch records project context in the evidence array so the decision is traceable.
+ */
+export async function applyApprovalBatchInDatabase(
+  projectId: string,
+  input: ApprovalBatchRequest,
+  decidedBy: string
+): Promise<ApprovalBatchActionResult> {
+  const validation = validateApprovalBatchInput(input);
+  if (validation) {
+    return validation;
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const partIds = Array.from(new Set(input.partIds.map((id) => id.trim()).filter((id) => id.length > 0)));
+
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (!(await projectExists(client, projectId))) {
+      await client.query("ROLLBACK");
+      return { status: "not_found" };
+    }
+
+    const projectKeyResult = await client.query<{ project_key: string; name: string }>(
+      "SELECT project_key, name FROM projects WHERE id = $1",
+      [projectId]
+    );
+    const projectRow = projectKeyResult.rows[0];
+
+    const existingMap = new Map<string, PartApprovalStatus>();
+    const presentPartIds = new Set<string>();
+    for (const partId of partIds) {
+      const existing = await client.query<{ approval_status: PartApprovalStatus }>(
+        "SELECT approval_status FROM part_approvals WHERE part_id = $1 LIMIT 1",
+        [partId]
+      );
+      const existingRow = existing.rows[0];
+      if (existingRow) {
+        existingMap.set(partId, existingRow.approval_status);
+      }
+      const partsCheck = await client.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+      if (partsCheck.rows.length > 0) {
+        presentPartIds.add(partId);
+      }
+    }
+
+    const targetStatus: PartApprovalStatus = input.action === "approve" ? "approved" : "pending_review";
+    const summary = input.action === "approve"
+      ? `Approved via project ${projectRow?.project_key ?? projectId} batch`
+      : `Flagged for review via project ${projectRow?.project_key ?? projectId} batch`;
+    const trimmedNotes = (input.notes ?? "").trim();
+    const detail = trimmedNotes.length > 0
+      ? `${summary}. Notes: ${trimmedNotes}`
+      : `${summary}. No notes provided.`;
+    const evidence = [
+      `project:${projectId}`,
+      `project_key:${projectRow?.project_key ?? "unknown"}`,
+      `triggered_by:approval_batch`,
+      `decided_by:${decidedBy}`
+    ];
+    const now = new Date();
+
+    const outcomes: ApprovalBatchOutcome[] = [];
+    let appliedCount = 0;
+    let skippedCount = 0;
+    let notFoundCount = 0;
+
+    for (const partId of partIds) {
+      if (!presentPartIds.has(partId)) {
+        notFoundCount += 1;
+        outcomes.push({
+          message: "Part not found in catalog.",
+          newApprovalStatus: null,
+          partId,
+          previousApprovalStatus: null,
+          status: "not_found"
+        });
+        continue;
+      }
+
+      const previous = existingMap.get(partId) ?? null;
+      if (previous === targetStatus) {
+        skippedCount += 1;
+        outcomes.push({
+          message: `Part already ${targetStatus.replace(/_/gu, " ")}.`,
+          newApprovalStatus: targetStatus,
+          partId,
+          previousApprovalStatus: previous,
+          status: targetStatus === "approved" ? "skipped_already_approved" : "skipped_no_change"
+        });
+        continue;
+      }
+
+      await client.query(
+        `
+          INSERT INTO part_approvals (part_id, approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          ON CONFLICT (part_id) DO UPDATE SET
+            approval_status = EXCLUDED.approval_status,
+            summary = EXCLUDED.summary,
+            detail = EXCLUDED.detail,
+            evidence = EXCLUDED.evidence,
+            decided_by = EXCLUDED.decided_by,
+            decided_at = EXCLUDED.decided_at,
+            last_updated_at = EXCLUDED.last_updated_at
+        `,
+        [partId, targetStatus, summary, detail, evidence, decidedBy, now]
+      );
+
+      appliedCount += 1;
+      outcomes.push({
+        message: `Approval status set to ${targetStatus.replace(/_/gu, " ")}.`,
+        newApprovalStatus: targetStatus,
+        partId,
+        previousApprovalStatus: previous,
+        status: "applied"
+      });
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      status: "applied",
+      response: {
+        action: input.action,
+        appliedCount,
+        boundary: APPROVAL_BATCH_BOUNDARY_COPY,
+        notFoundCount,
+        outcomes,
+        projectId,
+        skippedCount
+      }
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw toProjectMemoryStoreError(error);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Validates an approval batch request body before any database work runs.
+ */
+function validateApprovalBatchInput(
+  input: ApprovalBatchRequest
+): { status: "invalid"; code: string; message: string } | null {
+  if (!input || !Array.isArray(input.partIds) || input.partIds.length === 0) {
+    return {
+      code: "PART_IDS_REQUIRED",
+      message: "Approval batch requires at least one partId.",
+      status: "invalid"
+    };
+  }
+  if (input.partIds.length > APPROVAL_BATCH_MAX_PARTS) {
+    return {
+      code: "TOO_MANY_PART_IDS",
+      message: `Approval batch is limited to ${APPROVAL_BATCH_MAX_PARTS} parts per request.`,
+      status: "invalid"
+    };
+  }
+  if (input.action !== "approve" && input.action !== "flag_for_review") {
+    return {
+      code: "INVALID_ACTION",
+      message: "Approval batch action must be 'approve' or 'flag_for_review'.",
+      status: "invalid"
+    };
+  }
+  for (const partId of input.partIds) {
+    if (typeof partId !== "string" || partId.trim().length === 0) {
+      return {
+        code: "INVALID_PART_ID",
+        message: "Every entry in partIds must be a non-empty string.",
+        status: "invalid"
+      };
+    }
+  }
+  return null;
 }

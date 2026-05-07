@@ -22,10 +22,12 @@ import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
-import { createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase } from "./project-memory-store";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
+  ApprovalBatchAction,
+  ApprovalBatchRequest,
   AssetPromotionInput,
   BomImportCreateInput,
   BomImportPreviewInput,
@@ -158,6 +160,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
   const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
   const projectCircuitBlockInstantiationsMatch = /^\/projects\/([^/]+)\/circuit-block-instantiations$/u.exec(url.pathname);
+  const projectApprovalBatchMatch = /^\/projects\/([^/]+)\/approval-batch$/u.exec(url.pathname);
+  const projectApprovalCandidatesMatch = /^\/projects\/([^/]+)\/approval-candidates$/u.exec(url.pathname);
   const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
 
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
@@ -354,6 +358,13 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && projectApprovalBatchMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleApprovalBatchApply(request, response, decodeURIComponent(projectApprovalBatchMatch[1]), session.sub);
+    return;
+  }
+
   if (request.method === "POST" && substitutionRevokeMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -363,7 +374,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, project POST/PATCH, project revision PATCH, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, and export-bundle POST routes are enabled for the catalog API"
+      error: "Only GET, project POST/PATCH, project revision PATCH, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -397,6 +408,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (url.pathname === "/where-used") {
     await handleWhereUsedSearchRead(response, url);
+    return;
+  }
+
+  if (url.pathname === "/connector-sets") {
+    await handleConnectorSetCatalogRead(response, url);
     return;
   }
 
@@ -455,6 +471,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (projectApprovalCandidatesMatch?.[1]) {
+    await handleApprovalBatchCandidatesRead(response, decodeURIComponent(projectApprovalCandidatesMatch[1]));
+    return;
+  }
+
   if (projectEvidenceMatch?.[1]) {
     await handleProjectEvidenceAttachmentsRead(response, decodeURIComponent(projectEvidenceMatch[1]));
     return;
@@ -496,6 +517,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   if (storageServeMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleStorageFileServe(response, storageServeMatch[1]);
     return;
   }
@@ -2020,6 +2043,123 @@ async function handleWhereUsedSearchRead(response: ServerResponse, url: URL): Pr
 }
 
 /**
+ * Handles connector-set catalog reads grouped by connector_class with mate context.
+ */
+async function handleConnectorSetCatalogRead(response: ServerResponse, url: URL): Promise<void> {
+  const connectorClassFilter = readConnectorClass(url.searchParams.get("connectorClass")) ?? null;
+  const queryFilter = (url.searchParams.get("q") ?? "").trim();
+  const filters: { connectorClass?: ConnectorClass | null; query?: string | null } = {
+    connectorClass: connectorClassFilter,
+    query: queryFilter.length > 0 ? queryFilter : null
+  };
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "connector-set-list-read",
+      () => readConnectorSetCatalogFromDatabase(filters),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles project-scoped approval candidate reads. The candidate set is built from confirmed
+ * usage and matched BOM lines whose part is not yet approved.
+ */
+async function handleApprovalBatchCandidatesRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "approval-batch-candidates-read",
+      () => readApprovalBatchCandidatesFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles bulk approval actions triggered from a project BOM context. Approval state is
+ * the only field changed; readiness, asset validation, and export verification are not touched.
+ */
+async function handleApprovalBatchApply(request: IncomingMessage, response: ServerResponse, projectId: string, decidedBy: string): Promise<void> {
+  const body = await readJsonBody<ApprovalBatchRequest>(request);
+
+  if (!body || !Array.isArray(body.partIds) || (body.action !== "approve" && body.action !== "flag_for_review")) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_APPROVAL_BATCH",
+        message: "Approval batch requires partIds[] and action of 'approve' or 'flag_for_review'."
+      }
+    });
+    return;
+  }
+
+  const action: ApprovalBatchAction = body.action;
+  const normalized: ApprovalBatchRequest = {
+    action,
+    notes: typeof body.notes === "string" ? body.notes : null,
+    partIds: body.partIds.filter((value): value is string => typeof value === "string")
+  };
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "approval-batch-apply",
+      () => applyApprovalBatchInDatabase(projectId, normalized, decidedBy),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles local/dev-safe generation request creation without simulating output assets.
  */
 async function handleGenerationRequestCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
@@ -2165,7 +2305,7 @@ async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: s
 
   const ext = extname(fullPath).toLowerCase();
   const contentType = inferStorageContentType(ext);
-  const isInline = contentType === "application/pdf";
+  const isInline = contentType === "application/pdf" || contentType.startsWith("image/");
   const filename = basename(fullPath);
 
   response.writeHead(200, {
@@ -2189,11 +2329,15 @@ async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: s
 function inferStorageContentType(ext: string): string {
   const types: Record<string, string> = {
     ".dxf": "application/octet-stream",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
     ".kicad_mod": "application/octet-stream",
     ".kicad_sym": "application/octet-stream",
     ".pdf": "application/pdf",
+    ".png": "image/png",
     ".step": "application/octet-stream",
-    ".stp": "application/octet-stream"
+    ".stp": "application/octet-stream",
+    ".webp": "image/webp"
   };
 
   return types[ext] ?? "application/octet-stream";
@@ -3197,6 +3341,9 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts") return "api-search";
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
   if (method === "GET" && pathname === "/where-used") return "api-where-used-search";
+  if (method === "GET" && pathname === "/connector-sets") return "api-connector-set-list";
+  if (method === "GET" && /^\/projects\/[^/]+\/approval-candidates$/u.test(pathname)) return "api-approval-batch-candidates";
+  if (method === "POST" && /^\/projects\/[^/]+\/approval-batch$/u.test(pathname)) return "api-approval-batch-apply";
   if (method === "GET" && pathname === "/projects") return "api-project-list";
   if (method === "GET" && pathname === "/projects/health-summary") return "api-project-fleet-risk";
   if (method === "POST" && pathname === "/projects") return "api-project-create";
@@ -3511,7 +3658,7 @@ async function handleExportBundleCreate(request: IncomingMessage, response: Serv
   }
 
   try {
-    const result = await timeRouteOperation(response, "export-bundle-create", () => createExportBundleInDatabase(projectId, body, actor), (value) => value.status);
+    const result = await timeRouteOperation(response, "export-bundle-create", () => createExportBundleInDatabase(projectId, body, actor, getStorageClient()), (value) => value.status);
 
     if (result.status === "not_configured") {
       sendProjectMemoryNotConfigured(response);
@@ -3539,7 +3686,7 @@ async function handleExportBundleCreate(request: IncomingMessage, response: Serv
  */
 async function handleExportBundlesRead(response: ServerResponse, projectId: string): Promise<void> {
   try {
-    const result = await timeRouteOperation(response, "export-bundles-read", () => readExportBundlesFromDatabase(projectId), (value) => value.status);
+    const result = await timeRouteOperation(response, "export-bundles-read", () => readExportBundlesFromDatabase(projectId, getStorageClient()), (value) => value.status);
 
     if (result.status === "not_configured") {
       sendProjectMemoryNotConfigured(response);

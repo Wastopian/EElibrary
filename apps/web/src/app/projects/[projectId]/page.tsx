@@ -6,6 +6,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
+import { ApprovalBatchPanel } from "../../../components/ApprovalBatchPanel";
 import { BomDiagnosticsPanel } from "../../../components/BomDiagnosticsPanel";
 import { BomImportPanel } from "../../../components/BomImportPanel";
 import { BomImportMatchPanel } from "../../../components/BomImportMatchPanel";
@@ -14,8 +15,9 @@ import { EvidenceAttachmentPanel } from "../../../components/EvidenceAttachmentP
 import { ExportBundlePanel } from "../../../components/ExportBundlePanel";
 import { FollowUpPanel } from "../../../components/FollowUpPanel";
 import { ProjectEditPanel } from "../../../components/ProjectEditPanel";
+import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { WorkspaceJumpNav } from "../../../components/WorkspaceJumpNav";
-import { fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
 import type { ApiHealth } from "../../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type {
@@ -128,11 +130,18 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           { href: "#project-bom-diagnostics-heading", label: "BOM diagnostics" },
           { href: "#project-usage-heading", label: "Usage" },
           { href: "#project-risk-heading", label: "BOM health" },
+          { href: "#project-approval-batch-heading", label: "Approval batch" },
           { href: "#project-export-bundles-heading", label: "Export bundles" },
           { href: "#project-follow-ups-heading", label: "Follow-ups" },
           { href: "#project-evidence-heading", label: "Evidence" },
           { href: "#project-capabilities-heading", label: "Capabilities" }
         ]}
+      />
+
+      <WorkspaceActionPanel
+        actions={buildProjectWorkspaceActions(response)}
+        description="Project-scoped jumps for review, compare, evidence, circuit reuse, and verified exports."
+        title="Next project workspaces"
       />
 
       <section className="detail-section" aria-labelledby="project-summary-heading">
@@ -226,8 +235,23 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </SectionPanel>
       </section>
 
+      <section className="detail-section" aria-labelledby="project-approval-batch-heading">
+        <SectionHeading
+          id="project-approval-batch-heading"
+          index="10"
+          subtitle="Review approval gaps from this project's confirmed usage and matched BOM rows; bulk approve or flag for review with one action."
+          title="Review approval gaps"
+        />
+        <SectionPanel
+          description="The approval-batch action records project context as the trigger and only changes part-level approval rows. Asset validation, lifecycle, readiness, and export verification are not touched."
+          title="Project-scoped approval queue"
+        >
+          <ApprovalBatchPanel projectId={project.id} />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="project-export-bundles-heading">
-        <SectionHeading id="project-export-bundles-heading" index="10" subtitle="Generate manifest-first Altium, SolidWorks, or neutral export packages from verified assets only." title="Export bundles" />
+        <SectionHeading id="project-export-bundles-heading" index="11" subtitle="Generate manifest-first Altium, SolidWorks, or neutral export packages from verified assets only." title="Export bundles" />
         <SectionPanel
           description="Bundles include only verified file-backed assets. Referenced-only, unverified, or missing assets are recorded as omissions in the manifest. Export readiness does not imply part approval."
           title={exportBundles && exportBundles.bundles.length > 0 ? `${exportBundles.bundles.length} export bundle${exportBundles.bundles.length === 1 ? "" : "s"}` : "No export bundles yet"}
@@ -241,21 +265,21 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
       </section>
 
       <section className="detail-section" aria-labelledby="project-follow-ups-heading">
-        <SectionHeading id="project-follow-ups-heading" index="11" subtitle="Persist assignable work from current BOM health findings without changing part truth." title="Follow-up work" />
+        <SectionHeading id="project-follow-ups-heading" index="12" subtitle="Persist assignable work from current BOM health findings without changing part truth." title="Follow-up work" />
         <SectionPanel description="Follow-up status, assignee, evidence links, and resolution notes are operational workflow only. They do not resolve readiness unless the underlying BOM, part, asset, or evidence state changes." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
           <FollowUpPanel followUps={followUps} targetId={project.id} targetType="project" />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="project-evidence-heading">
-        <SectionHeading id="project-evidence-heading" index="12" subtitle="Decision evidence metadata can be attached without changing validation, approval, or export readiness." title="Evidence attachments" />
+        <SectionHeading id="project-evidence-heading" index="13" subtitle="Decision evidence metadata can be attached without changing validation, approval, or export readiness." title="Evidence attachments" />
         <SectionPanel description="Evidence can support future reviews, but it remains provenance until someone explicitly reviews or validates the underlying item." title={evidence.attachments.length > 0 ? `${evidence.attachments.length} evidence attachments` : "No evidence attachments"}>
           <ProjectEvidencePanel attachments={evidence.attachments} projectId={project.id} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="project-capabilities-heading">
-        <SectionHeading id="project-capabilities-heading" index="13" subtitle="Capability metadata keeps shipped foundations separate from planned workflows." title="Capability state" />
+        <SectionHeading id="project-capabilities-heading" index="14" subtitle="Capability metadata keeps shipped foundations separate from planned workflows." title="Capability state" />
         <div className="projects-detail-grid">
           <SectionPanel title="Readable foundations" description="These are current read foundations for persisted project memory.">
             <CapabilityList capabilities={foundationCapabilities} />
@@ -353,6 +377,69 @@ function ProjectDetailSetupState({ detailState }: { detailState: Extract<Project
       </SectionPanel>
     </main>
   );
+}
+
+/**
+ * Builds project-scoped workflow jumps that avoid manual URL or id entry for common next actions.
+ */
+function buildProjectWorkspaceActions(response: ProjectDetailResponse): WorkspaceAction[] {
+  const usagePartIds = [...new Set(response.usages.map((usage) => usage.partId).filter(Boolean))].slice(0, 4);
+  const firstUsagePartId = usagePartIds[0] ?? "";
+
+  return [
+    {
+      body: usagePartIds.length > 0
+        ? "Compare the first confirmed parts used by this project."
+        : "Open compare and add parts after BOM matching creates confirmed usage.",
+      href: usagePartIds.length > 0 ? buildCompareUrl(usagePartIds) : "/compare",
+      label: "Compare used parts",
+      signal: usagePartIds.length > 0 ? `${usagePartIds.length} selected` : "Pick parts"
+    },
+    {
+      body: firstUsagePartId
+        ? "Open where-used for the first confirmed part from this project."
+        : "Open where-used search after confirmed usage exists.",
+      href: firstUsagePartId ? buildProjectWhereUsedHref(firstUsagePartId) : "/where-used",
+      label: "Search where-used",
+      signal: response.usages.length > 0 ? "Usage ready" : "Needs usage"
+    },
+    {
+      body: "Attach or review project-level evidence without changing approval or export state.",
+      href: buildProjectEvidenceHref(response.project.id),
+      label: "Attach project evidence",
+      signal: "Project target"
+    },
+    {
+      body: "Add a reusable circuit block to this project BOM when repeated circuitry applies.",
+      href: "#project-circuit-block-instantiation-heading",
+      label: "Use circuit blocks",
+      signal: "BOM helper"
+    },
+    {
+      body: "Create or inspect bundles that include verified file-backed assets only.",
+      href: "#project-export-bundles-heading",
+      label: "Install/export files",
+      signal: "Verified only"
+    }
+  ];
+}
+
+/**
+ * Builds a where-used URL for a known project usage part id.
+ */
+function buildProjectWhereUsedHref(partId: string): string {
+  const params = new URLSearchParams({ q: partId, targetType: "part" });
+
+  return `/where-used?${params.toString()}`;
+}
+
+/**
+ * Builds the global evidence vault URL filtered to this project target.
+ */
+function buildProjectEvidenceHref(projectId: string): string {
+  const params = new URLSearchParams({ q: projectId, targetType: "project" });
+
+  return `/evidence?${params.toString()}`;
 }
 
 /**
@@ -530,6 +617,7 @@ function ProjectUsageTable({ usages }: { usages: ProjectPartUsage[] }) {
           <tr>
             <th>Part</th>
             <th>Status</th>
+            <th>Trust context</th>
             <th>Designators</th>
             <th>Quantity</th>
             <th>Context</th>
@@ -541,12 +629,15 @@ function ProjectUsageTable({ usages }: { usages: ProjectPartUsage[] }) {
             <tr key={usage.id}>
               <td>
                 <Link href={`/parts/${usage.partId}`}>
-                  <span className="ui-mono">{usage.partId}</span>
+                  <strong className="ui-mono">{usage.partMpn ?? usage.partId}</strong>
                 </Link>
+                <div className="muted-copy">{usage.manufacturerName ?? "Manufacturer not recorded"}</div>
+                <div className="muted-copy ui-mono">{usage.partId}</div>
               </td>
               <td>
                 <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
               </td>
+              <td className="muted-copy">{formatUsageTrustContext(usage)}</td>
               <td>{formatDesignators(usage.designators)}</td>
               <td>{usage.quantity ?? "Not recorded"}</td>
               <td>{usage.usageContext ?? "No usage context recorded"}</td>
@@ -557,6 +648,28 @@ function ProjectUsageTable({ usages }: { usages: ProjectPartUsage[] }) {
       </table>
     </div>
   );
+}
+
+/**
+ * Builds a compact trust summary from persisted usage snapshots.
+ */
+function formatUsageTrustContext(usage: ProjectPartUsage): string {
+  const approvalStatus = readSnapshotString(usage.approvalSnapshot, "status");
+  const readinessStatus = readSnapshotString(usage.readinessSnapshot, "status");
+  const approvalStage = approvalStatus === "approved"
+    ? "Approved"
+    : approvalStatus === "pending_review"
+      ? "Pending approval"
+      : "Approval not recorded";
+  const readinessStage = readinessStatus
+    ? `Readiness: ${readinessStatus.replace(/_/g, " ")}`
+    : "Readiness not recorded";
+  return `${approvalStage} | ${readinessStage}`;
+}
+
+function readSnapshotString(snapshot: Record<string, unknown>, key: string): string | null {
+  const value = snapshot[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /**

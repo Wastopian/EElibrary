@@ -38,6 +38,10 @@ test("admin queue presentation renders grouped mode with backend-backed issue qu
   assert.match(html, /Grouped/u);
   assert.match(html, /Table/u);
   assert.match(html, /All items/u);
+  assert.match(html, /Find row/u);
+  assert.match(html, /Work state/u);
+  assert.match(html, /Needs attention/u);
+  assert.match(html, /Clear filters/u);
   assert.match(html, /Generated drafts and review-required outputs/u);
   assert.match(html, /Pending approval/u);
   assert.match(html, /Open queue/u);
@@ -101,9 +105,11 @@ test("admin queue presentation renders table mode with backend-backed rows", () 
   );
 
   assert.match(html, /All items/u);
+  assert.match(html, /MPN, maker, queue, or detail/u);
+  assert.match(html, /Ready or informational/u);
   assert.match(html, /Review queue/u);
   assert.match(html, /Pending approval/u);
-  assert.match(html, /backend-backed rows in/u);
+  assert.match(html, /backend-backed rows across current queues/u);
   assert.match(html, /215079-8/u);
   assert.match(html, /TPS7A02DBVR/u);
   assert.doesNotMatch(html, /Duplicate candidates/u);

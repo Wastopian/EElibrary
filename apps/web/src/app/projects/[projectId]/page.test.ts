@@ -54,6 +54,12 @@ test("project detail renders persisted project memory sections", async () => {
 
     assert.match(html, /Motor controller alpha/u);
     assert.match(html, /Project summary/u);
+    assert.match(html, /Next project workspaces/u);
+    assert.match(html, /Compare used parts/u);
+    assert.match(html, /Search where-used/u);
+    assert.match(html, /Attach project evidence/u);
+    assert.match(html, /Use circuit blocks/u);
+    assert.match(html, /Install\/export files/u);
     assert.match(html, /Edit project memory/u);
     assert.match(html, /Save project/u);
     assert.match(html, /Save revision/u);

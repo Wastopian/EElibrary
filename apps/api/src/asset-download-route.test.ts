@@ -256,7 +256,9 @@ test("GET /parts/:partId/assets/:assetId/download returns 503 when storage clien
 
 test("GET /storage/:encodedKey returns 400 for a path traversal key", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   setCatalogStorePoolForTests(createEmptyPoolStub());
 
   try {
@@ -267,14 +269,37 @@ test("GET /storage/:encodedKey returns 400 for a path traversal key", async () =
     assert.equal(result.body.error.code, "INVALID_STORAGE_KEY");
   } finally {
     setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    restoreEnv(previousNodeEnv);
+  }
+});
+
+test("GET /storage/:encodedKey returns 401 when admin auth is missing", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  process.env.NODE_ENV = "test";
+  delete process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  setCatalogStorePoolForTests(createEmptyPoolStub());
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGet("/storage/test-part.step", handleRequest);
+
+    assert.equal(result.statusCode, 401);
+    assert.equal(result.body.error.code, "UNAUTHORIZED");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
     restoreEnv(previousNodeEnv);
   }
 });
 
 test("GET /storage/:encodedKey returns 404 when the file does not exist in local storage", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   process.env.STORAGE_LOCAL_PATH = tmpdir();
   setCatalogStorePoolForTests(createEmptyPoolStub());
 
@@ -286,6 +311,7 @@ test("GET /storage/:encodedKey returns 404 when the file does not exist in local
     assert.equal(result.body.error.code, "FILE_NOT_FOUND");
   } finally {
     setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
     if (previousStoragePath === undefined) {
       delete process.env.STORAGE_LOCAL_PATH;
     } else {
@@ -297,12 +323,14 @@ test("GET /storage/:encodedKey returns 404 when the file does not exist in local
 
 test("GET /storage/:encodedKey streams a real file with correct headers", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
   const tempDir = await mkdtemp(join(tmpdir(), "ee-serve-test-"));
   const testContent = "STEP file content for EE storage test";
   await writeFile(join(tempDir, "test-part.step"), testContent, "utf8");
 
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createEmptyPoolStub());
 
@@ -316,6 +344,7 @@ test("GET /storage/:encodedKey streams a real file with correct headers", async 
     assert.equal(result.body, testContent);
   } finally {
     setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
     if (previousStoragePath === undefined) {
       delete process.env.STORAGE_LOCAL_PATH;
     } else {
@@ -328,12 +357,14 @@ test("GET /storage/:encodedKey streams a real file with correct headers", async 
 
 test("GET /storage/:encodedKey serves a PDF with inline Content-Disposition", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
   const tempDir = await mkdtemp(join(tmpdir(), "ee-serve-pdf-test-"));
   const pdfContent = "%PDF-1.4 test content";
   await writeFile(join(tempDir, "datasheet.pdf"), pdfContent, "utf8");
 
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createEmptyPoolStub());
 
@@ -347,6 +378,7 @@ test("GET /storage/:encodedKey serves a PDF with inline Content-Disposition", as
     assert.equal(result.body, pdfContent);
   } finally {
     setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
     if (previousStoragePath === undefined) {
       delete process.env.STORAGE_LOCAL_PATH;
     } else {
@@ -432,7 +464,9 @@ async function invokeApiGet(
 function createStorageClientStub(downloadUrl: string | null): FileStorageClient {
   return {
     backend: downloadUrl !== null ? "local" : "not_configured",
+    exists: async () => downloadUrl !== null,
     getDownloadUrl: async () => downloadUrl,
+    read: async () => Buffer.from(""),
     write: async () => { throw new Error("write not expected in download route tests"); }
   } as FileStorageClient;
 }
@@ -490,5 +524,13 @@ function restoreEnv(previousNodeEnv: string | undefined): void {
     delete process.env.NODE_ENV;
   } else {
     process.env.NODE_ENV = previousNodeEnv;
+  }
+}
+
+function restoreOptionalEnv(key: string, previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = previous;
   }
 }

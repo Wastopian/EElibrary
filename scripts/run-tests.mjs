@@ -41,8 +41,12 @@ async function main() {
 }
 
 /**
- * Recursively collects .test.ts files from one file or directory.
+ * Recursively collects `.test.ts` / `.test.tsx` files from one file or directory.
  */
+function isTestFile(filePath) {
+  return filePath.endsWith(".test.ts") || filePath.endsWith(".test.tsx");
+}
+
 async function collectTestFiles(entryPath) {
   const entryStat = await stat(entryPath).catch(() => null);
 
@@ -51,7 +55,7 @@ async function collectTestFiles(entryPath) {
   }
 
   if (entryStat.isFile()) {
-    return entryPath.endsWith(".test.ts") ? [entryPath] : [];
+    return isTestFile(entryPath) ? [entryPath] : [];
   }
 
   if (!entryStat.isDirectory()) {

@@ -6,7 +6,7 @@
  * by setting STORAGE_BACKEND=s3 (implementation TBD in P3-X).
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 /** FileStorageBackend identifies which storage implementation is active. */
@@ -21,6 +21,19 @@ export interface FileStorageClient {
    * Returns null when the backend is not configured or the key is invalid.
    */
   getDownloadUrl(storageKey: string): Promise<string | null>;
+  /**
+   * Returns true when the storage key resolves to a present, readable file on the active backend.
+   * Used by read paths (e.g. export bundle history) to surface honest "file missing" states
+   * instead of offering broken download links.
+   */
+  exists(storageKey: string): Promise<boolean>;
+  /**
+   * Reads file content from storage under the given key. Used by the worker when copying verified
+   * asset bytes into a deterministic per-bundle path during async export-bundle assembly. Throws
+   * when the key is invalid or the underlying file is unreadable so callers can surface the failure
+   * as structured telemetry instead of silently producing an empty payload.
+   */
+  read(storageKey: string): Promise<Buffer>;
   /** Writes file content to storage under the given key, creating parent directories as needed. */
   write(storageKey: string, content: Buffer): Promise<void>;
 }
@@ -57,6 +70,31 @@ class LocalFileStorageClient implements FileStorageClient {
     return `${this.serveBaseUrl}/storage/${encodeURIComponent(storageKey)}`;
   }
 
+  async exists(storageKey: string): Promise<boolean> {
+    const fullPath = resolveStorageKey(this.basePath, storageKey);
+
+    if (!fullPath) {
+      return false;
+    }
+
+    try {
+      await access(fullPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async read(storageKey: string): Promise<Buffer> {
+    const fullPath = resolveStorageKey(this.basePath, storageKey);
+
+    if (!fullPath) {
+      throw new Error(`Invalid storage key rejected to prevent path traversal: ${storageKey}`);
+    }
+
+    return readFile(fullPath);
+  }
+
   async write(storageKey: string, content: Buffer): Promise<void> {
     const fullPath = resolveStorageKey(this.basePath, storageKey);
 
@@ -75,6 +113,14 @@ class NotConfiguredFileStorageClient implements FileStorageClient {
 
   async getDownloadUrl(): Promise<string | null> {
     return null;
+  }
+
+  async exists(): Promise<boolean> {
+    return false;
+  }
+
+  async read(): Promise<Buffer> {
+    throw new Error("File storage is not configured. Set STORAGE_BACKEND=local or a supported backend.");
   }
 
   async write(): Promise<void> {

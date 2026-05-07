@@ -12,7 +12,10 @@ import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLab
 import { DetailSectionNav } from "./DetailSectionNav";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
+import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
+import { getTrustLineageSummary } from "../../../lib/trust-lineage";
+import type { TrustLineageStageSummary, TrustLineageSummary } from "../../../lib/trust-lineage";
 import {
   assetTrustStageTone,
   formatAssetPromotionBlockers,
@@ -71,20 +74,28 @@ type PartWhereUsedState =
   | { status: "not_found" }
   | { status: "unavailable"; code: string; message: string };
 
+/** PartDetailPageState keeps catalog setup errors separate from genuine 404s. */
+type PartDetailPageState =
+  | { detail: PartDetailPageDetail; status: "ready"; whereUsedState: PartWhereUsedState }
+  | { status: "not_found" }
+  | { code: string; message: string; partId: string; status: "setup_required"; whereUsedState: PartWhereUsedState };
+
 /**
  * Renders a component detail page with provenance, connector intelligence, asset state, and export readiness.
  */
 export default async function PartDetailPage({ params }: DetailPageProps) {
   const { partId } = await params;
-  const [detail, whereUsedState] = await Promise.all([
-    fetchPartDetail(partId),
-    loadPartWhereUsed(partId)
-  ]);
+  const pageState = await loadPartDetailPage(partId);
 
-  if (!detail) {
+  if (pageState.status === "not_found") {
     notFound();
   }
 
+  if (pageState.status === "setup_required") {
+    return <PartDetailSetupState state={pageState} />;
+  }
+
+  const { detail, whereUsedState } = pageState;
   const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const bestMate = record.buildableMatingSet.bestMate;
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
@@ -101,6 +112,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const enrichmentBoundaryCopy = getEnrichmentBoundaryCopy(detail.enrichmentSummary);
   const enrichmentStatusItems = getPartEnrichmentStatusItems(detail.enrichmentSummary);
   const completenessChecklist = getPartCompletenessChecklist(record, assetGroups, bundleReadiness, generationOptions, reviewWorkflowSummary);
+  const trustLineage = getTrustLineageSummary(record, bundleReadiness, assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
   const nextActions = getPartNextActions(record);
   const primaryNextAction = nextActions[0];
   const latestSource = record.sources[0];
@@ -201,6 +213,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             {record.part.description && (
               <p className="detail-hero__description">{record.part.description}</p>
             )}
+            <TrustLineageStrip summary={trustLineage} />
             <p className="detail-trust-callout">
               <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
             </p>
@@ -241,6 +254,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         />
 
         <DetailSectionNav tabs={detailTabs} />
+
+        <WorkspaceActionPanel
+          actions={buildPartWorkspaceActions(record, bundleReadiness, whereUsedState)}
+          description="Plain jumps into the next workspaces for this part. These links carry the part id for you."
+          title="Next workspaces"
+        />
 
         <DetailReadinessSummary
           approval={record.approval}
@@ -620,6 +639,87 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           <ExportBundleSummary bundleReadiness={bundleReadiness} />
         </SectionPanel>
 
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Loads the primary detail record and keeps setup failures renderable instead of route-fatal.
+ */
+async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> {
+  const whereUsedPromise = loadPartWhereUsed(partId);
+
+  try {
+    const detail = await fetchPartDetail(partId);
+
+    if (!detail) {
+      return { status: "not_found" };
+    }
+
+    return {
+      detail,
+      status: "ready",
+      whereUsedState: await whereUsedPromise
+    };
+  } catch (error) {
+    if (isApiClientError(error)) {
+      return {
+        code: error.code,
+        message: error.message,
+        partId,
+        status: "setup_required",
+        whereUsedState: await whereUsedPromise
+      };
+    }
+
+    return {
+      code: "API_UNAVAILABLE",
+      message: "The API could not be reached, so catalog detail truth cannot be read.",
+      partId,
+      status: "setup_required",
+      whereUsedState: await whereUsedPromise
+    };
+  }
+}
+
+/**
+ * Renders setup guidance when detail truth cannot be loaded from the catalog API.
+ */
+function PartDetailSetupState({ state }: { state: Extract<PartDetailPageState, { status: "setup_required" }> }) {
+  return (
+    <main className="detail-layout">
+      <div className="detail-nav-links">
+        <Link className="back-link" href="/catalog">
+          &larr; Back to catalog search
+        </Link>
+      </div>
+
+      <section className="detail-section" aria-labelledby="part-detail-setup-heading">
+        <SectionHeading
+          id="part-detail-setup-heading"
+          index="01"
+          subtitle="Part detail requires DB-backed catalog truth before readiness, provenance, and export state can be inspected."
+          title="Catalog detail unavailable"
+        />
+        <SectionPanel description="No seed fallback or guessed metadata is shown for this part detail route." title="Connect the catalog database">
+          <div className="setup-steps">
+            <div>
+              <strong>Detail read failed</strong>
+              <span>{state.code}: {state.message}</span>
+              <code>{state.partId}</code>
+            </div>
+            <div>
+              <strong>Bring the catalog online</strong>
+              <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
+              <code>npm run db:migrate</code>
+              <code>npm run dev</code>
+            </div>
+          </div>
+        </SectionPanel>
+        <SectionPanel description="Usage memory is loaded separately and never fills in missing catalog detail truth." title="Where-used side channel">
+          <PartWhereUsedPanel state={state.whereUsedState} />
+        </SectionPanel>
       </section>
     </main>
   );
@@ -1356,6 +1456,92 @@ function buildDetailTabs(
     { badge: cadAttentionCount > 0 ? `${cadAttentionCount}` : assetGroups.length > 0 ? `${assetGroups.length}` : undefined, href: "#files-heading", label: "CAD assets" },
     { badge: blockedExportCount > 0 ? `${blockedExportCount}` : undefined, href: "#approval-heading", label: "Approval & export" }
   ];
+}
+
+/**
+ * Builds the part-scoped workflow jumps that help operators continue without URL editing.
+ */
+function buildPartWorkspaceActions(record: PartDetailPageRecord, bundleReadiness: BundleReadinessSummary, whereUsedState: PartWhereUsedState): WorkspaceAction[] {
+  const connectorClass = record.readinessSummary.connectorClass;
+  const whereUsedCount = whereUsedState.status === "available" ? whereUsedState.response.usages.length : null;
+
+  return [
+    {
+      body: "Open this part in the side-by-side compare workspace.",
+      href: buildCompareUrl([record.part.id]),
+      label: "Compare this part",
+      signal: "Side-by-side"
+    },
+    {
+      body: "Find confirmed project usage and BOM history for this exact internal part.",
+      href: buildWhereUsedHref("part", record.part.id),
+      label: "Check where-used",
+      signal: whereUsedCount === null ? "Project memory" : `${whereUsedCount} known`
+    },
+    {
+      body: "Attach review notes, links, or file evidence to this part without changing approval.",
+      href: buildEvidenceHref("part", record.part.id),
+      label: "Attach evidence",
+      signal: "Part target"
+    },
+    {
+      body: connectorClass === "non_connector"
+        ? "Browse connector memory if this part becomes part of a reusable connector set."
+        : "Open connector memory filtered to this connector class and MPN.",
+      href: buildConnectorSetHref(record),
+      label: connectorClass === "non_connector" ? "Browse connector sets" : "Review connector set",
+      signal: formatConnectorClassSignal(connectorClass)
+    },
+    {
+      body: "Jump to the export gate and see which files are verified, missing, or blocked.",
+      href: "#approval-heading",
+      label: "Review export blockers",
+      signal: bundleReadiness.label
+    }
+  ];
+}
+
+/**
+ * Builds a where-used route with a filled-in query so operators do not need query strings.
+ */
+function buildWhereUsedHref(targetType: string, query: string): string {
+  const params = new URLSearchParams({ q: query, targetType });
+
+  return `/where-used?${params.toString()}`;
+}
+
+/**
+ * Builds an evidence route scoped to one persisted target id.
+ */
+function buildEvidenceHref(targetType: string, query: string): string {
+  const params = new URLSearchParams({ q: query, targetType });
+
+  return `/evidence?${params.toString()}`;
+}
+
+/**
+ * Builds a connector-set route that prefers class and MPN when connector evidence exists.
+ */
+function buildConnectorSetHref(record: PartDetailPageRecord): string {
+  const connectorClass = record.readinessSummary.connectorClass;
+
+  if (connectorClass === "non_connector") {
+    return "/connector-sets";
+  }
+
+  const params = new URLSearchParams({
+    connectorClass,
+    q: record.part.mpn
+  });
+
+  return `/connector-sets?${params.toString()}`;
+}
+
+/**
+ * Formats connector-class signal copy without exposing null or backend casing.
+ */
+function formatConnectorClassSignal(connectorClass: PartDetailPageRecord["readinessSummary"]["connectorClass"]): string {
+  return connectorClass === "non_connector" ? "Optional" : connectorClass.replace(/_/gu, " ");
 }
 
 /**
@@ -2256,4 +2442,43 @@ function buildConnectorConfidenceSummary(buildableMatingSet: PartDetailPageRecor
   }
 
   return `${detailParts.join("; ")} from ${buildableMatingSet.confidenceBreakdown.evidenceCount} mapped relationship signals${evidenceParts.length > 0 ? ` (${evidenceParts.join(", ")})` : ""}.`;
+}
+
+/**
+ * Renders the four-stage trust lineage strip so engineers can scan
+ * imported / reviewed / approved / verified-for-export at a glance.
+ */
+function TrustLineageStrip({ summary }: { summary: TrustLineageSummary }): React.ReactElement {
+  return (
+    <section className="trust-lineage-strip" role="group" aria-label="Trust lineage">
+      <ol className="trust-lineage-strip__stages">
+        {summary.stages.map((stage, index) => (
+          <TrustLineageStageItem
+            key={stage.stage}
+            isLast={index === summary.stages.length - 1}
+            stage={stage}
+          />
+        ))}
+      </ol>
+      <p className="trust-lineage-strip__boundary muted-copy">{summary.boundary}</p>
+    </section>
+  );
+}
+
+/**
+ * Renders one trust-lineage stage with state badge, label, and one-line reason.
+ */
+function TrustLineageStageItem({ stage, isLast }: { stage: TrustLineageStageSummary; isLast: boolean }): React.ReactElement {
+  return (
+    <li className="trust-lineage-strip__item" data-state={stage.state}>
+      <div className="trust-lineage-strip__item-header">
+        <StatusBadge label={stage.label} tone={mapViewToneToBadge(stage.tone)} />
+        <span className={`trust-lineage-strip__state trust-lineage-strip__state--${stage.state}`}>
+          {stage.badgeLabel}
+        </span>
+      </div>
+      <p className="trust-lineage-strip__detail">{stage.detail}</p>
+      {!isLast ? <span aria-hidden="true" className="trust-lineage-strip__connector">→</span> : null}
+    </li>
+  );
 }

@@ -15,7 +15,7 @@ export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model" |
 export type EngineeringAssetClass = AssetType;
 
 /** File formats describe storage content without implying availability. */
-export type FileFormat = "pdf" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
+export type FileFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
 
 /** License modes prevent the UI from promising redistribution when it is not known. */
 export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown";
@@ -404,6 +404,10 @@ export interface ProjectPartUsage {
   projectRevisionId: string;
   bomLineId: string | null;
   partId: string;
+  /** Optional denormalized part identity for high-usability project tables. */
+  partMpn?: string;
+  /** Optional denormalized manufacturer identity for high-usability project tables. */
+  manufacturerName?: string;
   usageContext: string | null;
   designators: string[];
   quantity: number | null;
@@ -1605,6 +1609,8 @@ export interface PartSearchRecord {
   reviewRecords: ReviewRecord[];
   validationRecords: AssetValidationRecord[];
   promotionAudits: AssetPromotionAuditRecord[];
+  /** Optional export-bundle readiness projection when a search API precomputes it. */
+  bundleReadiness?: BundleReadinessSummary;
   readinessSummary: PartReadinessSummary;
   approval: PartApproval;
   duplicateCandidates: PartDuplicateCandidate[];
@@ -1989,6 +1995,56 @@ export interface ExportBundleManifest {
   warnings: string[];
 }
 
+/**
+ * ExportBundleFileAvailability distinguishes the three honest states a stored bundle file can be in.
+ *
+ * - `manifest_only` — bundle was generated as a manifest record only (no file write was attempted).
+ *   This is the current default while file-backed bundle generation is still foundation-stage.
+ * - `available` — bundle has a `storageKey` AND the file is currently present on the storage backend.
+ * - `file_missing` — bundle has a `storageKey` but the file is absent from the storage backend
+ *   (e.g. retention sweep, manual delete). Surfacing this prevents broken Download links from
+ *   appearing in bundle history.
+ */
+export type ExportBundleFileAvailability = "manifest_only" | "available" | "file_missing";
+
+/**
+ * ExportBundleAssemblyStatus distinguishes the four honest states of worker-side asset-byte assembly.
+ *
+ * Assembly is separate from the synchronous manifest archive write. The manifest is recorded by the
+ * API at bundle creation; asset bytes (per-included-asset payloads) are copied into deterministic
+ * per-bundle storage paths by the worker so an archive download can be produced without blocking
+ * the API request.
+ *
+ * - `not_required` — bundle had zero included assets, so no asset-byte work is queued.
+ * - `pending` — bundle is waiting for the worker to copy each included asset's bytes.
+ * - `assembled` — every included asset's bytes were copied to the per-bundle storage prefix.
+ * - `assembly_failed` — assembly stopped on a specific asset; see `assemblyError` for telemetry.
+ */
+export type ExportBundleAssemblyStatus = "not_required" | "pending" | "assembled" | "assembly_failed";
+
+/**
+ * ExportBundleAssemblyErrorPhase identifies which step of the asset-byte assembly failed.
+ *
+ * - `fetch_asset` — reading the source asset bytes from storage failed.
+ * - `write_asset` — writing the per-bundle copy of the asset bytes to storage failed.
+ * - `unknown` — the failure was not classifiable into either phase.
+ */
+export type ExportBundleAssemblyErrorPhase = "fetch_asset" | "write_asset" | "unknown";
+
+/**
+ * ExportBundleAssemblyError records structured failure telemetry for one assembly attempt.
+ *
+ * Failure telemetry is intentionally per-asset so operators see exactly which asset failed and why,
+ * rather than scanning a free-text manifest warning.
+ */
+export interface ExportBundleAssemblyError {
+  phase: ExportBundleAssemblyErrorPhase;
+  message: string;
+  failedAssetId: string | null;
+  failedBundlePath: string | null;
+  failedAt: string;
+}
+
 /** ExportBundle is the persisted bundle record with its manifest. */
 export interface ExportBundle {
   id: string;
@@ -1996,11 +2052,38 @@ export interface ExportBundle {
   revisionLabel: string | null;
   bundleFormat: ExportBundleFormat;
   storageKey: string | null;
+  /**
+   * Storage key for the worker-assembled single-archive (`.tar.gz`). Null until assembly succeeds.
+   * Distinct from `storageKey` so the manifest archive (JSON) and the engineering-friendly bundle
+   * download stay separable — readable manifest for audit, single archive for download.
+   */
+  archiveStorageKey: string | null;
+  /**
+   * Honest availability signal for the bundle file. Computed at read time so a download link
+   * is only offered when the file is actually present on the storage backend.
+   */
+  fileAvailability: ExportBundleFileAvailability;
+  /**
+   * Honest availability signal for the assembled `.tar.gz` archive, computed at read time the same
+   * way as `fileAvailability` so a "Download archive" link never points at a missing file.
+   */
+  archiveAvailability: ExportBundleFileAvailability;
   manifest: ExportBundleManifest;
   partCount: number;
   includedAssetCount: number;
   omittedAssetCount: number;
   warningCount: number;
+  /**
+   * Worker-side asset-byte assembly status. Separate from `fileAvailability` so manifest persistence
+   * (synchronous, API-side) is not conflated with per-asset byte copying (async, worker-side).
+   */
+  assemblyStatus: ExportBundleAssemblyStatus;
+  /** Structured telemetry for the latest failed assembly attempt; null when never failed. */
+  assemblyError: ExportBundleAssemblyError | null;
+  /** ISO timestamp the worker last completed (or last failed) an assembly attempt; null until first attempt. */
+  assemblyCompletedAt: string | null;
+  /** Number of assembly attempts the worker has executed for this bundle. */
+  assemblyAttemptCount: number;
   createdBy: string | null;
   createdAt: string;
 }
@@ -2210,4 +2293,126 @@ export interface ProjectRevisionCompareResponse {
   mpnSwapCount: number;
   unchangedCount: number;
   rows: ProjectRevisionCompareRow[];
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC15: Connector set catalog view
+// ---------------------------------------------------------------------------
+
+/** ConnectorSetMatePairKind names how a mate row relates to its primary connector. */
+export type ConnectorSetMatePairKind = "best_mate" | "alternate_mate";
+
+/** ConnectorSetMatePair is one mate or alternate for a primary connector in the set view. */
+export interface ConnectorSetMatePair {
+  matePartId: string;
+  mateMpn: string;
+  mateManufacturerName: string;
+  matePartLifecycleStatus: LifecycleStatus;
+  matePartApprovalStatus: PartApprovalStatus | null;
+  matePartReadinessStatus: PartReadinessStatus | null;
+  matePartConnectorClass: ConnectorClass | null;
+  relationshipType: ConnectorSetMatePairKind;
+  /** Optional confidence score from mate_relations.confidence_score (0-1). */
+  confidenceScore: number | null;
+  /** Number of confirmed project usages that touch this mate. */
+  projectUsageCount: number;
+}
+
+/** ConnectorSetEntry is one connector listing with its identity, current state, mates, and use count. */
+export interface ConnectorSetEntry {
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  connectorClass: ConnectorClass;
+  lifecycleStatus: LifecycleStatus;
+  approvalStatus: PartApprovalStatus | null;
+  readinessStatus: PartReadinessStatus | null;
+  blockerCount: number | null;
+  /** Confirmed project usage count for the primary connector. */
+  projectUsageCount: number;
+  matePairs: ConnectorSetMatePair[];
+}
+
+/** ConnectorSetClassGroup groups connector entries by `connector_class` so the catalog can render families. */
+export interface ConnectorSetClassGroup {
+  connectorClass: ConnectorClass;
+  entries: ConnectorSetEntry[];
+}
+
+/** ConnectorSetListResponse returns the connector-set catalog grouped by connector_class. */
+export interface ConnectorSetListResponse {
+  state: ProjectMemoryReadState;
+  /** Optional connector_class filter applied; null means no filter. */
+  connectorClassFilter: ConnectorClass | null;
+  /** Optional MPN substring filter applied; null when no filter. */
+  query: string | null;
+  totalConnectorCount: number;
+  totalMatePairCount: number;
+  groups: ConnectorSetClassGroup[];
+  /** Trust boundary copy reminding readers that listing does not approve reuse or unlock export. */
+  boundary: string;
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC16: Approval batch workflow from project BOM context
+// ---------------------------------------------------------------------------
+
+/** ApprovalBatchAction names the bulk action applied to a candidate part. */
+export type ApprovalBatchAction = "approve" | "flag_for_review";
+
+/** ApprovalBatchCandidate is one matched-usage part that currently has an approval gap. */
+export interface ApprovalBatchCandidate {
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  approvalStatus: PartApprovalStatus | null;
+  lifecycleStatus: LifecycleStatus | null;
+  readinessStatus: PartReadinessStatus | null;
+  /** Number of distinct BOM lines in this project that confirm usage of the part. */
+  bomLineCount: number;
+  /** Designators across BOM lines for fast triage (capped). */
+  designators: string[];
+  /** Stable BOM line ids for trace-back. */
+  bomLineIds: string[];
+}
+
+/** ApprovalBatchCandidatesResponse returns the project-scoped approval queue. */
+export interface ApprovalBatchCandidatesResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  generatedAt: string;
+  candidates: ApprovalBatchCandidate[];
+  /** Trust boundary copy reminding readers that approval does not validate evidence or unlock export. */
+  boundary: string;
+}
+
+/** ApprovalBatchRequest is the bulk approval input from the project BOM context. */
+export interface ApprovalBatchRequest {
+  partIds: string[];
+  action: ApprovalBatchAction;
+  notes?: string | null;
+}
+
+/** ApprovalBatchOutcomeStatus reports per-part processing outcome. */
+export type ApprovalBatchOutcomeStatus = "applied" | "skipped_already_approved" | "not_found" | "skipped_no_change";
+
+/** ApprovalBatchOutcome is one part's per-record outcome inside a batch. */
+export interface ApprovalBatchOutcome {
+  partId: string;
+  status: ApprovalBatchOutcomeStatus;
+  previousApprovalStatus: PartApprovalStatus | null;
+  newApprovalStatus: PartApprovalStatus | null;
+  message: string;
+}
+
+/** ApprovalBatchResponse summarizes a bulk approval action triggered from project BOM context. */
+export interface ApprovalBatchResponse {
+  projectId: string;
+  action: ApprovalBatchAction;
+  appliedCount: number;
+  skippedCount: number;
+  notFoundCount: number;
+  outcomes: ApprovalBatchOutcome[];
+  /** Trust boundary reminder shown beside the batch result. */
+  boundary: string;
 }

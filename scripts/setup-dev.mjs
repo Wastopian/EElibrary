@@ -77,12 +77,43 @@ function validateEnvOrFail() {
 async function step3DockerCompose() {
   console.log("-> [3/8] docker compose up -d");
 
+  await ensureDockerAvailable();
+
   try {
     await runCommand("docker", ["compose", "up", "-d"], { cwd: fromRepoRoot() });
   } catch (error) {
     throw new Error(
       `docker compose failed: ${error instanceof Error ? error.message : String(error)}\n` +
-        "Ensure Docker Desktop (or a docker daemon) is running, then re-run npm run setup:dev."
+        "Open Docker Desktop (or start your local docker daemon), wait until it reports running, " +
+        "then re-run npm run setup:dev."
+    );
+  }
+}
+
+/**
+ * Pre-flight checks for Docker so the operator gets actionable copy when the binary is missing
+ * or the daemon is not running, instead of an opaque ENOENT or socket error from `docker compose`.
+ */
+async function ensureDockerAvailable() {
+  try {
+    await runSilent("docker", ["--version"]);
+  } catch (error) {
+    throw new Error(
+      "Docker is not installed or not on PATH.\n" +
+        "EE Library uses Docker Desktop (or a Linux docker daemon) to run the local Postgres + storage stack.\n" +
+        "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ and re-run npm run setup:dev.\n" +
+        `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  try {
+    await runSilent("docker", ["info"]);
+  } catch (error) {
+    throw new Error(
+      "Docker is installed but the daemon is not responding.\n" +
+        "Start Docker Desktop (or your docker service), wait until it reports running, " +
+        "then re-run npm run setup:dev.\n" +
+        `Underlying error: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }
@@ -151,6 +182,28 @@ function runCommand(command, args, options = {}) {
       stdio: "inherit",
       shell: process.platform === "win32",
       ...options
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`${command} ${args.join(" ")} exited with code ${code}`));
+      }
+    });
+  });
+}
+
+/**
+ * Runs a child process and rejects on non-zero exit, suppressing stdout/stderr.
+ * Used by the pre-flight checks where the operator only needs the success/fail signal.
+ */
+function runSilent(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      shell: process.platform === "win32",
+      stdio: "ignore"
     });
 
     child.on("error", reject);

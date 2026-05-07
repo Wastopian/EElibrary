@@ -25,6 +25,24 @@ type WhereUsedPageState =
   | { health: ApiHealth | null; response: WhereUsedSearchResponse; status: "ready" }
   | { code: string; health: ApiHealth | null; message: string; query: string; status: "setup_required"; targetType: WhereUsedTargetType };
 
+/** WhereUsedQueryExample is one shareable lookup example for a target family. */
+interface WhereUsedQueryExample {
+  /** Short example label shown before the concrete query value. */
+  label: string;
+  /** Concrete query value used in the generated example link. */
+  query: string;
+}
+
+/** WhereUsedQueryGuidance keeps per-target query and recovery copy together. */
+interface WhereUsedQueryGuidance {
+  /** One-sentence target-specific query hint. */
+  hint: string;
+  /** Concrete examples that can be opened as shareable where-used searches. */
+  examples: WhereUsedQueryExample[];
+  /** Recovery hint shown when a query returns no persisted results. */
+  recovery: string;
+}
+
 /** WhereUsedPageProps carries Next.js search params as an awaited value in this app version. */
 interface WhereUsedPageProps {
   searchParams: Promise<WhereUsedPageSearchParams>;
@@ -60,16 +78,18 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
               <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
             </div>
           </div>
-          {pageState.status === "ready" ? <WhereUsedSnapshot response={pageState.response} /> : <WhereUsedIdleSnapshot />}
+          {pageState.status === "ready" ? <WhereUsedSnapshot response={pageState.response} /> : pageState.status === "setup_required" ? <WhereUsedSetupSnapshot /> : <WhereUsedIdleSnapshot />}
         </div>
       </section>
 
       <WorkspaceJumpNav ariaLabel="Where-used sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="where-used-search-heading">
-        <SectionHeading id="where-used-search-heading" index="01" subtitle="All four target types are now backed: parts, circuit blocks, connector sets, and assets via export bundles." title="Search memory" />
-        <SectionPanel description="Search by internal part id, MPN, circuit block id, or circuit block key." title="Where-used lookup">
-          <WhereUsedSearchForm query={pageState.status === "ready" ? pageState.response.query : pageState.query} targetType={pageState.status === "ready" ? pageState.response.targetType : pageState.targetType} />
+        <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Project memory must be connected before target coverage can be claimed." : "All four target types are backed by persisted records when project memory is connected: parts, circuit blocks, connector sets, and assets via export bundles."} title="Search memory" />
+        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is disabled until persisted project, BOM, circuit, and export records can be read." : "Search by internal part id, MPN, circuit block id, or circuit block key."} title={pageState.status === "setup_required" ? "Project memory unavailable" : "Where-used lookup"}>
+          {pageState.status === "setup_required"
+            ? <WhereUsedSearchSetupState state={pageState} />
+            : <WhereUsedSearchForm query={pageState.status === "ready" ? pageState.response.query : pageState.query} targetType={pageState.status === "ready" ? pageState.response.targetType : pageState.targetType} />}
         </SectionPanel>
       </section>
 
@@ -116,8 +136,32 @@ async function loadWhereUsedPage(targetType: WhereUsedTargetType, query: string)
   const healthPromise = fetchApiHealth().catch(() => null);
 
   if (query.trim().length === 0) {
+    const health = await healthPromise;
+
+    if (!health) {
+      return {
+        code: "API_UNAVAILABLE",
+        health,
+        message: "The API health endpoint could not be reached, so where-used backing cannot be confirmed.",
+        query,
+        status: "setup_required",
+        targetType
+      };
+    }
+
+    if (health && !isProjectMemoryConnected(health)) {
+      return {
+        code: "DB_NOT_CONFIGURED",
+        health,
+        message: "Where-used search requires the project-memory database before target coverage can be claimed.",
+        query,
+        status: "setup_required",
+        targetType
+      };
+    }
+
     return {
-      health: await healthPromise,
+      health,
       query,
       status: "idle",
       targetType
@@ -156,27 +200,44 @@ async function loadWhereUsedPage(targetType: WhereUsedTargetType, query: string)
 }
 
 /**
+ * Checks whether health confirms the persistence layer needed by where-used search.
+ */
+function isProjectMemoryConnected(health: ApiHealth): boolean {
+  return health.dependencies.database === "connected";
+}
+
+/**
  * Renders the search controls as a simple GET form so the result URL is shareable.
  */
 function WhereUsedSearchForm({ query, targetType }: { query: string; targetType: WhereUsedTargetType }) {
   return (
-    <form className="where-used-search-form" method="get">
-      <label>
-        <span>Target</span>
-        <select defaultValue={targetType} name="targetType">
-          <option value="part">Part</option>
-          <option value="circuit_block">Circuit block</option>
-          <option value="connector_set">Connector set</option>
-          <option value="asset">Asset</option>
-        </select>
-      </label>
-      <label className="where-used-search-form__query">
-        <span>Query</span>
-        <input defaultValue={query} name="q" placeholder="TPS7A02DBVR or ALPHA-POWER" type="search" />
-      </label>
-      <button className="button-primary" type="submit">Search</button>
-    </form>
+    <div className="where-used-search-panel">
+      <form className="where-used-search-form" method="get">
+        <label>
+          <span>Target</span>
+          <select defaultValue={targetType} name="targetType">
+            <option value="part">Part</option>
+            <option value="circuit_block">Circuit block</option>
+            <option value="connector_set">Connector set</option>
+            <option value="asset">Asset</option>
+          </select>
+        </label>
+        <label className="where-used-search-form__query">
+          <span>Query</span>
+          <input defaultValue={query} name="q" placeholder={getWhereUsedQueryGuidance(targetType).examples.map((example) => example.query).join(" or ")} type="search" />
+        </label>
+        <button className="button-primary" type="submit">Search</button>
+      </form>
+      <WhereUsedQueryGuidancePanel targetType={targetType} />
+    </div>
   );
+}
+
+/**
+ * Renders setup guidance in place of query controls when project memory is unavailable.
+ */
+function WhereUsedSearchSetupState({ state }: { state: Extract<WhereUsedPageState, { status: "setup_required" }> }) {
+  return <EmptyState title="Connect project memory" body={`${state.code}: ${state.message}`} />;
 }
 
 /**
@@ -188,6 +249,20 @@ function WhereUsedIdleSnapshot() {
       <WhereUsedStat label="Targets" tone="info" value="4" />
       <WhereUsedStat label="Backed now" tone="verified" value="4" />
       <WhereUsedStat label="Trust" tone="review" value="Bounded" />
+      <WhereUsedStat label="Export" tone="neutral" value="No change" />
+    </div>
+  );
+}
+
+/**
+ * Renders neutral setup tiles so unavailable persistence is not counted as backed capability.
+ */
+function WhereUsedSetupSnapshot() {
+  return (
+    <div className="projects-stat-grid">
+      <WhereUsedStat label="Targets" tone="neutral" value="-" />
+      <WhereUsedStat label="Backed now" tone="review" value="DB" />
+      <WhereUsedStat label="Trust" tone="review" value="Setup" />
       <WhereUsedStat label="Export" tone="neutral" value="No change" />
     </div>
   );
@@ -225,7 +300,7 @@ function WhereUsedStat({ label, tone, value }: { label: string; tone: BadgeTone;
  */
 function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
   if (state.status === "idle") {
-    return <EmptyState title="Start a where-used search" body="Choose a backed target and search for an internal part id, MPN, circuit block id, or circuit block key." />;
+    return <WhereUsedIdleRecovery />;
   }
 
   if (state.status === "setup_required") {
@@ -239,7 +314,12 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
   }
 
   if (response.state === "empty") {
-    return <EmptyState title="No where-used records found" body={`No persisted ${formatWhereUsedTargetType(response.targetType).toLowerCase()} usage or dependency records matched "${response.query}".`} />;
+    return (
+      <div className="where-used-empty-recovery">
+        <EmptyState title="No where-used records found" body={`No persisted ${formatWhereUsedTargetType(response.targetType).toLowerCase()} usage or dependency records matched "${response.query}".`} />
+        <WhereUsedRecoveryHint targetType={response.targetType} />
+      </div>
+    );
   }
 
   return (
@@ -255,6 +335,60 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
           : null}
       {response.circuitBlockDependencies.length > 0 ? <WhereUsedCircuitDependencyTable records={response.circuitBlockDependencies} /> : null}
       {response.assetExports.length > 0 ? <WhereUsedAssetExportTable records={response.assetExports} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Renders first-run where-used guidance with concrete places to find searchable identifiers.
+ */
+function WhereUsedIdleRecovery() {
+  return (
+    <div className="where-used-empty-recovery">
+      <EmptyState
+        title="Start with a saved part or project"
+        body="Use Catalog or Projects to find an exact part number, internal part record, circuit block key, connector, or project asset before searching where-used memory."
+      />
+      <div className="empty-recovery-actions" aria-label="Where-used recovery actions">
+        <Link className="button-link" href="/catalog">Find parts in Catalog</Link>
+        <Link className="button-link button-link--quiet" href="/projects">Open project BOMs</Link>
+        <Link className="button-link button-link--quiet" href="/connector-sets">Browse connector sets</Link>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders target-specific query examples beside the where-used form.
+ */
+function WhereUsedQueryGuidancePanel({ targetType }: { targetType: WhereUsedTargetType }) {
+  const guidance = getWhereUsedQueryGuidance(targetType);
+
+  return (
+    <div className="where-used-query-guidance">
+      <div className="where-used-query-guidance__copy">
+        <span>Query examples</span>
+        <p>{guidance.hint}</p>
+      </div>
+      <div className="where-used-query-guidance__examples">
+        {guidance.examples.map((example) => (
+          <Link href={buildWhereUsedExampleHref(targetType, example.query)} key={`${targetType}:${example.query}`}>
+            {example.label}: <strong>{example.query}</strong>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders a no-result recovery hint that matches the selected target family.
+ */
+function WhereUsedRecoveryHint({ targetType }: { targetType: WhereUsedTargetType }) {
+  return (
+    <div className="where-used-recovery-hint">
+      <span>No-result recovery</span>
+      <p>{getWhereUsedQueryGuidance(targetType).recovery}</p>
     </div>
   );
 }
@@ -458,6 +592,65 @@ function readSingleParam(value: string | string[] | undefined): string {
   }
 
   return value?.trim() ?? "";
+}
+
+/**
+ * Returns target-specific query examples and empty-state recovery copy.
+ */
+function getWhereUsedQueryGuidance(targetType: WhereUsedTargetType): WhereUsedQueryGuidance {
+  if (targetType === "circuit_block") {
+    return {
+      examples: [
+        { label: "Block id", query: "cblock-alpha-power" },
+        { label: "Block key", query: "ALPHA-POWER" }
+      ],
+      hint: "Circuit block searches match the persisted block id or block key and then expand to its part roles.",
+      recovery: "Try the exact circuit block id shown near the block title, or use the uppercase block key shown in the circuit block library."
+    };
+  }
+
+  if (targetType === "connector_set") {
+    return {
+      examples: [
+        { label: "Connector part id", query: "part-memory-jst-header" },
+        { label: "Connector MPN", query: "B4B-XH-A" }
+      ],
+      hint: "Connector-set searches start from a connector part id or MPN and include linked best-mate and alternate-mate parts.",
+      recovery: "Switch to a connector part id or exact connector MPN; non-connector parts will not produce connector-set mate expansion."
+    };
+  }
+
+  if (targetType === "asset") {
+    return {
+      examples: [
+        { label: "Part id", query: "part-memory-ldo" },
+        { label: "MPN", query: "TPS7A02DBVR" }
+      ],
+      hint: "Asset searches use the part id or MPN, then return export bundles whose manifests included that part's assets.",
+      recovery: "Search the owning part id or MPN instead of an asset id; asset results come from export bundle manifests."
+    };
+  }
+
+  return {
+    examples: [
+      { label: "Part id", query: "part-memory-ldo" },
+      { label: "MPN", query: "TPS7A02DBVR" }
+    ],
+    hint: "Part searches match an internal part id or exact MPN before showing confirmed project usage and circuit dependencies.",
+    recovery: "Try the internal part id shown on the part detail page first; if that misses, retry with the exact manufacturer part number from the catalog row."
+  };
+}
+
+/**
+ * Builds a shareable where-used example link for one target and query.
+ */
+function buildWhereUsedExampleHref(targetType: WhereUsedTargetType, query: string): string {
+  const params = new URLSearchParams({
+    q: query,
+    targetType
+  });
+
+  return `/where-used?${params.toString()}`;
 }
 
 /**

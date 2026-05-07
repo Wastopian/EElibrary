@@ -9,6 +9,8 @@ import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperation
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
+import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
+import { getWorkerStorageClient } from "./file-storage";
 import { runProviderPartImport } from "./provider-part-import";
 import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
 import type { ProviderPartRequest } from "./provider-adapters";
@@ -193,6 +195,7 @@ function buildUsageLines(): string[] {
     "npm run operations -w @ee-library/worker -- [limit]",
     "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
     "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
+    "npm run assemble-bundles -w @ee-library/worker -- [limit]",
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
     "npm run generate:drafts -w @ee-library/worker -- [limit]",
@@ -324,6 +327,34 @@ async function processQueuedProviderEnrichmentJobs(limitValue?: string): Promise
 }
 
 /**
+ * Drains pending export bundles by copying each verified asset's bytes into the per-bundle storage prefix.
+ *
+ * Failures are persisted as structured `assembly_error` telemetry on the bundle row so operators see
+ * exactly which asset failed and why instead of a generic "bundle generation failed" line.
+ */
+async function assembleExportBundles(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const storage = getWorkerStorageClient();
+    const summary = await timeWorkerOperation(
+      "worker.assemble_export_bundles",
+      () => processPendingExportBundleAssembly(Number.isFinite(limit) ? limit : 20, storage),
+      timings,
+      (value) => `${value.processed.length} bundle${value.processed.length === 1 ? "" : "s"}, ${value.processed.filter((r) => r.status === "assembly_failed").length} failed`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.assemble_export_bundles", error, timings);
+    throw error;
+  }
+}
+
+/**
  * Prints recent imports, generation, review, validation, and promotion diagnostics.
  */
 async function printWorkerOperationalDiagnostics(limitValue?: string): Promise<void> {
@@ -443,6 +474,11 @@ async function main(): Promise<void> {
 
   if (command === "enrichment-jobs") {
     await processQueuedProviderEnrichmentJobs(process.argv[3]);
+    return;
+  }
+
+  if (command === "assemble-bundles") {
+    await assembleExportBundles(process.argv[3]);
     return;
   }
 

@@ -118,6 +118,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           href: "/admin",
           label: "Admin",
           match: { path: "/admin", type: "path" }
+        },
+        {
+          description: "Check API, database, worker, storage, and queued-job health.",
+          href: "/system",
+          label: "System",
+          match: { path: "/system", type: "path" }
         }
       ],
       label: "Workspaces"

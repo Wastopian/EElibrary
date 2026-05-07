@@ -94,13 +94,13 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 
 **Engineering workspaces**
 
-- **`/compare`** — up to four parts via `?parts=id1,id2,…`: key metrics, lifecycle, trust, readiness, approval, and export bundle gate in one table (add ids from part detail “Compare workspace” or the URL).
-- **Asset PDF preview** on part detail — when a stored datasheet PDF is `previewStatus: ready`, an inline frame appears (reference-only PDFs stay download / open in new tab only).
+- **`/compare`** — up to four parts from Catalog/detail actions or the in-page selection tray: key metrics, lifecycle, trust, readiness, approval, asset-class readiness, trust-stage diff, connector context, and export bundle gate in one table.
+- **Asset PDF/image preview** on part detail — when a stored PDF or supported image is `previewStatus: ready`, an inline preview appears (reference-only files stay download / open in new tab only).
 - `/where-used` across parts, circuit blocks, connector sets (mates), and assets (bundle manifests).
 - `/evidence` vault with filters, review, and storage-backed attachments tied to projects, BOM lines, parts, findings, and blocks.
 - `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
 - `/connector-sets`: browse connector families, mate pairs, and project usage counts.
-- `/admin` queues; authenticated shell via `/sign-in`; `/system/health` for API, DB, storage, worker.
+- `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in`; raw API health remains available at `/system/health`.
 
 Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
 
@@ -128,7 +128,7 @@ After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED
 
 ## Current Boundaries
 
-- **`/compare`** (basic readiness metrics) is in the workspace sidebar. **`/tools`** (calculators) stays out of primary navigation until that route exists.
+- **`/compare`** (basic readiness metrics) and **`/system`** health are in the workspace sidebar. **`/tools`** (calculators) stays out of primary navigation until that route exists.
 - Exact-MPN import is not broad live distributor search.
 - Imported does not mean approved, CAD-verified, or export-ready.
 - BOM upload preserves raw context; matching and usage follow explicit operator actions and deterministic rules—weak rows do not silently become confirmed usage.

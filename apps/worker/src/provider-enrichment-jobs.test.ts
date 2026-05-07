@@ -432,7 +432,9 @@ test("provider enrichment worker downloads datasheet and advances asset to downl
   setDatasheetFetcherForTests(async () => new Response(pdfBytes));
   setWorkerStorageClientForTests({
     backend: "local",
+    exists: async () => false,
     getDownloadUrl: async () => null,
+    read: async () => Buffer.from(""),
     write: async (key, bytes) => { writtenFiles.push({ bytes, key }); }
   } as FileStorageClient);
 

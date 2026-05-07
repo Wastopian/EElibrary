@@ -43,6 +43,17 @@ test("app navigation marks the projects route as active inside project memory pa
 });
 
 /**
+ * Verifies the system-health workspace is visible and active for operational review.
+ */
+test("app navigation marks the system route as active inside system health pages", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/system" />);
+
+  assert.match(html, /System/u);
+  assert.match(html, /Check API, database, worker, storage, and queued-job health/u);
+  assert.match(html, /aria-current="page"/u);
+});
+
+/**
  * Verifies saved-view query links can mark active state on the homepage.
  */
 test("app navigation marks the pending approval view as active when its filter is applied", () => {

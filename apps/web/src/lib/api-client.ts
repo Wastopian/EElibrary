@@ -13,6 +13,7 @@ import type {
   BomImportCreateInput,
   BomImportCreateResponse,
   BomImportDiagnosticsResponse,
+  BomImportLinesResponse,
   BomImportMatchResponse,
   BomImportPreviewInput,
   BomImportPreviewResponse,
@@ -425,6 +426,27 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
   }
 
   const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches raw and mapped rows for one persisted BOM import.
+ */
+export async function fetchBomImportLines(bomImportId: string): Promise<BomImportLinesResponse | null> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/lines`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "BOM import lines request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomImportLinesResponse>;
 
   return envelope.data;
 }
@@ -1272,7 +1294,7 @@ export function buildExportBundleDownloadUrl(storageKey: string | null): string 
 /**
  * Resolves the API base URL for local and deployed web runtimes.
  */
-function getApiBaseUrl(): string {
+export function getApiBaseUrl(): string {
   return process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000";
 }
 

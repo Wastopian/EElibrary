@@ -190,6 +190,12 @@ async function loadProjectsDashboard(): Promise<ProjectsDashboardState> {
  * Renders setup guidance for project memory without offering seed fallback as real data.
  */
 function ProjectsSetupState({ dashboardState }: { dashboardState: Extract<ProjectsDashboardState, { status: "setup_required" }> }) {
+  // The database-connection badge + the setup panel below explain the dominant case (DB unreachable).
+  // Only surface the technical API message when the DB is actually reported as connected — that is
+  // the genuinely unexpected path where an operator needs the diagnostic detail to debug further.
+  const databaseStatus = dashboardState.health?.dependencies.database;
+  const showTechnicalMessage = databaseStatus === "connected";
+
   return (
     <main className="projects-layout">
       <Link className="back-link" href="/catalog">
@@ -202,9 +208,9 @@ function ProjectsSetupState({ dashboardState }: { dashboardState: Extract<Projec
           <p className="projects-hero__lede">Project memory reads require persisted project, BOM, and usage tables. No seed fallback is used for project history.</p>
           <div className="projects-hero__status">
             <StatusBadge label={dashboardState.code} tone="review" />
-            <StatusBadge label={`Database ${dashboardState.health?.dependencies.database ?? "unknown"}`} tone={dashboardState.health?.dependencies.database === "connected" ? "verified" : "review"} />
+            <StatusBadge label={`Database ${databaseStatus ?? "unknown"}`} tone={databaseStatus === "connected" ? "verified" : "review"} />
           </div>
-          <p className="mode-warning">{dashboardState.message}</p>
+          {showTechnicalMessage && <p className="mode-warning">{dashboardState.message}</p>}
         </div>
       </section>
       <SectionPanel title="Setup guidance" description="Project memory is DB-backed only. Apply migrations before expecting project rows.">

@@ -52,6 +52,11 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Risk flags/u);
     assert.match(html, /Review and export state/u);
     assert.match(html, /Where-used/u);
+    assert.match(html, /Next workspaces/u);
+    assert.match(html, /Compare this part/u);
+    assert.match(html, /Check where-used/u);
+    assert.match(html, /Attach evidence/u);
+    assert.match(html, /Review export blockers/u);
     assert.match(html, /No confirmed project usage/u);
     assert.match(html, /draft CAD needs review/u);
     assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
@@ -62,6 +67,35 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Blocked bundles/u);
     assert.match(html, /Export lane/u);
     assert.doesNotMatch(html, /approved part/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies catalog setup failures render guidance instead of route-fatal detail errors.
+ */
+test("part detail renders setup guidance when catalog detail is unavailable", async () => {
+  const restoreFetch = mockFetch(() =>
+    jsonResponse(
+      {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Catalog database is not configured."
+        }
+      },
+      503
+    )
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: "part-tps7a02dbvr" }) }));
+
+    assert.match(html, /Catalog detail unavailable/u);
+    assert.match(html, /Connect the catalog database/u);
+    assert.match(html, /DB_NOT_CONFIGURED/u);
+    assert.match(html, /Where-used side channel/u);
+    assert.doesNotMatch(html, /No matching parts found/u);
   } finally {
     restoreFetch();
   }

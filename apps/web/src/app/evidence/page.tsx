@@ -2,17 +2,26 @@
  * File header: Renders the global evidence vault workspace for provenance review and file-backed evidence.
  */
 
+import Link from "next/link";
 import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { EvidenceVaultAttachPanel } from "../../components/EvidenceVaultAttachPanel";
 import { EvidenceVaultReviewTable } from "../../components/EvidenceVaultReviewTable";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
-import { fetchApiHealth, fetchEvidenceAttachments, isApiClientError } from "../../lib/api-client";
+import { fetchApiHealth, fetchBomImportLines, fetchCircuitBlockDetail, fetchCircuitBlocks, fetchEvidenceAttachments, fetchPartSearch, fetchProjectBomHealth, fetchProjectDetail, fetchProjectList, isApiClientError } from "../../lib/api-client";
+import { buildEvidenceTargetPickerOptionKey, formatEvidenceTargetTypeLabel } from "../../lib/evidence-target-picker";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { EvidenceAttachmentListFilters, EvidenceAttachmentListResponse, EvidenceAttachmentType, EvidenceReviewStatus, EvidenceStorageState, EvidenceTargetType } from "@ee-library/shared/types";
+import type { EvidenceTargetPickerOption } from "../../lib/evidence-target-picker";
+import type { BomImport, BomLine, EvidenceAttachment, EvidenceAttachmentListFilters, EvidenceAttachmentListResponse, EvidenceAttachmentType, EvidenceReviewStatus, EvidenceStorageState, EvidenceTargetType, ProjectBomRiskFinding, ProjectPartUsage } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
+
+/** MAX_TARGET_PICKER_PROJECTS bounds server-side child lookups for the evidence picker. */
+const MAX_TARGET_PICKER_PROJECTS = 8;
+
+/** MAX_TARGET_PICKER_IMPORTS_PER_PROJECT keeps BOM-line suggestions responsive on large projects. */
+const MAX_TARGET_PICKER_IMPORTS_PER_PROJECT = 6;
 
 /** EvidencePageSearchParams mirrors the GET query that drives evidence vault filters. */
 type EvidencePageSearchParams = {
@@ -40,6 +49,7 @@ interface EvidencePageProps {
 export default async function EvidencePage({ searchParams }: EvidencePageProps) {
   const filters = readEvidenceFilters(await searchParams);
   const pageState = await loadEvidencePage(filters);
+  const targetOptions = pageState.status === "ready" ? await loadEvidenceTargetPickerOptions(pageState.response) : [];
   const jumpItems = [
     { href: "#evidence-filters-heading", label: "Filters" },
     { href: "#evidence-attach-heading", label: "Attach" },
@@ -77,9 +87,9 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-attach-heading">
-        <SectionHeading id="evidence-attach-heading" index="02" subtitle="Attach link, note, or local file evidence to a persisted target id." title="Attach evidence" />
-        <SectionPanel description="File uploads use the configured storage layer and persist hash, MIME type, storage key, provenance, and review status." title="New evidence">
-          <EvidenceVaultAttachPanel />
+        <SectionHeading id="evidence-attach-heading" index="02" subtitle={pageState.status === "ready" ? "Attach link, note, or local file evidence to a persisted target id." : "Project memory must be connected before evidence can be attached to persisted targets."} title="Attach evidence" />
+        <SectionPanel description={pageState.status === "ready" ? "File uploads use the configured storage layer and persist hash, MIME type, storage key, provenance, and review status." : "Attachment controls stay disabled because target ids and storage provenance cannot be persisted right now."} title={pageState.status === "ready" ? "New evidence" : "Attachment unavailable"}>
+          {pageState.status === "ready" ? <EvidenceVaultAttachPanel initialOptions={targetOptions} /> : <EvidenceAttachSetupState state={pageState} />}
         </SectionPanel>
       </section>
 
@@ -151,6 +161,285 @@ async function loadEvidencePage(filters: EvidenceAttachmentListFilters): Promise
 }
 
 /**
+ * Loads persisted target suggestions for the attach picker without making them trust signals.
+ */
+async function loadEvidenceTargetPickerOptions(response: EvidenceAttachmentListResponse): Promise<EvidenceTargetPickerOption[]> {
+  const options = new Map<string, EvidenceTargetPickerOption>();
+
+  addEvidenceAttachmentTargetOptions(options, response.attachments);
+
+  const [projectListResult, partSearchResult, circuitBlockListResult] = await Promise.allSettled([
+    fetchProjectList(),
+    fetchPartSearch({ pageSize: 12, sort: "mpn_asc" }),
+    fetchCircuitBlocks()
+  ]);
+
+  if (partSearchResult.status === "fulfilled") {
+    for (const row of partSearchResult.value) {
+      addEvidenceTargetOption(options, {
+        detail: `${row.manufacturer.name} - part id ${row.part.id}`,
+        label: row.part.mpn,
+        source: "Catalog",
+        targetId: row.part.id,
+        targetType: "part"
+      });
+
+      for (const asset of row.assets) {
+        addEvidenceTargetOption(options, {
+          detail: `${formatAssetType(asset.assetType)} - ${asset.fileFormat} - ${asset.id}`,
+          label: `${row.part.mpn} ${formatAssetType(asset.assetType)}`,
+          source: "Catalog assets",
+          targetId: asset.id,
+          targetType: "asset"
+        });
+      }
+    }
+  }
+
+  if (projectListResult.status === "fulfilled") {
+    for (const summary of projectListResult.value.projects) {
+      addEvidenceTargetOption(options, {
+        detail: `${summary.project.name} - ${summary.revisionCount} revisions - ${summary.usageCount} confirmed usages`,
+        label: summary.project.projectKey,
+        source: "Projects",
+        targetId: summary.project.id,
+        targetType: "project"
+      });
+    }
+
+    const projectTargetResults = await Promise.allSettled(
+      projectListResult.value.projects
+        .slice(0, MAX_TARGET_PICKER_PROJECTS)
+        .map((summary) => loadProjectEvidenceTargetOptions(summary.project.id, summary.project.projectKey))
+    );
+
+    for (const result of projectTargetResults) {
+      if (result.status === "fulfilled") {
+        for (const option of result.value) {
+          addEvidenceTargetOption(options, option);
+        }
+      }
+    }
+  }
+
+  if (circuitBlockListResult.status === "fulfilled") {
+    for (const summary of circuitBlockListResult.value.circuitBlocks) {
+      addEvidenceTargetOption(options, {
+        detail: `${summary.circuitBlock.name} - ${summary.totalPartCount} roles - ${summary.readinessGapCount} readiness gaps`,
+        label: summary.circuitBlock.blockKey,
+        source: "Circuit blocks",
+        targetId: summary.circuitBlock.id,
+        targetType: "circuit_block"
+      });
+    }
+
+    const circuitBlockDetailResults = await Promise.allSettled(
+      circuitBlockListResult.value.circuitBlocks
+        .slice(0, MAX_TARGET_PICKER_PROJECTS)
+        .map((summary) => fetchCircuitBlockDetail(summary.circuitBlock.id).catch(() => null))
+    );
+
+    for (const result of circuitBlockDetailResults) {
+      if (result.status === "fulfilled" && result.value) {
+        addCircuitBlockPartTargetOptions(options, result.value);
+      }
+    }
+  }
+
+  return Array.from(options.values()).sort(compareEvidenceTargetOptions);
+}
+
+/**
+ * Loads project child targets that need project-scoped APIs.
+ */
+async function loadProjectEvidenceTargetOptions(projectId: string, projectKey: string): Promise<EvidenceTargetPickerOption[]> {
+  const options: EvidenceTargetPickerOption[] = [];
+  const [detailResult, bomHealthResult] = await Promise.allSettled([
+    fetchProjectDetail(projectId).catch(() => null),
+    fetchProjectBomHealth(projectId).catch(() => null)
+  ]);
+  const detail = detailResult.status === "fulfilled" ? detailResult.value : null;
+  const bomHealth = bomHealthResult.status === "fulfilled" ? bomHealthResult.value : null;
+
+  if (detail) {
+    for (const bomImport of detail.bomImports) {
+      options.push(buildBomImportTargetOption(bomImport, projectKey));
+    }
+
+    for (const usage of detail.usages) {
+      options.push(buildProjectUsageTargetOption(usage, projectKey));
+    }
+
+    options.push(...await loadBomLineEvidenceTargetOptions(detail.bomImports, projectKey));
+  }
+
+  if (bomHealth) {
+    for (const finding of bomHealth.findings) {
+      options.push(buildRiskFindingTargetOption(finding, projectKey));
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Loads BOM-line targets for a bounded set of imports.
+ */
+async function loadBomLineEvidenceTargetOptions(bomImports: BomImport[], projectKey: string): Promise<EvidenceTargetPickerOption[]> {
+  const lineResults = await Promise.allSettled(
+    bomImports
+      .slice(0, MAX_TARGET_PICKER_IMPORTS_PER_PROJECT)
+      .map((bomImport) => fetchBomImportLines(bomImport.id).catch(() => null))
+  );
+  const options: EvidenceTargetPickerOption[] = [];
+
+  for (const result of lineResults) {
+    if (result.status === "fulfilled" && result.value) {
+      for (const line of result.value.lines) {
+        options.push(buildBomLineTargetOption(line, projectKey));
+      }
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Adds targets already present in the vault so repeated attachments remain discoverable.
+ */
+function addEvidenceAttachmentTargetOptions(options: Map<string, EvidenceTargetPickerOption>, attachments: EvidenceAttachment[]): void {
+  for (const attachment of attachments) {
+    addEvidenceTargetOption(options, {
+      detail: `${attachment.evidenceType} evidence - ${attachment.title}`,
+      label: `${formatEvidenceTargetTypeLabel(attachment.targetType)} ${attachment.targetId}`,
+      source: "Current vault",
+      targetId: attachment.targetId,
+      targetType: attachment.targetType
+    });
+  }
+}
+
+/**
+ * Adds circuit block role targets from a loaded block detail response.
+ */
+function addCircuitBlockPartTargetOptions(options: Map<string, EvidenceTargetPickerOption>, detail: Awaited<ReturnType<typeof fetchCircuitBlockDetail>>): void {
+  if (!detail) {
+    return;
+  }
+
+  for (const record of detail.parts) {
+    addEvidenceTargetOption(options, {
+      detail: `${detail.circuitBlock.blockKey} - ${record.part.mpn} - ${record.blockPart.substitutionPolicy.replace(/_/gu, " ")}`,
+      label: record.blockPart.role,
+      source: "Circuit block roles",
+      targetId: record.blockPart.id,
+      targetType: "circuit_block_part"
+    });
+  }
+}
+
+/**
+ * Builds a picker option for one BOM import record.
+ */
+function buildBomImportTargetOption(bomImport: BomImport, projectKey: string): EvidenceTargetPickerOption {
+  return {
+    detail: `${projectKey} - ${bomImport.importStatus} - ${bomImport.id}`,
+    label: bomImport.sourceFilename,
+    source: "Project BOM imports",
+    targetId: bomImport.id,
+    targetType: "bom_import"
+  };
+}
+
+/**
+ * Builds a picker option for one BOM line record.
+ */
+function buildBomLineTargetOption(line: BomLine, projectKey: string): EvidenceTargetPickerOption {
+  const identity = line.rawMpn ?? line.rawDescription ?? line.id;
+
+  return {
+    detail: `${projectKey} row ${line.rowNumber} - ${line.matchStatus} - ${formatDesignators(line.designators)}`,
+    label: identity,
+    source: "BOM lines",
+    targetId: line.id,
+    targetType: "bom_line"
+  };
+}
+
+/**
+ * Builds a picker option for one confirmed project usage record.
+ */
+function buildProjectUsageTargetOption(usage: ProjectPartUsage, projectKey: string): EvidenceTargetPickerOption {
+  const identity = usage.partMpn ?? usage.partId;
+  const maker = usage.manufacturerName ? ` - ${usage.manufacturerName}` : "";
+
+  return {
+    detail: `${projectKey}${maker} - ${formatDesignators(usage.designators)} - ${usage.usageStatus}`,
+    label: identity,
+    source: "Confirmed project usage",
+    targetId: usage.id,
+    targetType: "project_part_usage"
+  };
+}
+
+/**
+ * Builds a picker option for one explainable BOM health finding.
+ */
+function buildRiskFindingTargetOption(finding: ProjectBomRiskFinding, projectKey: string): EvidenceTargetPickerOption {
+  return {
+    detail: `${projectKey} - ${finding.code} - ${finding.severity}`,
+    label: finding.title,
+    source: "BOM health findings",
+    targetId: finding.id,
+    targetType: "risk_finding"
+  };
+}
+
+/**
+ * Adds one picker option if it has a usable persisted id.
+ */
+function addEvidenceTargetOption(options: Map<string, EvidenceTargetPickerOption>, option: EvidenceTargetPickerOption): void {
+  const targetId = option.targetId.trim();
+
+  if (!targetId) {
+    return;
+  }
+
+  const normalizedOption = {
+    ...option,
+    targetId
+  };
+  const optionKey = buildEvidenceTargetPickerOptionKey(normalizedOption.targetType, normalizedOption.targetId);
+
+  if (!options.has(optionKey)) {
+    options.set(optionKey, normalizedOption);
+  }
+}
+
+/**
+ * Sorts picker options by target family, label, and id for stable rendering.
+ */
+function compareEvidenceTargetOptions(left: EvidenceTargetPickerOption, right: EvidenceTargetPickerOption): number {
+  return formatEvidenceTargetTypeLabel(left.targetType).localeCompare(formatEvidenceTargetTypeLabel(right.targetType)) ||
+    left.label.localeCompare(right.label) ||
+    left.targetId.localeCompare(right.targetId);
+}
+
+/**
+ * Formats asset type values for compact target labels.
+ */
+function formatAssetType(assetType: string): string {
+  return assetType.replace(/_/gu, " ");
+}
+
+/**
+ * Formats BOM designators without hiding an empty designator set.
+ */
+function formatDesignators(designators: string[]): string {
+  return designators.length > 0 ? designators.join(", ") : "no designator";
+}
+
+/**
  * Renders evidence filter controls as a shareable GET form.
  */
 function EvidenceFilterForm({ filters }: { filters: EvidenceAttachmentListFilters }) {
@@ -213,6 +502,18 @@ function EvidenceFilterForm({ filters }: { filters: EvidenceAttachmentListFilter
 }
 
 /**
+ * Renders setup guidance instead of attach controls when persisted targets are unavailable.
+ */
+function EvidenceAttachSetupState({ state }: { state: Extract<EvidencePageState, { status: "setup_required" }> }) {
+  return (
+    <EmptyState
+      body={`${state.code}: ${state.message} Evidence attachment requires a persisted target id, provenance row, and storage state before it can be recorded.`}
+      title="Connect project memory before attaching evidence"
+    />
+  );
+}
+
+/**
  * Renders the results state for setup, empty, and populated evidence lists.
  */
 function EvidenceResults({ state }: { state: EvidencePageState }) {
@@ -221,10 +522,26 @@ function EvidenceResults({ state }: { state: EvidencePageState }) {
   }
 
   if (state.response.attachments.length === 0) {
-    return <EmptyState title="No evidence matched" body="Adjust filters or attach evidence to a persisted project, BOM, part, asset, risk, or circuit target." />;
+    return <EvidenceEmptyRecovery />;
   }
 
   return <EvidenceVaultReviewTable attachments={state.response.attachments} />;
+}
+
+/**
+ * Renders empty evidence guidance with visible actions for filter recovery and attachment.
+ */
+function EvidenceEmptyRecovery() {
+  return (
+    <div className="empty-recovery-state">
+      <EmptyState title="No evidence matched" body="Clear one filter, or attach a link, note, or file to a saved project, BOM row, part, asset, risk, or circuit target." />
+      <div className="empty-recovery-actions" aria-label="Evidence recovery actions">
+        <a className="button-link" href="#evidence-filters-heading">Review filters</a>
+        <a className="button-link button-link--quiet" href="#evidence-attach-heading">Attach evidence</a>
+        <Link className="button-link button-link--quiet" href="/projects">Open projects</Link>
+      </div>
+    </div>
+  );
 }
 
 /**

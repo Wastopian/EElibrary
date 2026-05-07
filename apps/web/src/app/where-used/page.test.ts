@@ -34,6 +34,8 @@ test("where-used page renders part usage and circuit block dependencies", async 
     const html = await renderWhereUsedPage({ q: "TPS7A02DBVR", targetType: "part" });
 
     assert.match(html, /Usage and dependency search/u);
+    assert.match(html, /Query examples/u);
+    assert.match(html, /Part id/u);
     assert.match(html, /ALPHA/u);
     assert.match(html, /TPS7A02DBVR/u);
     assert.match(html, /Main LDO/u);
@@ -82,7 +84,60 @@ test("where-used page renders empty state for supported asset target with no res
 
     assert.match(html, /No where-used records found/u);
     assert.match(html, /asset-memory-ldo-symbol-ref/u);
+    assert.match(html, /Search the owning part id or MPN instead of an asset id/u);
     assert.doesNotMatch(html, /Main LDO/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies first-run recovery points users to visible workspaces instead of hidden query tricks.
+ */
+test("where-used page renders first-run recovery actions when project memory is connected", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse(buildHealthResponse("connected"));
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderWhereUsedPage({});
+
+    assert.match(html, /Start with a saved part or project/u);
+    assert.match(html, /Find parts in Catalog/u);
+    assert.match(html, /Open project BOMs/u);
+    assert.match(html, /Browse connector sets/u);
+    assert.doesNotMatch(html, /URL/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies unavailable project memory does not claim target backing before a search.
+ */
+test("where-used page renders setup state without backed-target counts when database is unavailable", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse(buildHealthResponse("not_configured"));
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderWhereUsedPage({});
+
+    assert.match(html, /Connect project memory/u);
+    assert.match(html, /Project memory must be connected before target coverage can be claimed/u);
+    assert.match(html, /DB_NOT_CONFIGURED/u);
+    assert.match(html, /Backed now/u);
+    assert.match(html, />DB</u);
+    assert.doesNotMatch(html, /<strong>4<\/strong>/u);
+    assert.doesNotMatch(html, /Query examples/u);
   } finally {
     restoreFetch();
   }

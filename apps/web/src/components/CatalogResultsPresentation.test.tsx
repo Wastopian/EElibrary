@@ -7,6 +7,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CatalogResultsPresentation } from "./CatalogResultsPresentation";
+import type { CatalogResultRowViewModel } from "./CatalogResultsPresentation";
 
 /**
  * Verifies list mode renders explanation-first readiness rows with the mode toggle visible.
@@ -19,6 +20,7 @@ test("catalog results presentation renders list mode by default", () => {
   assert.match(html, /Review Needed/u);
   assert.match(html, /Top blocker/u);
   assert.match(html, /Connector intelligence/u);
+  assert.match(html, /Trust gates/u);
 });
 
 /**
@@ -30,6 +32,8 @@ test("catalog results presentation renders dense table mode", () => {
   assert.match(html, /visible rows/u);
   assert.match(html, /Description/u);
   assert.match(html, /CAD\/export/u);
+  assert.match(html, /Trust gates/u);
+  assert.match(html, /Imp/u);
   assert.match(html, /Next action/u);
   assert.match(html, /Open/u);
   assert.match(html, /215079-8/u);
@@ -38,7 +42,7 @@ test("catalog results presentation renders dense table mode", () => {
 /**
  * Builds a deterministic row model for presentation tests.
  */
-function buildRow() {
+function buildRow(): CatalogResultRowViewModel {
   return {
     approvalDetail: "Open review work still remains before the record should be treated as approved.",
     approvalLabel: "Pending review",
@@ -48,6 +52,7 @@ function buildRow() {
     cadExportLabel: "Export bundle: partial bundle",
     cadExportTone: "review" as const,
     category: "Connector",
+    compareAddHref: "/compare?parts=part-1",
     description: "",
     connectorSignalDetail: "Mating set exists, but one accessory relationship still needs review.",
     connectorSignalLabel: "Mapped with follow-up",
@@ -70,6 +75,12 @@ function buildRow() {
     readinessHeadline: "Review Needed",
     readinessSubhead: "One CAD workflow still needs engineering review.",
     topBlocker: "Review generated footprint before export.",
+    trustLineageBadges: [
+      { abbrev: "Imp", badgeTone: "verified", stageKey: "imported", stateMark: "OK", title: "Imported: ok." },
+      { abbrev: "Rev", badgeTone: "neutral", stageKey: "reviewed", stateMark: "…", title: "Reviewed: pending." },
+      { abbrev: "Apr", badgeTone: "info", stageKey: "approved", stateMark: "…", title: "Approved: pending." },
+      { abbrev: "Exp", badgeTone: "review", stageKey: "verified_for_export", stateMark: "!", title: "Verified for export: blocked." }
+    ],
     trustScore: 0.79,
     trustTone: "review" as const
   };

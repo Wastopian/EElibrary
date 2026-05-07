@@ -13,6 +13,7 @@ import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
 import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
+import { getTrustLineageSummary } from "../../lib/trust-lineage";
 import { formatReviewStateLabel, reviewStateTone } from "../../lib/detail-view-model";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
@@ -57,6 +58,7 @@ interface ReviewQueueItem {
   reviewStateTone: BadgeTone;
   context: string;
   detail: string;
+  trustLineageLabel: string;
   updatedAt: string;
 }
 
@@ -69,6 +71,7 @@ interface PromotionQueueItem {
   canPromote: boolean;
   blockerReasons: string[];
   validationReason: string;
+  trustLineageLabel: string;
   updatedAt: string;
 }
 
@@ -422,6 +425,7 @@ export default async function AdminPage() {
                           <span className="ui-mono">{item.mpn}</span>
                         </Link>
                         <div className="muted-copy">{item.manufacturerName}</div>
+                        <div className="muted-copy">{item.trustLineageLabel}</div>
                       </td>
                       <td>
                         <div>{item.context}</div>
@@ -485,6 +489,7 @@ export default async function AdminPage() {
                           <span className="ui-mono">{item.mpn}</span>
                         </Link>
                         <div className="muted-copy">{item.manufacturerName}</div>
+                        <div className="muted-copy">{item.trustLineageLabel}</div>
                       </td>
                       <td>
                         <div>{formatAssetType(item.assetType)}</div>
@@ -1393,6 +1398,7 @@ function buildReviewQueue(records: PartSearchRecord[]): ReviewQueueItem[] {
         reviewStateTone: mapViewToneToBadge(reviewStateTone(reviewStatus.state)),
         targetId: asset.id,
         targetType: "asset",
+        trustLineageLabel: formatCompactTrustLineage(record),
         updatedAt: asset.lastUpdatedAt
       });
     }
@@ -1413,6 +1419,7 @@ function buildReviewQueue(records: PartSearchRecord[]): ReviewQueueItem[] {
         reviewStateTone: mapViewToneToBadge(reviewStateTone(reviewStatus.state)),
         targetId: workflow.id,
         targetType: "generation_workflow",
+        trustLineageLabel: formatCompactTrustLineage(record),
         updatedAt: record.lastUpdatedAt
       });
     }
@@ -1442,6 +1449,7 @@ function buildPromotionQueue(records: PartSearchRecord[]): PromotionQueueItem[] 
         manufacturerName: record.manufacturer.name,
         mpn: record.part.mpn,
         partId: record.part.id,
+        trustLineageLabel: formatCompactTrustLineage(record),
         updatedAt: asset.lastUpdatedAt,
         validationReason: validationSummary.reason
       });
@@ -1542,6 +1550,34 @@ function formatAssetProvenance(provenance: Asset["provenance"]): string {
     official: "Official",
     trusted_external: "Trusted external"
   }[provenance];
+}
+
+/**
+ * Formats a compact four-stage trust chain for queue rows.
+ */
+function formatCompactTrustLineage(record: PartSearchRecord): string {
+  if (!record.bundleReadiness) {
+    return "Imported: pending | Reviewed: pending | Approved: pending | Verified for export: pending";
+  }
+  const assetReviewStatuses = record.assets.map((asset) => getAssetReviewStatus(asset, record.reviewRecords));
+  const workflowReviewStatuses = record.generationWorkflows.map((workflow) => getWorkflowReviewStatus(workflow, record.reviewRecords));
+  const promotionSummaries = record.assets.map((asset) => getAssetPromotionSummary(asset, record.validationRecords, record.promotionAudits));
+  const trust = getTrustLineageSummary(
+    record,
+    record.bundleReadiness,
+    assetReviewStatuses,
+    workflowReviewStatuses,
+    promotionSummaries
+  );
+  const markers = trust.stages.map((stage) => `${stage.label}: ${formatCompactStageState(stage.state)}`);
+  return markers.join(" | ");
+}
+
+function formatCompactStageState(state: "passed" | "pending" | "blocked" | "not_applicable"): string {
+  if (state === "passed") return "ok";
+  if (state === "blocked") return "blocked";
+  if (state === "not_applicable") return "n/a";
+  return "pending";
 }
 
 function validationStatusTone(status: AssetValidationRecord["validationStatus"]): BadgeTone {
