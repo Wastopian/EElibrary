@@ -8,8 +8,10 @@ import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
-import { fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
+import { OperatorChecklist } from "../../components/OperatorChecklist";
+import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../../lib/detail-view-model";
+import { buildCatalogTrustLineageBadges } from "../../lib/trust-lineage";
 import { importUiCopy } from "../../lib/import-ui-copy";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CadAvailabilityFilter, CatalogDataSource, ConnectorClass, LifecycleStatus, PartApprovalStatus, PartReadinessStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
@@ -30,6 +32,7 @@ type PageSearchParams = {
   providerPartId?: string | string[];
   providerUrl?: string | string[];
   q?: string | string[];
+  parts?: string | string[];
   readinessStatus?: string | string[];
   sort?: string | string[];
 };
@@ -90,6 +93,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const page = readPositiveInteger(readSingleParam(resolvedSearchParams?.page));
   const pageSize = readPositiveInteger(readSingleParam(resolvedSearchParams?.pageSize));
   const sort = readSearchSort(readSingleParam(resolvedSearchParams?.sort));
+  const compareParts = parseComparePartIds(readSingleParam(resolvedSearchParams?.parts));
   const filters: PartSearchFilters = {
     approvalStatus,
     cadAvailability,
@@ -119,7 +123,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const resultRange = buildResultRange(pagination, results.length);
   const quickLookupState = buildQuickLookupState(buildLookupValue(query, providerPartId, providerUrl, datasheetUrl), results, pagination);
   const noMatchProviderLookup = buildNoMatchProviderLookup(query, source, buildSearchHref(filters, 1));
-  const catalogResultRows = buildCatalogResultRows(results);
+  const primaryAction = buildCatalogPrimaryAction(quickLookupState, noMatchProviderLookup);
+  const catalogResultRows = buildCatalogResultRows(results, compareParts);
   const activeFilterPills = buildActiveFilterPills({
     approvalStatus,
     cadAvailability,
@@ -133,6 +138,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     providerPartId,
     providerUrl,
     query,
+    pageSize,
     readinessStatus,
     sort
   });
@@ -143,7 +149,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <div className="quick-check-workspace__layout">
           <div className="hero-editorial__inner quick-check-workspace__main">
             <h1>Catalog workbench</h1>
-            <p className="hero-lede">Paste an MPN, scan the matching parts table, or import an exact MPN from configured providers.</p>
+            <p className="hero-lede">Search by part number, scan matches, then open the right part record.</p>
 
             <form className="quick-check-form" action="/catalog" method="get">
               <input name="manufacturerId" type="hidden" value={manufacturerId} />
@@ -155,15 +161,16 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               <input name="approvalStatus" type="hidden" value={approvalStatus} />
               <input name="connectorClass" type="hidden" value={connectorClass} />
               <input name="sort" type="hidden" value={sort} />
+              <input name="pageSize" type="hidden" value={pageSize?.toString() ?? ""} />
               <label className="quick-check-form__field" htmlFor="q">
-                <span>MPN, manufacturer, provider id, or keyword</span>
+                <span>Search by part number</span>
                 <input defaultValue={query} id="q" name="q" placeholder="TPS7A02DBVR, STM32G031K8T6, GRM188R71C104KA01D..." />
               </label>
               <details className="quick-check-form__advanced" open={!!(providerPartId || providerUrl || datasheetUrl)}>
-                <summary className="quick-check-form__advanced-toggle">Provider or datasheet lookup context</summary>
+                <summary className="quick-check-form__advanced-toggle">Advanced supplier and datasheet fields</summary>
                 <div className="quick-check-form__advanced-fields">
                   <label className="quick-check-form__field quick-check-form__field--provider-ref" htmlFor="provider-part-reference">
-                    <span>Provider part reference</span>
+                    <span>Supplier part reference</span>
                     <input defaultValue={providerPartId} id="provider-part-reference" name="providerPartId" placeholder="LCSC code or provider part id" />
                   </label>
                   <label className="quick-check-form__field quick-check-form__field--provider-url" htmlFor="provider-url">
@@ -177,7 +184,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 </div>
               </details>
               <div className="quick-check-form__actions">
-                <button type="submit">Check Part</button>
+                <button type="submit">Check part</button>
                 {query || providerPartId || providerUrl || datasheetUrl ? (
                   <Link className="button-link button-link--quiet quick-check-form__clear" href="/catalog">
                     Clear
@@ -189,16 +196,22 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             <p className="quick-check-hint">
               Try <Link href="/catalog?q=0430250200">0430250200</Link> / <Link href="/catalog?q=STM32F411CEU6">STM32F411CEU6</Link> / <Link href="/catalog?q=TPS7A02DBVR">TPS7A02DBVR</Link>
             </p>
+            {quickLookupState.status !== "idle" ? (
+              <div className="quick-check-form__actions">
+                <Link className="button-link" href={primaryAction.href}>
+                  {primaryAction.label}
+                </Link>
+                <p className="muted-copy">{primaryAction.detail}</p>
+              </div>
+            ) : null}
 
             {warnings.length > 0 ? <p className="mode-warning">{warnings.join(" ")}</p> : null}
-            {source === "seed_fallback" ? (
-              <p className="mode-warning">Local seed mode — not DB-backed catalog data.</p>
-            ) : null}
+            {source === "seed_fallback" ? <p className="mode-warning">Showing local sample data for testing.</p> : null}
 
             <QuickLookupPanel noMatchProviderLookup={noMatchProviderLookup} state={quickLookupState} />
 
             <details className="catalog-import-drawer" id="import-by-mpn">
-              <summary>Import by MPN from configured providers</summary>
+              <summary>Import by part number (advanced)</summary>
               <ImportByMpnPanel />
             </details>
 
@@ -207,8 +220,32 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </section>
 
+      <details className="catalog-getting-started">
+        <summary>First time here? See 3 quick steps</summary>
+        <OperatorChecklist
+          primaryActionHref={primaryAction.href}
+          primaryActionLabel={primaryAction.label}
+          steps={[
+            {
+              detail: "Search for one part number first.",
+              label: "Step 1: Search"
+            },
+            {
+              detail: "Use filters to narrow the list, then pick the right row.",
+              label: "Step 2: Narrow down"
+            },
+            {
+              detail: "Open the full part page to decide what to do next.",
+              label: "Step 3: Open details"
+            }
+          ]}
+          summary="Simple flow for first-time users."
+          title="Catalog first-run checklist"
+        />
+      </details>
+
       <div className="search-workspace">
-        <aside className="filter-rail filter-rail--bar" aria-label="Search filters">
+        <aside className="filter-rail filter-rail--bar" aria-label="Search filters" id="catalog-filters">
           <form action="/catalog" method="get">
             <div className="filter-rail__intro">
               <p className="app-kicker">Filters</p>
@@ -251,69 +288,82 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 ))}
               </select>
             </label>
-            <label>
-              Lifecycle
-              <select defaultValue={lifecycleStatus} name="lifecycleStatus">
-                <option value="">All lifecycle states</option>
-                {facets.lifecycleStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {formatFacetOptionLabel(formatLifecycleStatus(status), facets.counts?.lifecycleStatuses[status])}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              CAD files for export
-              <select defaultValue={cadAvailability} name="cad">
-                <option value="any">{formatFacetOptionLabel("Any", facets.counts?.cadAvailability.any)}</option>
-                <option value="available">{formatFacetOptionLabel("Has verified file-backed CAD", facets.counts?.cadAvailability.available)}</option>
-                <option value="unavailable">{formatFacetOptionLabel("Missing verified CAD", facets.counts?.cadAvailability.unavailable)}</option>
-              </select>
-            </label>
-            <label>
-              Readiness
-              <select defaultValue={readinessStatus} name="readinessStatus">
-                <option value="">All readiness states</option>
-                {facets.readinessStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {formatFacetOptionLabel(formatReadinessStatus(status), facets.counts?.readinessStatuses[status])}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Approval
-              <select defaultValue={approvalStatus} name="approvalStatus">
-                <option value="">All approval states</option>
-                {facets.approvalStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {formatFacetOptionLabel(formatApprovalStatus(status), facets.counts?.approvalStatuses[status])}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {facets.connectorClasses.length > 0 ? (
-              <label>
-                Connector class
-                <select defaultValue={connectorClass} name="connectorClass">
-                  <option value="">All connector classes</option>
-                  {facets.connectorClasses.map((status) => (
-                    <option key={status} value={status}>
-                      {formatFacetOptionLabel(formatConnectorClass(status), facets.counts?.connectorClasses[status])}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <label>
-              Sort
-              <select defaultValue={sort} name="sort">
-                <option value="mpn_asc">MPN A-Z</option>
-                <option value="mpn_desc">MPN Z-A</option>
-                <option value="updated_desc">Recently updated</option>
-                <option value="trust_desc">Trust score</option>
-              </select>
-            </label>
+            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, readinessStatus, sort })}>
+              <summary>More filters</summary>
+              <div className="filter-rail__more-fields">
+                <label>
+                  Lifecycle
+                  <select defaultValue={lifecycleStatus} name="lifecycleStatus">
+                    <option value="">All lifecycle states</option>
+                    {facets.lifecycleStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {formatFacetOptionLabel(formatLifecycleStatus(status), facets.counts?.lifecycleStatuses[status])}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  CAD files for export
+                  <select defaultValue={cadAvailability} name="cad">
+                    <option value="any">{formatFacetOptionLabel("Any", facets.counts?.cadAvailability.any)}</option>
+                    <option value="available">{formatFacetOptionLabel("Has verified file-backed CAD", facets.counts?.cadAvailability.available)}</option>
+                    <option value="unavailable">{formatFacetOptionLabel("Missing verified CAD", facets.counts?.cadAvailability.unavailable)}</option>
+                  </select>
+                </label>
+                <label>
+                  Readiness
+                  <select defaultValue={readinessStatus} name="readinessStatus">
+                    <option value="">All readiness states</option>
+                    {facets.readinessStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {formatFacetOptionLabel(formatReadinessStatus(status), facets.counts?.readinessStatuses[status])}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Approval
+                  <select defaultValue={approvalStatus} name="approvalStatus">
+                    <option value="">All approval states</option>
+                    {facets.approvalStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {formatFacetOptionLabel(formatApprovalStatus(status), facets.counts?.approvalStatuses[status])}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {facets.connectorClasses.length > 0 ? (
+                  <label>
+                    Connector class
+                    <select defaultValue={connectorClass} name="connectorClass">
+                      <option value="">All connector classes</option>
+                      {facets.connectorClasses.map((status) => (
+                        <option key={status} value={status}>
+                          {formatFacetOptionLabel(formatConnectorClass(status), facets.counts?.connectorClasses[status])}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <label>
+                  Sort
+                  <select defaultValue={sort} name="sort">
+                    <option value="mpn_asc">MPN A-Z</option>
+                    <option value="mpn_desc">MPN Z-A</option>
+                    <option value="updated_desc">Recently updated</option>
+                    <option value="trust_desc">Trust score</option>
+                  </select>
+                </label>
+                <label>
+                  Rows per page
+                  <select defaultValue={(pageSize ?? 20).toString()} name="pageSize">
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+              </div>
+            </details>
             <div className="filter-rail__actions">
               <button type="submit">Apply filters</button>
               {activeFilterPills.length > 0 ? (
@@ -333,7 +383,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               <p className="results-panel__range">
                 Rows {resultRange.start}-{resultRange.end} / page {pagination.page} of {pagination.totalPages}
               </p>
-              <p className="results-panel__lede">Each row summarizes identity, top blocker, asset truth, and export gate before you open the full readiness record.</p>
+              <p className="results-panel__lede">Each row shows the part, what is missing, and the next step. Open a row to see the full record.</p>
             </div>
             <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
           </div>
@@ -376,47 +426,44 @@ function HomepageWorkspaceRail({
   return (
     <aside aria-label="Homepage workspace context" className="quick-check-rail">
       <section className="quick-check-rail__card">
-        <p className="app-kicker">Catalog snapshot</p>
-        <div className="quick-check-rail__badges">
-          <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
-          <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
-        </div>
-        <div className="quick-check-rail__metrics">
-          <div>
-            <span>Matches</span>
-            <strong>{catalogStats.totalMatches}</strong>
-          </div>
-          <div>
-            <span>Verified CAD</span>
-            <strong>{catalogStats.verifiedCadRecords}</strong>
-          </div>
-          <div>
-            <span>Connectors</span>
-            <strong>{catalogStats.connectorRecords}</strong>
-          </div>
-          <div>
-            <span>Generation workflows</span>
-            <strong>{catalogStats.generationWorkflowCount}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="quick-check-rail__card">
-        <p className="app-kicker">Catalog health</p>
-        <strong>{providerSummary.label}</strong>
-        <p>{providerSummary.detail}</p>
-      </section>
-
-      <section className="quick-check-rail__card">
-        <p className="app-kicker">Engineer workflow</p>
-        <strong>Use quick check for triage, detail for decisions, and admin for follow-up.</strong>
-        <p>Export remains gated by verified file-backed CAD, and connector ambiguity stays visible instead of getting polished away.</p>
+        <p className="app-kicker">How to use this page</p>
+        <strong>Search a part, open it, then handle reviews in admin.</strong>
+        <p>Exports only appear when verified CAD files exist. Mismatches stay visible so nothing slips through.</p>
         <div className="quick-check-rail__links">
           <Link href="/catalog?approvalStatus=pending_review">Pending approval</Link>
           <Link href="/catalog?cad=unavailable">Missing CAD</Link>
           <Link href="/admin">Open admin queue</Link>
         </div>
       </section>
+
+      <details className="quick-check-rail__card quick-check-rail__details">
+        <summary>
+          <span className="quick-check-rail__details-summary">
+            <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
+            <span className="quick-check-rail__details-meta">{catalogStats.totalMatches} matches</span>
+          </span>
+        </summary>
+        <div className="quick-check-rail__details-body">
+          <div className="quick-check-rail__badges">
+            <StatusBadge label={providerSummary.label} tone={providerSummary.tone} />
+          </div>
+          <div className="quick-check-rail__metrics">
+            <div>
+              <span>Matches</span>
+              <strong>{catalogStats.totalMatches}</strong>
+            </div>
+            <div>
+              <span>Verified CAD</span>
+              <strong>{catalogStats.verifiedCadRecords}</strong>
+            </div>
+            <div>
+              <span>Connectors</span>
+              <strong>{catalogStats.connectorRecords}</strong>
+            </div>
+          </div>
+          <p className="muted-copy">{providerSummary.detail}</p>
+        </div>
+      </details>
     </aside>
   );
 }
@@ -428,8 +475,8 @@ function QuickLookupPanel({ noMatchProviderLookup, state }: { noMatchProviderLoo
   if (state.status === "idle") {
     return (
       <div className="quick-check-empty quick-check-empty--idle" role="status">
-        <strong>Search the readiness record</strong>
-        <p>Enter a part number to see confirmed identity, visible blockers, and whether export still lacks file-backed assets.</p>
+        <strong>Find a part to check</strong>
+        <p>Type a part number above. You will see what we know, what is missing, and what to do next.</p>
       </div>
     );
   }
@@ -453,7 +500,7 @@ function NoMatchProviderLookup({ lookup, providerLookup }: { lookup: string; pro
     <div className="quick-check-empty quick-check-empty--acquisition" role="status">
       <strong>Part not found</strong>
       <p>
-        No catalog records matched <span className="ui-mono">{lookup}</span>. The UI will not create a readiness answer without backend data.
+        Nothing matched <span className="ui-mono">{lookup}</span> yet. We will not invent a record. Try the import option below or refine the search.
       </p>
       {providerLookup.status === "available" ? (
         <ImportByMpnPanel
@@ -476,11 +523,11 @@ function NoMatchProviderLookup({ lookup, providerLookup }: { lookup: string; pro
  */
 function QuickAmbiguousResult({ query, records, totalRecords }: { query: string; records: PartSearchRecord[]; totalRecords: number }) {
   return (
-    <section aria-label={`Ambiguous readiness matches for ${query}`} className="quick-check-empty quick-check-empty--ambiguous" role="status">
+    <section aria-label={`Multiple matches for ${query}`} className="quick-check-empty quick-check-empty--ambiguous" role="status">
       <div>
-        <strong>Ambiguous match</strong>
+        <strong>Multiple matches</strong>
         <p>
-          {totalRecords} catalog records matched <span className="ui-mono">{query}</span>. Open the correct part before trusting readiness or export state.
+          {totalRecords} catalog records matched <span className="ui-mono">{query}</span>. Pick the right one to see its full record.
         </p>
       </div>
       <div className="quick-candidate-list">
@@ -1037,26 +1084,30 @@ function HomepageSetupState({ catalogState }: { catalogState: Extract<HomepageCa
         <div className="hero-editorial__inner">
           <p className="app-kicker">EE Library</p>
           <h1>Quick part readiness check</h1>
-          <p className="hero-lede">Backend unavailable. Connect the catalog database or enable explicit local seed mode to search. The UI will not invent DB-backed results.</p>
+          <p className="hero-lede">Search is paused right now. Start your local data services, then come back here.</p>
           <div className="catalog-strip" role="status">
             <span className="catalog-strip__label">Status</span>
-            <StatusBadge label={catalogState.code} tone="review" />
+            <StatusBadge label="Search paused" tone="review" />
             <StatusBadge label={`Database ${catalogState.health?.dependencies.database ?? "unknown"}`} tone={catalogState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
-          <p className="mode-warning">{catalogState.message}</p>
           <form className="search-bar" aria-disabled="true">
-            <label htmlFor="q-disabled">Search by MPN or keyword</label>
+            <label htmlFor="q-disabled">Search by part number or keyword</label>
             <div className="search-bar__controls">
-              <input disabled id="q-disabled" name="q" placeholder="Available after catalog is connected" />
+              <input disabled id="q-disabled" name="q" placeholder="Search will be available after setup" />
               <button disabled type="button">
                 Search catalog
               </button>
             </div>
           </form>
-          <p className="search-disabled-note">Search stays visible so the layout matches a connected catalog. It remains disabled until data is reachable.</p>
-          <p className="mode-warning">{importUiCopy.catalogAcquisitionUnavailableSetup}</p>
+          <p className="search-disabled-note">You can still browse this page while setup finishes.</p>
+          <details className="import-guide">
+            <summary>Show technical details</summary>
+            <p className="mode-warning">{catalogState.message}</p>
+            <p className="mode-warning">{importUiCopy.catalogAcquisitionUnavailableSetup}</p>
+            <p className="mode-warning">Status code: {catalogState.code}</p>
+          </details>
           <details className="import-guide" id="import-by-mpn">
-            <summary>How to import a part by MPN (worker)</summary>
+            <summary>Import commands (advanced)</summary>
             <pre>{`npm run ingest -w @ee-library/worker -- jlcparts <MPN_OR_LCSC_ID>
 npm run imports:providers`}</pre>
           </details>
@@ -1064,22 +1115,28 @@ npm run imports:providers`}</pre>
       </section>
 
       <div className="setup-panel">
-        <h2>Connect Postgres or enable local seed mode</h2>
-        <p>No catalog records are shown here because EE Library does not silently substitute production data.</p>
+        <h2>Finish setup to search parts</h2>
+        <p>Use one of these paths, then refresh this page.</p>
         <div className="setup-steps">
           <div>
-            <strong>Canonical database</strong>
-            <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
-            <code>npm run ingest:local</code>
+            <strong>Quick start</strong>
+            <code>npm run setup:dev</code>
             <code>npm run dev</code>
+            <span>This prepares local services and starts the app with real data access.</span>
           </div>
           <div>
-            <strong>Explicit local seed</strong>
-            <code>$env:EE_LIBRARY_ALLOW_SEED_FALLBACK=&quot;true&quot;</code>
-            <code>npm run dev</code>
-            <span>Seed mode is local examples only, not Postgres-backed truth.</span>
+            <strong>Need help?</strong>
+            <span>Open <Link href="/system">System checks</Link> to see what is missing, then return to catalog.</span>
           </div>
         </div>
+        <details className="import-guide">
+          <summary>Advanced setup options</summary>
+          <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
+          <code>npm run ingest:local</code>
+          <code>npm run dev</code>
+          <code>$env:EE_LIBRARY_ALLOW_SEED_FALLBACK=&quot;true&quot;</code>
+          <p className="mode-warning">Sample mode is for local testing only.</p>
+        </details>
       </div>
     </main>
   );
@@ -1098,16 +1155,16 @@ function buildCatalogStats(records: PartSearchRecord[], totalMatches: number) {
 function buildProviderSummary(records: PartSearchRecord[], source: CatalogDataSource, health: ApiHealth | null): { detail: string; label: string; tone: BadgeTone } {
   if (source === "seed_fallback") {
     return {
-      detail: "Deterministic seed examples. Provider import health is not representative of production.",
-      label: "Local seed",
+      detail: "Local sample data. Import activity and background status here may differ from live data.",
+      label: "Sample data",
       tone: "review"
     };
   }
 
   if (!health) {
     return {
-      detail: "Catalog rows loaded, but the health endpoint was not reachable.",
-      label: "Health unknown",
+      detail: "Parts loaded, but live system checks are unavailable right now.",
+      label: "Status unknown",
       tone: "review"
     };
   }
@@ -1118,14 +1175,14 @@ function buildProviderSummary(records: PartSearchRecord[], source: CatalogDataSo
   const latestImport = sources.map((sourceRecord) => sourceRecord.sourceLastImportedAt).filter((value): value is string => Boolean(value)).sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
 
   return {
-    detail: `${providerCount} provider identities on this page / ${failedImports} failed imports / ${latestImport ? `last import ${formatDateTime(latestImport)}` : "no import timestamps on page"}`,
-    label: health.dependencies.database === "connected" ? "DB-backed" : `DB ${health.dependencies.database}`,
+    detail: `${providerCount} supplier sources on this page / ${failedImports} import issues / ${latestImport ? `last import ${formatDateTime(latestImport)}` : "no recent import time on this page"}`,
+    label: health.dependencies.database === "connected" ? "Live data" : "Data check needed",
     tone: health.dependencies.database === "connected" && failedImports === 0 ? "verified" : "review"
   };
 }
 
 function catalogModeLabel(source: CatalogDataSource): string {
-  return source === "seed_fallback" ? "Local seed mode" : "DB-backed catalog";
+  return source === "seed_fallback" ? "Sample data" : "Live catalog";
 }
 
 function catalogModeTone(source: CatalogDataSource): BadgeTone {
@@ -1324,7 +1381,7 @@ function buildSearchHref(filters: PartSearchFilters, page: number): string {
 /**
  * Builds presentation rows for the list/table catalog results view without leaking backend shapes.
  */
-function buildCatalogResultRows(records: PartSearchRecord[]) {
+function buildCatalogResultRows(records: PartSearchRecord[], compareParts: string[]) {
   return records.map((record) => {
     const exportReadiness = getSearchExportReadiness(record);
     const assetTruth = getAssetTruthSummary(record);
@@ -1335,6 +1392,10 @@ function buildCatalogResultRows(records: PartSearchRecord[]) {
     const topBlocker = record.readinessSummary.blockerSummary[0] ?? record.readinessSummary.recommendedActions[0] ?? "No immediate blocker derived from this record.";
     const riskLabel = record.riskFlags[0]?.label ? "Risk flag" : "Top blocker";
 
+    const compareAddHref = buildCompareUrl(
+      [...new Set([...compareParts, record.part.id])].slice(0, 4)
+    );
+
     return {
       approvalDetail: record.approval.detail,
       approvalLabel: record.approval.summary,
@@ -1343,6 +1404,7 @@ function buildCatalogResultRows(records: PartSearchRecord[]) {
       assetTruthLabel: assetTruth.label,
       cadExportLabel: exportReadiness.label,
       cadExportTone: exportReadiness.tone,
+      compareAddHref,
       category: record.part.category,
       description: record.part.description,
       connectorSignalDetail: connectorHint?.detail ?? recoveryStatus.detail,
@@ -1369,10 +1431,18 @@ function buildCatalogResultRows(records: PartSearchRecord[]) {
           : record.approval.summary,
       riskLabel,
       topBlocker,
+      trustLineageBadges: buildCatalogTrustLineageBadges(record),
       trustScore: record.part.trustScore,
       trustTone: scoreTone(record.part.trustScore)
     };
   });
+}
+
+function parseComparePartIds(parts: string | undefined): string[] {
+  if (!parts || !parts.trim()) {
+    return [];
+  }
+  return [...new Set(parts.split(",").map((segment) => segment.trim()).filter(Boolean))].slice(0, 4);
 }
 
 /**
@@ -1425,6 +1495,31 @@ function buildCatalogNextAction(record: PartSearchRecord): { detail: string; lab
 }
 
 /**
+ * Returns true when any advanced filter or sort/page-size override is active.
+ *
+ * Used to keep the "More filters" disclosure open by default whenever the user
+ * already has an advanced filter applied so it stays visible on reload.
+ */
+function hasAdvancedFilters(input: {
+  approvalStatus: PartApprovalStatus | undefined;
+  cadAvailability: CadAvailabilityFilter;
+  connectorClass: ConnectorClass | undefined;
+  lifecycleStatus: LifecycleStatus | undefined;
+  pageSize: number | undefined;
+  readinessStatus: PartReadinessStatus | undefined;
+  sort: PartSearchSort;
+}): boolean {
+  if (input.approvalStatus !== undefined) return true;
+  if (input.cadAvailability !== "any") return true;
+  if (input.connectorClass !== undefined) return true;
+  if (input.lifecycleStatus !== undefined) return true;
+  if (input.readinessStatus !== undefined) return true;
+  if (input.sort !== "mpn_asc") return true;
+  if (input.pageSize !== undefined && input.pageSize !== 20) return true;
+  return false;
+}
+
+/**
  * Builds concise active-filter labels so engineers can see the current query context at a glance.
  */
 function buildActiveFilterPills({
@@ -1440,6 +1535,7 @@ function buildActiveFilterPills({
   providerPartId,
   providerUrl,
   query,
+  pageSize,
   readinessStatus,
   sort
 }: {
@@ -1455,6 +1551,7 @@ function buildActiveFilterPills({
   providerPartId: string | undefined;
   providerUrl: string | undefined;
   query: string | undefined;
+  pageSize: number | undefined;
   readinessStatus: PartReadinessStatus | undefined;
   sort: PartSearchSort;
 }) {
@@ -1518,6 +1615,10 @@ function buildActiveFilterPills({
     pills.push(`Sort: ${formatSortLabel(sort)}`);
   }
 
+  if (typeof pageSize === "number" && pageSize !== 20) {
+    pills.push(`Rows/page: ${pageSize}`);
+  }
+
   return pills;
 }
 
@@ -1544,4 +1645,45 @@ function appendHrefParam(params: URLSearchParams, key: string, value: string | u
  */
 function buildLookupValue(query: string | undefined, providerPartId: string | undefined, providerUrl: string | undefined, datasheetUrl: string | undefined): string | undefined {
   return query || providerPartId || providerUrl || datasheetUrl;
+}
+
+function buildCatalogPrimaryAction(state: QuickLookupState, providerLookup: NoMatchProviderLookupState): { detail: string; href: string; label: string } {
+  if (state.status === "matched") {
+    return {
+      detail: "Found exactly one match.",
+      href: `/parts/${state.record.part.id}`,
+      label: "Open full record"
+    };
+  }
+
+  if (state.status === "ambiguous") {
+    const firstRecord = state.records[0];
+    return {
+      detail: "More than one match. Open one and confirm it's the right part.",
+      href: firstRecord ? `/parts/${firstRecord.part.id}` : "#catalog-results",
+      label: "Review ambiguous matches"
+    };
+  }
+
+  if (state.status === "no_match" && providerLookup.status === "available") {
+    return {
+      detail: "No match yet. Import this exact part number.",
+      href: "#import-by-mpn",
+      label: "Open import panel"
+    };
+  }
+
+  if (state.status === "no_match") {
+    return {
+      detail: "No match yet. Try a more specific search.",
+      href: "#catalog-filters",
+      label: "Refine filters"
+    };
+  }
+
+  return {
+    detail: "Start by typing a part number.",
+    href: "#q",
+    label: "Focus search"
+  };
 }

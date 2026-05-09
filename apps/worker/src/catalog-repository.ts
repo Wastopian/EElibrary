@@ -1045,6 +1045,7 @@ async function persistSourceRecord(client: PoolClient, sourceRecord: SourceRecor
  * Upserts one asset registry row.
  */
 async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
+  const previewStatus = normalizePreviewStatusForPersistedAsset(asset);
   await client.query(
     `
       INSERT INTO assets (
@@ -1110,13 +1111,34 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
       asset.generationMethod,
       asset.generationSourceAssetId,
       asset.validationStatus,
-      asset.previewStatus,
+      previewStatus,
       asset.assetState,
       asset.sourceUrl,
       asset.sourceRecordId,
       asset.lastUpdatedAt
     ]
   );
+}
+
+/**
+ * Keeps preview readiness honest at the worker write boundary:
+ * `ready` is persisted only when an embeddable file artifact exists in local storage.
+ */
+function normalizePreviewStatusForPersistedAsset(asset: Asset): Asset["previewStatus"] {
+  if (asset.previewStatus !== "ready") {
+    return asset.previewStatus;
+  }
+
+  const fileEmbeddable = asset.fileFormat === "pdf"
+    || asset.fileFormat === "png"
+    || asset.fileFormat === "jpg"
+    || asset.fileFormat === "jpeg"
+    || asset.fileFormat === "webp";
+  const hasStoredFile = (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated")
+    && typeof asset.storageKey === "string"
+    && asset.storageKey.length > 0;
+
+  return fileEmbeddable && hasStoredFile ? "ready" : "not_available";
 }
 
 /**

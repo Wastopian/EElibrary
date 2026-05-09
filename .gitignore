@@ -19,3 +19,6 @@ Thumbs.db
 
 # Claude Code worktree metadata and per-session checkouts.
 .claude/
+
+# Docker Desktop "Dev Environments" metadata (auto-generated, machine-local).
+compose-dev.yaml

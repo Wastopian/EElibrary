@@ -285,7 +285,7 @@ export function ImportByMpnPanel({
       <p className="import-by-mpn-panel__intro muted-copy">
         {isCompact
           ? `${importUiCopy.catalogAcquisitionLead} ${importUiCopy.catalogAcquisitionNote}`
-          : "Import one exact MPN into your Postgres-backed catalog from a configured provider. This fetches provider metadata; it does not verify CAD files or export bundles."}
+          : "Import one exact part number from a configured supplier. This fetches supplier metadata; it does not verify CAD files or export bundles."}
       </p>
 
       <form className="import-by-mpn-panel__form" onSubmit={onSubmit}>

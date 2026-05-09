@@ -120,8 +120,8 @@ export default async function CircuitBlocksPage() {
             </div>
             <div>
               <span>Evidence</span>
-              <strong>Provenance stays reviewable.</strong>
-              <p>Links and notes support future review without changing validation or approval state.</p>
+              <strong>Source records stay reviewable.</strong>
+              <p>Links and notes support future review without changing approval status.</p>
             </div>
           </div>
         </SectionPanel>

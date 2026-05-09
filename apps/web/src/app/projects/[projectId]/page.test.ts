@@ -53,7 +53,20 @@ test("project detail renders persisted project memory sections", async () => {
     const html = await renderProjectDetailPage("project-alpha");
 
     assert.match(html, /Motor controller alpha/u);
+    assert.match(html, /Parts in this project/u);
+    assert.match(html, /Upload parts list/u);
+    assert.match(html, /Advanced project tools/u);
     assert.match(html, /Project summary/u);
+    assert.match(html, /Project first-run checklist/u);
+    assert.match(html, /Actionable next steps/u);
+    assert.match(html, /Upload next BOM revision/u);
+    assert.match(html, /Triage BOM health findings/u);
+    assert.match(html, /Next project workspaces/u);
+    assert.match(html, /Compare used parts/u);
+    assert.match(html, /Search where-used/u);
+    assert.match(html, /Attach project evidence/u);
+    assert.match(html, /Use circuit blocks/u);
+    assert.match(html, /Install\/export files/u);
     assert.match(html, /Edit project memory/u);
     assert.match(html, /Save project/u);
     assert.match(html, /Save revision/u);
@@ -78,7 +91,7 @@ test("project detail renders persisted project memory sections", async () => {
     assert.match(html, /Evidence attachments/u);
     assert.match(html, /Design review link/u);
     assert.match(html, /Evidence is provenance/u);
-    assert.match(html, /Planned workflows/u);
+    assert.match(html, /Planned next/u);
     assert.doesNotMatch(html, /BOM health dashboard is planned/u);
   } finally {
     restoreFetch();
@@ -146,6 +159,10 @@ test("project detail renders empty child sections honestly", async () => {
     const html = await renderProjectDetailPage("project-alpha");
 
     assert.match(html, /No revisions yet/u);
+    assert.match(html, /Project first-run checklist/u);
+    assert.match(html, /Actionable next steps/u);
+    assert.match(html, /Upload first BOM/u);
+    assert.match(html, /Match imported BOM rows/u);
     assert.match(html, /No BOM imports yet/u);
     assert.match(html, /Use the CSV intake panel above/u);
     assert.match(html, /No confirmed part usage yet/u);

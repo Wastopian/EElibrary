@@ -4,9 +4,8 @@
 
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { DM_Mono, DM_Sans, Syne } from "next/font/google";
-import { AppNavigation } from "../components/AppNavigation";
+import { RootLayoutShell } from "./RootLayoutShell";
 import "./globals.css";
 
 const syne = Syne({ subsets: ["latin"], variable: "--font-syne", weight: ["400", "600", "700", "800"] });
@@ -20,38 +19,8 @@ export const metadata: Metadata = {
 };
 
 /**
- * Renders the desktop-first application shell around every route.
+ * Renders the desktop-first application shell around every route with global CSS loaded.
  */
 export default function RootLayout({ children }: { children: ReactNode }) {
-  return (
-    <html className={`${syne.variable} ${dmSans.variable} ${dmMono.variable}`} lang="en">
-      <body>
-        <a className="skip-link" href="#page-content">
-          Skip to main content
-        </a>
-        <div className="app-shell">
-          <aside aria-label="Primary workspace shell" className="app-sidebar">
-            <Link className="app-sidebar__brand-link" href="/">
-              <div className="app-sidebar__brand">
-                <p className="app-kicker">EE Library</p>
-                <p className="app-sidebar__title">Engineering memory</p>
-                <p className="app-sidebar__subtitle">Projects - parts - evidence - reuse.</p>
-              </div>
-            </Link>
-            <AppNavigation />
-            <section aria-label="Trust boundary guidance" className="app-sidebar__note">
-              <span>Trust boundary</span>
-              <strong>No export claim without verified files.</strong>
-              <p>Generated, approved, and export-ready remain separate states.</p>
-            </section>
-          </aside>
-          <div className="app-main">
-            <div className="app-main__content" id="page-content">
-              {children}
-            </div>
-          </div>
-        </div>
-      </body>
-    </html>
-  );
+  return <RootLayoutShell fontClassName={`${syne.variable} ${dmSans.variable} ${dmMono.variable}`}>{children}</RootLayoutShell>;
 }

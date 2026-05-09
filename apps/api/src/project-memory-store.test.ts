@@ -7,15 +7,20 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import {
+  applyApprovalBatchInDatabase,
+  createExportBundleInDatabase,
+  resolveExportBundleFileAvailability,
   createBomImportInDatabase,
   createCircuitBlockInDatabase,
   createCircuitBlockPartInDatabase,
   createEvidenceAttachmentInDatabase,
   createProjectInDatabase,
   matchBomImportRowsInDatabase,
+  readApprovalBatchCandidatesFromDatabase,
   readCircuitBlockDetailFromDatabase,
   readCircuitBlockFollowUpsFromDatabase,
   readCircuitBlocksFromDatabase,
+  readConnectorSetCatalogFromDatabase,
   readEvidenceAttachmentsFromDatabase,
   createPartSubstitutionInDatabase,
   instantiateCircuitBlockIntoProjectBomInDatabase,
@@ -1488,6 +1493,342 @@ test("instantiateCircuitBlockIntoProjectBomInDatabase creates a synthetic BOM im
 });
 
 /**
+ * Verifies the connector-set catalog returns groups, mate pairs, and project usage counts without inventing schema.
+ */
+test("readConnectorSetCatalogFromDatabase returns connector groups with mate pairs and trust boundary copy", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await seedConnectorCatalogRowsViaPool(pool);
+
+    const result = await readConnectorSetCatalogFromDatabase();
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+
+    const response = result.response;
+    assert.equal(response.state, "available");
+    assert.match(response.boundary, /does not approve/i);
+    assert.equal(response.connectorClassFilter, null);
+    assert.equal(response.totalConnectorCount, 4);
+    assert.equal(response.totalMatePairCount, 2);
+
+    const connectorGroup = response.groups.find((group) => group.connectorClass === "connector");
+    assert.ok(connectorGroup, "expected a 'connector' group");
+    const housing = connectorGroup!.entries.find((entry) => entry.partId === "part-conn-housing");
+    assert.ok(housing, "expected the housing part in the connector group");
+    assert.equal(housing!.matePairs.length, 2);
+    const bestMate = housing!.matePairs.find((pair) => pair.relationshipType === "best_mate");
+    const altMate = housing!.matePairs.find((pair) => pair.relationshipType === "alternate_mate");
+    assert.ok(bestMate);
+    assert.equal(bestMate!.matePartId, "part-conn-mate");
+    assert.equal(bestMate!.confidenceScore, 0.95);
+    assert.ok(altMate);
+    assert.equal(altMate!.matePartId, "part-conn-alt");
+
+    const toolingGroup = response.groups.find((group) => group.connectorClass === "tooling");
+    assert.ok(toolingGroup, "expected a 'tooling' group for the crimp tool");
+    assert.equal(toolingGroup!.entries.length, 1);
+
+    const filtered = await readConnectorSetCatalogFromDatabase({ connectorClass: "connector" });
+    if (filtered.status !== "available") throw new Error("filtered call should succeed");
+    assert.equal(filtered.response.totalConnectorCount, 3);
+    assert.equal(filtered.response.connectorClassFilter, "connector");
+
+    const queryResult = await readConnectorSetCatalogFromDatabase({ query: "BM02B" });
+    if (queryResult.status !== "available") throw new Error("query call should succeed");
+    assert.equal(queryResult.response.totalConnectorCount, 1);
+    assert.equal(queryResult.response.query, "BM02B");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the approval-batch candidates query returns matched-usage parts whose approval is missing
+ * and excludes parts that are already approved.
+ */
+test("readApprovalBatchCandidatesFromDatabase returns matched parts with approval gaps for one project", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // Add a second matched line to project-alpha that points at a different (un-approved) part.
+    await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at) VALUES ('line-alpha-3', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 3, '{"R2"}', 1, 'RC0603FR-0710KL', 'Yageo', '10K resistor', '{"row":3}'::jsonb, 'part-memory-resistor', 'matched', 1, '2026-04-30T00:05:30.000Z', '2026-04-30T00:05:30.000Z')`);
+
+    const result = await readApprovalBatchCandidatesFromDatabase("project-alpha");
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+
+    const response = result.response;
+    assert.equal(response.projectId, "project-alpha");
+    assert.equal(response.state, "available");
+    assert.match(response.boundary, /Approval state does not validate/i);
+
+    // The LDO row is matched but already approved, so it must be excluded.
+    assert.ok(
+      response.candidates.every((candidate) => candidate.partId !== "part-memory-ldo"),
+      "approved part should be excluded from the candidate queue"
+    );
+
+    // The resistor row is matched and not approved, so it should be present.
+    const resistor = response.candidates.find((candidate) => candidate.partId === "part-memory-resistor");
+    assert.ok(resistor, "expected the resistor as a candidate row");
+    assert.equal(resistor!.mpn, "RC0603FR-0710KL");
+    assert.equal(resistor!.bomLineCount, 1);
+    assert.deepEqual(resistor!.designators, ["R2"]);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a bulk approve action persists approved status only and records project-context evidence,
+ * without changing readiness, lifecycle, or assets.
+ */
+test("applyApprovalBatchInDatabase applies bulk approve and records project context without altering readiness or assets", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const result = await applyApprovalBatchInDatabase(
+      "project-alpha",
+      { action: "approve", notes: "OK for ALPHA design", partIds: ["part-memory-resistor", "part-memory-ldo", "part-missing"] },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "applied");
+    if (result.status !== "applied") return;
+
+    const response = result.response;
+    assert.equal(response.action, "approve");
+    assert.equal(response.appliedCount, 1);
+    assert.equal(response.skippedCount, 1);
+    assert.equal(response.notFoundCount, 1);
+    assert.match(response.boundary, /Bulk approval records project context/i);
+
+    const resistorOutcome = response.outcomes.find((outcome) => outcome.partId === "part-memory-resistor");
+    assert.ok(resistorOutcome);
+    assert.equal(resistorOutcome!.status, "applied");
+    assert.equal(resistorOutcome!.newApprovalStatus, "approved");
+
+    const ldoOutcome = response.outcomes.find((outcome) => outcome.partId === "part-memory-ldo");
+    assert.ok(ldoOutcome);
+    assert.equal(ldoOutcome!.status, "skipped_already_approved");
+
+    const missingOutcome = response.outcomes.find((outcome) => outcome.partId === "part-missing");
+    assert.ok(missingOutcome);
+    assert.equal(missingOutcome!.status, "not_found");
+
+    const approvalRow = await pool.query<{ approval_status: string; summary: string; evidence: unknown }>(
+      "SELECT approval_status, summary, evidence FROM part_approvals WHERE part_id = $1",
+      ["part-memory-resistor"]
+    );
+    assert.equal(approvalRow.rows[0]?.approval_status, "approved");
+    assert.match(String(approvalRow.rows[0]?.summary), /ALPHA/u);
+
+    // Readiness rows should be untouched.
+    const readinessRow = await pool.query<{ readiness_status: string }>(
+      "SELECT readiness_status FROM part_readiness_summaries WHERE part_id = $1",
+      ["part-memory-ldo"]
+    );
+    assert.equal(readinessRow.rows[0]?.readiness_status, "needs_attention");
+
+    // Assets should be untouched.
+    const assetCount = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM assets WHERE part_id = $1 AND export_status = 'verified_for_export'",
+      ["part-memory-ldo"]
+    );
+    assert.equal(assetCount.rows[0]?.count, "0");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies validation rejects invalid input before any database work runs.
+ */
+test("applyApprovalBatchInDatabase rejects empty partIds and unsupported actions", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const empty = await applyApprovalBatchInDatabase("project-alpha", { action: "approve", partIds: [] }, "test-admin");
+    assert.equal(empty.status, "invalid");
+    if (empty.status === "invalid") {
+      assert.equal(empty.code, "PART_IDS_REQUIRED");
+    }
+
+    const badAction = await applyApprovalBatchInDatabase("project-alpha", { action: "weird_action" as any, partIds: ["part-memory-resistor"] }, "test-admin");
+    assert.equal(badAction.status, "invalid");
+    if (badAction.status === "invalid") {
+      assert.equal(badAction.code, "INVALID_ACTION");
+    }
+
+    const missingProject = await applyApprovalBatchInDatabase("project-not-here", { action: "approve", partIds: ["part-memory-resistor"] }, "test-admin");
+    assert.equal(missingProject.status, "not_found");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies bundle file availability stays honest across the three states the UI cares about.
+ *
+ * - `null` storage_key always reports `manifest_only`, regardless of storage backend.
+ * - Storage clients that confirm the file is present yield `available`.
+ * - Storage clients that report the file is gone yield `file_missing`, so the UI can
+ *   warn the engineer instead of advertising a broken Download link.
+ */
+test("resolveExportBundleFileAvailability distinguishes manifest-only, available, and file-missing", async () => {
+  const presentClient: FileStorageClient = {
+    backend: "local",
+    async exists() { return true; },
+    async getDownloadUrl() { return "http://storage.test/present"; },
+    async read() { return Buffer.from(""); },
+    async write() { /* not used */ }
+  };
+
+  const missingClient: FileStorageClient = {
+    backend: "local",
+    async exists() { return false; },
+    async getDownloadUrl() { return "http://storage.test/missing"; },
+    async read() { return Buffer.from(""); },
+    async write() { /* not used */ }
+  };
+
+  const throwingClient: FileStorageClient = {
+    backend: "local",
+    async exists() { throw new Error("storage unreachable"); },
+    async getDownloadUrl() { return null; },
+    async read() { return Buffer.from(""); },
+    async write() { /* not used */ }
+  };
+
+  assert.equal(await resolveExportBundleFileAvailability(null, presentClient), "manifest_only");
+  assert.equal(await resolveExportBundleFileAvailability("bundles/x.zip", undefined), "manifest_only");
+  assert.equal(await resolveExportBundleFileAvailability("bundles/x.zip", presentClient), "available");
+  assert.equal(await resolveExportBundleFileAvailability("bundles/x.zip", missingClient), "file_missing");
+  assert.equal(await resolveExportBundleFileAvailability("bundles/x.zip", throwingClient), "file_missing");
+});
+
+test("createExportBundleInDatabase writes archive content when storage is available", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+  const writes: Array<{ key: string; content: string }> = [];
+  const storage: FileStorageClient = {
+    backend: "local",
+    async exists() { return true; },
+    async getDownloadUrl() { return "http://storage.local/example"; },
+    async read() { return Buffer.from(""); },
+    async write(storageKey, content) {
+      writes.push({ content: content.toString("utf8"), key: storageKey });
+    }
+  };
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin", storage);
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const { bundle } = result.response;
+    assert.equal(bundle.fileAvailability, "available");
+    assert.ok(bundle.storageKey);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0]?.key, bundle.storageKey);
+    assert.match(writes[0]?.content ?? "", /"bundleId":/u);
+    assert.match(writes[0]?.content ?? "", /"includedAssets":/u);
+    assert.equal(bundle.manifest.warnings.some((warning) => /archive write failed/i.test(warning)), false);
+    // Asset-byte assembly is queued asynchronously when the bundle has zero or more included assets;
+    // because the test fixture has no verified-for-export assets seeded, the bundle resolves to
+    // not_required immediately and never blocks the API response on storage I/O.
+    const expectedAssemblyStatus = bundle.includedAssetCount === 0 ? "not_required" : "pending";
+    assert.equal(bundle.assemblyStatus, expectedAssemblyStatus);
+    assert.equal(bundle.assemblyError, null);
+    assert.equal(bundle.assemblyAttemptCount, 0);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("createExportBundleInDatabase surfaces archive write failures as bundle warnings", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+  const storage: FileStorageClient = {
+    backend: "local",
+    async exists() { return false; },
+    async getDownloadUrl() { return null; },
+    async read() { return Buffer.from(""); },
+    async write() { throw new Error("disk full"); }
+  };
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin", storage);
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const { bundle } = result.response;
+    assert.equal(bundle.fileAvailability, "manifest_only");
+    assert.equal(bundle.storageKey, null);
+    assert.equal(bundle.manifest.warnings.some((warning) => /archive write failed \(disk full\)/i.test(warning)), true);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates a pg-mem project-memory database with optional fixture rows.
  */
 function createProjectMemoryPool(seedRows: boolean): TestPool {
@@ -1714,6 +2055,16 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (circuit_block_id, part_id, role)
     );
+
+    CREATE TABLE mate_relations (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      mate_part_id TEXT NOT NULL,
+      relationship_type TEXT NOT NULL,
+      confidence_score NUMERIC NOT NULL DEFAULT 1,
+      source_revision_id TEXT,
+      notes TEXT
+    );
   `);
 
   seedInternalCatalogRows(db);
@@ -1755,6 +2106,24 @@ function seedInternalCatalogRows(db: ReturnType<typeof newDb>): void {
     INSERT INTO part_readiness_summaries (part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at)
     VALUES ('part-memory-ldo', 'needs_attention', 'confirmed', 'non_connector', 1, '{"missing verified CAD"}', '{"review CAD"}', 'Fixture readiness summary.', '2026-04-30T00:08:00.000Z');
   `);
+}
+
+/**
+ * Seeds connector parts and mate_relations rows for connector-set catalog tests.
+ */
+async function seedConnectorCatalogRowsViaPool(pool: TestPool): Promise<void> {
+  await pool.query(`INSERT INTO manufacturers (id, name, aliases) VALUES ('mfg-jst', 'JST', '{}')`);
+  await pool.query(`INSERT INTO parts (id, mpn, manufacturer_id, last_updated_at) VALUES ('part-conn-housing', 'BM02B-SRSS-TB', 'mfg-jst', '2026-04-30T00:06:00.000Z')`);
+  await pool.query(`INSERT INTO parts (id, mpn, manufacturer_id, last_updated_at) VALUES ('part-conn-mate', 'SHR-02V-S-B', 'mfg-jst', '2026-04-30T00:06:00.000Z')`);
+  await pool.query(`INSERT INTO parts (id, mpn, manufacturer_id, last_updated_at) VALUES ('part-conn-alt', 'SHR-02V-S-S', 'mfg-jst', '2026-04-30T00:06:00.000Z')`);
+  await pool.query(`INSERT INTO parts (id, mpn, manufacturer_id, last_updated_at) VALUES ('part-conn-tool', 'WC-110', 'mfg-jst', '2026-04-30T00:06:00.000Z')`);
+  await pool.query(`INSERT INTO part_readiness_summaries (part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at) VALUES ('part-conn-housing', 'ready_for_export_review', 'confirmed', 'connector', 0, '{}', '{}', 'Connector housing.', '2026-04-30T00:08:00.000Z')`);
+  await pool.query(`INSERT INTO part_readiness_summaries (part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at) VALUES ('part-conn-mate', 'ready_for_export_review', 'confirmed', 'connector', 0, '{}', '{}', 'Mate housing.', '2026-04-30T00:08:00.000Z')`);
+  await pool.query(`INSERT INTO part_readiness_summaries (part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at) VALUES ('part-conn-alt', 'needs_attention', 'confirmed', 'connector', 1, '{"missing CAD"}', '{}', 'Alt mate.', '2026-04-30T00:08:00.000Z')`);
+  await pool.query(`INSERT INTO part_readiness_summaries (part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at) VALUES ('part-conn-tool', 'ready_for_export_review', 'confirmed', 'tooling', 0, '{}', '{}', 'Crimp tool.', '2026-04-30T00:08:00.000Z')`);
+  await pool.query(`INSERT INTO part_approvals (part_id, approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at) VALUES ('part-conn-housing', 'approved', 'Approved', 'Approved housing.', '{}', 'qa', '2026-04-30T00:07:00.000Z', '2026-04-30T00:07:00.000Z')`);
+  await pool.query(`INSERT INTO mate_relations (id, part_id, mate_part_id, relationship_type, confidence_score, source_revision_id, notes) VALUES ('mr-housing-best', 'part-conn-housing', 'part-conn-mate', 'best_mate', 0.95, NULL, 'Manufacturer table')`);
+  await pool.query(`INSERT INTO mate_relations (id, part_id, mate_part_id, relationship_type, confidence_score, source_revision_id, notes) VALUES ('mr-housing-alt', 'part-conn-housing', 'part-conn-alt', 'alternate_mate', 0.7, NULL, 'Likely alternate')`);
 }
 
 /**
@@ -1813,8 +2182,20 @@ async function seedThirdRevisionForCompare(pool: TestPool): Promise<void> {
 function createMemoryStorageClient(writtenStorage: Map<string, Buffer>): FileStorageClient {
   return {
     backend: "local",
+    async exists(storageKey: string): Promise<boolean> {
+      return writtenStorage.has(storageKey);
+    },
     async getDownloadUrl(storageKey: string): Promise<string | null> {
       return `http://storage.test/${encodeURIComponent(storageKey)}`;
+    },
+    async read(storageKey: string): Promise<Buffer> {
+      const content = writtenStorage.get(storageKey);
+
+      if (!content) {
+        throw new Error(`storage key not found: ${storageKey}`);
+      }
+
+      return content;
     },
     async write(storageKey: string, content: Buffer): Promise<void> {
       writtenStorage.set(storageKey, content);

@@ -38,6 +38,9 @@ export type AdminQueueTableRow = {
   updatedLabel: string;
 };
 
+/** AdminQueueStateScope names simple operator-facing state filters. */
+type AdminQueueStateScope = "all" | "blocked" | "needs_attention" | "ready";
+
 /** AdminQueuePresentationProps provides grouped and table-ready queue projections from the server page. */
 type AdminQueuePresentationProps = {
   groups: AdminQueueOverviewGroup[];
@@ -52,12 +55,19 @@ type AdminQueuePresentationProps = {
 export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, stats }: AdminQueuePresentationProps) {
   const [mode, setMode] = useState<"grouped" | "table">(initialMode);
   const [activeGroupId, setActiveGroupId] = useState<string>("all");
+  const [stateScope, setStateScope] = useState<AdminQueueStateScope>("all");
+  const [textFilter, setTextFilter] = useState("");
   const activeGroup = groups.find((group) => group.id === activeGroupId);
   const visibleGroups = activeGroupId === "all" ? groups : groups.filter((group) => group.id === activeGroupId);
-  const filteredRows = useMemo(
+  const groupScopedRows = useMemo(
     () => (activeGroupId === "all" ? rows : rows.filter((row) => row.queueId === activeGroupId)),
     [activeGroupId, rows]
   );
+  const filteredRows = useMemo(
+    () => groupScopedRows.filter((row) => rowMatchesStateScope(row, stateScope) && rowMatchesTextFilter(row, textFilter)),
+    [groupScopedRows, stateScope, textFilter]
+  );
+  const hasActiveScope = stateScope !== "all" || textFilter.trim().length > 0;
 
   return (
     <section aria-labelledby="admin-queue-overview-heading" className="admin-queue-overview">
@@ -97,6 +107,41 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
           ))}
         </div>
         <p>{activeGroupId === "all" ? `${rows.length} backend-backed rows across current queues` : `${filteredRows.length} backend-backed rows in ${activeGroup?.label ?? "the selected queue"}`}</p>
+      </div>
+
+      <div className="admin-queue-scope-controls" aria-label="Queue row scope controls">
+        <label>
+          <span>Find row</span>
+          <input
+            onChange={(event) => setTextFilter(event.currentTarget.value)}
+            placeholder="MPN, maker, queue, or detail"
+            type="search"
+            value={textFilter}
+          />
+        </label>
+        <label>
+          <span>Work state</span>
+          <select
+            onChange={(event) => setStateScope(readAdminQueueStateScope(event.currentTarget.value))}
+            value={stateScope}
+          >
+            <option value="all">All states</option>
+            <option value="needs_attention">Needs attention</option>
+            <option value="blocked">Blocked only</option>
+            <option value="ready">Ready or informational</option>
+          </select>
+        </label>
+        <button
+          disabled={!hasActiveScope}
+          onClick={() => {
+            setStateScope("all");
+            setTextFilter("");
+          }}
+          type="button"
+        >
+          Clear filters
+        </button>
+        <p>{filteredRows.length} of {groupScopedRows.length} rows shown</p>
       </div>
 
       {mode === "grouped" ? (
@@ -169,6 +214,51 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
       )}
     </section>
   );
+}
+
+/**
+ * Narrows an arbitrary select value into a supported admin queue state scope.
+ */
+function readAdminQueueStateScope(value: string): AdminQueueStateScope {
+  return value === "blocked" || value === "needs_attention" || value === "ready" ? value : "all";
+}
+
+/**
+ * Checks whether a queue row belongs in the selected operator-facing state bucket.
+ */
+function rowMatchesStateScope(row: AdminQueueTableRow, scope: AdminQueueStateScope): boolean {
+  if (scope === "blocked") {
+    return row.stateTone === "danger";
+  }
+
+  if (scope === "needs_attention") {
+    return row.stateTone === "review" || row.stateTone === "danger" || row.stateTone === "generated";
+  }
+
+  if (scope === "ready") {
+    return row.stateTone === "verified" || row.stateTone === "info";
+  }
+
+  return true;
+}
+
+/**
+ * Checks whether a queue row contains the free-text filter in operator-visible fields.
+ */
+function rowMatchesTextFilter(row: AdminQueueTableRow, filter: string): boolean {
+  const normalizedFilter = filter.trim().toLowerCase();
+
+  if (!normalizedFilter) {
+    return true;
+  }
+
+  return [
+    row.detail,
+    row.manufacturerName,
+    row.mpn,
+    row.queueLabel,
+    row.stateLabel
+  ].some((value) => value.toLowerCase().includes(normalizedFilter));
 }
 
 /**

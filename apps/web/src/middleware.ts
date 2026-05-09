@@ -1,19 +1,59 @@
-import { auth } from "@/auth";
-import { NextResponse } from "next/server";
+/**
+ * File header: Protects admin routes with Edge-safe JWT role checks.
+ */
 
-export default auth((req) => {
-  if (!req.auth) {
-    const signIn = new URL("/sign-in", req.url);
-    signIn.searchParams.set("callbackUrl", req.nextUrl.pathname);
+import { getToken } from "next-auth/jwt";
+import { NextResponse, type NextRequest } from "next/server";
+
+/** AppRole mirrors the narrow role values embedded by the NextAuth JWT callback. */
+type AppRole = "admin" | "user";
+
+/**
+ * Redirects non-authenticated users to sign-in and keeps non-admin users out of admin routes.
+ */
+export default async function middleware(request: NextRequest) {
+  const token = await readSessionToken(request);
+
+  if (!token) {
+    const signIn = new URL("/sign-in", request.url);
+    signIn.searchParams.set("callbackUrl", request.nextUrl.pathname);
     return NextResponse.redirect(signIn);
   }
 
-  if (req.nextUrl.pathname.startsWith("/admin") && req.auth.user.role !== "admin") {
-    return NextResponse.redirect(new URL("/", req.url));
+  if (request.nextUrl.pathname.startsWith("/admin") && readAppRole(token.role) !== "admin") {
+    return NextResponse.redirect(new URL("/", request.url));
   }
 
   return NextResponse.next();
-});
+}
+
+/**
+ * Reads the Auth.js JWT without importing the server auth module that depends on DB and Node APIs.
+ */
+async function readSessionToken(request: NextRequest): Promise<Record<string, unknown> | null> {
+  const secret = process.env["AUTH_SECRET"] ?? process.env["NEXTAUTH_SECRET"];
+
+  if (!secret) {
+    return null;
+  }
+
+  try {
+    return await getToken({
+      req: request,
+      secret,
+      secureCookie: request.nextUrl.protocol === "https:"
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Narrows untrusted JWT role claims before making an admin routing decision.
+ */
+function readAppRole(value: unknown): AppRole | null {
+  return value === "admin" || value === "user" ? value : null;
+}
 
 export const config = {
   matcher: ["/admin/:path*"],

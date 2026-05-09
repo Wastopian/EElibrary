@@ -12,7 +12,10 @@ import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLab
 import { DetailSectionNav } from "./DetailSectionNav";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
+import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
+import { getTrustLineageSummary } from "../../../lib/trust-lineage";
+import type { TrustLineageStageSummary, TrustLineageSummary } from "../../../lib/trust-lineage";
 import {
   assetTrustStageTone,
   formatAssetPromotionBlockers,
@@ -71,20 +74,28 @@ type PartWhereUsedState =
   | { status: "not_found" }
   | { status: "unavailable"; code: string; message: string };
 
+/** PartDetailPageState keeps catalog setup errors separate from genuine 404s. */
+type PartDetailPageState =
+  | { detail: PartDetailPageDetail; status: "ready"; whereUsedState: PartWhereUsedState }
+  | { status: "not_found" }
+  | { code: string; message: string; partId: string; status: "setup_required"; whereUsedState: PartWhereUsedState };
+
 /**
  * Renders a component detail page with provenance, connector intelligence, asset state, and export readiness.
  */
 export default async function PartDetailPage({ params }: DetailPageProps) {
   const { partId } = await params;
-  const [detail, whereUsedState] = await Promise.all([
-    fetchPartDetail(partId),
-    loadPartWhereUsed(partId)
-  ]);
+  const pageState = await loadPartDetailPage(partId);
 
-  if (!detail) {
+  if (pageState.status === "not_found") {
     notFound();
   }
 
+  if (pageState.status === "setup_required") {
+    return <PartDetailSetupState state={pageState} />;
+  }
+
+  const { detail, whereUsedState } = pageState;
   const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const bestMate = record.buildableMatingSet.bestMate;
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
@@ -101,6 +112,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const enrichmentBoundaryCopy = getEnrichmentBoundaryCopy(detail.enrichmentSummary);
   const enrichmentStatusItems = getPartEnrichmentStatusItems(detail.enrichmentSummary);
   const completenessChecklist = getPartCompletenessChecklist(record, assetGroups, bundleReadiness, generationOptions, reviewWorkflowSummary);
+  const trustLineage = getTrustLineageSummary(record, bundleReadiness, assetReviewStatuses, workflowReviewStatuses, assetPromotionSummaries);
   const nextActions = getPartNextActions(record);
   const primaryNextAction = nextActions[0];
   const latestSource = record.sources[0];
@@ -111,6 +123,8 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     value: formatMetricValue(metric)
   }));
   const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState);
+  const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
+  const missingAssetGroups = assetGroups.filter((group) => group.bestAsset === null);
 
   /**
    * Requests generation through the API while leaving completion and export approval explicit.
@@ -184,7 +198,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="overview-heading"
           index="01"
-          subtitle="Identity, normalized metrics, package, datasheet metadata, and catalog signals."
+          subtitle="Part identity, key specs, package, and datasheet."
           title="Overview"
         />
 
@@ -201,9 +215,13 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             {record.part.description && (
               <p className="detail-hero__description">{record.part.description}</p>
             )}
-            <p className="detail-trust-callout">
-              <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
-            </p>
+            <TrustLineageStrip summary={trustLineage} />
+            <details className="detail-trust-callout">
+              <summary>How verification works</summary>
+              <p>
+                <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
+              </p>
+            </details>
             <div className="signal-strip" role="group" aria-label="Engineering signals">
               <div className="signal-strip__primary">
                 <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
@@ -219,7 +237,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </div>
           </div>
           <div className="detail-hero__status">
-            <TrustMeter label="Catalog trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+            <details className="detail-hero__trust-meter">
+              <summary>Catalog trust score</summary>
+              <TrustMeter label="Catalog trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+              <p className="muted-copy">A blended score from imported sources. Use the verification steps above for the source of truth before export.</p>
+            </details>
             <DetailUseDecision
               assetTruthSummary={assetTruthSummary}
               datasheetAsset={datasheetAsset}
@@ -242,6 +264,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
         <DetailSectionNav tabs={detailTabs} />
 
+        <WorkspaceActionPanel
+          actions={buildPartWorkspaceActions(record, bundleReadiness, whereUsedState)}
+          description="Quick links for this part."
+          title="Next workspaces"
+        />
+
         <DetailReadinessSummary
           approval={record.approval}
           assetTruthSummary={assetTruthSummary}
@@ -251,7 +279,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           reviewWorkflowSummary={reviewWorkflowSummary}
         />
 
-        <SectionPanel description="Compact engineering-readiness checkpoints derived from the existing detail truth." title="Completeness checklist">
+        <SectionPanel description="What is done and what is still missing for this part." title="Completeness checklist">
           <DetailCompletenessChecklist items={completenessChecklist} />
         </SectionPanel>
 
@@ -268,10 +296,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </div>
 
         <div className="detail-two-col">
-          <SectionPanel description="Normalized to internal units. Confidence reflects source extraction, not manufacturing guarantee." title="Key metrics">
-            {metricRows.length > 0 ? <MetricTable rows={metricRows} /> : <EmptyState body="No normalized metrics are attached to this part yet." title="No metrics" />}
+          <SectionPanel description="Key specs in standard units. Always confirm against the official datasheet before final use." title="Key metrics">
+            {metricRows.length > 0 ? <MetricTable rows={metricRows} /> : <EmptyState body="No specs are attached to this part yet." title="No specs" />}
           </SectionPanel>
-          <SectionPanel description="Mechanical outline fields; unknowns stay explicit." title="Package">
+          <SectionPanel description="Package outline and dimensions." title="Package">
             <dl className="dimension-grid">
               {packageDimensionRows(record.package).map((row) => (
                 <div key={row.label}>
@@ -283,7 +311,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </SectionPanel>
         </div>
 
-        <SectionPanel description="Revision metadata is separate from whether a PDF is stored in object storage." title="Datasheet">
+        <SectionPanel description="Datasheet revision info. The PDF status is shown separately." title="Datasheet">
           <div className="datasheet-panel">
             <div>
               <p className="ui-mono">{record.datasheetRevision?.revisionLabel ?? "No revision"}</p>
@@ -301,10 +329,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <details className="audit-disclosure detail-audit-disclosure">
           <summary>Acquisition and enrichment audit</summary>
           <div className="detail-audit-disclosure__grid">
-            <SectionPanel description="Where this part came from and whether the current detail page has job-backed acquisition provenance." title="Acquisition summary">
+            <SectionPanel description="Where this part record came from." title="Acquisition summary">
               <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
             </SectionPanel>
-            <SectionPanel description="Background enrichment progress stays separate from approval, parsing, and export truth." title="Enrichment status">
+            <SectionPanel description="Background data updates. These run separately from review and export." title="Enrichment status">
               <DetailEnrichmentSummary boundaryCopy={enrichmentBoundaryCopy} items={enrichmentStatusItems} summary={detail.enrichmentSummary} summarySignal={enrichmentSummarySignal} />
             </SectionPanel>
           </div>
@@ -365,10 +393,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="where-used-heading"
           index="02"
-          subtitle="Confirmed project usage records from matched BOM rows. Historical use does not approve this part or make exports available."
+          subtitle="Where this part appears in saved projects. Past use does not mean it is approved."
           title="Where-used"
         />
-        <SectionPanel description="Usage history answers where the part appeared while keeping approval, review, and export readiness separate." title="Confirmed usage history">
+        <SectionPanel description="Past project use of this part." title="Confirmed usage history">
           <PartWhereUsedPanel state={whereUsedState} />
         </SectionPanel>
       </section>
@@ -377,13 +405,13 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="mates-heading"
           index="03"
-          subtitle="Connector build sets, mates, accessories, tooling, and cable relationships stay close to readiness."
+          subtitle="Mating connectors, accessories, tools, and cables for this part."
           title="Mates and accessories"
         />
         {hasConnectorIntelligence ? (
           <>
             <div className="detail-two-col">
-              <SectionPanel description="Single prioritized recommendation plus any close alternate mates that still need review." title="Best mate">
+              <SectionPanel description="Top recommended mate. Other close mates may still need review." title="Best mate">
                 {bestMate ? (
                   <>
                     <RelatedPartLine relation={bestMate} related={findRelatedPart(bestMate.matePartId, relatedPartSummaries)} />
@@ -402,7 +430,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                   <p className="muted-copy">No best-mate mapping is stored for this part.</p>
                 )}
               </SectionPanel>
-              <SectionPanel description="Practical set: mate, required hardware, tooling, cable options, and note-derived assumptions." title="Buildable mating set">
+              <SectionPanel description="Mate, required hardware, tools, and cable options for a buildable set." title="Buildable mating set">
                 <ul className="connector-list">
                   <li>
                     <strong>Best mate:</strong> {bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "Not available"}
@@ -448,7 +476,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </div>
           </>
         ) : (
-          <EmptyState body="No connector-specific mate, accessory, tooling, or cable relationships are stored for this record." title="No mating data" />
+          <EmptyState body="No mating connectors, accessories, tools, or cables are linked yet." title="No mating data" />
         )}
       </section>
 
@@ -456,12 +484,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="alternates-heading"
           index="04"
-          subtitle="Alternates and companion parts stay separate so substitutions do not blur into typical co-parts."
+          subtitle="Possible substitutes and parts often used alongside this one."
           title="Alternates and companions"
         />
         {hasSimilarParts || hasCompanionParts ? (
           <div className="detail-two-col">
-            <SectionPanel description="Alternates for substitution decisions - not automatic drop-ins." title="Similar parts">
+            <SectionPanel description="Possible substitutes. Verify before using." title="Similar parts">
               {hasSimilarParts ? <p className="related-inline">{renderRelatedList(record.similarParts.map((relation) => relation.similarPartId), relatedPartSummaries)}</p> : <p className="muted-copy">No similar-part alternates are stored yet.</p>}
             </SectionPanel>
             <SectionPanel description="Parts often used alongside this one in real designs." title="Typical companions">
@@ -469,7 +497,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </SectionPanel>
           </div>
         ) : (
-          <EmptyState body="No similar-part alternates or typical companion recommendations are stored for this record." title="No alternates or companions" />
+          <EmptyState body="No substitute or companion parts linked yet." title="No alternates or companions" />
         )}
       </section>
 
@@ -477,11 +505,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="substitutions-heading"
           index="04b"
-          subtitle="Engineer-signed-off alternates that BOM diagnostics can surface as triage hints. Substitutions are decision records, not automatic confirmations."
+          subtitle="Engineer-approved alternates that other engineers can pick when this part is not available."
           title="Approved substitutes"
         />
         <SectionPanel
-          description="Add an approved alternate part for substitution decisions. Scope can be global (any project) or restricted to one project."
+          description="Add an approved alternate. Choose if it applies to all projects or one."
           title="Substitution decisions"
         >
           <PartSubstitutionPanel partId={record.part.id} partMpn={record.part.mpn} />
@@ -492,11 +520,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="sourcing-heading"
           index="05"
-          subtitle="Lifecycle, source freshness, and import provenance are available here. Distributor pricing remains unavailable until the backend models it."
+          subtitle="Lifecycle status and where the data came from. Pricing is not connected yet."
           title="Sourcing and lifecycle"
         />
         <div className="detail-two-col">
-          <SectionPanel description="Use lifecycle and latest import evidence to decide whether the part is still a healthy design candidate." title="Lifecycle and source health">
+          <SectionPanel description="Check if this part is still a safe choice for new designs." title="Lifecycle and source health">
             <div className="detail-sourcing-grid">
               <div>
                 <span>Lifecycle</span>
@@ -515,7 +543,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               </div>
             </div>
           </SectionPanel>
-          <SectionPanel description="The V3 design includes distributor pricing and stock, but the current backend contract does not expose supplier rows yet." title="Distributor pricing">
+          <SectionPanel description="Distributor pricing and stock are not connected yet." title="Distributor pricing">
             <div className="detail-unavailable-card" role="status">
               <StatusBadge label="Unavailable" tone="neutral" />
               <strong>Supplier pricing and stock are not in the current API contract.</strong>
@@ -529,18 +557,39 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="files-heading"
           index="06"
-          subtitle="Best-ranked asset per class. Availability, provenance, review, validation, and export status stay separate."
+          subtitle="Open usable files first. Missing classes are listed separately below."
           title="Files and models"
         />
-        {assetGroups.length > 0 ? (
+        <SectionPanel
+          title="File coverage"
+          description={`${populatedAssetGroups.length} class${populatedAssetGroups.length === 1 ? "" : "es"} with files · ${missingAssetGroups.length} missing`}
+        >
+          <div className="empty-recovery-actions">
+            <a className="button-link" href="#approval-heading">Request missing files</a>
+            <a className="button-link button-link--quiet" href="#export-bundles">Check export readiness</a>
+          </div>
+        </SectionPanel>
+        {populatedAssetGroups.length > 0 ? (
           <div className="asset-grid">
-            {assetGroups.map((group) => (
+            {populatedAssetGroups.map((group) => (
               <EngineeringAssetSummary group={group} key={group.assetType} promotionAction={submitAssetPromotionAction} promotionSummaries={assetPromotionSummaries} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} validationSummaries={assetValidationSummaries} />
             ))}
           </div>
         ) : (
-          <EmptyState body="No engineering asset rows are attached to this part yet." title="No assets" />
+          <EmptyState body="No file-backed assets are attached yet. Use the action above to request or add files." title="No usable files yet" />
         )}
+        {missingAssetGroups.length > 0 ? (
+          <details className="audit-disclosure" style={{ marginTop: 12 }}>
+            <summary>Show missing file classes ({missingAssetGroups.length})</summary>
+            <ul className="info-list">
+              {missingAssetGroups.map((group) => (
+                <li key={`missing-${group.assetType}`}>
+                  <span>{assetTypeLabel(group.assetType)}: no file rows yet.</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
 
         {record.generationWorkflows.length > 0 ? (
           <>
@@ -578,12 +627,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="approval-heading"
           index="07"
-          subtitle="Review workflows, generation requests, and explicit export promotion stay separate from part identity and asset provenance."
+          subtitle="Track reviews, file generation requests, and approval to export."
           title="Approval and export"
         />
 
         {shouldRenderGenerationOptions(generationOptions) ? (
-          <SectionPanel description="Each control creates a tracked generation request when structured source-readiness checks pass. Generated outputs remain drafts until reviewed; approval is not export verification." title="Request draft generation">
+          <SectionPanel description="Request a draft from existing data. Drafts must be reviewed before export." title="Request draft generation">
             <ul className="info-list">
               {generationOptions.map((option) => (
                 <li key={`req-${option.targetAssetType}`}>
@@ -616,10 +665,92 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </SectionPanel>
         ) : null}
 
-        <SectionPanel description="Only file-backed assets that passed review, validation evidence, and explicit promotion can authorize export bundles." title="Export bundles" tone="technical">
+        <SectionPanel description="Only verified files can power export bundles." title="Export bundles" tone="technical">
+          <div id="export-bundles" />
           <ExportBundleSummary bundleReadiness={bundleReadiness} />
         </SectionPanel>
 
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Loads the primary detail record and keeps setup failures renderable instead of route-fatal.
+ */
+async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> {
+  const whereUsedPromise = loadPartWhereUsed(partId);
+
+  try {
+    const detail = await fetchPartDetail(partId);
+
+    if (!detail) {
+      return { status: "not_found" };
+    }
+
+    return {
+      detail,
+      status: "ready",
+      whereUsedState: await whereUsedPromise
+    };
+  } catch (error) {
+    if (isApiClientError(error)) {
+      return {
+        code: error.code,
+        message: error.message,
+        partId,
+        status: "setup_required",
+        whereUsedState: await whereUsedPromise
+      };
+    }
+
+    return {
+      code: "API_UNAVAILABLE",
+      message: "The API could not be reached, so catalog detail truth cannot be read.",
+      partId,
+      status: "setup_required",
+      whereUsedState: await whereUsedPromise
+    };
+  }
+}
+
+/**
+ * Renders setup guidance when detail truth cannot be loaded from the catalog API.
+ */
+function PartDetailSetupState({ state }: { state: Extract<PartDetailPageState, { status: "setup_required" }> }) {
+  return (
+    <main className="detail-layout">
+      <div className="detail-nav-links">
+        <Link className="back-link" href="/catalog">
+          &larr; Back to catalog search
+        </Link>
+      </div>
+
+      <section className="detail-section" aria-labelledby="part-detail-setup-heading">
+        <SectionHeading
+          id="part-detail-setup-heading"
+          index="01"
+          subtitle="Connect the catalog database to view this part."
+          title="Catalog detail unavailable"
+        />
+        <SectionPanel description="Real data only. We do not fill in guessed details." title="Connect the catalog database">
+          <div className="setup-steps">
+            <div>
+              <strong>Detail read failed</strong>
+              <span>{state.code}: {state.message}</span>
+              <code>{state.partId}</code>
+            </div>
+            <div>
+              <strong>Bring the catalog online</strong>
+              <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
+              <code>npm run db:migrate</code>
+              <code>npm run dev</code>
+            </div>
+          </div>
+        </SectionPanel>
+        <SectionPanel description="Usage history is loaded separately." title="Where-used side channel">
+          <PartWhereUsedPanel state={state.whereUsedState} />
+        </SectionPanel>
       </section>
     </main>
   );
@@ -766,7 +897,7 @@ function DetailUseDecision({
           <dd>{assetTruthSummary.label}</dd>
         </div>
         <div>
-          <dt>Provenance</dt>
+          <dt>Source</dt>
           <dd>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source row"}</dd>
         </div>
       </dl>
@@ -1356,6 +1487,92 @@ function buildDetailTabs(
     { badge: cadAttentionCount > 0 ? `${cadAttentionCount}` : assetGroups.length > 0 ? `${assetGroups.length}` : undefined, href: "#files-heading", label: "CAD assets" },
     { badge: blockedExportCount > 0 ? `${blockedExportCount}` : undefined, href: "#approval-heading", label: "Approval & export" }
   ];
+}
+
+/**
+ * Builds the part-scoped workflow jumps that help operators continue without URL editing.
+ */
+function buildPartWorkspaceActions(record: PartDetailPageRecord, bundleReadiness: BundleReadinessSummary, whereUsedState: PartWhereUsedState): WorkspaceAction[] {
+  const connectorClass = record.readinessSummary.connectorClass;
+  const whereUsedCount = whereUsedState.status === "available" ? whereUsedState.response.usages.length : null;
+
+  return [
+    {
+      body: "Open this part in the side-by-side compare workspace.",
+      href: buildCompareUrl([record.part.id]),
+      label: "Compare this part",
+      signal: "Side-by-side"
+    },
+    {
+      body: "Find confirmed project usage and BOM history for this exact internal part.",
+      href: buildWhereUsedHref("part", record.part.id),
+      label: "Check where-used",
+      signal: whereUsedCount === null ? "Project memory" : `${whereUsedCount} known`
+    },
+    {
+      body: "Attach review notes, links, or file evidence to this part without changing approval.",
+      href: buildEvidenceHref("part", record.part.id),
+      label: "Attach evidence",
+      signal: "Part target"
+    },
+    {
+      body: connectorClass === "non_connector"
+        ? "Browse connector memory if this part becomes part of a reusable connector set."
+        : "Open connector memory filtered to this connector class and MPN.",
+      href: buildConnectorSetHref(record),
+      label: connectorClass === "non_connector" ? "Browse connector sets" : "Review connector set",
+      signal: formatConnectorClassSignal(connectorClass)
+    },
+    {
+      body: "Jump to the export gate and see which files are verified, missing, or blocked.",
+      href: "#approval-heading",
+      label: "Review export blockers",
+      signal: bundleReadiness.label
+    }
+  ];
+}
+
+/**
+ * Builds a where-used route with a filled-in query so operators do not need query strings.
+ */
+function buildWhereUsedHref(targetType: string, query: string): string {
+  const params = new URLSearchParams({ q: query, targetType });
+
+  return `/where-used?${params.toString()}`;
+}
+
+/**
+ * Builds an evidence route scoped to one persisted target id.
+ */
+function buildEvidenceHref(targetType: string, query: string): string {
+  const params = new URLSearchParams({ q: query, targetType });
+
+  return `/evidence?${params.toString()}`;
+}
+
+/**
+ * Builds a connector-set route that prefers class and MPN when connector evidence exists.
+ */
+function buildConnectorSetHref(record: PartDetailPageRecord): string {
+  const connectorClass = record.readinessSummary.connectorClass;
+
+  if (connectorClass === "non_connector") {
+    return "/connector-sets";
+  }
+
+  const params = new URLSearchParams({
+    connectorClass,
+    q: record.part.mpn
+  });
+
+  return `/connector-sets?${params.toString()}`;
+}
+
+/**
+ * Formats connector-class signal copy without exposing null or backend casing.
+ */
+function formatConnectorClassSignal(connectorClass: PartDetailPageRecord["readinessSummary"]["connectorClass"]): string {
+  return connectorClass === "non_connector" ? "Optional" : connectorClass.replace(/_/gu, " ");
 }
 
 /**
@@ -2256,4 +2473,101 @@ function buildConnectorConfidenceSummary(buildableMatingSet: PartDetailPageRecor
   }
 
   return `${detailParts.join("; ")} from ${buildableMatingSet.confidenceBreakdown.evidenceCount} mapped relationship signals${evidenceParts.length > 0 ? ` (${evidenceParts.join(", ")})` : ""}.`;
+}
+
+/**
+ * Renders the four-stage trust lineage strip so engineers can scan
+ * imported / reviewed / approved / verified-for-export at a glance.
+ */
+function TrustLineageStrip({ summary }: { summary: TrustLineageSummary }): React.ReactElement {
+  const guidance = summarizeTrustGuidance(summary);
+
+  return (
+    <section className="trust-lineage-strip" role="group" aria-label="Trust lineage">
+      <div className="trust-lineage-strip__guidance">
+        <strong>{guidance.title}</strong>
+        <p>{guidance.detail}</p>
+      </div>
+      <details className="trust-lineage-strip__steps">
+        <summary>Show verification steps</summary>
+        <ol className="trust-lineage-strip__stages">
+          {summary.stages.map((stage, index) => (
+            <TrustLineageStageItem
+              key={stage.stage}
+              isLast={index === summary.stages.length - 1}
+              stage={stage}
+            />
+          ))}
+        </ol>
+        <p className="trust-lineage-strip__boundary muted-copy">{summary.boundary}</p>
+      </details>
+    </section>
+  );
+}
+
+function summarizeTrustGuidance(summary: TrustLineageSummary): { detail: string; title: string } {
+  const stageByKey = new Map(summary.stages.map((stage) => [stage.stage, stage]));
+  const verifiedStage = stageByKey.get("verified_for_export");
+  const approvedStage = stageByKey.get("approved");
+  const reviewedStage = stageByKey.get("reviewed");
+  const importedStage = stageByKey.get("imported");
+  const blockedStage = summary.stages.find((stage) => stage.state === "blocked");
+
+  if (blockedStage) {
+    return {
+      detail: `Resolve "${blockedStage.label}" first. Then continue in order from left to right.`,
+      title: "Blocked right now"
+    };
+  }
+
+  if (verifiedStage?.state === "passed") {
+    return {
+      detail: "This part has a verified export path.",
+      title: "Ready for export"
+    };
+  }
+
+  if (approvedStage?.state === "passed") {
+    return {
+      detail: "Part approval is complete. File verification is the remaining step.",
+      title: "Almost ready"
+    };
+  }
+
+  if (reviewedStage?.state === "passed") {
+    return {
+      detail: "Review is complete. Approval is the next step.",
+      title: "Needs part approval"
+    };
+  }
+
+  if (importedStage?.state === "passed") {
+    return {
+      detail: "Import is complete. Review is the next step.",
+      title: "Needs review"
+    };
+  }
+
+  return {
+    detail: "No trust steps are complete yet.",
+    title: "Not started"
+  };
+}
+
+/**
+ * Renders one trust-lineage stage with state badge, label, and one-line reason.
+ */
+function TrustLineageStageItem({ stage, isLast }: { stage: TrustLineageStageSummary; isLast: boolean }): React.ReactElement {
+  return (
+    <li className="trust-lineage-strip__item" data-state={stage.state}>
+      <div className="trust-lineage-strip__item-header">
+        <StatusBadge label={stage.label} tone={mapViewToneToBadge(stage.tone)} />
+        <span className={`trust-lineage-strip__state trust-lineage-strip__state--${stage.state}`}>
+          {stage.badgeLabel}
+        </span>
+      </div>
+      <p className="trust-lineage-strip__detail">{stage.detail}</p>
+      {!isLast ? <span aria-hidden="true" className="trust-lineage-strip__connector">→</span> : null}
+    </li>
+  );
 }

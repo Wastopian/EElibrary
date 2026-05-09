@@ -118,6 +118,7 @@ export function PartSubstitutionPanel({ partId, partMpn }: PartSubstitutionPanel
 
       <div className="part-substitution-panel__form">
         <h4 className="form-section-label">Add approved substitute</h4>
+        <p className="form-hint">Fill in why this alternate is acceptable so future reviewers can trust the decision quickly.</p>
 
         <div className="form-row">
           <label className="form-label" htmlFor="substitution-substitute">Substitute part id</label>
@@ -160,14 +161,15 @@ export function PartSubstitutionPanel({ partId, partMpn }: PartSubstitutionPanel
         <div className="form-row">
           <label className="form-label" htmlFor="substitution-notes">Sign-off notes</label>
           <textarea
-            className="form-textarea"
+            className="form-textarea form-textarea--notes"
             id="substitution-notes"
             maxLength={500}
-            placeholder="Why is this alternate acceptable? Reviewer evidence, test data, etc."
-            rows={3}
+            placeholder="State the reason plainly: fit, performance match, tests passed, and any limits."
+            rows={6}
             value={signoffNotes}
             onChange={(e) => setSignoffNotes(e.target.value)}
           />
+          <small className="form-hint">Tip: include evidence source or test ID so anyone can verify later.</small>
         </div>
 
         <div className="form-actions">

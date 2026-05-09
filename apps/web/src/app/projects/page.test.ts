@@ -105,9 +105,9 @@ test("projects dashboard renders setup guidance when project memory is not confi
   try {
     const html = await renderProjectsPage();
 
-    assert.match(html, /Connect the project database/u);
-    assert.match(html, /DB_NOT_CONFIGURED/u);
-    assert.match(html, /No seed fallback is used for project history/u);
+    assert.match(html, /Project pages are paused/u);
+    assert.match(html, /Open system checks/u);
+    assert.match(html, /Finish setup to open projects/u);
     assert.doesNotMatch(html, /Motor controller alpha/u);
   } finally {
     restoreFetch();

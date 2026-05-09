@@ -6,16 +6,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import RootLayout from "./layout";
+import { RootLayoutShell } from "./RootLayoutShell";
 
 /**
  * Verifies the shared shell reflects the engineering-memory framing instead of a generic catalog title.
  */
 test("root layout renders the engineering memory workspace shell", () => {
   const html = renderToStaticMarkup(
-    <RootLayout>
+    <RootLayoutShell>
       <main>Child content</main>
-    </RootLayout>
+    </RootLayoutShell>
   );
 
   assert.match(html, /Engineering memory/u);

@@ -9,6 +9,8 @@ import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperation
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
+import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
+import { getWorkerStorageClient } from "./file-storage";
 import { runProviderPartImport } from "./provider-part-import";
 import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
 import type { ProviderPartRequest } from "./provider-adapters";
@@ -193,6 +195,7 @@ function buildUsageLines(): string[] {
     "npm run operations -w @ee-library/worker -- [limit]",
     "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
     "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
+    "npm run assemble-bundles -w @ee-library/worker -- [limit]",
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
     "npm run generate:drafts -w @ee-library/worker -- [limit]",
@@ -324,6 +327,34 @@ async function processQueuedProviderEnrichmentJobs(limitValue?: string): Promise
 }
 
 /**
+ * Drains pending export bundles by copying each verified asset's bytes into the per-bundle storage prefix.
+ *
+ * Failures are persisted as structured `assembly_error` telemetry on the bundle row so operators see
+ * exactly which asset failed and why instead of a generic "bundle generation failed" line.
+ */
+async function assembleExportBundles(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const storage = getWorkerStorageClient();
+    const summary = await timeWorkerOperation(
+      "worker.assemble_export_bundles",
+      () => processPendingExportBundleAssembly(Number.isFinite(limit) ? limit : 20, storage),
+      timings,
+      (value) => `${value.processed.length} bundle${value.processed.length === 1 ? "" : "s"}, ${value.processed.filter((r) => r.status === "assembly_failed").length} failed`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.assemble_export_bundles", error, timings);
+    throw error;
+  }
+}
+
+/**
  * Prints recent imports, generation, review, validation, and promotion diagnostics.
  */
 async function printWorkerOperationalDiagnostics(limitValue?: string): Promise<void> {
@@ -446,6 +477,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "assemble-bundles") {
+    await assembleExportBundles(process.argv[3]);
+    return;
+  }
+
   if (command === "generate-drafts") {
     await generateDraftAssets(process.argv[3]);
     return;
@@ -485,21 +521,49 @@ async function main(): Promise<void> {
 }
 
 /**
- * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM.
+ * DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS controls how often the daemon drains pending export bundle
+ * assemblies. Slower than the heartbeat interval so the daemon does not hammer Postgres when no
+ * bundles are queued; the cadence is fine because bundle generation is operator-initiated and
+ * a 30 second tail-latency between "Generate" and "Download archive" is acceptable.
+ */
+const DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS = 30_000;
+
+/**
+ * DEFAULT_BUNDLE_ASSEMBLY_BATCH_LIMIT caps how many pending bundles one tick processes so a long
+ * backlog does not block heartbeats or other daemon work.
+ */
+const DEFAULT_BUNDLE_ASSEMBLY_BATCH_LIMIT = 5;
+
+/**
+ * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, and on a
+ * slower cadence drains pending export-bundle asset-byte assemblies so engineers do not need to
+ * invoke `npm run assemble-bundles` after generating a bundle.
+ *
  * Used by the local-dev `npm run dev:worker` script and the GET /system/health liveness check.
  */
 async function runDaemon(): Promise<void> {
-  console.log(`Worker daemon starting (workerId=${resolveWorkerId()}, interval=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms).`);
+  console.log(
+    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms).`
+  );
 
   await safeEmitHeartbeat({ command: "daemon" });
 
-  const interval = setInterval(() => {
+  const heartbeatInterval = setInterval(() => {
     void safeEmitHeartbeat({ command: "daemon" });
   }, DEFAULT_HEARTBEAT_INTERVAL_MS);
 
+  const bundleAssemblyInterval = setInterval(() => {
+    void safeProcessPendingExportBundleAssembly();
+  }, DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS);
+
+  // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
+  // not have to wait a full interval before the worker picks it up.
+  void safeProcessPendingExportBundleAssembly();
+
   await new Promise<void>((resolve) => {
     const stop = () => {
-      clearInterval(interval);
+      clearInterval(heartbeatInterval);
+      clearInterval(bundleAssemblyInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -508,6 +572,31 @@ async function runDaemon(): Promise<void> {
 
   console.log("Worker daemon stopping.");
   await shutdownHeartbeatPool();
+}
+
+/**
+ * Processes pending export bundle assemblies without throwing so a transient DB or storage error
+ * never crashes the daemon. Logs a one-line summary only when there was actual work to surface so
+ * an idle daemon stays quiet.
+ */
+async function safeProcessPendingExportBundleAssembly(): Promise<void> {
+  try {
+    const storage = getWorkerStorageClient();
+    const summary = await processPendingExportBundleAssembly(DEFAULT_BUNDLE_ASSEMBLY_BATCH_LIMIT, storage);
+
+    if (summary.processed.length === 0) {
+      return;
+    }
+
+    const failed = summary.processed.filter((row) => row.status === "assembly_failed").length;
+    const assembled = summary.processed.length - failed;
+    console.log(
+      `Worker daemon: assembled ${assembled} bundle${assembled === 1 ? "" : "s"}` +
+        (failed > 0 ? `, ${failed} failed (see assembly_error JSONB)` : "")
+    );
+  } catch (error) {
+    console.error("Bundle assembly tick failed.", error instanceof Error ? error.message : error);
+  }
 }
 
 /**

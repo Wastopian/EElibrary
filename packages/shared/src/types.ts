@@ -15,7 +15,7 @@ export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model" |
 export type EngineeringAssetClass = AssetType;
 
 /** File formats describe storage content without implying availability. */
-export type FileFormat = "pdf" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
+export type FileFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
 
 /** License modes prevent the UI from promising redistribution when it is not known. */
 export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown";
@@ -404,6 +404,10 @@ export interface ProjectPartUsage {
   projectRevisionId: string;
   bomLineId: string | null;
   partId: string;
+  /** Optional denormalized part identity for high-usability project tables. */
+  partMpn?: string;
+  /** Optional denormalized manufacturer identity for high-usability project tables. */
+  manufacturerName?: string;
   usageContext: string | null;
   designators: string[];
   quantity: number | null;
@@ -576,6 +580,218 @@ export interface ProjectListResponse {
   state: ProjectMemoryReadState;
   projects: ProjectSummary[];
   capabilities: ProjectMemoryCapability[];
+}
+
+/**
+ * ProjectFolderCategory enumerates the first-class subfolders the project file mirror
+ * creates per project. Categories are the only directories the API exposes; any other
+ * on-disk content is surfaced as an "extra" entry so engineers can audit drift.
+ */
+export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "notes";
+
+/**
+ * ProjectFolderEntry describes one file persisted inside a project folder category.
+ * Sizes and timestamps come straight from the filesystem so the UI can show calm,
+ * factual file info without re-deriving anything.
+ */
+export interface ProjectFolderEntry {
+  /** Bare filename (no path components). */
+  name: string;
+  /** Bytes on disk; null when the entry is a sub-directory the API refuses to traverse. */
+  sizeBytes: number | null;
+  /** ISO-8601 timestamp captured from the filesystem mtime, or null when unavailable. */
+  modifiedAt: string | null;
+  /** True when the entry is a regular file; false when it is a directory or symlink. */
+  isFile: boolean;
+}
+
+/** ProjectFolderListing groups one category's filesystem entries with its absolute path. */
+export interface ProjectFolderListing {
+  /** Stable category identifier; matches ProjectFolderCategory. */
+  category: ProjectFolderCategory;
+  /** Human-readable category label rendered above the file list. */
+  label: string;
+  /** Short description of what should live in this folder. */
+  description: string;
+  /** Absolute path to this category's folder on the API host. */
+  absolutePath: string;
+  /** Files and directories observed inside this category folder. */
+  entries: ProjectFolderEntry[];
+}
+
+/**
+ * ProjectFilesAvailability tracks whether the file mirror is reachable. "configured"
+ * means the API can read and write the project root; "not_configured" means the env
+ * var has been disabled so the panel must show a clean, honest disabled state.
+ */
+export type ProjectFilesAvailability = "configured" | "not_configured" | "error";
+
+/** ProjectFilesResponse is the read-only project file mirror contract. */
+export interface ProjectFilesResponse {
+  /** Whether the project file mirror is configured and reachable. */
+  availability: ProjectFilesAvailability;
+  /** Absolute path to the project root folder, when configured. */
+  rootPath: string | null;
+  /** The project this listing belongs to. */
+  projectId: string;
+  /** Project key used as the on-disk folder name. */
+  projectKey: string;
+  /** Per-category listings; empty when availability is not_configured. */
+  folders: ProjectFolderListing[];
+  /** Human-readable detail when availability is "error". */
+  message: string | null;
+}
+
+/**
+ * ProjectFileUploadInput is the request body for `POST /projects/:id/files/:category`.
+ *
+ * Either `contentBase64` or `content` must be present:
+ *   - `contentBase64` is for arbitrary binary uploads (PDF datasheets, STEP models, BOM
+ *     CSVs). Standard base64 with optional `data:...,` prefix.
+ *   - `content` is for plain UTF-8 text written directly. Used for notes the engineer
+ *     types in the browser so the file is human-readable on disk.
+ */
+export interface ProjectFileUploadInput {
+  /** Suggested filename. The server sanitizes it and may append a collision suffix. */
+  filename: string;
+  /** Base64 payload for binary uploads. */
+  contentBase64?: string;
+  /** UTF-8 text payload for note composition. */
+  content?: string;
+}
+
+/** ProjectFileUploadResponse is the success envelope returned after a successful upload. */
+export interface ProjectFileUploadResponse {
+  /** Category the new file was written into. */
+  category: ProjectFolderCategory;
+  /** Final on-disk filename after sanitization and collision handling. */
+  entry: ProjectFolderEntry;
+  /** Absolute path the file was written to. */
+  absolutePath: string;
+}
+
+/**
+ * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
+ * the UI can render consistent labels and group views without a free-form taxonomy.
+ * Add categories here when the team starts working with a new class of supplier.
+ */
+export type VendorCategory =
+  | "pcb_fab"
+  | "sheet_metal"
+  | "machining"
+  | "finishing"
+  | "electronics_assembly"
+  | "distributor"
+  | "other";
+
+/**
+ * VendorAvailability mirrors ProjectFilesAvailability: "configured" means the vendor
+ * notes folder is reachable, "not_configured" means the env var has been disabled, and
+ * "error" surfaces filesystem failures honestly to the UI.
+ */
+export type VendorAvailability = "configured" | "not_configured" | "error";
+
+/**
+ * Vendor is the institutional record for one supplier. Slugs are derived from the name
+ * and are stable across renames-of-display so URLs and folders do not move silently.
+ */
+export interface Vendor {
+  /** URL slug derived from the vendor name; also the on-disk folder name. */
+  slug: string;
+  /** Display name. */
+  name: string;
+  /** Supplier class. */
+  category: VendorCategory;
+  /** One-line description that surfaces in the list view. */
+  summary: string;
+  /** ISO timestamp when the vendor record was created. */
+  createdAt: string;
+  /** ISO timestamp when the vendor record was last updated. */
+  updatedAt: string;
+}
+
+/** VendorSummary couples a Vendor with note/file counts for the list view. */
+export interface VendorSummary {
+  /** Vendor record itself. */
+  vendor: Vendor;
+  /** Number of Markdown notes saved under this vendor. */
+  noteCount: number;
+  /** Number of reference files saved under this vendor. */
+  fileCount: number;
+}
+
+/** VendorListResponse returns every vendor record alongside reachability metadata. */
+export interface VendorListResponse {
+  /** Whether the vendor notes mirror is configured and reachable. */
+  availability: VendorAvailability;
+  /** Absolute path to the vendor notes root, when configured. */
+  rootPath: string | null;
+  /** Per-vendor summaries; empty when availability is not_configured. */
+  vendors: VendorSummary[];
+  /** Human-readable detail when availability is "error". */
+  message: string | null;
+}
+
+/**
+ * VendorFolderSection enumerates the two on-disk folders inside a vendor record. Notes
+ * are Markdown decisions and observations the engineer types; files are uploaded
+ * reference docs (capability sheets, drawing standards, sample reports).
+ */
+export type VendorFolderSection = "notes" | "files";
+
+/** VendorDetailResponse returns one vendor with its notes and files folder listings. */
+export interface VendorDetailResponse {
+  /** Whether the vendor notes mirror is configured and reachable. */
+  availability: VendorAvailability;
+  /** Absolute path to the vendor notes root, when configured. */
+  rootPath: string | null;
+  /** Vendor record itself; null when not_configured or not_found. */
+  vendor: Vendor | null;
+  /** Engineer notes folder listing. */
+  notes: ProjectFolderEntry[];
+  /** Reference files folder listing. */
+  files: ProjectFolderEntry[];
+  /** Absolute path to this vendor's notes/ folder, when configured. */
+  notesPath: string | null;
+  /** Absolute path to this vendor's files/ folder, when configured. */
+  filesPath: string | null;
+  /** Human-readable detail when availability is "error". */
+  message: string | null;
+}
+
+/** VendorCreateInput is the request body for `POST /vendors`. */
+export interface VendorCreateInput {
+  /** Display name; required. */
+  name: string;
+  /** Supplier class; required. */
+  category: VendorCategory;
+  /** Optional one-liner shown in the list view. */
+  summary?: string;
+}
+
+/** VendorCreateResponse returns the newly created vendor record. */
+export interface VendorCreateResponse {
+  vendor: Vendor;
+}
+
+/** VendorFileUploadInput is the request body for `POST /vendors/:slug/files/:section`. */
+export interface VendorFileUploadInput {
+  /** Suggested filename. The server sanitizes it and may append a collision suffix. */
+  filename: string;
+  /** Base64 payload for binary uploads. */
+  contentBase64?: string;
+  /** UTF-8 text payload for note composition. */
+  content?: string;
+}
+
+/** VendorFileUploadResponse is the success envelope returned after a successful upload. */
+export interface VendorFileUploadResponse {
+  /** Section the file was written into. */
+  section: VendorFolderSection;
+  /** Final on-disk filename after sanitization and collision handling. */
+  entry: ProjectFolderEntry;
+  /** Absolute path the file was written to. */
+  absolutePath: string;
 }
 
 /** ProjectFleetRiskRow reports per-project explainable BOM risk counts for the fleet dashboard. */
@@ -1605,6 +1821,8 @@ export interface PartSearchRecord {
   reviewRecords: ReviewRecord[];
   validationRecords: AssetValidationRecord[];
   promotionAudits: AssetPromotionAuditRecord[];
+  /** Optional export-bundle readiness projection when a search API precomputes it. */
+  bundleReadiness?: BundleReadinessSummary;
   readinessSummary: PartReadinessSummary;
   approval: PartApproval;
   duplicateCandidates: PartDuplicateCandidate[];
@@ -1989,6 +2207,56 @@ export interface ExportBundleManifest {
   warnings: string[];
 }
 
+/**
+ * ExportBundleFileAvailability distinguishes the three honest states a stored bundle file can be in.
+ *
+ * - `manifest_only` — bundle was generated as a manifest record only (no file write was attempted).
+ *   This is the current default while file-backed bundle generation is still foundation-stage.
+ * - `available` — bundle has a `storageKey` AND the file is currently present on the storage backend.
+ * - `file_missing` — bundle has a `storageKey` but the file is absent from the storage backend
+ *   (e.g. retention sweep, manual delete). Surfacing this prevents broken Download links from
+ *   appearing in bundle history.
+ */
+export type ExportBundleFileAvailability = "manifest_only" | "available" | "file_missing";
+
+/**
+ * ExportBundleAssemblyStatus distinguishes the four honest states of worker-side asset-byte assembly.
+ *
+ * Assembly is separate from the synchronous manifest archive write. The manifest is recorded by the
+ * API at bundle creation; asset bytes (per-included-asset payloads) are copied into deterministic
+ * per-bundle storage paths by the worker so an archive download can be produced without blocking
+ * the API request.
+ *
+ * - `not_required` — bundle had zero included assets, so no asset-byte work is queued.
+ * - `pending` — bundle is waiting for the worker to copy each included asset's bytes.
+ * - `assembled` — every included asset's bytes were copied to the per-bundle storage prefix.
+ * - `assembly_failed` — assembly stopped on a specific asset; see `assemblyError` for telemetry.
+ */
+export type ExportBundleAssemblyStatus = "not_required" | "pending" | "assembled" | "assembly_failed";
+
+/**
+ * ExportBundleAssemblyErrorPhase identifies which step of the asset-byte assembly failed.
+ *
+ * - `fetch_asset` — reading the source asset bytes from storage failed.
+ * - `write_asset` — writing the per-bundle copy of the asset bytes to storage failed.
+ * - `unknown` — the failure was not classifiable into either phase.
+ */
+export type ExportBundleAssemblyErrorPhase = "fetch_asset" | "write_asset" | "unknown";
+
+/**
+ * ExportBundleAssemblyError records structured failure telemetry for one assembly attempt.
+ *
+ * Failure telemetry is intentionally per-asset so operators see exactly which asset failed and why,
+ * rather than scanning a free-text manifest warning.
+ */
+export interface ExportBundleAssemblyError {
+  phase: ExportBundleAssemblyErrorPhase;
+  message: string;
+  failedAssetId: string | null;
+  failedBundlePath: string | null;
+  failedAt: string;
+}
+
 /** ExportBundle is the persisted bundle record with its manifest. */
 export interface ExportBundle {
   id: string;
@@ -1996,11 +2264,38 @@ export interface ExportBundle {
   revisionLabel: string | null;
   bundleFormat: ExportBundleFormat;
   storageKey: string | null;
+  /**
+   * Storage key for the worker-assembled single-archive (`.tar.gz`). Null until assembly succeeds.
+   * Distinct from `storageKey` so the manifest archive (JSON) and the engineering-friendly bundle
+   * download stay separable — readable manifest for audit, single archive for download.
+   */
+  archiveStorageKey: string | null;
+  /**
+   * Honest availability signal for the bundle file. Computed at read time so a download link
+   * is only offered when the file is actually present on the storage backend.
+   */
+  fileAvailability: ExportBundleFileAvailability;
+  /**
+   * Honest availability signal for the assembled `.tar.gz` archive, computed at read time the same
+   * way as `fileAvailability` so a "Download archive" link never points at a missing file.
+   */
+  archiveAvailability: ExportBundleFileAvailability;
   manifest: ExportBundleManifest;
   partCount: number;
   includedAssetCount: number;
   omittedAssetCount: number;
   warningCount: number;
+  /**
+   * Worker-side asset-byte assembly status. Separate from `fileAvailability` so manifest persistence
+   * (synchronous, API-side) is not conflated with per-asset byte copying (async, worker-side).
+   */
+  assemblyStatus: ExportBundleAssemblyStatus;
+  /** Structured telemetry for the latest failed assembly attempt; null when never failed. */
+  assemblyError: ExportBundleAssemblyError | null;
+  /** ISO timestamp the worker last completed (or last failed) an assembly attempt; null until first attempt. */
+  assemblyCompletedAt: string | null;
+  /** Number of assembly attempts the worker has executed for this bundle. */
+  assemblyAttemptCount: number;
   createdBy: string | null;
   createdAt: string;
 }
@@ -2210,4 +2505,126 @@ export interface ProjectRevisionCompareResponse {
   mpnSwapCount: number;
   unchangedCount: number;
   rows: ProjectRevisionCompareRow[];
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC15: Connector set catalog view
+// ---------------------------------------------------------------------------
+
+/** ConnectorSetMatePairKind names how a mate row relates to its primary connector. */
+export type ConnectorSetMatePairKind = "best_mate" | "alternate_mate";
+
+/** ConnectorSetMatePair is one mate or alternate for a primary connector in the set view. */
+export interface ConnectorSetMatePair {
+  matePartId: string;
+  mateMpn: string;
+  mateManufacturerName: string;
+  matePartLifecycleStatus: LifecycleStatus;
+  matePartApprovalStatus: PartApprovalStatus | null;
+  matePartReadinessStatus: PartReadinessStatus | null;
+  matePartConnectorClass: ConnectorClass | null;
+  relationshipType: ConnectorSetMatePairKind;
+  /** Optional confidence score from mate_relations.confidence_score (0-1). */
+  confidenceScore: number | null;
+  /** Number of confirmed project usages that touch this mate. */
+  projectUsageCount: number;
+}
+
+/** ConnectorSetEntry is one connector listing with its identity, current state, mates, and use count. */
+export interface ConnectorSetEntry {
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  connectorClass: ConnectorClass;
+  lifecycleStatus: LifecycleStatus;
+  approvalStatus: PartApprovalStatus | null;
+  readinessStatus: PartReadinessStatus | null;
+  blockerCount: number | null;
+  /** Confirmed project usage count for the primary connector. */
+  projectUsageCount: number;
+  matePairs: ConnectorSetMatePair[];
+}
+
+/** ConnectorSetClassGroup groups connector entries by `connector_class` so the catalog can render families. */
+export interface ConnectorSetClassGroup {
+  connectorClass: ConnectorClass;
+  entries: ConnectorSetEntry[];
+}
+
+/** ConnectorSetListResponse returns the connector-set catalog grouped by connector_class. */
+export interface ConnectorSetListResponse {
+  state: ProjectMemoryReadState;
+  /** Optional connector_class filter applied; null means no filter. */
+  connectorClassFilter: ConnectorClass | null;
+  /** Optional MPN substring filter applied; null when no filter. */
+  query: string | null;
+  totalConnectorCount: number;
+  totalMatePairCount: number;
+  groups: ConnectorSetClassGroup[];
+  /** Trust boundary copy reminding readers that listing does not approve reuse or unlock export. */
+  boundary: string;
+}
+
+// ---------------------------------------------------------------------------
+// P2-FUNC16: Approval batch workflow from project BOM context
+// ---------------------------------------------------------------------------
+
+/** ApprovalBatchAction names the bulk action applied to a candidate part. */
+export type ApprovalBatchAction = "approve" | "flag_for_review";
+
+/** ApprovalBatchCandidate is one matched-usage part that currently has an approval gap. */
+export interface ApprovalBatchCandidate {
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  approvalStatus: PartApprovalStatus | null;
+  lifecycleStatus: LifecycleStatus | null;
+  readinessStatus: PartReadinessStatus | null;
+  /** Number of distinct BOM lines in this project that confirm usage of the part. */
+  bomLineCount: number;
+  /** Designators across BOM lines for fast triage (capped). */
+  designators: string[];
+  /** Stable BOM line ids for trace-back. */
+  bomLineIds: string[];
+}
+
+/** ApprovalBatchCandidatesResponse returns the project-scoped approval queue. */
+export interface ApprovalBatchCandidatesResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  generatedAt: string;
+  candidates: ApprovalBatchCandidate[];
+  /** Trust boundary copy reminding readers that approval does not validate evidence or unlock export. */
+  boundary: string;
+}
+
+/** ApprovalBatchRequest is the bulk approval input from the project BOM context. */
+export interface ApprovalBatchRequest {
+  partIds: string[];
+  action: ApprovalBatchAction;
+  notes?: string | null;
+}
+
+/** ApprovalBatchOutcomeStatus reports per-part processing outcome. */
+export type ApprovalBatchOutcomeStatus = "applied" | "skipped_already_approved" | "not_found" | "skipped_no_change";
+
+/** ApprovalBatchOutcome is one part's per-record outcome inside a batch. */
+export interface ApprovalBatchOutcome {
+  partId: string;
+  status: ApprovalBatchOutcomeStatus;
+  previousApprovalStatus: PartApprovalStatus | null;
+  newApprovalStatus: PartApprovalStatus | null;
+  message: string;
+}
+
+/** ApprovalBatchResponse summarizes a bulk approval action triggered from project BOM context. */
+export interface ApprovalBatchResponse {
+  projectId: string;
+  action: ApprovalBatchAction;
+  appliedCount: number;
+  skippedCount: number;
+  notFoundCount: number;
+  outcomes: ApprovalBatchOutcome[];
+  /** Trust boundary reminder shown beside the batch result. */
+  boundary: string;
 }

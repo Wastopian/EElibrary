@@ -7,6 +7,7 @@
 import React, { useState } from "react";
 import { StatusBadge, TrustMeter } from "@ee-library/ui";
 import type { BadgeTone } from "@ee-library/ui";
+import type { CatalogTrustLineageBadge } from "../lib/trust-lineage";
 
 /** CatalogResultRowViewModel keeps the search presentation decoupled from raw backend records. */
 export type CatalogResultRowViewModel = {
@@ -18,6 +19,7 @@ export type CatalogResultRowViewModel = {
   category: string;
   cadExportLabel: string;
   cadExportTone: BadgeTone;
+  compareAddHref: string;
   description: string;
   connectorSignalDetail: string;
   connectorSignalLabel: string;
@@ -41,6 +43,7 @@ export type CatalogResultRowViewModel = {
   readinessSubhead: string;
   topBlocker: string;
   trustScore: number;
+  trustLineageBadges: CatalogTrustLineageBadge[];
   trustTone: BadgeTone;
 };
 
@@ -93,6 +96,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                   <th>Lifecycle</th>
                   <th>Datasheet</th>
                   <th>CAD/export</th>
+                  <th>Trust gates</th>
                   <th>Readiness</th>
                   <th>Next action</th>
                   <th>Action</th>
@@ -120,6 +124,12 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                       <StatusBadge label={row.cadExportLabel} tone={row.cadExportTone} />
                     </td>
                     <td>
+                      <details className="catalog-trust-gates-cell">
+                        <summary>stages</summary>
+                        <CatalogTrustGatesRow badges={row.trustLineageBadges} />
+                      </details>
+                    </td>
+                    <td>
                       <strong>{row.readinessHeadline}</strong>
                       <div className="muted-copy">{row.readinessSubhead}</div>
                     </td>
@@ -130,6 +140,9 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                     <td>
                       <a className="button-link button-link--quiet" href={row.href}>
                         Open
+                      </a>
+                      <a className="button-link button-link--quiet" href={row.compareAddHref}>
+                        Compare
                       </a>
                     </td>
                   </tr>
@@ -168,36 +181,7 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
         <small>{row.readinessDetail}</small>
       </div>
 
-      <div className="result-row__signals">
-        <div>
-          <span>Export bundle</span>
-          <strong>{row.exportLabel}</strong>
-          <small>Bundle export follows verified file-backed CAD, not single-file luck.</small>
-        </div>
-        <div>
-          <span>Approval</span>
-          <strong>{row.approvalLabel}</strong>
-          <small>{row.approvalDetail}</small>
-        </div>
-        <div>
-          <span>CAD truth</span>
-          <strong>{row.assetTruthLabel}</strong>
-          <small>{row.assetTruthDetail}</small>
-        </div>
-        <div>
-          <span>{row.connectorSignalTitle}</span>
-          <strong>{row.connectorSignalLabel}</strong>
-          <small>{row.connectorSignalDetail}</small>
-        </div>
-      </div>
-
       <div className="result-row__sidebar">
-        <div className="result-row__badges">
-          <StatusBadge label={row.lifecycleLabel} tone="neutral" />
-          <StatusBadge label={row.approvalLabel} tone={row.approvalTone} />
-          <StatusBadge label={row.exportLabel} tone={row.exportTone} />
-        </div>
-        <TrustMeter label="Trust" score={row.trustScore} tone={row.trustTone} />
         <div className="result-row__next">
           <span>{row.riskLabel}</span>
           <p>{row.topBlocker}</p>
@@ -206,8 +190,66 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
           <a className="button-link button-link--quiet" href={row.href}>
             Open record
           </a>
+          <a className="button-link button-link--quiet" href={row.compareAddHref}>
+            Add to compare
+          </a>
         </div>
       </div>
+
+      <details className="result-row__details">
+        <summary>Show signals and trust gates</summary>
+        <div className="result-row__details-body">
+          <div className="result-row__signals">
+            <div>
+              <span>Export bundle</span>
+              <strong>{row.exportLabel}</strong>
+              <small>Bundle export follows verified file-backed CAD, not single-file luck.</small>
+            </div>
+            <div>
+              <span>Approval</span>
+              <strong>{row.approvalLabel}</strong>
+              <small>{row.approvalDetail}</small>
+            </div>
+            <div>
+              <span>CAD truth</span>
+              <strong>{row.assetTruthLabel}</strong>
+              <small>{row.assetTruthDetail}</small>
+            </div>
+            <div>
+              <span>{row.connectorSignalTitle}</span>
+              <strong>{row.connectorSignalLabel}</strong>
+              <small>{row.connectorSignalDetail}</small>
+            </div>
+          </div>
+          <div className="catalog-result-trust-gates" role="group" aria-label="Trust lineage gates">
+            <span className="catalog-result-trust-gates__label">Trust gates</span>
+            <CatalogTrustGatesRow badges={row.trustLineageBadges} />
+          </div>
+          <div className="result-row__details-meter">
+            <div className="result-row__badges">
+              <StatusBadge label={row.lifecycleLabel} tone="neutral" />
+              <StatusBadge label={row.approvalLabel} tone={row.approvalTone} />
+              <StatusBadge label={row.exportLabel} tone={row.exportTone} />
+            </div>
+            <TrustMeter label="Trust" score={row.trustScore} tone={row.trustTone} />
+          </div>
+        </div>
+      </details>
     </article>
+  );
+}
+
+/**
+ * Renders four abbreviated trust-stage badges so imported/reviewed/approved/export stay distinct at scan speed.
+ */
+function CatalogTrustGatesRow({ badges }: { badges: CatalogTrustLineageBadge[] }): React.ReactElement {
+  return (
+    <div className="catalog-trust-gates">
+      {badges.map((badge) => (
+        <span key={badge.stageKey} className="catalog-trust-gates__item" title={badge.title}>
+          <StatusBadge label={`${badge.abbrev}·${badge.stateMark}`} tone={badge.badgeTone} />
+        </span>
+      ))}
+    </div>
   );
 }

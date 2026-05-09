@@ -4,11 +4,31 @@
 
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
-import { buildExportBundleDownloadUrl, createExportBundle, isApiClientError } from "../lib/api-client";
+import { buildExportBundleDownloadUrl, createExportBundle, fetchProjectExportBundles, isApiClientError } from "../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { ExportBundle, ExportBundleFormat, ExportBundleListResponse, ProjectRevision } from "@ee-library/shared/types";
+import type { ExportBundle, ExportBundleAssemblyStatus, ExportBundleFormat, ExportBundleListResponse, ProjectRevision } from "@ee-library/shared/types";
+
+/**
+ * BUNDLE_AUTO_REFRESH_INTERVAL_MS controls how often the panel re-fetches the bundle list while
+ * one or more bundles are still in `pending` assembly. Slightly under the worker daemon's 30s
+ * tick so a bundle that finishes assembly is reflected in the UI within one polling cycle of the
+ * daemon completing rather than two. Idle panels (no pending bundles) do not poll at all.
+ */
+export const BUNDLE_AUTO_REFRESH_INTERVAL_MS = 8_000;
+
+/**
+ * Returns true when at least one bundle row is still in `pending` assembly and therefore the
+ * panel should keep polling the API for updates. Pulled out of the component so the polling rule
+ * can be exercised in unit tests without a DOM.
+ *
+ * `not_required` bundles never poll (no work to do); `assembled` and `assembly_failed` are
+ * terminal states and also do not poll. Only `pending` rows trigger refreshes.
+ */
+export function shouldAutoRefreshBundleAssembly(bundles: readonly ExportBundle[]): boolean {
+  return bundles.some((bundle) => bundle.assemblyStatus === "pending");
+}
 
 /** ExportBundlePanelProps scopes bundle generation to one project. */
 export interface ExportBundlePanelProps {
@@ -37,6 +57,46 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
   const [bundleList, setBundleList] = useState<ExportBundle[]>(bundles.bundles);
   const [format, setFormat] = useState<ExportBundleFormat>("neutral");
   const [revisionLabel, setRevisionLabel] = useState<string>("");
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState<boolean>(false);
+  const isFetchingRef = useRef<boolean>(false);
+
+  // Poll the bundle list while any bundle is still in `pending` assembly so the operator does not
+  // have to manually reload to see the worker daemon's progress. The effect re-runs whenever the
+  // bundle list changes; once every bundle has settled (assembled / assembly_failed / not_required)
+  // the interval clears and the panel goes idle. A ref guards against overlapping fetches when a
+  // request is slower than the polling interval.
+  useEffect(() => {
+    if (!shouldAutoRefreshBundleAssembly(bundleList)) {
+      setIsAutoRefreshing(false);
+      return;
+    }
+
+    setIsAutoRefreshing(true);
+
+    const refreshBundleList = async () => {
+      if (isFetchingRef.current) {
+        return;
+      }
+
+      isFetchingRef.current = true;
+      try {
+        const refreshed = await fetchProjectExportBundles(projectId);
+        setBundleList(refreshed.bundles);
+      } catch {
+        // Soft-fail: keep polling on the next interval. The next successful fetch will reconcile.
+      } finally {
+        isFetchingRef.current = false;
+      }
+    };
+
+    const interval = setInterval(() => {
+      void refreshBundleList();
+    }, BUNDLE_AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [bundleList, projectId]);
 
   const generateBundle = useCallback(async () => {
     setCreateState({ kind: "creating" });
@@ -125,7 +185,19 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
       </div>
 
       <div className="export-bundle-panel__history">
-        <h4 className="form-section-label">Bundle history</h4>
+        <div className="export-bundle-panel__history-header">
+          <h4 className="form-section-label">Bundle history</h4>
+          {isAutoRefreshing && (
+            <span
+              className="text-muted"
+              role="status"
+              aria-live="polite"
+              title="Polling while one or more bundles are still being assembled by the worker."
+            >
+              Refreshing assembly status…
+            </span>
+          )}
+        </div>
         {bundleList.length === 0 ? (
           <EmptyState
             title="No bundles yet"
@@ -141,6 +213,7 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
                 <th>Included</th>
                 <th>Omitted</th>
                 <th>Warnings</th>
+                <th>Assembly</th>
                 <th>Generated</th>
                 <th>Download</th>
               </tr>
@@ -159,7 +232,8 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
 
 function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElement {
   const [showManifest, setShowManifest] = useState(false);
-  const downloadUrl = buildExportBundleDownloadUrl(bundle.storageKey);
+  const manifestDownloadUrl = bundle.fileAvailability === "available" ? buildExportBundleDownloadUrl(bundle.storageKey) : null;
+  const archiveDownloadUrl = bundle.archiveAvailability === "available" ? buildExportBundleDownloadUrl(bundle.archiveStorageKey) : null;
   const inlineWarnings = collectInlineBundleWarnings(bundle);
 
   return (
@@ -185,22 +259,17 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
             <span>{bundle.warningCount}</span>
           )}
         </td>
+        <td>
+          <BundleAssemblyCell bundle={bundle} />
+        </td>
         <td className="ui-mono">{new Date(bundle.createdAt).toLocaleString()}</td>
         <td>
-          {downloadUrl ? (
-            <a className="link-button" href={downloadUrl} download>
-              Download
-            </a>
-          ) : (
-            <span className="text-muted" title="Bundle has no captured storage file. Manifest still readable below.">
-              Manifest only
-            </span>
-          )}
+          <BundleAvailabilityCell bundle={bundle} archiveDownloadUrl={archiveDownloadUrl} manifestDownloadUrl={manifestDownloadUrl} />
         </td>
       </tr>
       {inlineWarnings.length > 0 && (
         <tr>
-          <td colSpan={8}>
+          <td colSpan={9}>
             <ul className="bundle-inline-warnings">
               {inlineWarnings.map((warning, i) => (
                 <li key={i} className="form-feedback form-feedback--warning">
@@ -213,14 +282,14 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
       )}
       {showManifest && (
         <tr>
-          <td colSpan={8}>
+          <td colSpan={9}>
             <BundleManifestDetail bundle={bundle} onClose={() => setShowManifest(false)} />
           </td>
         </tr>
       )}
       {!showManifest && (
         <tr>
-          <td colSpan={8}>
+          <td colSpan={9}>
             <button
               className="link-button"
               type="button"
@@ -232,6 +301,125 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * Renders the worker-side asset-byte assembly state for one bundle row.
+ *
+ * Assembly state is intentionally separate from `fileAvailability`: the manifest is persisted
+ * synchronously by the API, while per-asset bytes are copied asynchronously by the worker.
+ * Showing both keeps "manifest exists" honest from "asset bytes are ready for download".
+ */
+function BundleAssemblyCell({ bundle }: { bundle: ExportBundle }): React.ReactElement {
+  if (bundle.assemblyStatus === "assembled") {
+    return <StatusBadge label="Assembled" tone="verified" />;
+  }
+
+  if (bundle.assemblyStatus === "pending") {
+    return <StatusBadge label="Assembling" tone="review" />;
+  }
+
+  if (bundle.assemblyStatus === "assembly_failed") {
+    return <StatusBadge label="Assembly failed" tone="danger" />;
+  }
+
+  return <StatusBadge label="Not required" tone="info" />;
+}
+
+/**
+ * Builds plain-language assembly-state telemetry suitable for the inline warning row.
+ *
+ * Returns null when there is nothing to surface (e.g. assembled or not_required) so the row stays
+ * quiet during normal operation.
+ */
+export function buildBundleAssemblyTelemetryMessage(bundle: ExportBundle): string | null {
+  if (bundle.assemblyStatus === "pending") {
+    return `Worker is copying ${bundle.includedAssetCount} verified asset${bundle.includedAssetCount === 1 ? "" : "s"} into per-bundle storage.`;
+  }
+
+  if (bundle.assemblyStatus === "assembly_failed" && bundle.assemblyError) {
+    const phaseCopy: Record<string, string> = {
+      fetch_asset: "reading the source asset bytes",
+      unknown: "an unclassified step",
+      write_asset: "writing the per-bundle copy"
+    };
+    const phaseDescription = phaseCopy[bundle.assemblyError.phase] ?? "an unclassified step";
+    const targetPath = bundle.assemblyError.failedBundlePath ?? bundle.assemblyError.failedAssetId ?? "an included asset";
+
+    return `Bundle assembly failed at ${phaseDescription} for ${targetPath}: ${bundle.assemblyError.message}.`;
+  }
+
+  return null;
+}
+
+/**
+ * Maps an assembly status to a stable label for non-DOM callers (printable summaries, tests).
+ */
+export function describeBundleAssemblyStatus(status: ExportBundleAssemblyStatus): string {
+  switch (status) {
+    case "assembled":
+      return "Assembled";
+    case "pending":
+      return "Assembling";
+    case "assembly_failed":
+      return "Assembly failed";
+    default:
+      return "Not required";
+  }
+}
+
+/**
+ * Renders the availability cell for a bundle row.
+ *
+ * Two distinct artifacts can be downloaded once they exist:
+ *   - the synchronous manifest archive (`storageKey`), recorded by the API at bundle creation, and
+ *   - the worker-assembled `.tar.gz` (`archiveStorageKey`), produced after asset-byte assembly.
+ * The archive download is preferred when present because it ships the verified asset bytes; the
+ * manifest stays available as the audit-readable JSON record. Missing-file states surface honestly
+ * so a broken link is never offered.
+ */
+function BundleAvailabilityCell({
+  archiveDownloadUrl,
+  bundle,
+  manifestDownloadUrl
+}: {
+  archiveDownloadUrl: string | null;
+  bundle: ExportBundle;
+  manifestDownloadUrl: string | null;
+}): React.ReactElement {
+  return (
+    <div className="bundle-download-cell">
+      {bundle.archiveAvailability === "available" && archiveDownloadUrl ? (
+        <a className="link-button" href={archiveDownloadUrl} download>
+          Download archive (.tar.gz)
+        </a>
+      ) : bundle.archiveAvailability === "file_missing" ? (
+        <span
+          className="text-warning"
+          title="Assembled archive is no longer present in storage. Regenerate the bundle to restore the archive."
+        >
+          Archive missing
+        </span>
+      ) : null}
+      {bundle.fileAvailability === "available" && manifestDownloadUrl ? (
+        <a className="link-button" href={manifestDownloadUrl} download>
+          Download manifest
+        </a>
+      ) : bundle.fileAvailability === "file_missing" ? (
+        <span
+          className="text-warning"
+          title="Manifest archive is no longer present in storage. Regenerate the bundle to restore the manifest."
+        >
+          Manifest missing
+        </span>
+      ) : null}
+      {bundle.fileAvailability === "manifest_only" && bundle.archiveAvailability === "manifest_only" && (
+        <span className="text-muted" title="Bundle has no captured storage file. Manifest still readable below.">
+          Manifest only
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -253,6 +441,15 @@ function collectInlineBundleWarnings(bundle: ExportBundle): string[] {
   }
   if (unverifiedCount > 0) {
     messages.push(`${unverifiedCount} unverified asset${unverifiedCount === 1 ? "" : "s"} excluded - awaiting verified-for-export promotion.`);
+  }
+
+  if (bundle.fileAvailability === "file_missing") {
+    messages.push("Bundle file is no longer present in storage. Regenerate the bundle to restore the download link.");
+  }
+
+  const assemblyMessage = buildBundleAssemblyTelemetryMessage(bundle);
+  if (assemblyMessage) {
+    messages.push(assemblyMessage);
   }
 
   return messages;

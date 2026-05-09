@@ -86,6 +86,10 @@ function buildHealth({
       enrichment: {
         failed: enrichmentFailed,
         pending: enrichmentPending
+      },
+      exportBundleAssembly: {
+        failed: 0,
+        pending: 0
       }
     },
     worker: {
