@@ -124,7 +124,10 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                       <StatusBadge label={row.cadExportLabel} tone={row.cadExportTone} />
                     </td>
                     <td>
-                      <CatalogTrustGatesRow badges={row.trustLineageBadges} />
+                      <details className="catalog-trust-gates-cell">
+                        <summary>stages</summary>
+                        <CatalogTrustGatesRow badges={row.trustLineageBadges} />
+                      </details>
                     </td>
                     <td>
                       <strong>{row.readinessHeadline}</strong>
@@ -176,42 +179,9 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
         <strong>{row.readinessHeadline}</strong>
         <p>{row.readinessSubhead}</p>
         <small>{row.readinessDetail}</small>
-        <div className="catalog-result-trust-gates" role="group" aria-label="Trust lineage gates">
-          <span className="catalog-result-trust-gates__label">Trust gates</span>
-          <CatalogTrustGatesRow badges={row.trustLineageBadges} />
-        </div>
-      </div>
-
-      <div className="result-row__signals">
-        <div>
-          <span>Export bundle</span>
-          <strong>{row.exportLabel}</strong>
-          <small>Bundle export follows verified file-backed CAD, not single-file luck.</small>
-        </div>
-        <div>
-          <span>Approval</span>
-          <strong>{row.approvalLabel}</strong>
-          <small>{row.approvalDetail}</small>
-        </div>
-        <div>
-          <span>CAD truth</span>
-          <strong>{row.assetTruthLabel}</strong>
-          <small>{row.assetTruthDetail}</small>
-        </div>
-        <div>
-          <span>{row.connectorSignalTitle}</span>
-          <strong>{row.connectorSignalLabel}</strong>
-          <small>{row.connectorSignalDetail}</small>
-        </div>
       </div>
 
       <div className="result-row__sidebar">
-        <div className="result-row__badges">
-          <StatusBadge label={row.lifecycleLabel} tone="neutral" />
-          <StatusBadge label={row.approvalLabel} tone={row.approvalTone} />
-          <StatusBadge label={row.exportLabel} tone={row.exportTone} />
-        </div>
-        <TrustMeter label="Trust" score={row.trustScore} tone={row.trustTone} />
         <div className="result-row__next">
           <span>{row.riskLabel}</span>
           <p>{row.topBlocker}</p>
@@ -225,6 +195,46 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
           </a>
         </div>
       </div>
+
+      <details className="result-row__details">
+        <summary>Show signals and trust gates</summary>
+        <div className="result-row__details-body">
+          <div className="result-row__signals">
+            <div>
+              <span>Export bundle</span>
+              <strong>{row.exportLabel}</strong>
+              <small>Bundle export follows verified file-backed CAD, not single-file luck.</small>
+            </div>
+            <div>
+              <span>Approval</span>
+              <strong>{row.approvalLabel}</strong>
+              <small>{row.approvalDetail}</small>
+            </div>
+            <div>
+              <span>CAD truth</span>
+              <strong>{row.assetTruthLabel}</strong>
+              <small>{row.assetTruthDetail}</small>
+            </div>
+            <div>
+              <span>{row.connectorSignalTitle}</span>
+              <strong>{row.connectorSignalLabel}</strong>
+              <small>{row.connectorSignalDetail}</small>
+            </div>
+          </div>
+          <div className="catalog-result-trust-gates" role="group" aria-label="Trust lineage gates">
+            <span className="catalog-result-trust-gates__label">Trust gates</span>
+            <CatalogTrustGatesRow badges={row.trustLineageBadges} />
+          </div>
+          <div className="result-row__details-meter">
+            <div className="result-row__badges">
+              <StatusBadge label={row.lifecycleLabel} tone="neutral" />
+              <StatusBadge label={row.approvalLabel} tone={row.approvalTone} />
+              <StatusBadge label={row.exportLabel} tone={row.exportTone} />
+            </div>
+            <TrustMeter label="Trust" score={row.trustScore} tone={row.trustTone} />
+          </div>
+        </div>
+      </details>
     </article>
   );
 }

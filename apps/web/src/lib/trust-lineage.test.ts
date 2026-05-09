@@ -29,7 +29,7 @@ test("trust lineage strip returns four stages in canonical order", () => {
     summary.stages.map((stage) => stage.stage),
     ["imported", "reviewed", "approved", "verified_for_export"]
   );
-  assert.match(summary.boundary, /Imported is data ingested/u);
+  assert.match(summary.boundary, /Each step is separate/u);
 });
 
 /**

@@ -82,7 +82,7 @@ export function CompareSelectionTray({ initialPartIds }: { initialPartIds: strin
           placeholder="part-id-1, part-id-2"
           value={input}
         />
-        <button type="submit">Add</button>
+        <button type="submit">Add parts</button>
       </form>
       {warning ? <p className="muted-copy">{warning}</p> : null}
     </section>

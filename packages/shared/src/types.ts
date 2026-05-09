@@ -582,6 +582,218 @@ export interface ProjectListResponse {
   capabilities: ProjectMemoryCapability[];
 }
 
+/**
+ * ProjectFolderCategory enumerates the first-class subfolders the project file mirror
+ * creates per project. Categories are the only directories the API exposes; any other
+ * on-disk content is surfaced as an "extra" entry so engineers can audit drift.
+ */
+export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "notes";
+
+/**
+ * ProjectFolderEntry describes one file persisted inside a project folder category.
+ * Sizes and timestamps come straight from the filesystem so the UI can show calm,
+ * factual file info without re-deriving anything.
+ */
+export interface ProjectFolderEntry {
+  /** Bare filename (no path components). */
+  name: string;
+  /** Bytes on disk; null when the entry is a sub-directory the API refuses to traverse. */
+  sizeBytes: number | null;
+  /** ISO-8601 timestamp captured from the filesystem mtime, or null when unavailable. */
+  modifiedAt: string | null;
+  /** True when the entry is a regular file; false when it is a directory or symlink. */
+  isFile: boolean;
+}
+
+/** ProjectFolderListing groups one category's filesystem entries with its absolute path. */
+export interface ProjectFolderListing {
+  /** Stable category identifier; matches ProjectFolderCategory. */
+  category: ProjectFolderCategory;
+  /** Human-readable category label rendered above the file list. */
+  label: string;
+  /** Short description of what should live in this folder. */
+  description: string;
+  /** Absolute path to this category's folder on the API host. */
+  absolutePath: string;
+  /** Files and directories observed inside this category folder. */
+  entries: ProjectFolderEntry[];
+}
+
+/**
+ * ProjectFilesAvailability tracks whether the file mirror is reachable. "configured"
+ * means the API can read and write the project root; "not_configured" means the env
+ * var has been disabled so the panel must show a clean, honest disabled state.
+ */
+export type ProjectFilesAvailability = "configured" | "not_configured" | "error";
+
+/** ProjectFilesResponse is the read-only project file mirror contract. */
+export interface ProjectFilesResponse {
+  /** Whether the project file mirror is configured and reachable. */
+  availability: ProjectFilesAvailability;
+  /** Absolute path to the project root folder, when configured. */
+  rootPath: string | null;
+  /** The project this listing belongs to. */
+  projectId: string;
+  /** Project key used as the on-disk folder name. */
+  projectKey: string;
+  /** Per-category listings; empty when availability is not_configured. */
+  folders: ProjectFolderListing[];
+  /** Human-readable detail when availability is "error". */
+  message: string | null;
+}
+
+/**
+ * ProjectFileUploadInput is the request body for `POST /projects/:id/files/:category`.
+ *
+ * Either `contentBase64` or `content` must be present:
+ *   - `contentBase64` is for arbitrary binary uploads (PDF datasheets, STEP models, BOM
+ *     CSVs). Standard base64 with optional `data:...,` prefix.
+ *   - `content` is for plain UTF-8 text written directly. Used for notes the engineer
+ *     types in the browser so the file is human-readable on disk.
+ */
+export interface ProjectFileUploadInput {
+  /** Suggested filename. The server sanitizes it and may append a collision suffix. */
+  filename: string;
+  /** Base64 payload for binary uploads. */
+  contentBase64?: string;
+  /** UTF-8 text payload for note composition. */
+  content?: string;
+}
+
+/** ProjectFileUploadResponse is the success envelope returned after a successful upload. */
+export interface ProjectFileUploadResponse {
+  /** Category the new file was written into. */
+  category: ProjectFolderCategory;
+  /** Final on-disk filename after sanitization and collision handling. */
+  entry: ProjectFolderEntry;
+  /** Absolute path the file was written to. */
+  absolutePath: string;
+}
+
+/**
+ * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
+ * the UI can render consistent labels and group views without a free-form taxonomy.
+ * Add categories here when the team starts working with a new class of supplier.
+ */
+export type VendorCategory =
+  | "pcb_fab"
+  | "sheet_metal"
+  | "machining"
+  | "finishing"
+  | "electronics_assembly"
+  | "distributor"
+  | "other";
+
+/**
+ * VendorAvailability mirrors ProjectFilesAvailability: "configured" means the vendor
+ * notes folder is reachable, "not_configured" means the env var has been disabled, and
+ * "error" surfaces filesystem failures honestly to the UI.
+ */
+export type VendorAvailability = "configured" | "not_configured" | "error";
+
+/**
+ * Vendor is the institutional record for one supplier. Slugs are derived from the name
+ * and are stable across renames-of-display so URLs and folders do not move silently.
+ */
+export interface Vendor {
+  /** URL slug derived from the vendor name; also the on-disk folder name. */
+  slug: string;
+  /** Display name. */
+  name: string;
+  /** Supplier class. */
+  category: VendorCategory;
+  /** One-line description that surfaces in the list view. */
+  summary: string;
+  /** ISO timestamp when the vendor record was created. */
+  createdAt: string;
+  /** ISO timestamp when the vendor record was last updated. */
+  updatedAt: string;
+}
+
+/** VendorSummary couples a Vendor with note/file counts for the list view. */
+export interface VendorSummary {
+  /** Vendor record itself. */
+  vendor: Vendor;
+  /** Number of Markdown notes saved under this vendor. */
+  noteCount: number;
+  /** Number of reference files saved under this vendor. */
+  fileCount: number;
+}
+
+/** VendorListResponse returns every vendor record alongside reachability metadata. */
+export interface VendorListResponse {
+  /** Whether the vendor notes mirror is configured and reachable. */
+  availability: VendorAvailability;
+  /** Absolute path to the vendor notes root, when configured. */
+  rootPath: string | null;
+  /** Per-vendor summaries; empty when availability is not_configured. */
+  vendors: VendorSummary[];
+  /** Human-readable detail when availability is "error". */
+  message: string | null;
+}
+
+/**
+ * VendorFolderSection enumerates the two on-disk folders inside a vendor record. Notes
+ * are Markdown decisions and observations the engineer types; files are uploaded
+ * reference docs (capability sheets, drawing standards, sample reports).
+ */
+export type VendorFolderSection = "notes" | "files";
+
+/** VendorDetailResponse returns one vendor with its notes and files folder listings. */
+export interface VendorDetailResponse {
+  /** Whether the vendor notes mirror is configured and reachable. */
+  availability: VendorAvailability;
+  /** Absolute path to the vendor notes root, when configured. */
+  rootPath: string | null;
+  /** Vendor record itself; null when not_configured or not_found. */
+  vendor: Vendor | null;
+  /** Engineer notes folder listing. */
+  notes: ProjectFolderEntry[];
+  /** Reference files folder listing. */
+  files: ProjectFolderEntry[];
+  /** Absolute path to this vendor's notes/ folder, when configured. */
+  notesPath: string | null;
+  /** Absolute path to this vendor's files/ folder, when configured. */
+  filesPath: string | null;
+  /** Human-readable detail when availability is "error". */
+  message: string | null;
+}
+
+/** VendorCreateInput is the request body for `POST /vendors`. */
+export interface VendorCreateInput {
+  /** Display name; required. */
+  name: string;
+  /** Supplier class; required. */
+  category: VendorCategory;
+  /** Optional one-liner shown in the list view. */
+  summary?: string;
+}
+
+/** VendorCreateResponse returns the newly created vendor record. */
+export interface VendorCreateResponse {
+  vendor: Vendor;
+}
+
+/** VendorFileUploadInput is the request body for `POST /vendors/:slug/files/:section`. */
+export interface VendorFileUploadInput {
+  /** Suggested filename. The server sanitizes it and may append a collision suffix. */
+  filename: string;
+  /** Base64 payload for binary uploads. */
+  contentBase64?: string;
+  /** UTF-8 text payload for note composition. */
+  content?: string;
+}
+
+/** VendorFileUploadResponse is the success envelope returned after a successful upload. */
+export interface VendorFileUploadResponse {
+  /** Section the file was written into. */
+  section: VendorFolderSection;
+  /** Final on-disk filename after sanitization and collision handling. */
+  entry: ProjectFolderEntry;
+  /** Absolute path the file was written to. */
+  absolutePath: string;
+}
+
 /** ProjectFleetRiskRow reports per-project explainable BOM risk counts for the fleet dashboard. */
 export interface ProjectFleetRiskRow {
   project: Project;

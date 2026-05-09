@@ -132,7 +132,7 @@ test("where-used page renders setup state without backed-target counts when data
     const html = await renderWhereUsedPage({});
 
     assert.match(html, /Connect project memory/u);
-    assert.match(html, /Project memory must be connected before target coverage can be claimed/u);
+    assert.match(html, /Connect project memory to search where things are used/u);
     assert.match(html, /DB_NOT_CONFIGURED/u);
     assert.match(html, /Backed now/u);
     assert.match(html, />DB</u);

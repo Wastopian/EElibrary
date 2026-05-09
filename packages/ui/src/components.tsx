@@ -102,8 +102,8 @@ export function StatusBadge({ label, tone = "neutral" }: StatusBadgeProps) {
 export interface SectionHeadingProps {
   /** Stable id for aria-labelledby. */
   id: string;
-  /** Short section index label such as "01". */
-  index: string;
+  /** Optional short section index label such as "01"; omitted when sections are not numbered. */
+  index?: string;
   /** Primary section title. */
   title: string;
   /** Optional supporting line under the title. */
@@ -111,14 +111,18 @@ export interface SectionHeadingProps {
 }
 
 /**
- * Renders a numbered section heading for long-form detail layouts.
+ * Renders a section heading for long-form detail layouts. The index column collapses
+ * cleanly when no index is provided, so cleaned-up workspace pages can drop the numeric
+ * label without losing alignment.
  */
 export function SectionHeading({ id, index, subtitle, title }: SectionHeadingProps) {
   return (
     <header className="ui-section-heading" id={id}>
-      <span aria-hidden className="ui-section-heading__index">
-        {index}
-      </span>
+      {index ? (
+        <span aria-hidden className="ui-section-heading__index">
+          {index}
+        </span>
+      ) : null}
       <div>
         <h2 className="ui-section-heading__title">{title}</h2>
         {subtitle ? <p className="ui-section-heading__subtitle">{subtitle}</p> : null}

@@ -72,55 +72,61 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
     {
       items: [
         {
-          description: "Search parts, import exact MPNs, and scan readiness.",
+          description: "Find a part, then open its full record.",
           href: "/catalog",
           label: "Catalog",
           match: { path: "/catalog", type: "path" }
         },
         {
-          description: "Compare up to four parts side-by-side on key specs and readiness.",
+          description: "Compare up to four parts side-by-side.",
           href: "/compare",
           label: "Compare",
           match: { path: "/compare", type: "path" }
         },
         {
-          description: "Open internal project memory and persisted BOM usage.",
+          description: "Open your project list and BOM history.",
           href: "/projects",
           label: "Projects",
           match: { path: "/projects", type: "path" }
         },
         {
-          description: "Search confirmed usage and circuit block dependencies.",
+          description: "Remember PCB shops, sheet metal, and who you trust.",
+          href: "/vendors",
+          label: "Vendors",
+          match: { path: "/vendors", type: "path" }
+        },
+        {
+          description: "See where a part or file is used.",
           href: "/where-used",
           label: "Where-used",
           match: { path: "/where-used", type: "path" }
         },
         {
-          description: "Find, upload, and review evidence provenance rows.",
+          description: "Add and review supporting notes and files.",
           href: "/evidence",
           label: "Evidence",
           match: { path: "/evidence", type: "path" }
         },
         {
-          description: "Capture reusable circuit blocks, linked part roles, and evidence.",
+          description: "Save reusable circuit patterns.",
           href: "/circuit-blocks",
           label: "Circuit blocks",
           match: { path: "/circuit-blocks", type: "path" }
         },
         {
-          description: "Browse connector families, mate pairs, and confirmed project usage.",
+          description: "Browse connector families and matching mates.",
           href: "/connector-sets",
           label: "Connector sets",
           match: { path: "/connector-sets", type: "path" }
         },
         {
-          description: "Review, promotion, failed import, and follow-up queues.",
+          description: "Handle review queues and blocked items.",
           href: "/admin",
           label: "Admin",
           match: { path: "/admin", type: "path" }
         },
         {
-          description: "Check API, database, worker, storage, and queued-job health.",
+          description: "Check service status and health.",
           href: "/system",
           label: "System",
           match: { path: "/system", type: "path" }
@@ -131,19 +137,19 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
     {
       items: [
         {
-          description: "Filtered view for mates, accessories, and warnings.",
+          description: "Show connector parts only.",
           href: "/catalog?category=Connector",
           label: "Connectors",
           match: { name: "category", type: "query", value: "Connector" }
         },
         {
-          description: "Filtered view for parts missing verified file-backed CAD.",
+          description: "Show parts still missing CAD files.",
           href: "/catalog?cad=unavailable",
           label: "Missing CAD",
           match: { name: "cad", type: "query", value: "unavailable" }
         },
         {
-          description: "Filtered view for parts waiting on a review decision.",
+          description: "Show parts waiting for approval.",
           href: "/catalog?approvalStatus=pending_review",
           label: "Pending review",
           match: { name: "approvalStatus", type: "query", value: "pending_review" }

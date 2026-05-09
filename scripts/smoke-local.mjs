@@ -11,6 +11,8 @@
 import { validateLocalEnv } from "./lib/env-validate.mjs";
 
 const apiBaseUrl = (process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000").replace(/\/$/u, "");
+const webBaseUrl = (process.env.EE_LIBRARY_WEB_BASE_URL ?? `http://127.0.0.1:${process.env.WEB_PORT ?? "3000"}`).replace(/\/$/u, "");
+const requireWebWorkspace = (process.env.EE_SMOKE_REQUIRE_WEB ?? "").trim() === "1";
 const checks = [];
 
 function check(name, status, detail) {
@@ -36,6 +38,13 @@ async function safeFetch(path, init) {
   } catch (error) {
     return { body: null, error: error instanceof Error ? error.message : String(error), ok: false, status: 0, url };
   }
+}
+
+function classifyWebCheckStatus(ok) {
+  if (ok) {
+    return "pass";
+  }
+  return requireWebWorkspace ? "fail" : "warn";
 }
 
 async function main() {
@@ -132,7 +141,33 @@ async function main() {
     check(`GET /parts/${demoPartId}`, "fail", `unexpected payload: ${JSON.stringify(detailResponse.body)}`);
   }
 
+  // Optional web workspace reachability checks. These stay warnings by default so
+  // API-only probes still provide value; set EE_SMOKE_REQUIRE_WEB=1 to fail hard.
+  const catalogPage = await safeFetchWeb(`/catalog`);
+  if (!catalogPage.ok) {
+    check("GET web /catalog", classifyWebCheckStatus(false), catalogPage.error ?? `HTTP ${catalogPage.status}`);
+  } else {
+    check("GET web /catalog", "pass", "workspace route returned HTTP 200");
+  }
+
+  const partPage = await safeFetchWeb(`/parts/${encodeURIComponent(demoPartId)}`);
+  if (!partPage.ok) {
+    check(`GET web /parts/${demoPartId}`, classifyWebCheckStatus(false), partPage.error ?? `HTTP ${partPage.status}`);
+  } else {
+    check(`GET web /parts/${demoPartId}`, "pass", "part detail route returned HTTP 200");
+  }
+
   printSummary();
+}
+
+async function safeFetchWeb(path, init) {
+  const url = `${webBaseUrl}${path}`;
+  try {
+    const response = await fetch(url, { cache: "no-store", redirect: "follow", ...init });
+    return { ok: response.ok, status: response.status, url };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error), ok: false, status: 0, url };
+  }
 }
 
 function printSummary() {

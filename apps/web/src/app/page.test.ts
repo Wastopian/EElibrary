@@ -41,10 +41,10 @@ test("homepage renders actionable setup state when DB is not configured and seed
   try {
     const html = await renderHomepage();
 
-    assert.match(html, /Connect Postgres or enable local seed mode/u);
-    assert.match(html, /Backend unavailable/u);
+    assert.match(html, /Finish setup to search parts/u);
+    assert.match(html, /Search is paused right now/u);
     assert.match(html, /EE_LIBRARY_ALLOW_SEED_FALLBACK/u);
-    assert.match(html, /No catalog records are shown here/u);
+    assert.match(html, /Use one of these paths, then refresh this page/u);
     assert.match(html, new RegExp(importUiCopy.catalogAcquisitionUnavailableSetup, "u"));
     assert.doesNotMatch(html, /matched records/u);
   } finally {
@@ -91,21 +91,20 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     const html = await renderHomepage();
 
     // Honest seed-mode framing — the page must label seed data clearly, not as DB-backed.
-    assert.match(html, /Local seed mode/u);
-    assert.match(html, /Deterministic seed examples/u);
-    assert.match(html, /not DB-backed catalog data/u);
+    assert.match(html, /Sample data/u);
+    assert.match(html, /Local sample data/u);
 
     // Core quick-check workspace surfaces stay visible even when DB is missing.
     assert.match(html, /Catalog workbench/u);
-    assert.match(html, /MPN, manufacturer, provider id, or keyword/u);
-    assert.match(html, /Provider or datasheet lookup context/u);
-    assert.match(html, /Provider part reference/u);
+    assert.match(html, /Search by part number/u);
+    assert.match(html, /Advanced supplier and datasheet fields/u);
+    assert.match(html, /Supplier part reference/u);
     assert.match(html, /Provider URL/u);
     assert.match(html, /0430250200/u);
 
     // Filter rail, results panel, and catalog presentation modes render in seed mode.
     assert.match(html, /Refine results/u);
-    assert.match(html, /Import by MPN/u);
+    assert.match(html, /Import by part number/u);
     assert.match(html, /CAD files for export/u);
     assert.match(html, /List/u);
     assert.match(html, /Table/u);
@@ -282,9 +281,9 @@ test("homepage renders ambiguous quick readiness state from multiple matches", a
   try {
     const html = await renderHomepage({ q: "connector" });
 
-    assert.match(html, /Ambiguous match/u);
+    assert.match(html, /Multiple matches/u);
     assert.match(html, /2 catalog records matched/u);
-    assert.match(html, /Open the correct part/u);
+    assert.match(html, /Pick the right one/u);
     assert.doesNotMatch(html, /Readiness Checks/u);
   } finally {
     restoreFetch();
@@ -387,7 +386,7 @@ test("homepage renders direct exact-MPN import CTA for DB-backed concrete no-mat
     const html = await renderHomepage({ q: "TPS7A02DBVR-999" });
 
     assert.match(html, /Part not found/u);
-    assert.match(html, /will not create a readiness answer without backend data/u);
+    assert.match(html, /We will not invent a record/u);
     assert.match(html, new RegExp(importUiCopy.catalogAcquisitionLead, "u"));
     assert.match(html, new RegExp(importUiCopy.catalogAcquisitionNote, "u"));
     assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
@@ -486,7 +485,7 @@ test("homepage keeps catalog acquisition unavailable for package-style no-match 
 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
-    assert.match(html, /does not run live provider search for generic keywords/u);
+    assert.match(html, /does not run live supplier search for broad keywords/u);
     assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   } finally {
     restoreFetch();
@@ -596,7 +595,7 @@ test("homepage keeps catalog acquisition unavailable when no-match runs in seed 
 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
-    assert.match(html, /local seed examples/u);
+    assert.match(html, /local sample data/u);
     assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   } finally {
     restoreFetch();

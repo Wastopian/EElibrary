@@ -130,7 +130,7 @@ export function ApprovalBatchPanel({ projectId }: ApprovalBatchPanelProps): Reac
         <>
           <div className="approval-batch-panel__controls">
             <button className="button-link" onClick={selectAll} type="button">Select all</button>
-            <button className="button-link" onClick={clearAll} type="button">Clear</button>
+            <button className="button-link" onClick={clearAll} type="button">Clear selection</button>
             <label>
               <span>Action</span>
               <select onChange={(event) => setAction(event.target.value as ApprovalBatchAction)} value={action}>

@@ -6,11 +6,11 @@ import Link from "next/link";
 import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { ProjectCreatePanel } from "../../components/ProjectCreatePanel";
-import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
+import { ProjectsBrowser } from "../../components/ProjectsBrowser";
 import { fetchApiHealth, fetchProjectFleetRisk, fetchProjectListEnvelope, isApiClientError } from "../../lib/api-client";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CatalogDataSource, ProjectFleetRiskResponse, ProjectFleetRiskRow, ProjectListResponse, ProjectMemoryCapability, ProjectMemoryCapabilityState, ProjectStatus, ProjectSummary } from "@ee-library/shared/types";
+import type { CatalogDataSource, ProjectFleetRiskResponse, ProjectFleetRiskRow, ProjectListResponse, ProjectMemoryCapability, ProjectMemoryCapabilityState, ProjectSummary } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -44,103 +44,104 @@ export default async function ProjectsPage() {
   const foundationCapabilities = response.capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = response.capabilities.filter((capability) => capability.state === "planned");
   const fleetRows = fleetRisk?.rows ?? [];
-  const jumpItems = [
-    { href: "#projects-list-heading", label: "Projects" },
-    ...(fleetRows.length > 0 ? [{ href: "#projects-fleet-risk-heading", label: "Fleet risk" }] : []),
-    { href: "#project-create-heading", label: "Create" },
-    { href: "#project-foundations-heading", label: "Foundations" },
-    ...(plannedCapabilities.length > 0 ? [{ href: "#planned-project-memory-heading", label: "Planned work" }] : [])
-  ];
 
   return (
     <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
-            <p className="app-kicker">Project memory</p>
-            <h1>Projects and BOM usage foundations</h1>
-            <p className="projects-hero__lede">
-              Create project memory, read persisted revisions and BOM imports, upload mapped CSV BOM rows, match usage, review BOM health, attach evidence, and branch into reusable circuit blocks.
-            </p>
-            <div className="projects-hero__status">
-              <StatusBadge label={source === "seed_fallback" ? "Unexpected seed mode" : "DB-backed project memory"} tone={source === "database" ? "verified" : "review"} />
-              <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
-              <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
-            </div>
+      <section className="projects-hero projects-hero--slim">
+        <div className="projects-hero__copy">
+          <p className="app-kicker">Projects</p>
+          <h1>Your projects</h1>
+          <p className="projects-hero__lede">
+            Pick a project to see its parts. Use Search by part to find where a part is used.
+          </p>
+          <div className="empty-recovery-actions" aria-label="Project quick actions">
+            <a className="button-link" href="#project-create-heading">Create project</a>
+            <Link className="button-link button-link--quiet" href="/where-used">Search by part</Link>
           </div>
-          <ProjectMemorySnapshot projects={response.projects} />
         </div>
       </section>
-
-      <ProjectMemoryTruthRail />
-
-      <WorkspaceJumpNav ariaLabel="Project memory sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="projects-list-heading">
         <SectionHeading
           id="projects-list-heading"
-          index="01"
-          subtitle="Only persisted project rows appear here. A configured but empty database stays empty."
+          subtitle="Search by name, key, or owner. Click a project to see its parts."
           title="Project records"
         />
         <SectionPanel
-          description="This is a read-only project-memory surface for records that already exist in the database."
+          description={response.projects.length > 0
+            ? "Click any project to open its parts and uploads."
+            : "No projects yet. Create one below to start tracking parts and uploads."}
           title={response.projects.length > 0 ? `${response.projects.length} project records` : "No persisted projects"}
         >
-          {response.projects.length > 0 ? <ProjectsTable projects={response.projects} /> : <ProjectsEmptyState />}
+          {response.projects.length > 0 ? <ProjectsBrowser projects={response.projects} /> : <ProjectsEmptyState />}
         </SectionPanel>
       </section>
-
-      {fleetRows.length > 0 && (
-        <section className="detail-section" aria-labelledby="projects-fleet-risk-heading">
-          <SectionHeading
-            id="projects-fleet-risk-heading"
-            index="02"
-            subtitle="Cross-project risk counts derived from persisted BOM rows, confirmed usage, lifecycle, CAD, and follow-up records."
-            title="Fleet risk dashboard"
-          />
-          <SectionPanel
-            description={fleetRisk?.boundary ?? "Counts are explainable inputs only and do not approve parts, validate assets, or unlock export."}
-            title={`${fleetRows.length} project${fleetRows.length === 1 ? "" : "s"} ranked by total risk count`}
-          >
-            <ProjectFleetRiskTable rows={fleetRows} />
-          </SectionPanel>
-        </section>
-      )}
 
       <section className="detail-section" aria-labelledby="project-create-heading">
         <SectionHeading
           id="project-create-heading"
-          index="02"
-          subtitle="Create a real project root and first revision so BOM intake has a durable scope."
+          subtitle="A project gives parts uploads a home."
           title="Create project"
         />
         <SectionPanel
-          description="Project creation is the minimum write path needed before BOM upload. It does not create parts, approvals, usage history, or risk findings."
-          title="New project memory"
+          description="Create a project first. You can upload a parts list from the project page once it exists."
+          title="New project"
         >
           <ProjectCreatePanel />
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="project-foundations-heading">
-        <SectionHeading id="project-foundations-heading" index="03" subtitle="These capabilities are foundations exposed by current endpoints." title="Current foundations" />
-        <SectionPanel description="Foundation means the API has real persistence for this stage while keeping approval, evidence, and export boundaries separate." title="Readable project memory">
-          <CapabilityList capabilities={foundationCapabilities} />
-        </SectionPanel>
-      </section>
+      <details className="projects-advanced">
+        <summary>Advanced project memory tools</summary>
+        <p className="projects-advanced__lede muted-copy">
+          Risk dashboards, capability state, and provenance boundaries. Most engineers can ignore these.
+        </p>
 
-      {plannedCapabilities.length > 0 ? (
-        <section className="detail-section" aria-labelledby="planned-project-memory-heading">
-          <SectionHeading id="planned-project-memory-heading" index="04" subtitle="These workflows are intentionally visible as planned work, not shipped behavior." title="Planned project memory" />
-          <SectionPanel
-            description="The next work turns foundation data into richer project-memory workflows."
-            title="Near-term project workflow"
-          >
-            <CapabilityList capabilities={plannedCapabilities} />
+        <div className="projects-advanced__status" role="group" aria-label="Project memory status">
+          <StatusBadge label={source === "seed_fallback" ? "Sample data only" : "Live project data"} tone={source === "database" ? "verified" : "review"} />
+          <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
+          <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
+        </div>
+
+        <ProjectMemorySnapshot projects={response.projects} />
+
+        {fleetRows.length > 0 && (
+          <section className="detail-section" aria-labelledby="projects-fleet-risk-heading">
+            <SectionHeading
+              id="projects-fleet-risk-heading"
+              subtitle="Cross-project risk counts from saved parts list rows, confirmed usage, lifecycle, CAD, and follow-up records."
+              title="Fleet risk dashboard"
+            />
+            <SectionPanel
+              description={fleetRisk?.boundary ?? "Counts are explainable inputs only. They do not approve parts, validate assets, or unlock export."}
+              title={`${fleetRows.length} project${fleetRows.length === 1 ? "" : "s"} ranked by total risk count`}
+            >
+              <ProjectFleetRiskTable rows={fleetRows} />
+            </SectionPanel>
+          </section>
+        )}
+
+        <section className="detail-section" aria-labelledby="project-foundations-heading">
+          <SectionHeading id="project-foundations-heading" subtitle="What the API can read today." title="Current foundations" />
+          <SectionPanel description="Foundations mean the API persists this stage. Approval, evidence, and export remain separate states." title="Readable project memory">
+            <CapabilityList capabilities={foundationCapabilities} />
           </SectionPanel>
         </section>
-      ) : null}
+
+        {plannedCapabilities.length > 0 ? (
+          <section className="detail-section" aria-labelledby="planned-project-memory-heading">
+            <SectionHeading id="planned-project-memory-heading" subtitle="Visible as planned work, not shipped behavior." title="Planned project memory" />
+            <SectionPanel
+              description="The next work turns foundation data into richer project workflows."
+              title="Near-term project workflow"
+            >
+              <CapabilityList capabilities={plannedCapabilities} />
+            </SectionPanel>
+          </section>
+        ) : null}
+
+        <ProjectMemoryTruthRail />
+      </details>
     </main>
   );
 }
@@ -204,28 +205,44 @@ function ProjectsSetupState({ dashboardState }: { dashboardState: Extract<Projec
       <section className="projects-hero">
         <div className="projects-hero__copy">
           <p className="app-kicker">Project memory</p>
-          <h1>Connect the project database</h1>
-          <p className="projects-hero__lede">Project memory reads require persisted project, BOM, and usage tables. No seed fallback is used for project history.</p>
+          <h1>Project pages are paused</h1>
+          <p className="projects-hero__lede">Start local data services, then come back to view project history.</p>
           <div className="projects-hero__status">
-            <StatusBadge label={dashboardState.code} tone="review" />
+            <StatusBadge label="Projects paused" tone="review" />
             <StatusBadge label={`Database ${databaseStatus ?? "unknown"}`} tone={databaseStatus === "connected" ? "verified" : "review"} />
           </div>
-          {showTechnicalMessage && <p className="mode-warning">{dashboardState.message}</p>}
+          <div className="empty-recovery-actions">
+            <Link className="button-link" href="/system">Open system checks</Link>
+            <Link className="button-link button-link--quiet" href="/catalog">Open catalog</Link>
+          </div>
+          {showTechnicalMessage ? (
+            <details className="import-guide">
+              <summary>Show technical details</summary>
+              <p className="mode-warning">{dashboardState.message}</p>
+              <p className="mode-warning">Status code: {dashboardState.code}</p>
+            </details>
+          ) : null}
         </div>
       </section>
-      <SectionPanel title="Setup guidance" description="Project memory is DB-backed only. Apply migrations before expecting project rows.">
+      <SectionPanel title="Finish setup to open projects" description="Use the quick path first. Open advanced details only if needed.">
         <div className="setup-steps">
           <div>
-            <strong>Canonical database</strong>
-            <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
-            <code>npm run db:migrate</code>
+            <strong>Quick start</strong>
+            <code>npm run setup:dev</code>
             <code>npm run dev</code>
+            <span>This prepares local services and starts the app with live project data access.</span>
           </div>
           <div>
-            <strong>Honest empty state</strong>
-            <span>A healthy empty database will show no project rows until project and BOM records are created by later workflows.</span>
+            <strong>What to expect</strong>
+            <span>After setup, this page may still be empty until you create your first project and upload a parts list.</span>
           </div>
         </div>
+        <details className="import-guide">
+          <summary>Advanced setup commands</summary>
+          <code>$env:DATABASE_URL=&quot;postgres://ee_library:ee_library@127.0.0.1:5432/ee_library&quot;</code>
+          <code>npm run db:migrate</code>
+          <code>npm run dev</code>
+        </details>
       </SectionPanel>
     </main>
   );
@@ -243,7 +260,7 @@ function ProjectMemorySnapshot({ projects }: { projects: ProjectSummary[] }) {
     <div className="projects-hero__snapshot" aria-label="Project memory summary">
       <ProjectMemoryStat label="Projects" tone="info" value={projects.length.toString()} />
       <ProjectMemoryStat label="Revisions" tone="neutral" value={totalRevisions.toString()} />
-      <ProjectMemoryStat label="BOM imports" tone="review" value={totalBomImports.toString()} />
+      <ProjectMemoryStat label="Parts list uploads" tone="review" value={totalBomImports.toString()} />
       <ProjectMemoryStat label="Confirmed usage" tone="verified" value={totalUsages.toString()} />
     </div>
   );
@@ -283,50 +300,6 @@ function ProjectMemoryTruthRail() {
         <p>Review approval, validation evidence, and verified-for-export promotion remain separate states.</p>
       </div>
     </section>
-  );
-}
-
-/**
- * Renders persisted projects in a dense table for engineering workstation use.
- */
-function ProjectsTable({ projects }: { projects: ProjectSummary[] }) {
-  return (
-    <div className="projects-table-wrap">
-      <table className="projects-table">
-        <thead>
-          <tr>
-            <th>Project</th>
-            <th>Status</th>
-            <th>Owner</th>
-            <th>Revisions</th>
-            <th>BOM imports</th>
-            <th>Confirmed usage</th>
-            <th>Latest activity</th>
-          </tr>
-        </thead>
-        <tbody>
-          {projects.map((summary) => (
-            <tr key={summary.project.id}>
-              <td>
-                <Link href={`/projects/${summary.project.id}`}>
-                  <span className="ui-mono">{summary.project.projectKey}</span>
-                </Link>
-                <div className="projects-table__primary">{summary.project.name}</div>
-                <div className="muted-copy">{summary.project.description}</div>
-              </td>
-              <td>
-                <StatusBadge label={formatProjectStatus(summary.project.status)} tone={projectStatusTone(summary.project.status)} />
-              </td>
-              <td>{summary.project.owner ?? "Unassigned"}</td>
-              <td>{summary.revisionCount}</td>
-              <td>{summary.bomImportCount}</td>
-              <td>{summary.usageCount}</td>
-              <td>{formatDateTime(summary.latestActivityAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 
@@ -442,38 +415,6 @@ function CapabilityList({ capabilities }: { capabilities: ProjectMemoryCapabilit
 }
 
 /**
- * Maps project lifecycle status into operator-facing copy.
- */
-function formatProjectStatus(status: ProjectStatus): string {
-  return {
-    active: "Active",
-    archived: "Archived",
-    deprecated: "Deprecated",
-    production: "Production",
-    prototype: "Prototype"
-  }[status];
-}
-
-/**
- * Maps project lifecycle status into badge tone.
- */
-function projectStatusTone(status: ProjectStatus): BadgeTone {
-  if (status === "production" || status === "active") {
-    return "verified";
-  }
-
-  if (status === "prototype") {
-    return "info";
-  }
-
-  if (status === "deprecated") {
-    return "review";
-  }
-
-  return "neutral";
-}
-
-/**
  * Formats project-memory capability state.
  */
 function formatCapabilityState(state: ProjectMemoryCapabilityState): string {
@@ -485,14 +426,4 @@ function formatCapabilityState(state: ProjectMemoryCapabilityState): string {
  */
 function capabilityTone(state: ProjectMemoryCapabilityState): BadgeTone {
   return state === "foundation" ? "info" : "review";
-}
-
-/**
- * Formats timestamps for dashboard tables.
- */
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short"
-  }).format(new Date(value));
 }

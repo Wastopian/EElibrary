@@ -35,10 +35,10 @@ export function RootLayoutShell({ children, fontClassName = "" }: RootLayoutShel
               </div>
             </Link>
             <AppNavigation />
-            <section aria-label="Trust boundary guidance" className="app-sidebar__note">
-              <span>Trust boundary</span>
-              <strong>No export claim without verified files.</strong>
-              <p>Generated, approved, and export-ready remain separate states.</p>
+            <section aria-label="Confidence guidance" className="app-sidebar__note">
+              <span>Before export</span>
+              <strong>Only use verified files for release.</strong>
+              <p>Need details? Open any part and select "How to read this" in the trust section.</p>
             </section>
           </aside>
           <div className="app-main">

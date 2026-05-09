@@ -64,8 +64,19 @@ import type {
   ProjectCreateInput,
   ProjectCreateResponse,
   ProjectEvidenceAttachmentsResponse,
+  ProjectFilesResponse,
+  ProjectFileUploadInput,
+  ProjectFileUploadResponse,
   ProjectFleetRiskResponse,
+  ProjectFolderCategory,
   ProjectListResponse,
+  VendorCreateInput,
+  VendorCreateResponse,
+  VendorDetailResponse,
+  VendorFileUploadInput,
+  VendorFileUploadResponse,
+  VendorFolderSection,
+  VendorListResponse,
   ProjectRevisionCompareResponse,
   ProjectRevisionUpdateInput,
   ProjectRevisionUpdateResponse,
@@ -325,6 +336,141 @@ export async function fetchProjectDetail(projectId: string): Promise<ProjectDeta
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectDetailResponse>;
 
+  return envelope.data;
+}
+
+/**
+ * Fetches the project file mirror listing (parts list, datasheets, 3D models) for one project.
+ *
+ * Returns null on 404 so the project detail page can still render when the API does not
+ * persist the project. Other API errors propagate as ApiClientError values so the caller
+ * can decide whether to suppress, surface, or retry.
+ */
+export async function fetchProjectFiles(projectId: string): Promise<ProjectFilesResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project file mirror request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFilesResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Uploads one file or note to the project file mirror for the requested category.
+ *
+ * The transport mirrors the evidence upload pattern: JSON body with either
+ * `contentBase64` (binary) or `content` (UTF-8 text). The web app picks the right form
+ * based on the active card — file inputs base64-encode; the notes composer sends text.
+ */
+export async function uploadProjectFile(
+  projectId: string,
+  category: ProjectFolderCategory,
+  input: ProjectFileUploadInput
+): Promise<ProjectFileUploadResponse> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(category)}`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project file upload");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFileUploadResponse>;
+  return envelope.data;
+}
+
+/**
+ * Fetches the vendor notebook list (every supplier with note and file counts).
+ *
+ * Returns the raw response (not just `.vendors`) so callers can render the appropriate
+ * setup state when the vendor mirror is disabled or unreachable on the API host.
+ */
+export async function fetchVendorList(): Promise<VendorListResponse> {
+  const response = await fetch(buildApiUrl("/vendors"), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Vendor list");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<VendorListResponse>;
+  return envelope.data;
+}
+
+/**
+ * Fetches one vendor's detail bundle (metadata + notes/files folder listings).
+ */
+export async function fetchVendorDetail(slug: string): Promise<VendorDetailResponse> {
+  const response = await fetch(buildApiUrl(`/vendors/${encodeURIComponent(slug)}`), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Vendor detail");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<VendorDetailResponse>;
+  return envelope.data;
+}
+
+/**
+ * Creates a new vendor record by name + category. The API derives the slug, so the web
+ * UI does not have to choose URLs — the response carries the canonical slug back.
+ */
+export async function createVendor(input: VendorCreateInput): Promise<VendorCreateResponse> {
+  const response = await fetch(buildApiUrl("/vendors"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Vendor create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<VendorCreateResponse>;
+  return envelope.data;
+}
+
+/**
+ * Uploads one file or note to the vendor mirror under the requested section.
+ *
+ * Mirrors uploadProjectFile so the workspace surfaces feel consistent: file inputs
+ * base64-encode, the inline notes composer sends UTF-8 text directly.
+ */
+export async function uploadVendorFile(
+  slug: string,
+  section: VendorFolderSection,
+  input: VendorFileUploadInput
+): Promise<VendorFileUploadResponse> {
+  const response = await fetch(
+    buildApiUrl(`/vendors/${encodeURIComponent(slug)}/files/${encodeURIComponent(section)}`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Vendor file upload");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<VendorFileUploadResponse>;
   return envelope.data;
 }
 

@@ -496,7 +496,7 @@ function EvidenceFilterForm({ filters }: { filters: EvidenceAttachmentListFilter
         <span>Query</span>
         <input defaultValue={filters.query ?? ""} name="q" placeholder="Title, target id, storage key, or URL" type="search" />
       </label>
-      <button className="button-primary" type="submit">Filter</button>
+      <button className="button-primary" type="submit">Apply filters</button>
     </form>
   );
 }

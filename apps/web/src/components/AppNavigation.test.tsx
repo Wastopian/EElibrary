@@ -38,7 +38,18 @@ test("app navigation marks the projects route as active inside project memory pa
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/projects/project-alpha" />);
 
   assert.match(html, /Projects/u);
-  assert.match(html, /Open internal project memory and persisted BOM usage/u);
+  assert.match(html, /Open your project list and BOM history/u);
+  assert.match(html, /aria-current="page"/u);
+});
+
+/**
+ * Verifies the vendor notebook route is present and active for vendor pages.
+ */
+test("app navigation marks the vendors route as active inside vendor notebook pages", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/vendors/jlcpcb" />);
+
+  assert.match(html, /Vendors/u);
+  assert.match(html, /Remember PCB shops, sheet metal, and who you trust/u);
   assert.match(html, /aria-current="page"/u);
 });
 
@@ -49,7 +60,7 @@ test("app navigation marks the system route as active inside system health pages
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/system" />);
 
   assert.match(html, /System/u);
-  assert.match(html, /Check API, database, worker, storage, and queued-job health/u);
+  assert.match(html, /Check service status and health/u);
   assert.match(html, /aria-current="page"/u);
 });
 

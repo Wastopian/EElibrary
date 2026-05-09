@@ -13,7 +13,7 @@ import { ImportByMpnPanel, ImportByMpnPanelStatus, resolveCanonicalImportRouteTa
 test("ImportByMpnPanel renders honest idle copy and primary route targets", () => {
   const html = renderToStaticMarkup(React.createElement(ImportByMpnPanel, { anchorId: "import-by-mpn" }));
 
-  assert.match(html, /Import one exact MPN/u);
+  assert.match(html, /Import one exact part number/u);
   assert.match(html, /does not verify CAD files or export bundles/u);
   assert.match(html, new RegExp(importUiCopy.buttonSubmit, "u"));
   assert.match(html, /id="import-by-mpn"/u);
@@ -29,8 +29,8 @@ test("ImportByMpnPanel supports catalog acquisition from no-match without implyi
     })
   );
 
-  assert.match(html, /Import this exact MPN/u);
-  assert.match(html, /Exact-MPN import only/u);
+  assert.match(html, /Import this exact part number/u);
+  assert.match(html, /Exact part-number import only/u);
   assert.match(html, /value="TPS7A02DBVR"/u);
   assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   assert.match(html, /Add provider-specific lookup context/u);
@@ -72,7 +72,7 @@ test("catalog acquisition import failures distinguish unavailable import from no
   assert.equal(forbidden.kind, "unavailable");
   assert.match(forbidden.message, /admin session/i);
   assert.equal(dbUnavailable.kind, "unavailable");
-  assert.match(dbUnavailable.message, /configured catalog database/i);
+  assert.match(dbUnavailable.message, /connected catalog data/i);
   assert.equal(failed.kind, "failed");
   assert.match(failed.message, /No matching catalog entry/u);
 });

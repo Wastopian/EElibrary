@@ -44,6 +44,13 @@ export async function waitForPostgres({ timeoutMs = 60_000, intervalMs = 1_000 }
       return;
     } catch (error) {
       lastError = error;
+      if (isAuthFailure(error)) {
+        throw new Error(
+          "Postgres rejected DATABASE_URL credentials (password authentication failed).\n" +
+            "If this is a local Docker setup, an old Postgres volume likely has different credentials.\n" +
+            "Run `docker compose down -v` from the repo root, then re-run `npm run setup:dev`."
+        );
+      }
       try {
         await client.end();
       } catch {
@@ -71,6 +78,14 @@ function describeError(error) {
     return error.message;
   }
   return String(error);
+}
+
+function isAuthFailure(error) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  return "code" in error && error.code === "28P01";
 }
 
 function sleep(ms) {

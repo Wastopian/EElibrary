@@ -20,6 +20,8 @@ import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
+import { buildProjectFilesResponse, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase } from "./project-memory-store";
@@ -68,6 +70,9 @@ import type {
   PartSearchSort,
   PartSubstitutionCreateInput,
   ProjectCreateInput,
+  ProjectFileUploadInput,
+  VendorCreateInput,
+  VendorFileUploadInput,
   ProjectRevisionStatus,
   ProjectRevisionUpdateInput,
   ProjectStatus,
@@ -144,6 +149,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectBomHealthMatch = /^\/projects\/([^/]+)\/bom-health$/u.exec(url.pathname);
   const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(url.pathname);
   const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(url.pathname);
+  const projectFilesMatch = /^\/projects\/([^/]+)\/files$/u.exec(url.pathname);
+  const projectFileUploadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
   const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
   const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(url.pathname);
   const circuitBlockPartUpdateMatch = /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u.exec(url.pathname);
@@ -163,6 +170,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectApprovalBatchMatch = /^\/projects\/([^/]+)\/approval-batch$/u.exec(url.pathname);
   const projectApprovalCandidatesMatch = /^\/projects\/([^/]+)\/approval-candidates$/u.exec(url.pathname);
   const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
+  const vendorDetailMatch = /^\/vendors\/([^/]+)$/u.exec(url.pathname);
+  const vendorFileUploadMatch = /^\/vendors\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
 
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
     await handleProviderLookupCreate(request, response);
@@ -236,6 +245,37 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProjectFollowUpsSync(response, decodeURIComponent(projectFollowUpsMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && projectFileUploadMatch?.[1] && projectFileUploadMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFileUpload(
+      request,
+      response,
+      decodeURIComponent(projectFileUploadMatch[1]),
+      decodeURIComponent(projectFileUploadMatch[2])
+    );
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/vendors") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleVendorCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && vendorFileUploadMatch?.[1] && vendorFileUploadMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleVendorFileUpload(
+      request,
+      response,
+      decodeURIComponent(vendorFileUploadMatch[1]),
+      decodeURIComponent(vendorFileUploadMatch[2])
+    );
     return;
   }
 
@@ -483,6 +523,21 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (projectFollowUpsMatch?.[1]) {
     await handleProjectFollowUpsRead(response, decodeURIComponent(projectFollowUpsMatch[1]));
+    return;
+  }
+
+  if (projectFilesMatch?.[1]) {
+    await handleProjectFilesRead(response, decodeURIComponent(projectFilesMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/vendors") {
+    await handleVendorListRead(response);
+    return;
+  }
+
+  if (request.method === "GET" && vendorDetailMatch?.[1]) {
+    await handleVendorDetailRead(response, decodeURIComponent(vendorDetailMatch[1]));
     return;
   }
 
@@ -1632,6 +1687,392 @@ async function handleCircuitBlockDetailRead(response: ServerResponse, circuitBlo
     }
 
     sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles project file mirror uploads.
+ *
+ * Looks up the project to confirm it exists, validates the requested category, then
+ * delegates to the file mirror service. Each typed failure result maps to a precise
+ * 4xx response so engineers always know why an upload was rejected (filename, content,
+ * size, traversal). Filesystem errors map to 500 with a redacted message.
+ */
+async function handleProjectFileUpload(
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string,
+  rawCategory: string
+): Promise<void> {
+  const category = resolveProjectFolderCategory(rawCategory);
+  if (!category) {
+    sendJson(response, 404, {
+      error: {
+        code: "PROJECT_FILE_CATEGORY_UNKNOWN",
+        message: "Project file category must be parts_list, datasheets, models, or notes."
+      }
+    });
+    return;
+  }
+
+  const body = await readJsonBody<ProjectFileUploadInput>(request);
+  if (!body || typeof body.filename !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FILE_UPLOAD",
+        message: "Project file uploads require a filename and either contentBase64 or content."
+      }
+    });
+    return;
+  }
+
+  try {
+    const detail = await timeRouteOperation(
+      response,
+      "project-file-upload-detail",
+      () => readProjectDetailFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (detail.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (detail.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = detail.response.project;
+    const result = await timeRouteOperation(
+      response,
+      "project-file-upload-write",
+      () => saveProjectFile({ id: project.id, projectKey: project.projectKey }, category, body),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_FILES_NOT_CONFIGURED",
+          message: "EE_LIBRARY_PROJECT_FILES_ROOT is set to off on the API host, so project file uploads are disabled."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_category") {
+      sendJson(response, 404, {
+        error: {
+          code: "PROJECT_FILE_CATEGORY_UNKNOWN",
+          message: "Project file category must be parts_list, datasheets, models, or notes."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_filename") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_PROJECT_FILE_NAME",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_content") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_PROJECT_FILE_CONTENT",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "too_large") {
+      sendJson(response, 413, {
+        error: {
+          code: "PROJECT_FILE_TOO_LARGE",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "error") {
+      sendJson(response, 500, {
+        error: {
+          code: "PROJECT_FILE_WRITE_FAILED",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(
+      response,
+      201,
+      {
+        absolutePath: result.absolutePath,
+        category: result.category,
+        entry: result.entry
+      },
+      "database"
+    );
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles vendor notebook reads. Returns the catalog envelope shape so the web client
+ * treats reachability errors consistently. The vendor mirror lives entirely on disk so
+ * no DB lookup is required here; reachability is reported via `availability`.
+ */
+async function handleVendorListRead(response: ServerResponse): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "vendor-list",
+      () => buildVendorListResponse(),
+      (value) => `${value.availability}:${value.vendors.length}`
+    );
+    sendCatalogJson(response, result, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only vendor detail requests. The service returns vendor=null inside the
+ * configured envelope when the slug is unknown, which the UI maps to a calm 404 panel.
+ */
+async function handleVendorDetailRead(response: ServerResponse, slug: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "vendor-detail",
+      () => buildVendorDetailResponse(slug),
+      (value) => `${value.availability}:${value.vendor ? "found" : "missing"}`
+    );
+    sendCatalogJson(response, result, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles vendor record creation. Requests must include a name and a supported category.
+ * The service rejects empty names, oversized summaries, and slug collisions with typed
+ * results so the route returns precise 4xx codes.
+ */
+async function handleVendorCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<VendorCreateInput>(request);
+  if (!body || typeof body.name !== "string" || typeof body.category !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_VENDOR_CREATE_REQUEST",
+        message: "Vendor create requires a name and a supported category."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "vendor-create",
+      () => createVendor(body),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "VENDOR_NOTES_NOT_CONFIGURED",
+          message: "EE_LIBRARY_VENDOR_NOTES_ROOT is set to off on the API host, so supplier notes are disabled."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_name") {
+      sendJson(response, 400, { error: { code: "INVALID_VENDOR_NAME", message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid_category") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_VENDOR_CATEGORY",
+          message: "Vendor category must be one of pcb_fab, sheet_metal, machining, finishing, electronics_assembly, distributor, other."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_summary") {
+      sendJson(response, 400, { error: { code: "INVALID_VENDOR_SUMMARY", message: result.message } });
+      return;
+    }
+
+    if (result.status === "conflict") {
+      sendJson(response, 409, { error: { code: "VENDOR_SLUG_CONFLICT", message: result.message } });
+      return;
+    }
+
+    if (result.status === "error") {
+      sendJson(response, 500, { error: { code: "VENDOR_CREATE_FAILED", message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, { vendor: result.vendor }, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles vendor file uploads. Each typed failure result maps to a precise 4xx response
+ * so engineers always know why an upload was rejected.
+ */
+async function handleVendorFileUpload(
+  request: IncomingMessage,
+  response: ServerResponse,
+  slug: string,
+  rawSection: string
+): Promise<void> {
+  const section = resolveVendorFolderSection(rawSection);
+  if (!section) {
+    sendJson(response, 404, {
+      error: {
+        code: "VENDOR_FILE_SECTION_UNKNOWN",
+        message: "Vendor file section must be 'notes' or 'files'."
+      }
+    });
+    return;
+  }
+
+  const body = await readJsonBody<VendorFileUploadInput>(request);
+  if (!body || typeof body.filename !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_VENDOR_FILE_UPLOAD",
+        message: "Vendor file uploads require a filename and either contentBase64 or content."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "vendor-file-upload",
+      () => saveVendorFile(slug, section, body),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "VENDOR_NOTES_NOT_CONFIGURED",
+          message: "EE_LIBRARY_VENDOR_NOTES_ROOT is set to off on the API host, so supplier uploads are disabled."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: "VENDOR_NOT_FOUND", message: "Vendor not found." } });
+      return;
+    }
+
+    if (result.status === "invalid_section") {
+      sendJson(response, 404, {
+        error: {
+          code: "VENDOR_FILE_SECTION_UNKNOWN",
+          message: "Vendor file section must be 'notes' or 'files'."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_filename") {
+      sendJson(response, 400, { error: { code: "INVALID_VENDOR_FILE_NAME", message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid_content") {
+      sendJson(response, 400, { error: { code: "INVALID_VENDOR_FILE_CONTENT", message: result.message } });
+      return;
+    }
+
+    if (result.status === "too_large") {
+      sendJson(response, 413, { error: { code: "VENDOR_FILE_TOO_LARGE", message: result.message } });
+      return;
+    }
+
+    if (result.status === "error") {
+      sendJson(response, 500, { error: { code: "VENDOR_FILE_WRITE_FAILED", message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(
+      response,
+      201,
+      {
+        absolutePath: result.absolutePath,
+        section: result.section,
+        entry: result.entry
+      },
+      "database"
+    );
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles read-only project file mirror requests.
+ *
+ * Looks up the project so we can resolve its on-disk folder by `projectKey`, then
+ * delegates to the file mirror service. Database-side errors (not_configured / not_found)
+ * are mapped to the same envelope shape as the rest of the project memory routes so the
+ * web client treats them consistently.
+ */
+async function handleProjectFilesRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-files-read",
+      () => readProjectDetailFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = result.response.project;
+    const filesResponse = await timeRouteOperation(
+      response,
+      "project-files-listing",
+      () => buildProjectFilesResponse({ id: project.id, projectKey: project.projectKey }),
+      (value) => `${value.availability}:${value.folders.length}`
+    );
+
+    sendCatalogJson(response, filesResponse, "database");
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -3358,6 +3799,12 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/projects\/[^/]+\/evidence$/u.test(pathname)) return "api-project-evidence";
   if (method === "GET" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups";
   if (method === "POST" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups-sync";
+  if (method === "GET" && /^\/projects\/[^/]+\/files$/u.test(pathname)) return "api-project-files";
+  if (method === "POST" && /^\/projects\/[^/]+\/files\/[^/]+$/u.test(pathname)) return "api-project-file-upload";
+  if (method === "GET" && pathname === "/vendors") return "api-vendor-list";
+  if (method === "POST" && pathname === "/vendors") return "api-vendor-create";
+  if (method === "GET" && /^\/vendors\/[^/]+$/u.test(pathname)) return "api-vendor-detail";
+  if (method === "POST" && /^\/vendors\/[^/]+\/files\/[^/]+$/u.test(pathname)) return "api-vendor-file-upload";
   if (method === "GET" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-detail";
   if (method === "GET" && /^\/bom-imports\/[^/]+\/lines$/u.test(pathname)) return "api-bom-import-lines";
   if (method === "POST" && pathname === "/bom-imports/preview") return "api-bom-import-preview";

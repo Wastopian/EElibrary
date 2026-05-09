@@ -88,7 +88,7 @@ test("happy path product loop imports a local fixture and opens answer-first det
     );
 
     assert.match(noMatchHtml, /Part not found/u);
-    assert.match(noMatchHtml, /Import exact MPN/u);
+    assert.match(noMatchHtml, /Import exact part number/u);
     assert.match(noMatchHtml, /Local catalog \(development\)/u);
 
     const importResult = await requestProviderImport({
@@ -117,7 +117,7 @@ test("happy path product loop imports a local fixture and opens answer-first det
     assert.match(detailHtml, /Use decision/u);
     assert.match(detailHtml, /Datasheet/u);
     assert.match(detailHtml, /CAD\/export/u);
-    assert.match(detailHtml, /Provenance/u);
+    assert.match(detailHtml, /Source/u);
     assert.match(detailHtml, /Next action/u);
   } finally {
     restoreFetch();

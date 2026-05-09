@@ -14,10 +14,12 @@ import { CircuitBlockInstantiationPanel } from "../../../components/CircuitBlock
 import { EvidenceAttachmentPanel } from "../../../components/EvidenceAttachmentPanel";
 import { ExportBundlePanel } from "../../../components/ExportBundlePanel";
 import { FollowUpPanel } from "../../../components/FollowUpPanel";
+import { OperatorChecklist } from "../../../components/OperatorChecklist";
 import { ProjectEditPanel } from "../../../components/ProjectEditPanel";
+import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
+import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { WorkspaceJumpNav } from "../../../components/WorkspaceJumpNav";
-import { buildCompareUrl, fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
 import type { ApiHealth } from "../../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type {
@@ -35,10 +37,9 @@ import type {
   ProjectBomRiskSeverity,
   ProjectDetailResponse,
   ProjectEvidenceAttachmentsResponse,
+  ProjectFilesResponse,
   ProjectMemoryCapability,
   ProjectMemoryCapabilityState,
-  ProjectPartUsage,
-  ProjectPartUsageStatus,
   ProjectRevision,
   ProjectRevisionStatus,
   ProjectStatus
@@ -59,6 +60,7 @@ type ProjectDetailState =
       bomHealth: ProjectBomHealthResponse;
       evidence: ProjectEvidenceAttachmentsResponse;
       exportBundles: ExportBundleListResponse | null;
+      files: ProjectFilesResponse | null;
       followUps: FollowUpListResponse;
       health: ApiHealth | null;
       response: ProjectDetailResponse;
@@ -89,7 +91,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
     return <ProjectDetailSetupState detailState={detailState} />;
   }
 
-  const { bomHealth, evidence, exportBundles, followUps, health, response } = detailState;
+  const { bomHealth, evidence, exportBundles, files, followUps, health, response } = detailState;
   const { bomImports, capabilities, project, revisions, summary, usages } = response;
   const foundationCapabilities = capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = capabilities.filter((capability) => capability.state === "planned");
@@ -100,195 +102,235 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         &larr; Back to projects
       </Link>
 
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
-            <p className="app-kicker">Project memory detail</p>
-            <h1>{project.name}</h1>
-            <p className="projects-hero__lede">
-              <span className="ui-mono">{project.projectKey}</span> preserves persisted revision, BOM import, and confirmed usage context. CSV BOM upload and exact internal row
-              matching, BOM health, where-used detail, evidence metadata, and reusable circuit block records are available as foundation workflows.
-            </p>
-            <div className="projects-hero__status">
-              <StatusBadge label={formatProjectStatus(project.status)} tone={projectStatusTone(project.status)} />
-              <StatusBadge label="DB-backed project record" tone="verified" />
-              <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
-            </div>
+      <section className="projects-hero projects-hero--slim">
+        <div className="projects-hero__copy">
+          <p className="app-kicker">Project</p>
+          <h1>{project.name}</h1>
+          <p className="projects-hero__lede">
+            <span className="ui-mono">{project.projectKey}</span>
+            {project.description ? <> &mdash; {project.description}</> : null}
+          </p>
+          <div className="empty-recovery-actions" aria-label="Project quick actions">
+            <a className="button-link" href="#project-bom-upload-heading">Upload parts list</a>
+            <Link className="button-link button-link--quiet" href="/where-used">Search where-used</Link>
+            <a className="button-link button-link--quiet" href="#advanced-project-tools">More tools</a>
           </div>
-          <ProjectDetailSnapshot revisionCount={summary.revisionCount} bomImportCount={summary.bomImportCount} usageCount={summary.usageCount} latestActivityAt={summary.latestActivityAt} riskFindingCount={bomHealth.findings.length} evidenceAttachmentCount={evidence.attachments.length} followUpCount={followUps.summary.openCount + followUps.summary.inProgressCount} />
+          <div className="projects-hero__status">
+            <StatusBadge label={formatProjectStatus(project.status)} tone={projectStatusTone(project.status)} />
+            <StatusBadge label={`${summary.usageCount} part${summary.usageCount === 1 ? "" : "s"}`} tone={summary.usageCount > 0 ? "verified" : "neutral"} />
+            <StatusBadge label={`${summary.bomImportCount} parts list upload${summary.bomImportCount === 1 ? "" : "s"}`} tone="info" />
+          </div>
         </div>
       </section>
 
-      <WorkspaceJumpNav
-        ariaLabel="Project detail sections"
-        items={[
-          { href: "#project-summary-heading", label: "Summary" },
-          { href: "#project-edit-heading", label: "Edit" },
-          { href: "#project-revisions-heading", label: "Revisions" },
-          { href: "#project-bom-upload-heading", label: "Upload BOM" },
-          { href: "#project-bom-imports-heading", label: "BOM imports" },
-          { href: "#project-bom-diagnostics-heading", label: "BOM diagnostics" },
-          { href: "#project-usage-heading", label: "Usage" },
-          { href: "#project-risk-heading", label: "BOM health" },
-          { href: "#project-approval-batch-heading", label: "Approval batch" },
-          { href: "#project-export-bundles-heading", label: "Export bundles" },
-          { href: "#project-follow-ups-heading", label: "Follow-ups" },
-          { href: "#project-evidence-heading", label: "Evidence" },
-          { href: "#project-capabilities-heading", label: "Capabilities" }
-        ]}
-      />
-
-      <WorkspaceActionPanel
-        actions={buildProjectWorkspaceActions(response)}
-        description="Project-scoped jumps for review, compare, evidence, circuit reuse, and verified exports."
-        title="Next project workspaces"
-      />
-
-      <section className="detail-section" aria-labelledby="project-summary-heading">
-        <SectionHeading id="project-summary-heading" index="01" subtitle="Project identity and lifecycle state from persisted project memory." title="Project summary" />
-        <SectionPanel description="Project records are a memory root. They do not imply any BOM row has been uploaded or matched yet." title={project.projectKey}>
-          <ProjectSummaryGrid response={response} />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-edit-heading">
-        <SectionHeading id="project-edit-heading" index="02" subtitle="Maintain project metadata and current revision state without changing trust records." title="Edit project memory" />
-        <SectionPanel description="These edits update project and revision metadata only. They do not approve parts, validate evidence, rematch BOM rows, or unlock export." title="Metadata maintenance">
-          <ProjectEditPanel project={project} revisions={revisions} />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-revisions-heading">
-        <SectionHeading id="project-revisions-heading" index="03" subtitle="Revisions scope BOM imports and usage records for future where-used views." title="Revisions" />
-        <SectionPanel description="Only persisted project revisions appear here." title={revisions.length > 0 ? `${revisions.length} revisions` : "No persisted revisions"}>
-          {revisions.length > 0 ? <ProjectRevisionTable revisions={revisions} /> : <EmptyState title="No revisions yet" body="No project revision rows are persisted for this project." />}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-bom-imports-heading">
-        <SectionHeading id="project-bom-upload-heading" index="04" subtitle="Upload CSV, preview rows, map columns, and persist raw BOM line evidence." title="Upload mapped BOM" />
+      <section className="detail-section" aria-labelledby="project-usage-heading">
+        <SectionHeading id="project-usage-heading" subtitle="The parts confirmed in this project. Type to search." title="Parts in this project" />
         <SectionPanel
-          description="This saves BOM import metadata and raw/mapped BOM lines only. Matching is a separate action so weak or ambiguous rows never become usage by accident."
-          title="CSV intake"
+          description="Only confirmed matches appear here. Unclear rows wait in diagnostics until they are reviewed."
+          title={usages.length > 0 ? `${usages.length} part${usages.length === 1 ? "" : "s"} in this project` : "No confirmed parts yet"}
+        >
+          {usages.length > 0 ? (
+            <ProjectUsageBrowser usages={usages} />
+          ) : (
+            <EmptyState
+              title="No confirmed part usage yet"
+              body="Upload a parts list below, then confirm matches to populate this list. No part-to-project usage rows are persisted yet."
+            />
+          )}
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="project-bom-upload-heading">
+        <SectionHeading id="project-bom-upload-heading" subtitle="Upload a CSV or XLSX file. Map columns. Save rows." title="Upload parts list" />
+        <SectionPanel
+          description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
+          title="Upload mapped BOM"
         >
           <BomImportPanel projectId={project.id} revisions={revisions} />
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="project-bom-imports-heading">
-        <SectionHeading id="project-bom-imports-heading" index="05" subtitle="BOM import metadata is shown only after rows exist in the database." title="BOM imports" />
-        <SectionPanel
-          description="CSV upload and column mapping create these records. Run matching when you are ready to compare rows against internal catalog identity."
-          title={bomImports.length > 0 ? `${bomImports.length} BOM import records` : "No persisted BOM imports"}
-        >
-          {bomImports.length > 0 ? (
-            <BomImportTable bomImports={bomImports} />
-          ) : (
-            <EmptyState title="No BOM imports yet" body="No BOM import metadata is persisted for this project. Use the CSV intake panel above to preview and save mapped BOM rows." />
-          )}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-bom-diagnostics-heading">
-        <SectionHeading id="project-bom-diagnostics-heading" index="06" subtitle="Row-level match status, confidence scores, triage actions, and side-by-side revision compare." title="BOM diagnostics" />
-        <SectionPanel
-          description="Diagnostics show match status per row and triage hints for weak, ambiguous, and unmatched rows. Revision compare shows what changed between two BOM imports."
-          title={bomImports.length > 0 ? `${bomImports.length} imports available` : "No BOM imports to diagnose"}
-        >
-          <BomDiagnosticsPanel bomImports={bomImports} projectId={project.id} revisions={revisions} />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-circuit-block-instantiation-heading">
+      <section className="detail-section" aria-labelledby="project-files-heading">
         <SectionHeading
-          id="project-circuit-block-instantiation-heading"
-          index="07"
-          subtitle="Generate BOM lines for a project revision from a reusable circuit block in the library."
-          title="Add circuit block to BOM"
+          id="project-files-heading"
+          subtitle="Files on disk for this project. Drop files into the folder to add them; refresh to update."
+          title="Project files"
         />
         <SectionPanel
-          description="Instantiation creates a synthetic BOM import with one matched line per block-part role. Confirmed usage rows are written for matched parts. Approval, readiness, and export verification are unchanged."
-          title="Reusable circuit block"
+          description="Each project has its own folder with subfolders for parts list source files, datasheets, and 3D models. The site reads what is on disk."
+          title="Folders on the API host"
         >
-          <CircuitBlockInstantiationPanel projectId={project.id} revisions={revisions} />
+          <ProjectFilesPanel files={files} projectId={project.id} />
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="project-usage-heading">
-        <SectionHeading id="project-usage-heading" index="08" subtitle="Confirmed usage records are the future source for where-used search." title="Confirmed usage" />
-        <SectionPanel
-          description="Usage rows are created only from confirmed exact internal matches. Weak or ambiguous BOM line matches remain line evidence, not where-used history."
-          title={usages.length > 0 ? `${usages.length} confirmed usage rows` : "No confirmed usage"}
-        >
-          {usages.length > 0 ? (
-            <ProjectUsageTable usages={usages} />
-          ) : (
-            <EmptyState title="No confirmed part usage yet" body="No part-to-project usage rows are persisted. Future matching must confirm rows before they appear as where-used memory." />
-          )}
-        </SectionPanel>
-      </section>
+      <details className="projects-advanced" id="advanced-project-tools">
+        <summary>Advanced project tools</summary>
+        <p className="projects-advanced__lede muted-copy">
+          Diagnostics, approvals, exports, follow-ups, evidence, and capabilities. Open these when you need them.
+        </p>
 
-      <section className="detail-section" aria-labelledby="project-risk-heading">
-        <SectionHeading id="project-risk-heading" index="09" subtitle="Explainable counts from persisted BOM rows, confirmed usage, lifecycle, CAD/export, connector, approval, and evidence records." title="BOM health and risk" />
-        <SectionPanel description="No opaque score is computed. Each finding lists the input rows and a concrete next action." title={bomHealth.summary.totalLineCount > 0 ? `${bomHealth.findings.length} explainable findings` : "No BOM rows to evaluate"}>
-          <ProjectBomHealthPanel health={bomHealth} />
-        </SectionPanel>
-      </section>
+        <ProjectDetailSnapshot revisionCount={summary.revisionCount} bomImportCount={summary.bomImportCount} usageCount={summary.usageCount} latestActivityAt={summary.latestActivityAt} riskFindingCount={bomHealth.findings.length} evidenceAttachmentCount={evidence.attachments.length} followUpCount={followUps.summary.openCount + followUps.summary.inProgressCount} />
 
-      <section className="detail-section" aria-labelledby="project-approval-batch-heading">
-        <SectionHeading
-          id="project-approval-batch-heading"
-          index="10"
-          subtitle="Review approval gaps from this project's confirmed usage and matched BOM rows; bulk approve or flag for review with one action."
-          title="Review approval gaps"
+        <OperatorChecklist
+          primaryActionHref={response.bomImports.length > 0 ? "#project-bom-imports-heading" : "#project-bom-upload-heading"}
+          primaryActionLabel={response.bomImports.length > 0 ? "Match BOM rows" : "Upload first BOM"}
+          steps={[
+            {
+              detail: "Upload your parts list file.",
+              label: "Step 1: Upload"
+            },
+            {
+              detail: "Match the rows so the app knows which parts are real matches.",
+              label: "Step 2: Match"
+            },
+            {
+              detail: "Review issues and finish follow-up tasks.",
+              label: "Step 3: Fix and finish"
+            }
+          ]}
+          summary="Simple flow for first-time users."
+          title="Project first-run checklist"
         />
-        <SectionPanel
-          description="The approval-batch action records project context as the trigger and only changes part-level approval rows. Asset validation, lifecycle, readiness, and export verification are not touched."
-          title="Project-scoped approval queue"
-        >
-          <ApprovalBatchPanel projectId={project.id} />
-        </SectionPanel>
-      </section>
 
-      <section className="detail-section" aria-labelledby="project-export-bundles-heading">
-        <SectionHeading id="project-export-bundles-heading" index="11" subtitle="Generate manifest-first Altium, SolidWorks, or neutral export packages from verified assets only." title="Export bundles" />
-        <SectionPanel
-          description="Bundles include only verified file-backed assets. Referenced-only, unverified, or missing assets are recorded as omissions in the manifest. Export readiness does not imply part approval."
-          title={exportBundles && exportBundles.bundles.length > 0 ? `${exportBundles.bundles.length} export bundle${exportBundles.bundles.length === 1 ? "" : "s"}` : "No export bundles yet"}
-        >
-          <ExportBundlePanel
-            bundles={exportBundles ?? { bundles: [], projectId: project.id }}
-            projectId={project.id}
-            revisions={revisions}
+        <WorkspaceActionPanel
+          actions={buildProjectNextStepActions({
+            bomHealth,
+            evidenceAttachmentCount: evidence.attachments.length,
+            exportBundleCount: exportBundles?.bundles.length ?? 0,
+            followUps,
+            response
+          })}
+          description="Task-first shortcuts for the next likely project action."
+          title="Actionable next steps"
+        />
+
+        <WorkspaceActionPanel
+          actions={buildProjectWorkspaceActions(response)}
+          description="Project-scoped jumps for review, compare, evidence, circuit reuse, and verified exports."
+          title="Next project workspaces"
+        />
+
+        <section className="detail-section" aria-labelledby="project-summary-heading">
+          <SectionHeading id="project-summary-heading" subtitle="Basic project info." title="Project summary" />
+          <SectionPanel description="This section shows project details only. It does not mean parts list rows are uploaded or matched yet." title={project.projectKey}>
+            <ProjectSummaryGrid response={response} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-edit-heading">
+          <SectionHeading id="project-edit-heading" subtitle="Update project name, owner, notes, and revision labels." title="Edit project memory" />
+          <SectionPanel description="This updates project details only. It does not approve parts, verify files, or rerun matching." title="Edit details">
+            <ProjectEditPanel project={project} revisions={revisions} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-revisions-heading">
+          <SectionHeading id="project-revisions-heading" subtitle="Saved revision history for this project." title="Revisions" />
+          <SectionPanel description="These are the revisions saved for this project." title={revisions.length > 0 ? `${revisions.length} revisions` : "No revisions saved yet"}>
+            {revisions.length > 0 ? <ProjectRevisionTable revisions={revisions} /> : <EmptyState title="No revisions yet" body="No project revision rows are persisted for this project." />}
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-bom-imports-heading">
+          <SectionHeading id="project-bom-imports-heading" subtitle="Saved parts list uploads." title="BOM imports" />
+          <SectionPanel
+            description="Each upload appears here after it is saved. Use Match rows to link parts list lines to known parts."
+            title={bomImports.length > 0 ? `${bomImports.length} BOM import records` : "No persisted BOM imports"}
+          >
+            {bomImports.length > 0 ? (
+              <BomImportTable bomImports={bomImports} />
+            ) : (
+              <EmptyState title="No BOM imports yet" body="No parts list import metadata is persisted for this project. Use the CSV intake panel above to preview and save mapped rows." />
+            )}
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-bom-diagnostics-heading">
+          <SectionHeading id="project-bom-diagnostics-heading" subtitle="See what matched, what did not, and what changed." title="BOM diagnostics" />
+          <SectionPanel
+            description="Use this to find unmatched rows, weak matches, and revision differences."
+            title={bomImports.length > 0 ? `${bomImports.length} imports available` : "No BOM imports to diagnose"}
+          >
+            <BomDiagnosticsPanel bomImports={bomImports} projectId={project.id} revisions={revisions} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-circuit-block-instantiation-heading">
+          <SectionHeading
+            id="project-circuit-block-instantiation-heading"
+            subtitle="Add a saved circuit block into this BOM."
+            title="Add circuit block to BOM"
           />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-follow-ups-heading">
-        <SectionHeading id="project-follow-ups-heading" index="12" subtitle="Persist assignable work from current BOM health findings without changing part truth." title="Follow-up work" />
-        <SectionPanel description="Follow-up status, assignee, evidence links, and resolution notes are operational workflow only. They do not resolve readiness unless the underlying BOM, part, asset, or evidence state changes." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
-          <FollowUpPanel followUps={followUps} targetId={project.id} targetType="project" />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-evidence-heading">
-        <SectionHeading id="project-evidence-heading" index="13" subtitle="Decision evidence metadata can be attached without changing validation, approval, or export readiness." title="Evidence attachments" />
-        <SectionPanel description="Evidence can support future reviews, but it remains provenance until someone explicitly reviews or validates the underlying item." title={evidence.attachments.length > 0 ? `${evidence.attachments.length} evidence attachments` : "No evidence attachments"}>
-          <ProjectEvidencePanel attachments={evidence.attachments} projectId={project.id} />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-capabilities-heading">
-        <SectionHeading id="project-capabilities-heading" index="14" subtitle="Capability metadata keeps shipped foundations separate from planned workflows." title="Capability state" />
-        <div className="projects-detail-grid">
-          <SectionPanel title="Readable foundations" description="These are current read foundations for persisted project memory.">
-            <CapabilityList capabilities={foundationCapabilities} />
+          <SectionPanel
+            description="This adds rows from a reusable block. It does not auto-approve parts or files."
+            title="Reusable circuit block"
+          >
+            <CircuitBlockInstantiationPanel projectId={project.id} revisions={revisions} />
           </SectionPanel>
-          <SectionPanel title="Planned workflows" description="These are not shipped by the current project detail page.">
-            <CapabilityList capabilities={plannedCapabilities} />
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-risk-heading">
+          <SectionHeading id="project-risk-heading" subtitle="Issues found in your parts list and matched parts." title="BOM health and risk" />
+          <SectionPanel description="Each issue includes a clear next action." title={bomHealth.summary.totalLineCount > 0 ? `${bomHealth.findings.length} explainable findings` : "No BOM rows to evaluate"}>
+            <ProjectBomHealthPanel health={bomHealth} />
           </SectionPanel>
-        </div>
-      </section>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-approval-batch-heading">
+          <SectionHeading
+            id="project-approval-batch-heading"
+            subtitle="Approve many parts at once when ready."
+            title="Review approval gaps"
+          />
+          <SectionPanel
+            description="This updates part approval status only."
+            title="Approval queue"
+          >
+            <ApprovalBatchPanel projectId={project.id} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-export-bundles-heading">
+          <SectionHeading id="project-export-bundles-heading" subtitle="Build downloadable export files." title="Export bundles" />
+          <SectionPanel
+            description="Only verified files are included. Missing files are listed clearly in the bundle details."
+            title={exportBundles && exportBundles.bundles.length > 0 ? `${exportBundles.bundles.length} export bundle${exportBundles.bundles.length === 1 ? "" : "s"}` : "No export bundles yet"}
+          >
+            <ExportBundlePanel
+              bundles={exportBundles ?? { bundles: [], projectId: project.id }}
+              projectId={project.id}
+              revisions={revisions}
+            />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-follow-ups-heading">
+          <SectionHeading id="project-follow-ups-heading" subtitle="Track open tasks for this project." title="Follow-up work" />
+          <SectionPanel description="Use this list to assign and track work items." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
+            <FollowUpPanel followUps={followUps} targetId={project.id} targetType="project" />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-evidence-heading">
+          <SectionHeading id="project-evidence-heading" subtitle="Attach notes and files that explain decisions." title="Evidence attachments" />
+          <SectionPanel description="Evidence gives context for reviews and audits." title={evidence.attachments.length > 0 ? `${evidence.attachments.length} evidence attachments` : "No evidence attachments"}>
+            <ProjectEvidencePanel attachments={evidence.attachments} projectId={project.id} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="project-capabilities-heading">
+          <SectionHeading id="project-capabilities-heading" subtitle="What this page can do now and what is planned next." title="Capability state" />
+          <div className="projects-detail-grid">
+            <SectionPanel title="Available now" description="Features you can use today.">
+              <CapabilityList capabilities={foundationCapabilities} />
+            </SectionPanel>
+            <SectionPanel title="Planned next" description="Features not shipped yet.">
+              <CapabilityList capabilities={plannedCapabilities} />
+            </SectionPanel>
+          </div>
+        </section>
+      </details>
     </main>
   );
 }
@@ -300,13 +342,17 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
   const healthPromise = fetchApiHealth();
 
   try {
-    const [health, response, bomHealth, evidence, followUps, exportBundles] = await Promise.all([
+    const [health, response, bomHealth, evidence, followUps, exportBundles, files] = await Promise.all([
       healthPromise,
       fetchProjectDetail(projectId),
       fetchProjectBomHealth(projectId),
       fetchProjectEvidenceAttachments(projectId),
       fetchProjectFollowUps(projectId),
-      fetchProjectExportBundles(projectId).catch(() => null)
+      fetchProjectExportBundles(projectId).catch(() => null),
+      // The file mirror is not critical to rendering the project workspace, so a failure
+      // here must never break the page. Catch and downgrade to null so the panel renders
+      // its own honest unavailable state without setup-blocking the rest of the route.
+      fetchProjectFiles(projectId).catch(() => null)
     ]);
 
     if (!response || !bomHealth || !evidence || !followUps) {
@@ -317,6 +363,7 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
       bomHealth,
       evidence,
       exportBundles,
+      files,
       followUps,
       health,
       response,
@@ -354,7 +401,7 @@ function ProjectDetailSetupState({ detailState }: { detailState: Extract<Project
         <div className="projects-hero__copy">
           <p className="app-kicker">Project memory detail</p>
           <h1>Project detail unavailable</h1>
-          <p className="projects-hero__lede">Project detail reads require the project-memory database tables. No fallback project history is shown.</p>
+          <p className="projects-hero__lede">Project details are paused until your project database is ready.</p>
           <div className="projects-hero__status">
             <StatusBadge label={detailState.code} tone="review" />
             <StatusBadge label={`Database ${detailState.health?.dependencies.database ?? "unknown"}`} tone={detailState.health?.dependencies.database === "connected" ? "verified" : "review"} />
@@ -362,16 +409,16 @@ function ProjectDetailSetupState({ detailState }: { detailState: Extract<Project
           <p className="mode-warning">{detailState.message}</p>
         </div>
       </section>
-      <SectionPanel title="Setup guidance" description="Project detail requires DB-backed project, revision, BOM, and usage tables.">
+      <SectionPanel title="Finish setup to view project details" description="Project details appear after the database tables are migrated and data is available.">
         <div className="setup-steps">
           <div>
-            <strong>Apply migrations</strong>
+            <strong>Run database setup</strong>
             <code>npm run db:migrate</code>
             <code>npm run dev</code>
           </div>
           <div>
-            <strong>No fallback records</strong>
-            <span>Project memory stays empty or unavailable until persisted project rows exist.</span>
+            <strong>What to expect</strong>
+            <span>This page stays empty until project rows exist in your database.</span>
           </div>
         </div>
       </SectionPanel>
@@ -421,6 +468,99 @@ function buildProjectWorkspaceActions(response: ProjectDetailResponse): Workspac
       label: "Install/export files",
       signal: "Verified only"
     }
+  ];
+}
+
+/**
+ * Builds task-first actions so first-time operators can continue project flow without hunting sections.
+ */
+function buildProjectNextStepActions({
+  bomHealth,
+  evidenceAttachmentCount,
+  exportBundleCount,
+  followUps,
+  response
+}: {
+  bomHealth: ProjectBomHealthResponse;
+  evidenceAttachmentCount: number;
+  exportBundleCount: number;
+  followUps: FollowUpListResponse;
+  response: ProjectDetailResponse;
+}): WorkspaceAction[] {
+  const hasBomImports = response.bomImports.length > 0;
+  const hasUsage = response.usages.length > 0;
+  const openFollowUps = followUps.summary.openCount + followUps.summary.inProgressCount;
+  const hasBomRows = bomHealth.summary.totalLineCount > 0;
+  const hasFindings = bomHealth.findings.length > 0;
+
+  return [
+    hasBomImports
+      ? {
+          body: "Persist the next revision so diagnostics and compare stay current.",
+          href: "#project-bom-upload-heading",
+          label: "Upload next BOM revision",
+          signal: `${response.bomImports.length} imported`
+        }
+      : {
+          body: "Start by uploading one mapped BOM so the rest of this workspace can derive usage and risk.",
+          href: "#project-bom-upload-heading",
+          label: "Upload first BOM",
+          signal: "No BOM imports"
+        },
+    hasUsage
+      ? {
+          body: "Review confirmed matches and jump to part detail where trust/export decisions are needed.",
+          href: "#project-usage-heading",
+          label: "Review confirmed usage",
+          signal: `${response.usages.length} confirmed`
+        }
+      : {
+          body: "Run row matching so project BOM lines become confirmed usage where confidence is exact.",
+          href: "#project-bom-imports-heading",
+          label: "Match imported BOM rows",
+          signal: hasBomImports ? "0 confirmed usage" : "Needs BOM import"
+        },
+    hasBomRows
+      ? {
+          body: hasFindings ? "Triage explainable BOM findings and run the next concrete action." : "BOM health is currently clear; keep it clear as revisions land.",
+          href: "#project-risk-heading",
+          label: hasFindings ? "Triage BOM health findings" : "Review BOM health status",
+          signal: hasFindings ? `${bomHealth.findings.length} findings` : "No findings"
+        }
+      : {
+          body: "No risk derivation yet because no BOM rows are available.",
+          href: "#project-bom-diagnostics-heading",
+          label: "Open BOM diagnostics",
+          signal: "No BOM rows"
+        },
+    openFollowUps > 0
+      ? {
+          body: "Close or progress tracked project work before the next release checkpoint.",
+          href: "#project-follow-ups-heading",
+          label: "Resolve follow-ups",
+          signal: `${openFollowUps} active`
+        }
+      : {
+          body: "No active follow-ups right now; create one when a finding needs tracked execution.",
+          href: "#project-follow-ups-heading",
+          label: "Review follow-up queue",
+          signal: "No active follow-ups"
+        },
+    exportBundleCount > 0
+      ? {
+          body: "Inspect the latest bundle state and download archives for install/export workflows.",
+          href: "#project-export-bundles-heading",
+          label: "Inspect export bundles",
+          signal: `${exportBundleCount} bundles`
+        }
+      : {
+          body: evidenceAttachmentCount > 0
+            ? "Generate a first bundle when verified file-backed assets are available."
+            : "Attach evidence and verify assets, then generate the first bundle.",
+          href: "#project-export-bundles-heading",
+          label: "Generate first export bundle",
+          signal: "No bundles"
+        }
   ];
 }
 
@@ -604,72 +744,6 @@ function BomImportTable({ bomImports }: { bomImports: BomImport[] }) {
       </table>
     </div>
   );
-}
-
-/**
- * Renders confirmed project part usage records.
- */
-function ProjectUsageTable({ usages }: { usages: ProjectPartUsage[] }) {
-  return (
-    <div className="projects-table-wrap">
-      <table className="projects-table">
-        <thead>
-          <tr>
-            <th>Part</th>
-            <th>Status</th>
-            <th>Trust context</th>
-            <th>Designators</th>
-            <th>Quantity</th>
-            <th>Context</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {usages.map((usage) => (
-            <tr key={usage.id}>
-              <td>
-                <Link href={`/parts/${usage.partId}`}>
-                  <strong className="ui-mono">{usage.partMpn ?? usage.partId}</strong>
-                </Link>
-                <div className="muted-copy">{usage.manufacturerName ?? "Manufacturer not recorded"}</div>
-                <div className="muted-copy ui-mono">{usage.partId}</div>
-              </td>
-              <td>
-                <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
-              </td>
-              <td className="muted-copy">{formatUsageTrustContext(usage)}</td>
-              <td>{formatDesignators(usage.designators)}</td>
-              <td>{usage.quantity ?? "Not recorded"}</td>
-              <td>{usage.usageContext ?? "No usage context recorded"}</td>
-              <td>{formatDateTime(usage.updatedAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/**
- * Builds a compact trust summary from persisted usage snapshots.
- */
-function formatUsageTrustContext(usage: ProjectPartUsage): string {
-  const approvalStatus = readSnapshotString(usage.approvalSnapshot, "status");
-  const readinessStatus = readSnapshotString(usage.readinessSnapshot, "status");
-  const approvalStage = approvalStatus === "approved"
-    ? "Approved"
-    : approvalStatus === "pending_review"
-      ? "Pending approval"
-      : "Approval not recorded";
-  const readinessStage = readinessStatus
-    ? `Readiness: ${readinessStatus.replace(/_/g, " ")}`
-    : "Readiness not recorded";
-  return `${approvalStage} | ${readinessStage}`;
-}
-
-function readSnapshotString(snapshot: Record<string, unknown>, key: string): string | null {
-  const value = snapshot[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /**
@@ -965,34 +1039,6 @@ function formatBomSourceFormat(sourceFormat: BomSourceFormat): string {
     manual: "Manual",
     xlsx: "XLSX"
   }[sourceFormat];
-}
-
-/**
- * Formats confirmed project usage lifecycle status.
- */
-function formatUsageStatus(status: ProjectPartUsageStatus): string {
-  return {
-    deprecated: "Deprecated",
-    in_review: "In review",
-    proposed: "Proposed",
-    released: "Released",
-    used: "Used"
-  }[status];
-}
-
-/**
- * Maps usage lifecycle status into badge tone.
- */
-function usageStatusTone(status: ProjectPartUsageStatus): BadgeTone {
-  if (status === "released" || status === "used") {
-    return "verified";
-  }
-
-  if (status === "in_review" || status === "proposed") {
-    return "info";
-  }
-
-  return "review";
 }
 
 /**

@@ -242,7 +242,7 @@ function ConnectorSetsFilterForm({ connectorClassFilter, query }: { connectorCla
         <span>Search MPN or manufacturer</span>
         <input defaultValue={query} name="q" placeholder="EH-1.25 or JST" type="search" />
       </label>
-      <button className="button-primary" type="submit">Apply</button>
+      <button className="button-primary" type="submit">Apply filters</button>
     </form>
   );
 }

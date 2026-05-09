@@ -85,8 +85,8 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
       <WorkspaceJumpNav ariaLabel="Where-used sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="where-used-search-heading">
-        <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Project memory must be connected before target coverage can be claimed." : "All four target types are backed by persisted records when project memory is connected: parts, circuit blocks, connector sets, and assets via export bundles."} title="Search memory" />
-        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is disabled until persisted project, BOM, circuit, and export records can be read." : "Search by internal part id, MPN, circuit block id, or circuit block key."} title={pageState.status === "setup_required" ? "Project memory unavailable" : "Where-used lookup"}>
+        <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Connect project memory to search where things are used." : "Find a part, circuit block, connector set, or exported asset and see where it appears."} title="Search memory" />
+        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is paused until project memory is ready." : "Search by part id, part number, circuit block id, or block key."} title={pageState.status === "setup_required" ? "Project memory unavailable" : "Where-used lookup"}>
           {pageState.status === "setup_required"
             ? <WhereUsedSearchSetupState state={pageState} />
             : <WhereUsedSearchForm query={pageState.status === "ready" ? pageState.response.query : pageState.query} targetType={pageState.status === "ready" ? pageState.response.targetType : pageState.targetType} />}
@@ -94,14 +94,14 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
       </section>
 
       <section className="detail-section" aria-labelledby="where-used-results-heading">
-        <SectionHeading id="where-used-results-heading" index="02" subtitle="Results are grouped around confirmed project usage and reusable-circuit roles." title="Results" />
-        <SectionPanel description="Historical usage and dependency context does not approve reuse, validate assets, or unlock export." title={getResultsTitle(pageState)}>
+        <SectionHeading id="where-used-results-heading" index="02" subtitle="Grouped by project usage and reusable circuit roles." title="Results" />
+        <SectionPanel description="Past use is information only. It does not approve parts or files." title={getResultsTitle(pageState)}>
           <WhereUsedResults state={pageState} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="where-used-boundaries-heading">
-        <SectionHeading id="where-used-boundaries-heading" index="03" subtitle="Where-used is input for engineering review, not a trust shortcut." title="Boundaries" />
+        <SectionHeading id="where-used-boundaries-heading" index="03" subtitle="Where-used is reference info. It does not approve parts or files on its own." title="Boundaries" />
         <div className="projects-truth-rail projects-truth-rail--compact">
           <div>
             <span>Confirmed usage</span>
@@ -324,9 +324,10 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
 
   return (
     <div className="where-used-global-results">
-      <p className="where-used-panel__boundary">
-        <strong>Trust boundary:</strong> {response.boundary}
-      </p>
+      <details className="where-used-panel__boundary">
+        <summary><strong>Trust boundary</strong></summary>
+        <p>{response.boundary}</p>
+      </details>
       <WhereUsedMatchSummary response={response} />
       {response.projectUsages.length > 0
         ? <WhereUsedProjectUsageTable records={response.projectUsages} />

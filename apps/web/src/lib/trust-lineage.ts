@@ -49,7 +49,7 @@ export interface TrustLineageSummary {
 }
 
 const BOUNDARY_COPY =
-  "Imported is data ingested. Reviewed is admin sign-off on individual records. Approved is engineering sign-off on the part. Verified for export is per-asset trust. None of the earlier gates implies the next.";
+  "Each step is separate: imported data, review sign-off, part approval, and export-ready assets.";
 
 /** Fallback when a catalog/search projection omits bundle readiness so lineage stays honest without crashing. */
 const CATALOG_FALLBACK_BUNDLE_READINESS: BundleReadinessSummary = {
@@ -158,7 +158,7 @@ function buildImportedStage(record: PartSearchRecord): TrustLineageStageSummary 
   if (importedCount > 0) {
     return {
       badgeLabel: `${importedCount} source${importedCount === 1 ? "" : "s"} imported`,
-      detail: `${importedCount} provider source ${pluralize("row", importedCount)} successfully imported. Imported does not mean reviewed or approved.`,
+      detail: `${importedCount} source ${pluralize("row", importedCount)} imported.`,
       label: "Imported",
       stage: "imported",
       state: "passed",
@@ -169,7 +169,7 @@ function buildImportedStage(record: PartSearchRecord): TrustLineageStageSummary 
   if (failedCount > 0) {
     return {
       badgeLabel: "Import failed",
-      detail: `${failedCount} provider import ${pluralize("attempt", failedCount)} failed. No source content has been ingested for this part.`,
+      detail: `${failedCount} import ${pluralize("attempt", failedCount)} failed.`,
       label: "Imported",
       stage: "imported",
       state: "blocked",
@@ -179,7 +179,7 @@ function buildImportedStage(record: PartSearchRecord): TrustLineageStageSummary 
 
   return {
     badgeLabel: "No source rows",
-    detail: "No provider import rows are recorded for this part yet.",
+    detail: "No import rows yet.",
     label: "Imported",
     stage: "imported",
     state: "pending",
@@ -201,7 +201,7 @@ function buildReviewedStage(
   if (statuses.length === 0) {
     return {
       badgeLabel: "No review on file",
-      detail: "No asset or workflow review records have been opened. Approval and export still require explicit review.",
+      detail: "No review records yet.",
       label: "Reviewed",
       stage: "reviewed",
       state: "pending",
@@ -219,7 +219,7 @@ function buildReviewedStage(
   if (approvedCount > 0 && rejectedCount === 0 && changeCount === 0) {
     return {
       badgeLabel: `${approvedCount} reviewed`,
-      detail: `${approvedCount} admin review ${pluralize("sign-off", approvedCount)} recorded. Reviewed does not mean approved or export-ready.`,
+      detail: `${approvedCount} review ${pluralize("sign-off", approvedCount)} recorded.`,
       label: "Reviewed",
       stage: "reviewed",
       state: "passed",
@@ -230,7 +230,7 @@ function buildReviewedStage(
   if (rejectedCount > 0) {
     return {
       badgeLabel: `${rejectedCount} rejected`,
-      detail: `${rejectedCount} review ${pluralize("record", rejectedCount)} rejected. Rejected outputs stay outside trust until replaced or reworked.`,
+      detail: `${rejectedCount} review ${pluralize("record", rejectedCount)} rejected.`,
       label: "Reviewed",
       stage: "reviewed",
       state: "blocked",
@@ -252,7 +252,7 @@ function buildReviewedStage(
   if (pendingCount > 0) {
     return {
       badgeLabel: `${pendingCount} in review`,
-      detail: `${pendingCount} review ${pluralize("record", pendingCount)} are open and awaiting sign-off.`,
+      detail: `${pendingCount} review ${pluralize("record", pendingCount)} open.`,
       label: "Reviewed",
       stage: "reviewed",
       state: "pending",

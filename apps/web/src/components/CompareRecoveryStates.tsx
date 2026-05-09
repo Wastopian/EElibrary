@@ -32,7 +32,7 @@ export function CompareMissingPartsRecovery() {
     <div className="empty-recovery-state">
       <EmptyState body="The selected ids did not resolve to catalog parts. Search Catalog for the exact MPN, then add the internal part record from the part workspace." title="No matching parts found" />
       <div className="empty-recovery-actions" aria-label="Missing compare part recovery actions">
-        <Link className="button-link" href="/catalog">Search Catalog</Link>
+        <Link className="button-link" href="/catalog">Find parts in Catalog</Link>
         <Link className="button-link button-link--quiet" href="/system">Check system health</Link>
       </div>
     </div>

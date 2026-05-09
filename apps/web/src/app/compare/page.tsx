@@ -260,9 +260,9 @@ async function loadComparePage(partIds: string[]): Promise<ComparePageState> {
  */
 function CompareSetupState({ state }: { state: Extract<ComparePageState, { status: "setup_required" }> }) {
   return (
-    <SectionPanel description="Comparison needs the same DB-backed detail payloads as the part workspace." title="Connect the catalog database">
+    <SectionPanel description="Connect the catalog database to compare parts." title="Connect the catalog database">
       <EmptyState
-        body={`${state.code}: ${state.message} Readiness, provenance, and export gates stay hidden until catalog detail records are reachable.`}
+        body={`${state.code}: ${state.message} Compare details stay hidden until the catalog database is connected.`}
         title="Compare unavailable"
       />
     </SectionPanel>
