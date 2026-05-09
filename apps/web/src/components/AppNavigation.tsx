@@ -137,46 +137,52 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
     {
       items: [
         {
-          description: "Show connector parts only.",
+          description: "Open the catalog filtered to connectors.",
           href: "/catalog?category=Connector",
           label: "Connectors",
           match: { name: "category", type: "query", value: "Connector" }
         },
         {
-          description: "Show parts still missing CAD files.",
+          description: "Open the catalog filtered to parts missing CAD.",
           href: "/catalog?cad=unavailable",
           label: "Missing CAD",
           match: { name: "cad", type: "query", value: "unavailable" }
         },
         {
-          description: "Show parts waiting for approval.",
+          description: "Open the catalog filtered to parts waiting for review.",
           href: "/catalog?approvalStatus=pending_review",
           label: "Pending review",
           match: { name: "approvalStatus", type: "query", value: "pending_review" }
         }
       ],
-      label: "Library views"
+      label: "Catalog filters"
     }
   ];
 
   return (
     <nav aria-label="Primary navigation" className="app-nav">
-      {groups.map((group) => (
-        <section className="app-nav__group" key={group.label}>
-          <p className="app-nav__group-label">{group.label}</p>
-          <div className="app-nav__group-links">
-            {group.items.map((item) => {
-              const isActive = isNavigationItemActive(item, currentLocation);
+      {groups.map((group) => {
+        const isFilterGroup = group.label === "Catalog filters";
 
-              return (
-                <a aria-current={isActive ? "page" : undefined} aria-label={`${item.label}: ${item.description}`} className={isActive ? "app-nav__link app-nav__link--active" : "app-nav__link"} href={item.href} key={item.href}>
-                  <span className="app-nav__link-label">{item.label}</span>
-                </a>
-              );
-            })}
-          </div>
-        </section>
-      ))}
+        return (
+          <section className={isFilterGroup ? "app-nav__group app-nav__group--filters" : "app-nav__group"} key={group.label}>
+            <p className="app-nav__group-label">{group.label}</p>
+            <div className="app-nav__group-links">
+              {group.items.map((item) => {
+                const isActive = isNavigationItemActive(item, currentLocation);
+                const className = `${isActive ? "app-nav__link app-nav__link--active" : "app-nav__link"}${isFilterGroup ? " app-nav__link--filter" : ""}`;
+
+                return (
+                  <a aria-current={isActive ? "page" : undefined} aria-label={`${item.label}: ${item.description}`} className={className} href={item.href} key={item.href}>
+                    <span className="app-nav__link-label">{item.label}</span>
+                    <span className="app-nav__link-description">{item.description}</span>
+                  </a>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
     </nav>
   );
 }

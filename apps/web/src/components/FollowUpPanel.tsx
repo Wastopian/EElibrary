@@ -104,7 +104,7 @@ export function FollowUpPanel({ followUps, targetId, targetType }: FollowUpPanel
           </table>
         </div>
       ) : (
-        <EmptyState title="No follow-ups yet" body="Refresh from computed gaps to create assignable work from current BOM health or circuit readiness inputs." />
+        <EmptyState title="No follow-ups yet" body="Click Refresh from computed gaps above to turn current BOM and readiness issues into assignable work." />
       )}
     </div>
   );

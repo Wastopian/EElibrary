@@ -8,6 +8,7 @@ import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-libra
 import { CircuitBlockCreatePanel } from "../../components/CircuitBlockCreatePanel";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { fetchApiHealth, fetchCircuitBlocks, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CircuitBlockListResponse, CircuitBlockStatus, CircuitBlockSummary, CircuitBlockType } from "@ee-library/shared/types";
@@ -45,13 +46,13 @@ export default async function CircuitBlocksPage() {
       <section className="projects-hero">
         <div className="projects-hero__layout">
           <div className="projects-hero__copy">
-            <p className="app-kicker">Circuit memory</p>
+            <p className="app-kicker">Circuit blocks</p>
             <h1>Reusable circuit blocks</h1>
             <p className="projects-hero__lede">
-              Capture reusable circuit patterns with linked internal parts, constraints, evidence, and current readiness signals. Block approval never overrides part approval or export readiness.
+              Save reusable circuit patterns so a future project can drop them in. Block approval is separate from part approval and from export readiness.
             </p>
             <div className="projects-hero__status">
-              <StatusBadge label="DB-backed circuit memory" tone="verified" />
+              <StatusBadge label="Database connected" tone="verified" />
               <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
               <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
             </div>
@@ -77,7 +78,7 @@ export default async function CircuitBlocksPage() {
           title="Circuit block library"
         />
         <SectionPanel
-          description="Only persisted circuit block records appear here. Counts are inputs for review, not an opaque quality score."
+          description="Only saved circuit blocks appear here. Counts are inputs for review, not a single quality score."
           title={response.circuitBlocks.length > 0 ? `${response.circuitBlocks.length} circuit blocks` : "No circuit blocks"}
         >
           {response.circuitBlocks.length > 0 ? <CircuitBlocksTable circuitBlocks={response.circuitBlocks} /> : <CircuitBlocksEmptyState />}
@@ -169,19 +170,18 @@ async function loadCircuitBlocksPage(): Promise<CircuitBlocksPageState> {
 function CircuitBlocksSetupState({ pageState }: { pageState: Extract<CircuitBlocksPageState, { status: "setup_required" }> }) {
   return (
     <main className="projects-layout">
-      <Link className="back-link" href="/projects">
-        &larr; Back to projects
-      </Link>
       <section className="projects-hero">
         <div className="projects-hero__copy">
-          <p className="app-kicker">Circuit memory</p>
-          <h1>Connect the engineering-memory database</h1>
-          <p className="projects-hero__lede">Circuit block reads require persisted circuit block and linked part-role tables. No seed fallback is used for reusable circuit knowledge.</p>
+          <p className="app-kicker">Circuit blocks</p>
+          <h1>{getSetupStateCopy(pageState.code).headline}</h1>
+          <p className="projects-hero__lede">{getSetupStateCopy(pageState.code).body} Circuit block reads need persisted circuit block and linked part-role tables — no seed fallback is used for reusable circuit knowledge.</p>
           <div className="projects-hero__status">
-            <StatusBadge label={pageState.code} tone="review" />
             <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
-          <p className="mode-warning">{pageState.message}</p>
+          <details className="audit-disclosure">
+            <summary>Show technical details</summary>
+            <p className="muted-copy">{pageState.code}: {pageState.message}</p>
+          </details>
         </div>
       </section>
     </main>
@@ -268,7 +268,7 @@ function CircuitBlocksTable({ circuitBlocks }: { circuitBlocks: CircuitBlockSumm
  * Renders the configured-but-empty circuit block state.
  */
 function CircuitBlocksEmptyState() {
-  return <EmptyState title="No circuit blocks yet" body="The database is ready, but no reusable circuit blocks are persisted. Create a block, then add internal part roles from the detail page." />;
+  return <EmptyState title="No circuit blocks yet" body="Create a block below, then open it to add the part roles you reuse together." />;
 }
 
 /**

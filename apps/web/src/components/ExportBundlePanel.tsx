@@ -122,7 +122,7 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
       <div className="export-bundle-panel__form">
         <h4 className="form-section-label">Generate export bundle</h4>
         <p className="form-hint">
-          Bundles include only verified file-backed assets. Referenced-only or unverified assets are recorded as omissions in the manifest.
+          Only verified files with stored content are included. Reference-only and unverified assets are listed as omissions in the manifest.
         </p>
 
         <div className="form-row">

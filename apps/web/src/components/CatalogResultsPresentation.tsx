@@ -62,7 +62,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
   return (
     <div className="catalog-results-presentation">
       <div className="results-panel__toolbar">
-        <p>Table mode is the default engineering scan view; list mode keeps the older explanation-first cards available.</p>
+        <p>List mode shows each match with its readiness explained. Switch to table for a dense scan view across all rows.</p>
         <div className="results-panel__mode" aria-label="Catalog results presentation mode">
           <button aria-pressed={mode === "list"} onClick={() => setMode("list")} type="button">
             List
@@ -96,7 +96,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                   <th>Lifecycle</th>
                   <th>Datasheet</th>
                   <th>CAD/export</th>
-                  <th>Trust gates</th>
+                  <th>Verification steps</th>
                   <th>Readiness</th>
                   <th>Next action</th>
                   <th>Action</th>
@@ -197,7 +197,7 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
       </div>
 
       <details className="result-row__details">
-        <summary>Show signals and trust gates</summary>
+        <summary>Show signals and verification steps</summary>
         <div className="result-row__details-body">
           <div className="result-row__signals">
             <div>
@@ -211,7 +211,7 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
               <small>{row.approvalDetail}</small>
             </div>
             <div>
-              <span>CAD truth</span>
+              <span>File status</span>
               <strong>{row.assetTruthLabel}</strong>
               <small>{row.assetTruthDetail}</small>
             </div>
@@ -221,8 +221,8 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
               <small>{row.connectorSignalDetail}</small>
             </div>
           </div>
-          <div className="catalog-result-trust-gates" role="group" aria-label="Trust lineage gates">
-            <span className="catalog-result-trust-gates__label">Trust gates</span>
+          <div className="catalog-result-trust-gates" role="group" aria-label="Verification step gates">
+            <span className="catalog-result-trust-gates__label">Verification steps</span>
             <CatalogTrustGatesRow badges={row.trustLineageBadges} />
           </div>
           <div className="result-row__details-meter">

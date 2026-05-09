@@ -25,13 +25,16 @@ export default function Error({ error, reset }: ErrorProps) {
   return (
     <section className="workspace-state">
       <div className="workspace-state__card workspace-state__card--danger">
-        <p className="workspace-state__eyebrow">Route state</p>
-        <h1>Workspace error</h1>
-        <p>Something broke while preparing this route. Retry the request to reload the current engineering workspace without hiding the failure behind stale UI.</p>
+        <p className="workspace-state__eyebrow">Something went wrong</p>
+        <h1>This page hit an error.</h1>
+        <p>It is not something you did. Retry to reload the page. If it keeps failing, open System to see what is offline.</p>
         <div className="workspace-state__actions">
           <button onClick={reset} type="button">
             Retry
           </button>
+          <a className="button-link button-link--quiet" href="/system">
+            Open System
+          </a>
         </div>
       </div>
     </section>

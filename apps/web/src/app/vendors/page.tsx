@@ -12,6 +12,7 @@ import { EmptyState, SectionHeading, SectionPanel } from "@ee-library/ui";
 import { VendorCreatePanel } from "../../components/VendorCreatePanel";
 import { VendorsBrowser } from "../../components/VendorsBrowser";
 import { fetchVendorList, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { VendorListResponse } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -55,9 +56,6 @@ export default async function VendorsPage() {
             <a className="button-link" href="#vendor-create-heading">
               {response.vendors.length > 0 ? "Add another supplier" : "Add a supplier"}
             </a>
-            <Link className="button-link button-link--quiet" href="/projects">
-              Back to projects
-            </Link>
           </div>
           {response.rootPath ? (
             <details className="vendors-notebook-path">
@@ -164,11 +162,6 @@ function VendorsNotConfiguredState() {
               then restart the API if needed.
             </p>
           </details>
-          <div className="empty-recovery-actions">
-            <Link className="button-link button-link--quiet" href="/projects">
-              Back to projects
-            </Link>
-          </div>
         </div>
       </section>
     </main>
@@ -192,13 +185,14 @@ function VendorsErrorState({ message }: { message: string }) {
 
 /** Renders the generic API-unavailable recovery state. */
 function VendorsSetupState({ code, message }: { code: string; message: string }) {
+  const copy = getSetupStateCopy(code);
   return (
     <main className="projects-layout">
       <section className="projects-hero projects-hero--slim">
         <div className="projects-hero__copy">
           <p className="app-kicker">Suppliers</p>
-          <h1>This page needs a running API</h1>
-          <p className="projects-hero__lede">Start the EE Library app, then open this page again.</p>
+          <h1>{copy.headline}</h1>
+          <p className="projects-hero__lede">{copy.body}</p>
           <details className="import-guide">
             <summary>Show technical details</summary>
             <p className="mode-warning">{message}</p>

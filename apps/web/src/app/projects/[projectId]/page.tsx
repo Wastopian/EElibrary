@@ -20,6 +20,7 @@ import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
 import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildCompareUrl, fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
+import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { ApiHealth } from "../../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type {
@@ -134,7 +135,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           ) : (
             <EmptyState
               title="No confirmed part usage yet"
-              body="Upload a parts list below, then confirm matches to populate this list. No part-to-project usage rows are persisted yet."
+              body="Upload a parts list below, then confirm matches to populate this list. No parts are confirmed for this project yet."
             />
           )}
         </SectionPanel>
@@ -228,7 +229,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         <section className="detail-section" aria-labelledby="project-revisions-heading">
           <SectionHeading id="project-revisions-heading" subtitle="Saved revision history for this project." title="Revisions" />
           <SectionPanel description="These are the revisions saved for this project." title={revisions.length > 0 ? `${revisions.length} revisions` : "No revisions saved yet"}>
-            {revisions.length > 0 ? <ProjectRevisionTable revisions={revisions} /> : <EmptyState title="No revisions yet" body="No project revision rows are persisted for this project." />}
+            {revisions.length > 0 ? <ProjectRevisionTable revisions={revisions} /> : <EmptyState title="No revisions yet" body="No revisions have been saved for this project yet." />}
           </SectionPanel>
         </section>
 
@@ -399,14 +400,16 @@ function ProjectDetailSetupState({ detailState }: { detailState: Extract<Project
       </Link>
       <section className="projects-hero">
         <div className="projects-hero__copy">
-          <p className="app-kicker">Project memory detail</p>
-          <h1>Project detail unavailable</h1>
-          <p className="projects-hero__lede">Project details are paused until your project database is ready.</p>
+          <p className="app-kicker">Project</p>
+          <h1>{getSetupStateCopy(detailState.code).headline}</h1>
+          <p className="projects-hero__lede">{getSetupStateCopy(detailState.code).body}</p>
           <div className="projects-hero__status">
-            <StatusBadge label={detailState.code} tone="review" />
             <StatusBadge label={`Database ${detailState.health?.dependencies.database ?? "unknown"}`} tone={detailState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
-          <p className="mode-warning">{detailState.message}</p>
+          <details className="audit-disclosure">
+            <summary>Show technical details</summary>
+            <p className="muted-copy">{detailState.code}: {detailState.message}</p>
+          </details>
         </div>
       </section>
       <SectionPanel title="Finish setup to view project details" description="Project details appear after the database tables are migrated and data is available.">
@@ -753,7 +756,7 @@ function ProjectBomHealthPanel({ health }: { health: ProjectBomHealthResponse })
   const { summary } = health;
 
   if (summary.totalLineCount === 0) {
-    return <EmptyState title="No BOM rows to evaluate" body="Upload and map a BOM before health can derive row, part, CAD/export, evidence, or lifecycle findings." />;
+    return <EmptyState title="No parts list to check" body="Upload a parts list first. Once it is mapped, the health view will flag row, part, CAD, evidence, and lifecycle issues." />;
   }
 
   return (
@@ -798,7 +801,7 @@ function ProjectBomHealthPanel({ health }: { health: ProjectBomHealthResponse })
           ))}
         </div>
       ) : (
-        <EmptyState title="No explainable findings" body="The current BOM rows do not trigger any configured health finding. This is not an approval or export guarantee." />
+        <EmptyState title="No issues found" body="No rules flagged anything in this BOM. That does not approve the parts for export — it just means nothing is currently flagged." />
       )}
     </div>
   );
@@ -864,7 +867,7 @@ function ProjectEvidencePanel({ attachments, projectId }: { attachments: Evidenc
       {attachments.length > 0 ? (
         <ProjectEvidenceTable attachments={attachments} />
       ) : (
-        <EmptyState title="No evidence metadata yet" body="Attach a review link or note to preserve why this project decision was made." />
+        <EmptyState title="No evidence yet" body="Attach a link or note so future you remembers why this decision was made." />
       )}
     </div>
   );
@@ -917,7 +920,7 @@ function ProjectEvidenceTable({ attachments }: { attachments: EvidenceAttachment
  */
 function CapabilityList({ capabilities }: { capabilities: ProjectMemoryCapability[] }) {
   if (capabilities.length === 0) {
-    return <EmptyState title="No capabilities reported" body="The API did not return capability metadata for this project detail read." />;
+    return <EmptyState title="No capabilities reported" body="We could not read capability information for this project." />;
   }
 
   return (

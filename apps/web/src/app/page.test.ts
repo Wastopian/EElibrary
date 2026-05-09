@@ -42,7 +42,7 @@ test("homepage renders actionable setup state when DB is not configured and seed
     const html = await renderHomepage();
 
     assert.match(html, /Finish setup to search parts/u);
-    assert.match(html, /Search is paused right now/u);
+    assert.match(html, /catalog database is not connected yet/u);
     assert.match(html, /EE_LIBRARY_ALLOW_SEED_FALLBACK/u);
     assert.match(html, /Use one of these paths, then refresh this page/u);
     assert.match(html, new RegExp(importUiCopy.catalogAcquisitionUnavailableSetup, "u"));

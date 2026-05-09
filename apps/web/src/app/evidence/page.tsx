@@ -9,6 +9,7 @@ import { EvidenceVaultAttachPanel } from "../../components/EvidenceVaultAttachPa
 import { EvidenceVaultReviewTable } from "../../components/EvidenceVaultReviewTable";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { fetchApiHealth, fetchBomImportLines, fetchCircuitBlockDetail, fetchCircuitBlocks, fetchEvidenceAttachments, fetchPartSearch, fetchProjectBomHealth, fetchProjectDetail, fetchProjectList, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { buildEvidenceTargetPickerOptionKey, formatEvidenceTargetTypeLabel } from "../../lib/evidence-target-picker";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
@@ -65,7 +66,7 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
             <p className="app-kicker">Evidence vault</p>
             <h1>Evidence provenance and review</h1>
             <p className="projects-hero__lede">
-              Find, attach, and review link, note, and file-backed evidence across project memory without changing part approval, validation, or export readiness.
+              Add and review supporting links, notes, and files. Evidence is reference material — it does not approve a part or unlock export on its own.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label="Evidence is provenance" tone="review" />
@@ -87,21 +88,21 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-attach-heading">
-        <SectionHeading id="evidence-attach-heading" index="02" subtitle={pageState.status === "ready" ? "Attach link, note, or local file evidence to a persisted target id." : "Project memory must be connected before evidence can be attached to persisted targets."} title="Attach evidence" />
-        <SectionPanel description={pageState.status === "ready" ? "File uploads use the configured storage layer and persist hash, MIME type, storage key, provenance, and review status." : "Attachment controls stay disabled because target ids and storage provenance cannot be persisted right now."} title={pageState.status === "ready" ? "New evidence" : "Attachment unavailable"}>
+        <SectionHeading id="evidence-attach-heading" index="02" subtitle={pageState.status === "ready" ? "Attach a link, note, or local file to a saved target." : "Projects must be connected before evidence can be attached."} title="Attach evidence" />
+        <SectionPanel description={pageState.status === "ready" ? "File uploads are saved with their hash, type, storage key, source, and review status." : "Attachments are paused because the project database is not reachable right now."} title={pageState.status === "ready" ? "New evidence" : "Attachment unavailable"}>
           {pageState.status === "ready" ? <EvidenceVaultAttachPanel initialOptions={targetOptions} /> : <EvidenceAttachSetupState state={pageState} />}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-results-heading">
-        <SectionHeading id="evidence-results-heading" index="03" subtitle="Review metadata can be edited from the vault without changing underlying trust state." title="Evidence rows" />
-        <SectionPanel description={pageState.status === "ready" ? pageState.response.boundary : "Project memory must be connected before evidence can be listed."} title={getEvidenceResultsTitle(pageState)}>
+        <SectionHeading id="evidence-results-heading" index="03" subtitle="Edit review notes here. Editing does not change part approval or export readiness." title="Evidence rows" />
+        <SectionPanel description={pageState.status === "ready" ? pageState.response.boundary : "Projects must be connected before evidence can be listed."} title={getEvidenceResultsTitle(pageState)}>
           <EvidenceResults state={pageState} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-boundaries-heading">
-        <SectionHeading id="evidence-boundaries-heading" index="04" subtitle="Evidence supports decisions but does not replace explicit validation or approval." title="Boundaries" />
+        <SectionHeading id="evidence-boundaries-heading" index="04" subtitle="Evidence supports a decision. It does not replace validation or approval." title="What evidence does and does not do" />
         <div className="projects-truth-rail projects-truth-rail--compact">
           <div>
             <span>File-backed</span>
@@ -505,10 +506,11 @@ function EvidenceFilterForm({ filters }: { filters: EvidenceAttachmentListFilter
  * Renders setup guidance instead of attach controls when persisted targets are unavailable.
  */
 function EvidenceAttachSetupState({ state }: { state: Extract<EvidencePageState, { status: "setup_required" }> }) {
+  const copy = getSetupStateCopy(state.code);
   return (
     <EmptyState
-      body={`${state.code}: ${state.message} Evidence attachment requires a persisted target id, provenance row, and storage state before it can be recorded.`}
-      title="Connect project memory before attaching evidence"
+      body={`${copy.body} Evidence attachment will return once projects are reachable. (${state.code}: ${state.message})`}
+      title={copy.headline}
     />
   );
 }
@@ -518,7 +520,8 @@ function EvidenceAttachSetupState({ state }: { state: Extract<EvidencePageState,
  */
 function EvidenceResults({ state }: { state: EvidencePageState }) {
   if (state.status === "setup_required") {
-    return <EmptyState title="Connect project memory" body={`${state.code}: ${state.message}`} />;
+    const copy = getSetupStateCopy(state.code);
+    return <EmptyState title={copy.headline} body={`${copy.body} (${state.code}: ${state.message})`} />;
   }
 
   if (state.response.attachments.length === 0) {
