@@ -242,6 +242,79 @@ export async function fetchProjectListEnvelope(): Promise<ApiEnvelope<ProjectLis
 }
 
 /**
+ * AuditEventListing mirrors the audit-log timeline shape returned by the API.
+ * Kept inline here to avoid widening the shared types package for the initial admin view.
+ */
+export type AuditEventListing = {
+  id: string;
+  occurredAt: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  actorRole: string | null;
+  actorIp: string | null;
+  actorUserAgent: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  resultStatus: "success" | "denied" | "failed";
+  route: string | null;
+  requestId: string | null;
+  reason: string | null;
+  beforeState: unknown;
+  afterState: unknown;
+};
+
+export type AuditEventListResponse = {
+  events: AuditEventListing[];
+  totalRecords: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type AuditEventListQuery = {
+  actorEmail?: string;
+  action?: string;
+  entityType?: string;
+  entityId?: string;
+  resultStatus?: AuditEventListing["resultStatus"];
+  occurredSince?: string;
+  occurredUntil?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+/**
+ * Fetches the admin audit-log timeline with optional actor / action / entity filters.
+ * Requires admin auth; the shared auth-headers path attaches the bearer token.
+ */
+export async function fetchAuditEventsEnvelope(query: AuditEventListQuery): Promise<ApiEnvelope<AuditEventListResponse>> {
+  const params = new URLSearchParams();
+  if (query.actorEmail) params.set("actorEmail", query.actorEmail);
+  if (query.action) params.set("action", query.action);
+  if (query.entityType) params.set("entityType", query.entityType);
+  if (query.entityId) params.set("entityId", query.entityId);
+  if (query.resultStatus) params.set("resultStatus", query.resultStatus);
+  if (query.occurredSince) params.set("occurredSince", query.occurredSince);
+  if (query.occurredUntil) params.set("occurredUntil", query.occurredUntil);
+  if (query.page) params.set("page", query.page.toString());
+  if (query.pageSize) params.set("pageSize", query.pageSize.toString());
+
+  const path = params.toString() ? `/admin/audit-log?${params.toString()}` : "/admin/audit-log";
+
+  const response = await fetch(buildApiUrl(path), {
+    cache: "no-store",
+    headers: { ...(await getAuthHeaders()) }
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Audit log read");
+  }
+
+  return (await response.json()) as ApiEnvelope<AuditEventListResponse>;
+}
+
+/**
  * Fetches the read-only project-memory list without hiding planned capability states.
  */
 export async function fetchProjectList(): Promise<ProjectListResponse> {
@@ -1435,6 +1508,14 @@ export function buildCompareUrl(partIds: string[]): string {
 export function buildExportBundleDownloadUrl(storageKey: string | null): string | null {
   if (!storageKey) return null;
   return `${getApiBaseUrl()}/storage/${encodeURIComponent(storageKey)}`;
+}
+
+/**
+ * Builds an absolute API URL from a project file entry's API-relative preview/download path.
+ */
+export function buildProjectFileAccessUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  return new URL(path, getApiBaseUrl()).toString();
 }
 
 /**

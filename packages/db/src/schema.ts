@@ -1258,3 +1258,47 @@ export const exportBundles = pgTable(
     check("export_bundles_format_check", literalCheck(`bundle_format IN ('altium', 'solidworks', 'neutral')`)),
   ]
 );
+
+/**
+ * auditEvents records every meaningful user-driven mutation across the API so that
+ * security review, compliance evidence, and per-entity history surfaces can answer
+ * "who did what and when". Append-only at the application layer; see
+ * docs/AUDIT_LOG_DESIGN.md for the broader plan.
+ */
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+
+    actorUserId: uuid("actor_user_id").references(() => users.id),
+    actorEmail: text("actor_email"),
+    actorRole: text("actor_role"),
+    actorIp: text("actor_ip"),
+    actorUserAgent: text("actor_user_agent"),
+
+    action: text("action").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    resultStatus: text("result_status").notNull(),
+
+    route: text("route"),
+    requestId: text("request_id"),
+    reason: text("reason"),
+
+    beforeState: jsonb("before_state"),
+    afterState: jsonb("after_state"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_audit_events_occurred").on(t.occurredAt),
+    index("idx_audit_events_actor").on(t.actorUserId, t.occurredAt),
+    index("idx_audit_events_entity").on(t.entityType, t.entityId, t.occurredAt),
+    index("idx_audit_events_action").on(t.action, t.occurredAt),
+    check(
+      "audit_events_result_status_check",
+      literalCheck(`result_status IN ('success', 'denied', 'failed')`)
+    ),
+  ]
+);

@@ -20,9 +20,12 @@ import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
-import { buildProjectFilesResponse, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import { buildProjectFilesResponse, resolveProjectFileForRead, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
+import { buildAuditContextFromRequest, listAuditEventsFromDatabase, recordAuditEvent } from "./audit-log";
+import type { AuditEventListFilters, AuditResultStatus } from "./audit-log";
+import type { ApiSession } from "./auth";
 import { buildSystemHealth } from "./system-health";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
@@ -150,6 +153,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(url.pathname);
   const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(url.pathname);
   const projectFilesMatch = /^\/projects\/([^/]+)\/files$/u.exec(url.pathname);
+  const projectFileReadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)\/([^/]+)$/u.exec(url.pathname);
   const projectFileUploadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
   const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
   const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(url.pathname);
@@ -181,7 +185,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   if (request.method === "POST" && url.pathname === "/projects") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleProjectCreate(request, response);
+    await handleProjectCreate(request, response, session);
     return;
   }
 
@@ -352,14 +356,14 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   if (request.method === "POST" && reviewActionMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleReviewActionCreate(request, response, reviewActionMatch[1]);
+    await handleReviewActionCreate(request, response, reviewActionMatch[1], session);
     return;
   }
 
   if (request.method === "POST" && promotionActionMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleAssetPromotionCreate(request, response, promotionActionMatch[1]);
+    await handleAssetPromotionCreate(request, response, promotionActionMatch[1], session);
     return;
   }
 
@@ -446,6 +450,13 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (url.pathname === "/admin/audit-log" && request.method === "GET") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleAuditLogList(request, response, url);
+    return;
+  }
+
   if (url.pathname === "/where-used") {
     await handleWhereUsedSearchRead(response, url);
     return;
@@ -528,6 +539,17 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (projectFilesMatch?.[1]) {
     await handleProjectFilesRead(response, decodeURIComponent(projectFilesMatch[1]));
+    return;
+  }
+
+  if (projectFileReadMatch?.[1] && projectFileReadMatch[2] && projectFileReadMatch[3]) {
+    await handleProjectFileServe(
+      response,
+      decodeURIComponent(projectFileReadMatch[1]),
+      decodeURIComponent(projectFileReadMatch[2]),
+      decodeURIComponent(projectFileReadMatch[3]),
+      url.searchParams.get("download") === "1"
+    );
     return;
   }
 
@@ -906,8 +928,9 @@ async function handleProviderAcquisitionJobRead(response: ServerResponse, jobId:
 /**
  * Handles project creation so the web app can open a real project-memory workspace.
  */
-async function handleProjectCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleProjectCreate(request: IncomingMessage, response: ServerResponse, session: ApiSession): Promise<void> {
   const body = await readJsonBody<ProjectCreateInput>(request);
+  const auditContext = buildAuditContextFromRequest(request, session);
 
   if (!body || !isProjectCreateInput(body)) {
     sendJson(response, 400, {
@@ -928,6 +951,13 @@ async function handleProjectCreate(request: IncomingMessage, response: ServerRes
     }
 
     if (result.status === "conflict") {
+      void recordAuditEvent(auditContext, {
+        action: "project.create",
+        entityType: "project",
+        entityId: body.projectKey ?? "",
+        resultStatus: "denied",
+        afterState: { reason: result.message }
+      });
       sendJson(response, 409, {
         error: {
           code: "PROJECT_KEY_CONFLICT",
@@ -937,8 +967,23 @@ async function handleProjectCreate(request: IncomingMessage, response: ServerRes
       return;
     }
 
+    void recordAuditEvent(auditContext, {
+      action: "project.create",
+      entityType: "project",
+      entityId: result.response.project.id,
+      resultStatus: "success",
+      afterState: result.response.project
+    });
+
     sendCatalogJsonWithStatus(response, 201, result.response, "database");
   } catch (error) {
+    void recordAuditEvent(auditContext, {
+      action: "project.create",
+      entityType: "project",
+      entityId: body.projectKey ?? "",
+      resultStatus: "failed",
+      afterState: { error: error instanceof Error ? error.message : String(error) }
+    });
     sendCatalogStoreError(response, error);
   }
 }
@@ -2079,6 +2124,127 @@ async function handleProjectFilesRead(response: ServerResponse, projectId: strin
 }
 
 /**
+ * Streams one project mirror file for browser preview or explicit download.
+ *
+ * The route uses the project database record only to find the canonical project folder.
+ * The file itself still comes from the mirror on disk, preserving the "drop it in the
+ * folder or upload it here" workflow.
+ */
+async function handleProjectFileServe(
+  response: ServerResponse,
+  projectId: string,
+  rawCategory: string,
+  filename: string,
+  forceDownload: boolean
+): Promise<void> {
+  const category = resolveProjectFolderCategory(rawCategory);
+  if (!category) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FILE_CATEGORY",
+        message: "Project file category is not supported."
+      }
+    });
+    return;
+  }
+
+  try {
+    const detail = await timeRouteOperation(
+      response,
+      "project-file-project-read",
+      () => readProjectDetailFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (detail.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (detail.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = detail.response.project;
+    const fileResult = await timeRouteOperation(
+      response,
+      "project-file-resolve",
+      () => resolveProjectFileForRead({ id: project.id, projectKey: project.projectKey }, category, filename),
+      (value) => value.status
+    );
+
+    if (fileResult.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_FILES_NOT_CONFIGURED",
+          message: "The project file mirror is disabled on the API host."
+        }
+      });
+      return;
+    }
+
+    if (fileResult.status === "invalid_category") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_PROJECT_FILE_CATEGORY",
+          message: "Project file category is not supported."
+        }
+      });
+      return;
+    }
+
+    if (fileResult.status === "invalid_filename") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_PROJECT_FILE_NAME",
+          message: fileResult.message
+        }
+      });
+      return;
+    }
+
+    if (fileResult.status === "not_found" || fileResult.status === "not_file") {
+      sendJson(response, 404, {
+        error: {
+          code: "PROJECT_FILE_NOT_FOUND",
+          message: "The requested project file was not found."
+        }
+      });
+      return;
+    }
+
+    if (fileResult.status === "error") {
+      sendJson(response, 500, {
+        error: {
+          code: "PROJECT_FILE_READ_FAILED",
+          message: fileResult.message
+        }
+      });
+      return;
+    }
+
+    const shouldPreview = !forceDownload && isBrowserPreviewMimeType(fileResult.mimeType);
+    response.writeHead(200, {
+      "Content-Disposition": buildFileContentDisposition(fileResult.filename, shouldPreview),
+      "Content-Type": fileResult.mimeType,
+      "X-EE-File-SHA256": fileResult.entry.sha256 ?? "",
+      ...buildTelemetryHeaders(response, 200)
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const readable = createReadStream(fileResult.absolutePath);
+      readable.on("error", reject);
+      response.on("error", reject);
+      response.on("finish", resolve);
+      readable.pipe(response);
+    });
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only project detail requests.
  */
 async function handleProjectDetailRead(response: ServerResponse, projectId: string): Promise<void> {
@@ -2458,6 +2624,63 @@ async function handlePartWhereUsedRead(response: ServerResponse, partId: string)
 }
 
 /**
+ * Handles the admin audit-log timeline read with optional actor / action / entity filters.
+ */
+async function handleAuditLogList(_request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+  const filters: AuditEventListFilters = {};
+  const actorEmail = url.searchParams.get("actorEmail");
+  const action = url.searchParams.get("action");
+  const entityType = url.searchParams.get("entityType");
+  const entityId = url.searchParams.get("entityId");
+  const resultStatus = url.searchParams.get("resultStatus");
+  const occurredSince = url.searchParams.get("occurredSince");
+  const occurredUntil = url.searchParams.get("occurredUntil");
+  const page = url.searchParams.get("page");
+  const pageSize = url.searchParams.get("pageSize");
+
+  if (actorEmail) filters.actorEmail = actorEmail;
+  if (action) filters.action = action;
+  if (entityType) filters.entityType = entityType;
+  if (entityId) filters.entityId = entityId;
+  if (resultStatus === "success" || resultStatus === "denied" || resultStatus === "failed") {
+    filters.resultStatus = resultStatus as AuditResultStatus;
+  }
+  if (occurredSince) filters.occurredSince = occurredSince;
+  if (occurredUntil) filters.occurredUntil = occurredUntil;
+  if (page) {
+    const parsedPage = Number.parseInt(page, 10);
+    if (Number.isFinite(parsedPage) && parsedPage > 0) filters.page = parsedPage;
+  }
+  if (pageSize) {
+    const parsedPageSize = Number.parseInt(pageSize, 10);
+    if (Number.isFinite(parsedPageSize) && parsedPageSize > 0) filters.pageSize = parsedPageSize;
+  }
+
+  try {
+    const result = await listAuditEventsFromDatabase(filters);
+
+    if (result === null) {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Audit log requires a configured database."
+        }
+      });
+      return;
+    }
+
+    sendJson(response, 200, { data: result, source: "database" });
+  } catch (error) {
+    sendJson(response, 500, {
+      error: {
+        code: "AUDIT_LOG_READ_FAILED",
+        message: error instanceof Error ? error.message : "Audit log read failed."
+      }
+    });
+  }
+}
+
+/**
  * Handles global where-used search across supported project-memory dependency records.
  */
 async function handleWhereUsedSearchRead(response: ServerResponse, url: URL): Promise<void> {
@@ -2658,8 +2881,9 @@ async function handleGenerationRequestCreate(request: IncomingMessage, response:
 /**
  * Handles local/dev-safe review actions without simulating generation or export verification.
  */
-async function handleReviewActionCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
+async function handleReviewActionCreate(request: IncomingMessage, response: ServerResponse, partId: string, session: ApiSession): Promise<void> {
   const body = await readJsonBody<ReviewActionInput>(request);
+  const auditContext = buildAuditContextFromRequest(request, session);
 
   if (!body || !isReviewTargetType(body.targetType) || !isReviewOutcome(body.outcome) || typeof body.targetId !== "string" || body.targetId.trim().length === 0) {
     sendJson(response, 400, {
@@ -2696,6 +2920,13 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
     }
 
     if (result.status === "not_found") {
+      void recordAuditEvent(auditContext, {
+        action: "review.create",
+        entityType: body.targetType,
+        entityId: body.targetId,
+        resultStatus: "denied",
+        afterState: { partId, outcome: body.outcome, reason: result.reason }
+      });
       sendJson(response, 404, {
         error: {
           code: "REVIEW_TARGET_NOT_FOUND",
@@ -2705,8 +2936,23 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
       return;
     }
 
+    void recordAuditEvent(auditContext, {
+      action: "review.create",
+      entityType: body.targetType,
+      entityId: body.targetId,
+      resultStatus: "success",
+      afterState: { partId, outcome: body.outcome, notes: body.notes ?? null }
+    });
+
     sendCatalogJson(response, result.response, "database");
   } catch (error) {
+    void recordAuditEvent(auditContext, {
+      action: "review.create",
+      entityType: body.targetType,
+      entityId: body.targetId,
+      resultStatus: "failed",
+      afterState: { error: error instanceof Error ? error.message : String(error) }
+    });
     sendCatalogStoreError(response, error);
   }
 }
@@ -2785,6 +3031,23 @@ function inferStorageContentType(ext: string): string {
 }
 
 /**
+ * Returns true when a browser can reasonably preview a file without a domain-specific
+ * CAD/EDA viewer. Everything else is served as an attachment even from the preview URL.
+ */
+function isBrowserPreviewMimeType(mimeType: string): boolean {
+  return mimeType === "application/pdf" || mimeType.startsWith("image/") || mimeType.startsWith("text/") || mimeType.startsWith("application/json");
+}
+
+/**
+ * Builds a conservative Content-Disposition header with an ASCII-safe filename. This is
+ * only presentation metadata; the route still serves the exact on-disk file.
+ */
+function buildFileContentDisposition(filename: string, inline: boolean): string {
+  const safeFilename = filename.replace(/[^\x20-\x7E]+/gu, "_").replace(/[\\"]/gu, "_");
+  return `${inline ? "inline" : "attachment"}; filename="${safeFilename}"`;
+}
+
+/**
  * Redirects to source_url for referenced assets, or reports why a file is not accessible.
  */
 async function handleAssetDownload(response: ServerResponse, partId: string, assetId: string): Promise<void> {
@@ -2844,8 +3107,9 @@ async function handleAssetDownload(response: ServerResponse, partId: string, ass
   }
 }
 
-async function handleAssetPromotionCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
+async function handleAssetPromotionCreate(request: IncomingMessage, response: ServerResponse, partId: string, session: ApiSession): Promise<void> {
   const body = await readJsonBody<AssetPromotionInput>(request);
+  const auditContext = buildAuditContextFromRequest(request, session);
 
   if (!body || typeof body.assetId !== "string" || body.assetId.trim().length === 0) {
     sendJson(response, 400, {
@@ -2871,6 +3135,13 @@ async function handleAssetPromotionCreate(request: IncomingMessage, response: Se
     }
 
     if (result.status === "not_found") {
+      void recordAuditEvent(auditContext, {
+        action: "asset.promote",
+        entityType: "asset",
+        entityId: body.assetId,
+        resultStatus: "denied",
+        afterState: { partId, reason: result.reason }
+      });
       sendJson(response, 404, {
         error: {
           code: "PROMOTION_TARGET_NOT_FOUND",
@@ -2881,6 +3152,13 @@ async function handleAssetPromotionCreate(request: IncomingMessage, response: Se
     }
 
     if (result.status === "not_promotable") {
+      void recordAuditEvent(auditContext, {
+        action: "asset.promote",
+        entityType: "asset",
+        entityId: body.assetId,
+        resultStatus: "denied",
+        afterState: { partId, reason: result.reason }
+      });
       sendJson(response, 409, {
         error: {
           code: "ASSET_NOT_PROMOTABLE",
@@ -2890,8 +3168,23 @@ async function handleAssetPromotionCreate(request: IncomingMessage, response: Se
       return;
     }
 
+    void recordAuditEvent(auditContext, {
+      action: "asset.promote",
+      entityType: "asset",
+      entityId: body.assetId,
+      resultStatus: "success",
+      afterState: { partId, promotion: result.response }
+    });
+
     sendCatalogJson(response, result.response, "database");
   } catch (error) {
+    void recordAuditEvent(auditContext, {
+      action: "asset.promote",
+      entityType: "asset",
+      entityId: body.assetId,
+      resultStatus: "failed",
+      afterState: { partId, error: error instanceof Error ? error.message : String(error) }
+    });
     sendCatalogStoreError(response, error);
   }
 }
@@ -3800,6 +4093,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups";
   if (method === "POST" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups-sync";
   if (method === "GET" && /^\/projects\/[^/]+\/files$/u.test(pathname)) return "api-project-files";
+  if (method === "GET" && /^\/projects\/[^/]+\/files\/[^/]+\/[^/]+$/u.test(pathname)) return "api-project-file-serve";
   if (method === "POST" && /^\/projects\/[^/]+\/files\/[^/]+$/u.test(pathname)) return "api-project-file-upload";
   if (method === "GET" && pathname === "/vendors") return "api-vendor-list";
   if (method === "POST" && pathname === "/vendors") return "api-vendor-create";

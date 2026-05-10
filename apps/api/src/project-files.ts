@@ -2,7 +2,7 @@
  * File header: Project file mirror service.
  *
  * Persists project files outside the database so engineers can also drop files directly
- * into operating-system folders. For each project the service maintains three first-class
+ * into operating-system folders. For each project the service maintains four first-class
  * subfolders — parts list, datasheets, and 3D models — under a configurable root.
  *
  * The root resolves in this order:
@@ -15,6 +15,8 @@
  * traversal regardless of how a project key was persisted upstream.
  */
 
+import { createReadStream, type Stats } from "node:fs";
+import { createHash } from "node:crypto";
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -76,6 +78,9 @@ export const PROJECT_FOLDER_DEFINITIONS: readonly ProjectFolderDefinition[] = [
  */
 export const MAX_PROJECT_FILE_BYTES = 25 * 1024 * 1024;
 
+/** PROJECT_FILE_PROVENANCE tags mirror entries without surfacing database jargon to users. */
+const PROJECT_FILE_PROVENANCE = "project_file_mirror" as const;
+
 /** ProjectFilesProjectInput minimally identifies a project for file mirror operations. */
 export interface ProjectFilesProjectInput {
   /** Database id used for the response payload. */
@@ -134,7 +139,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
 
   try {
     await ensureProjectFolderTree(projectRoot);
-    const folders = await readFolderListings(projectRoot);
+    const folders = await readFolderListings(project.id, projectRoot);
 
     return {
       availability: "configured",
@@ -207,12 +212,12 @@ async function ensureProjectFolderTree(projectRoot: string): Promise<void> {
  * Hidden files starting with "." and the macOS `.DS_Store` cruft are skipped to keep the
  * UI calm without losing the engineer's actual deliverables.
  */
-async function readFolderListings(projectRoot: string): Promise<ProjectFolderListing[]> {
+async function readFolderListings(projectId: string, projectRoot: string): Promise<ProjectFolderListing[]> {
   const listings: ProjectFolderListing[] = [];
 
   for (const folder of PROJECT_FOLDER_DEFINITIONS) {
     const absolutePath = path.join(projectRoot, folder.folderName);
-    const entries = await readDirectoryEntries(absolutePath);
+    const entries = await readDirectoryEntries(projectId, folder, absolutePath);
 
     listings.push({
       category: folder.category,
@@ -231,7 +236,7 @@ async function readFolderListings(projectRoot: string): Promise<ProjectFolderLis
  * with `isFile: false` and a null size so the UI can flag deeper structure that the mirror
  * does not currently traverse.
  */
-async function readDirectoryEntries(absolutePath: string): Promise<ProjectFolderEntry[]> {
+async function readDirectoryEntries(projectId: string, folder: ProjectFolderDefinition, absolutePath: string): Promise<ProjectFolderEntry[]> {
   const dirEntries = await readdir(absolutePath, { withFileTypes: true });
   const visible = dirEntries.filter((entry) => !entry.name.startsWith(".") && entry.name !== "Thumbs.db");
 
@@ -240,25 +245,215 @@ async function readDirectoryEntries(absolutePath: string): Promise<ProjectFolder
       const entryPath = path.join(absolutePath, entry.name);
       try {
         const info = await stat(entryPath);
-
-        return {
-          name: entry.name,
-          sizeBytes: info.isFile() ? info.size : null,
-          modifiedAt: info.mtime.toISOString(),
-          isFile: info.isFile()
-        };
+        return await buildProjectFolderEntry(projectId, folder, entry.name, entryPath, info);
       } catch {
         return {
           name: entry.name,
+          relativePath: buildProjectFileRelativePath(folder, entry.name),
           sizeBytes: null,
           modifiedAt: null,
-          isFile: false
+          isFile: false,
+          mimeType: null,
+          sha256: null,
+          previewUrl: null,
+          downloadUrl: null,
+          provenance: PROJECT_FILE_PROVENANCE
         };
       }
     })
   );
 
   return enriched.sort(compareEntries);
+}
+
+/**
+ * ProjectFileReadResult describes a safe, existing file that can be streamed by the API
+ * or the exact reason the request cannot be served.
+ */
+export type ProjectFileReadResult =
+  | {
+      status: "ok";
+      absolutePath: string;
+      entry: ProjectFolderEntry;
+      filename: string;
+      mimeType: string;
+    }
+  | { status: "not_configured" }
+  | { status: "invalid_category" }
+  | { status: "invalid_filename"; message: string }
+  | { status: "not_found" }
+  | { status: "not_file" }
+  | { status: "error"; message: string };
+
+/**
+ * Resolves one project mirror file for preview/download without letting route params
+ * escape the configured category folder.
+ */
+export async function resolveProjectFileForRead(
+  project: ProjectFilesProjectInput,
+  category: ProjectFolderCategory,
+  rawFilename: string
+): Promise<ProjectFileReadResult> {
+  const root = getProjectFilesRoot();
+  if (!root) {
+    return { status: "not_configured" };
+  }
+
+  const folder = PROJECT_FOLDER_DEFINITIONS.find((definition) => definition.category === category);
+  if (!folder) {
+    return { status: "invalid_category" };
+  }
+
+  const filename = parseRequestedFilename(rawFilename);
+  if (!filename) {
+    return {
+      status: "invalid_filename",
+      message: "Filename must be a single visible file in the requested project folder."
+    };
+  }
+
+  try {
+    const safeKey = sanitizeProjectKey(project.projectKey);
+    const projectRoot = resolveProjectRoot(root, safeKey);
+    const categoryRoot = path.join(projectRoot, folder.folderName);
+    const absolutePath = path.resolve(categoryRoot, filename);
+
+    if (!isPathInside(categoryRoot, absolutePath)) {
+      return {
+        status: "invalid_filename",
+        message: "Resolved file path escaped the project folder."
+      };
+    }
+
+    const info = await stat(absolutePath);
+    if (!info.isFile()) {
+      return { status: "not_file" };
+    }
+
+    const entry = await buildProjectFolderEntry(project.id, folder, filename, absolutePath, info);
+    return {
+      status: "ok",
+      absolutePath,
+      entry,
+      filename,
+      mimeType: entry.mimeType ?? "application/octet-stream"
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "not_found" };
+    }
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : "Project file could not be read."
+    };
+  }
+}
+
+/**
+ * Builds the full metadata shape for a listed or newly-uploaded project file. Hashing is
+ * intentional: it gives small teams a simple duplicate check and later lets us link the
+ * same file to review/export workflows without guessing by filename.
+ */
+async function buildProjectFolderEntry(
+  projectId: string,
+  folder: ProjectFolderDefinition,
+  filename: string,
+  absolutePath: string,
+  info: Stats
+): Promise<ProjectFolderEntry> {
+  const isFile = info.isFile();
+  const mimeType = isFile ? inferProjectFileMimeType(filename) : null;
+  return {
+    name: filename,
+    relativePath: buildProjectFileRelativePath(folder, filename),
+    sizeBytes: isFile ? info.size : null,
+    modifiedAt: info.mtime.toISOString(),
+    isFile,
+    mimeType,
+    sha256: isFile ? await hashFileSha256(absolutePath) : null,
+    previewUrl: isFile && mimeType && isProjectFileBrowserPreviewMimeType(mimeType) ? buildProjectFileAccessPath(projectId, folder.category, filename, false) : null,
+    downloadUrl: isFile ? buildProjectFileAccessPath(projectId, folder.category, filename, true) : null,
+    provenance: PROJECT_FILE_PROVENANCE
+  };
+}
+
+/**
+ * Builds the project-relative file path shown to the browser and future file-linking jobs.
+ */
+function buildProjectFileRelativePath(folder: ProjectFolderDefinition, filename: string): string {
+  return `${folder.folderName}/${filename}`;
+}
+
+/**
+ * Builds an API-relative URL for file preview/download. The web app resolves this against
+ * the configured API base URL so it works when web and API run on different ports.
+ */
+function buildProjectFileAccessPath(projectId: string, category: ProjectFolderCategory, filename: string, download: boolean): string {
+  const base = `/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(category)}/${encodeURIComponent(filename)}`;
+  return download ? `${base}?download=1` : base;
+}
+
+/**
+ * Parses a requested filename route segment. Folder traversal and hidden-file requests
+ * are rejected; normal engineer filenames with spaces or parentheses remain valid.
+ */
+function parseRequestedFilename(rawFilename: string): string | null {
+  const trimmed = rawFilename.trim();
+  if (!trimmed || trimmed === "." || trimmed === ".." || trimmed.startsWith(".")) {
+    return null;
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || path.basename(trimmed) !== trimmed) {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
+ * Infers a practical MIME type from the filename extension. This is not treated as proof
+ * of file contents; it only controls browser preview/download behavior.
+ */
+export function inferProjectFileMimeType(filename: string): string {
+  const extension = path.extname(filename).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    ".csv": "text/csv; charset=utf-8",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".json": "application/json; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".step": "application/step",
+    ".stl": "model/stl",
+    ".stp": "application/step",
+    ".txt": "text/plain; charset=utf-8",
+    ".webp": "image/webp",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  };
+
+  return mimeTypes[extension] ?? "application/octet-stream";
+}
+
+/**
+ * Returns true when a regular browser can preview the project mirror file directly.
+ */
+function isProjectFileBrowserPreviewMimeType(mimeType: string): boolean {
+  return mimeType === "application/pdf" || mimeType.startsWith("image/") || mimeType.startsWith("text/") || mimeType.startsWith("application/json");
+}
+
+/**
+ * Streams a file into a SHA-256 digest so large direct-drop files are not loaded into
+ * memory just to get a stable fingerprint.
+ */
+async function hashFileSha256(absolutePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(absolutePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
 }
 
 /** Sorts files first, then folders, then alphabetically (case-insensitive) within each group. */
@@ -385,17 +580,13 @@ export async function saveProjectFile(
 
     await writeFile(absolutePath, decoded.buffer);
     const info = await stat(absolutePath);
+    const entry = await buildProjectFolderEntry(project.id, folder, finalName, absolutePath, info);
 
     return {
       status: "ok",
       absolutePath,
       category,
-      entry: {
-        name: finalName,
-        sizeBytes: info.size,
-        modifiedAt: info.mtime.toISOString(),
-        isFile: true
-      }
+      entry
     };
   } catch (error) {
     return {

@@ -15,9 +15,9 @@
  */
 
 import React, { useCallback, useState } from "react";
-import { uploadProjectFile } from "../lib/api-client";
+import { buildProjectFileAccessUrl, uploadProjectFile } from "../lib/api-client";
 import { isApiClientError } from "../lib/api-client";
-import type { ProjectFilesResponse, ProjectFolderCategory, ProjectFolderListing } from "@ee-library/shared/types";
+import type { ProjectFilesResponse, ProjectFolderCategory, ProjectFolderEntry, ProjectFolderListing } from "@ee-library/shared/types";
 
 /**
  * Refreshes the page so the listing always reflects what's on disk. Using a full reload
@@ -126,7 +126,14 @@ function ProjectFilesCategory({ folder, projectId }: { folder: ProjectFolderList
                 {entry.isFile && typeof entry.sizeBytes === "number" ? formatBytes(entry.sizeBytes) : "—"}
                 {" · "}
                 {entry.modifiedAt ? formatDateTime(entry.modifiedAt) : "Unknown date"}
+                {entry.isFile && entry.mimeType ? (
+                  <>
+                    {" / "}
+                    {formatFileKind(entry.mimeType)}
+                  </>
+                ) : null}
               </div>
+              {entry.isFile ? <ProjectFileActions entry={entry} /> : null}
             </li>
           ))}
         </ul>
@@ -135,6 +142,54 @@ function ProjectFilesCategory({ folder, projectId }: { folder: ProjectFolderList
       <UploadFileControl category={folder.category} projectId={projectId} />
       {folder.category === "notes" ? <NoteComposer projectId={projectId} /> : null}
     </section>
+  );
+}
+
+/**
+ * Renders plain-language file actions. The SHA-256 hash is labeled as a file ID so
+ * engineers can compare duplicates without learning internal evidence/asset terms.
+ */
+function ProjectFileActions({ entry }: { entry: ProjectFolderEntry }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const previewUrl = buildProjectFileAccessUrl(entry.previewUrl);
+  const downloadUrl = buildProjectFileAccessUrl(entry.downloadUrl);
+
+  const copyFileId = useCallback(async () => {
+    if (!entry.sha256) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(entry.sha256);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }, [entry.sha256]);
+
+  return (
+    <div className="project-files-card__actions">
+      {previewUrl ? (
+        <a className="project-files-card__action" href={previewUrl} rel="noreferrer" target="_blank">
+          Open
+        </a>
+      ) : null}
+      {downloadUrl ? (
+        <a className="project-files-card__action" href={downloadUrl}>
+          Download
+        </a>
+      ) : null}
+      {entry.sha256 ? (
+        <button className="project-files-card__action" onClick={() => void copyFileId()} type="button">
+          Copy file ID
+        </button>
+      ) : null}
+      {copyState !== "idle" ? (
+        <span className="project-files-card__fingerprint-status muted-copy" role={copyState === "failed" ? "alert" : undefined}>
+          {copyState === "copied" ? "Copied" : "Copy failed"}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -362,6 +417,19 @@ function formatBytes(bytes: number): string {
     unitIndex += 1;
   }
   return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+/**
+ * Converts MIME types into short labels that make sense to engineers scanning a folder.
+ */
+function formatFileKind(mimeType: string): string {
+  if (mimeType.includes("pdf")) return "PDF";
+  if (mimeType.includes("spreadsheet") || mimeType.includes("excel")) return "Spreadsheet";
+  if (mimeType.startsWith("image/")) return "Image";
+  if (mimeType.startsWith("text/")) return "Text";
+  if (mimeType.includes("step")) return "STEP";
+  if (mimeType.includes("stl")) return "STL";
+  return "File";
 }
 
 /**

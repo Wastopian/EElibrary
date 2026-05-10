@@ -597,12 +597,28 @@ export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "no
 export interface ProjectFolderEntry {
   /** Bare filename (no path components). */
   name: string;
+  /**
+   * Category-relative path, such as `datasheets/TPS7A02.pdf`. This gives the UI and
+   * future reconciliation jobs a stable handle without exposing arbitrary filesystem
+   * traversal.
+   */
+  relativePath?: string;
   /** Bytes on disk; null when the entry is a sub-directory the API refuses to traverse. */
   sizeBytes: number | null;
   /** ISO-8601 timestamp captured from the filesystem mtime, or null when unavailable. */
   modifiedAt: string | null;
   /** True when the entry is a regular file; false when it is a directory or symlink. */
   isFile: boolean;
+  /** MIME type inferred from the file extension when the entry is a regular file. */
+  mimeType?: string | null;
+  /** SHA-256 content fingerprint for duplicate detection and future file linking. */
+  sha256?: string | null;
+  /** API-relative URL that opens the file inline when the browser can preview it. */
+  previewUrl?: string | null;
+  /** API-relative URL that forces a download for handoff to CAD/EDA tools. */
+  downloadUrl?: string | null;
+  /** Stable source label preserving that this row came from the project file mirror. */
+  provenance?: "project_file_mirror";
 }
 
 /** ProjectFolderListing groups one category's filesystem entries with its absolute path. */

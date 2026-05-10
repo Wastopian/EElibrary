@@ -126,6 +126,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           match: { path: "/admin", type: "path" }
         },
         {
+          description: "Who did what and when, across the app.",
+          href: "/admin/audit-log",
+          label: "Audit log",
+          match: { path: "/admin/audit-log", type: "path" }
+        },
+        {
           description: "Check service status and health.",
           href: "/system",
           label: "System",
@@ -190,6 +196,11 @@ function isNavigationItemActive(item: NavigationItem, currentLocation: string): 
   if (item.match.type === "path") {
     if (item.match.path === "/catalog") {
       return pathname === "/" || pathname === "/catalog" || pathname.startsWith("/parts/");
+    }
+
+    if (item.match.path === "/admin") {
+      // Admin is active only on /admin itself; deeper /admin/* routes have their own nav entries.
+      return pathname === "/admin";
     }
 
     return pathname.startsWith(item.match.path);

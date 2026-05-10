@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   buildProjectFilesResponse,
   getProjectFilesRoot,
+  resolveProjectFileForRead,
   resolveProjectFolderCategory,
   sanitizeProjectKey,
   sanitizeUploadFilename,
@@ -139,10 +140,17 @@ test("buildProjectFilesResponse surfaces files dropped directly into the on-disk
     assert.ok(firstPartsEntry);
     assert.equal(firstPartsEntry.isFile, true);
     assert.equal(typeof firstPartsEntry.sizeBytes, "number");
+    assert.equal(firstPartsEntry.relativePath, "parts-list/alpha-bom.csv");
+    assert.equal(firstPartsEntry.mimeType, "text/csv; charset=utf-8");
+    assert.match(firstPartsEntry.sha256 ?? "", /^[a-f0-9]{64}$/u);
+    assert.equal(firstPartsEntry.previewUrl, "/projects/project-alpha/files/parts_list/alpha-bom.csv");
+    assert.equal(firstPartsEntry.downloadUrl, "/projects/project-alpha/files/parts_list/alpha-bom.csv?download=1");
+    assert.equal(firstPartsEntry.provenance, "project_file_mirror");
 
     const datasheets = response.folders.find((folder) => folder.category === "datasheets");
     assert.ok(datasheets);
     assert.equal(datasheets.entries[0]?.name, "GRM21.pdf");
+    assert.equal(datasheets.entries[0]?.mimeType, "application/pdf");
 
     const models = response.folders.find((folder) => folder.category === "models");
     assert.ok(models);
@@ -222,6 +230,11 @@ test("saveProjectFile writes base64 binary content to the requested category", a
     }
     assert.equal(result.entry.name, "GRM21.pdf");
     assert.equal(result.entry.isFile, true);
+    assert.equal(result.entry.relativePath, "datasheets/GRM21.pdf");
+    assert.equal(result.entry.mimeType, "application/pdf");
+    assert.match(result.entry.sha256 ?? "", /^[a-f0-9]{64}$/u);
+    assert.equal(result.entry.previewUrl, "/projects/project-alpha/files/datasheets/GRM21.pdf");
+    assert.equal(result.entry.downloadUrl, "/projects/project-alpha/files/datasheets/GRM21.pdf?download=1");
     assert.ok(result.absolutePath.endsWith(path.join("ALPHA", "datasheets", "GRM21.pdf")));
 
     const onDisk = await readFile(result.absolutePath, "utf8");
@@ -253,6 +266,49 @@ test("saveProjectFile writes UTF-8 text directly when content is provided", asyn
     const onDisk = await readFile(result.absolutePath, "utf8");
     assert.match(onDisk, /Considered alternates/);
     assert.match(onDisk, /lead time too long/);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("resolveProjectFileForRead returns safe stream metadata for an existing file", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const datasheetsPath = path.join(sandbox.root, "ALPHA", "datasheets");
+    await mkdir(datasheetsPath, { recursive: true });
+    await writeFile(path.join(datasheetsPath, "GRM21.pdf"), "%PDF-1.4");
+
+    const result = await resolveProjectFileForRead(
+      { id: "project-alpha", projectKey: "ALPHA" },
+      "datasheets",
+      "GRM21.pdf"
+    );
+
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") {
+      return;
+    }
+    assert.equal(result.filename, "GRM21.pdf");
+    assert.equal(result.mimeType, "application/pdf");
+    assert.equal(result.entry.previewUrl, "/projects/project-alpha/files/datasheets/GRM21.pdf");
+    assert.ok(result.absolutePath.endsWith(path.join("ALPHA", "datasheets", "GRM21.pdf")));
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("resolveProjectFileForRead rejects path-like filenames", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const result = await resolveProjectFileForRead(
+      { id: "project-alpha", projectKey: "ALPHA" },
+      "datasheets",
+      "../secret.pdf"
+    );
+
+    assert.equal(result.status, "invalid_filename");
   } finally {
     await sandbox.restore();
   }
