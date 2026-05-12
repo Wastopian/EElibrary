@@ -8,6 +8,7 @@ import { newDb } from "pg-mem";
 import {
   createDocumentRedlineInDatabase,
   createDocumentRevisionInDatabase,
+  readAssetDownloadAclGrant,
   readAssetDownloadGateFromDatabase,
   readDocumentRevisionsForPartFromDatabase,
   setDocumentControlPoolForTests,
@@ -219,6 +220,118 @@ test("asset download gate ignores archived revisions", async () => {
     assert.equal(result.status, "decided");
     if (result.status !== "decided") return;
     assert.equal(result.gate.status, "unrestricted");
+  } finally {
+    setDocumentControlPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a user-principal ACL grant authorizes a controlled download without acknowledgment.
+ */
+test("ACL grant for the user principal authorizes a gated download", async () => {
+  const pool = createDocumentControlPool();
+  setDocumentControlPoolForTests(pool);
+
+  try {
+    await seedPartAndAsset(pool);
+
+    const created = await createDocumentRevisionInDatabase("part-alpha", {
+      accessLevel: "itar_controlled",
+      aclEntries: [
+        { permission: "view", principalId: "user-7", principalType: "user" }
+      ],
+      assetId: "asset-datasheet-alpha",
+      documentType: "datasheet",
+      lifecycleStatus: "released",
+      revisionLabel: "Rev A",
+      revisionDate: "2026-05-01"
+    }, "admin-user");
+
+    assert.equal(created.status, "created");
+    if (created.status !== "created") return;
+
+    const grant = await readAssetDownloadAclGrant(created.response.revision.id, { userId: "user-7", role: "user" });
+    assert.equal(grant.status, "granted");
+    if (grant.status !== "granted") return;
+    assert.equal(grant.grant.status, "acl_user");
+    assert.equal(grant.grant.permission, "view");
+
+    const noGrant = await readAssetDownloadAclGrant(created.response.revision.id, { userId: "user-9", role: "user" });
+    assert.equal(noGrant.status, "no_grant");
+  } finally {
+    setDocumentControlPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a role-principal ACL grant authorizes the actor when the session role matches.
+ */
+test("ACL grant for the role principal authorizes a matching session role", async () => {
+  const pool = createDocumentControlPool();
+  setDocumentControlPoolForTests(pool);
+
+  try {
+    await seedPartAndAsset(pool);
+
+    const created = await createDocumentRevisionInDatabase("part-alpha", {
+      accessLevel: "restricted",
+      aclEntries: [
+        { permission: "view", principalId: "admin", principalType: "role" }
+      ],
+      assetId: "asset-datasheet-alpha",
+      documentType: "datasheet",
+      lifecycleStatus: "released",
+      revisionLabel: "Rev R",
+      revisionDate: "2026-05-01"
+    }, "admin-user");
+
+    assert.equal(created.status, "created");
+    if (created.status !== "created") return;
+
+    const grant = await readAssetDownloadAclGrant(created.response.revision.id, { userId: null, role: "admin" });
+    assert.equal(grant.status, "granted");
+    if (grant.status !== "granted") return;
+    assert.equal(grant.grant.status, "acl_role");
+
+    const wrongRole = await readAssetDownloadAclGrant(created.response.revision.id, { userId: null, role: "user" });
+    assert.equal(wrongRole.status, "no_grant");
+  } finally {
+    setDocumentControlPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies review/approve permissions are not enough on their own — only view and admin
+ * unlock downloads. Review permission is workflow-only and intentionally does not bypass
+ * the gate.
+ */
+test("ACL grant with only review permission does not authorize a download", async () => {
+  const pool = createDocumentControlPool();
+  setDocumentControlPoolForTests(pool);
+
+  try {
+    await seedPartAndAsset(pool);
+
+    const created = await createDocumentRevisionInDatabase("part-alpha", {
+      accessLevel: "itar_controlled",
+      aclEntries: [
+        { permission: "review", principalId: "user-7", principalType: "user" }
+      ],
+      assetId: "asset-datasheet-alpha",
+      documentType: "datasheet",
+      lifecycleStatus: "released",
+      revisionLabel: "Rev A",
+      revisionDate: "2026-05-01"
+    }, "admin-user");
+
+    assert.equal(created.status, "created");
+    if (created.status !== "created") return;
+
+    const result = await readAssetDownloadAclGrant(created.response.revision.id, { userId: "user-7", role: "user" });
+    assert.equal(result.status, "no_grant");
   } finally {
     setDocumentControlPoolForTests(null);
     await pool.end();

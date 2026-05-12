@@ -79,11 +79,34 @@ export function setDocumentControlPoolForTests(databasePool: Pool | null): void 
 /** AssetDownloadGate names whether an asset download is unrestricted or gated by ACL. */
 export type AssetDownloadGate =
   | { status: "unrestricted" }
-  | { status: "gated"; accessLevel: DocumentAccessLevel; revisionLabel: string; documentType: DocumentControlType };
+  | {
+      status: "gated";
+      revisionId: string;
+      accessLevel: DocumentAccessLevel;
+      revisionLabel: string;
+      documentType: DocumentControlType;
+    };
 
 /** AssetDownloadGateResult separates honest "unknown" cases (no DB) from a real decision. */
 export type AssetDownloadGateResult =
   | { status: "decided"; gate: AssetDownloadGate }
+  | { status: "not_configured" };
+
+/** AssetDownloadAclActor is the minimal actor shape the ACL check needs. */
+export interface AssetDownloadAclActor {
+  userId: string | null;
+  role: string | null;
+}
+
+/** AssetDownloadGrant explains how a gated download was authorized for the audit record. */
+export type AssetDownloadGrant =
+  | { status: "acl_user"; permission: DocumentAclPermission }
+  | { status: "acl_role"; permission: DocumentAclPermission; role: string };
+
+/** AssetDownloadAclResult reports whether the actor has a usable grant on a revision. */
+export type AssetDownloadAclResult =
+  | { status: "granted"; grant: AssetDownloadGrant }
+  | { status: "no_grant" }
   | { status: "not_configured" };
 
 /**
@@ -103,9 +126,9 @@ export async function readAssetDownloadGateFromDatabase(assetId: string): Promis
   }
 
   try {
-    const result = await databasePool.query<{ access_level: DocumentAccessLevel; revision_label: string; document_type: DocumentControlType }>(
+    const result = await databasePool.query<{ id: string; access_level: DocumentAccessLevel; revision_label: string; document_type: DocumentControlType }>(
       `
-        SELECT access_level, revision_label, document_type
+        SELECT id, access_level, revision_label, document_type
         FROM document_revisions
         WHERE asset_id = $1
           AND lifecycle_status != 'archived'
@@ -128,6 +151,7 @@ export async function readAssetDownloadGateFromDatabase(assetId: string): Promis
       status: "decided",
       gate: {
         status: "gated",
+        revisionId: row.id,
         accessLevel: row.access_level,
         revisionLabel: row.revision_label,
         documentType: row.document_type
@@ -135,6 +159,63 @@ export async function readAssetDownloadGateFromDatabase(assetId: string): Promis
     };
   } catch (error) {
     throw new CatalogStoreError("query_failed", "Asset download gate read failed.", error);
+  }
+}
+
+/**
+ * Resolves whether one actor has a usable ACL grant on a controlled-document revision.
+ *
+ * The actor's user id is checked against principal_type='user' rows; the actor's role
+ * (when present) is checked against principal_type='role' rows. A grant is considered
+ * usable when permission is 'view' or 'admin' (review/approve are workflow permissions
+ * and intentionally do not unlock downloads on their own) AND the grant has not
+ * expired. Team membership is not modelled yet and is intentionally skipped — its
+ * absence means a team-only grant cannot authorize a download today.
+ */
+export async function readAssetDownloadAclGrant(documentRevisionId: string, actor: AssetDownloadAclActor): Promise<AssetDownloadAclResult> {
+  const databasePool = getDocumentControlDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  if (!actor.userId && !actor.role) {
+    return { status: "no_grant" };
+  }
+
+  try {
+    const result = await databasePool.query<{ principal_type: DocumentAclPrincipalType; principal_id: string; permission: DocumentAclPermission }>(
+      `
+        SELECT principal_type, principal_id, permission
+        FROM document_acl_entries
+        WHERE document_revision_id = $1
+          AND permission IN ('view', 'admin')
+          AND (expires_at IS NULL OR expires_at > now())
+          AND (
+            (principal_type = 'user' AND principal_id = $2)
+            OR (principal_type = 'role' AND principal_id = $3)
+          )
+        ORDER BY
+          CASE permission WHEN 'admin' THEN 1 ELSE 2 END,
+          created_at DESC
+        LIMIT 1
+      `,
+      [documentRevisionId, actor.userId ?? "", actor.role ?? ""]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "no_grant" };
+    }
+
+    if (row.principal_type === "user") {
+      return { status: "granted", grant: { status: "acl_user", permission: row.permission } };
+    }
+
+    return { status: "granted", grant: { status: "acl_role", permission: row.permission, role: row.principal_id } };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Asset download ACL read failed.", error);
   }
 }
 
