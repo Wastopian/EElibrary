@@ -17,6 +17,8 @@ function buildStubBundle(overrides: Partial<ExportBundle> = {}): ExportBundle {
   const manifest: ExportBundleManifest = {
     bundleFormat: "neutral",
     bundleId: "ebundle-test",
+    controlSummary: { highestAccessLevel: null, itarControlledCount: 0, restrictedCount: 0 },
+    controlledAssets: [],
     generatedAt: "2026-05-07T10:00:00.000Z",
     includedAssets: [],
     omissions: [],

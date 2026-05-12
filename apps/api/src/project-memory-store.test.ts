@@ -1955,6 +1955,114 @@ test("createExportBundleInDatabase surfaces archive write failures as bundle war
 });
 
 /**
+ * Verifies the bundle manifest carries restricted/ITAR controlled-asset context when an
+ * included asset is bound to a non-archived controlled document revision.
+ */
+test("createExportBundleInDatabase tags controlled assets in the manifest", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
+
+    // Promote one already-seeded asset to verified-for-export so the bundle picks it up,
+    // then attach an ITAR-controlled document revision to that asset.
+    await pool.query(`UPDATE assets SET export_status = 'verified_for_export', storage_key = 'parts/ldo/symbol.kicad_sym' WHERE id = 'asset-memory-ldo-symbol-ref'`);
+    await pool.query(
+      `INSERT INTO document_revisions (id, part_id, asset_id, document_type, revision_label, lifecycle_status, access_level, created_by)
+       VALUES ('docrev-ldo-itar', 'part-memory-ldo', 'asset-memory-ldo-symbol-ref', 'mechanical_drawing', 'Rev A', 'released', 'itar_controlled', 'admin')`
+    );
+
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const { bundle } = result.response;
+    assert.equal(bundle.manifest.controlSummary.highestAccessLevel, "itar_controlled");
+    assert.equal(bundle.manifest.controlSummary.itarControlledCount, 1);
+    assert.equal(bundle.manifest.controlSummary.restrictedCount, 0);
+    assert.equal(bundle.manifest.controlledAssets.length, 1);
+    assert.equal(bundle.manifest.controlledAssets[0]?.assetId, "asset-memory-ldo-symbol-ref");
+    assert.equal(bundle.manifest.controlledAssets[0]?.accessLevel, "itar_controlled");
+    assert.equal(bundle.manifest.warnings.some((warning) => /ITAR-controlled asset/u.test(warning)), true);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies bundles with no controlled revisions report an empty summary and no warning.
+ */
+test("createExportBundleInDatabase reports empty control summary when no controlled revision exists", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
+    await pool.query(`UPDATE assets SET export_status = 'verified_for_export', storage_key = 'parts/ldo/symbol.kicad_sym' WHERE id = 'asset-memory-ldo-symbol-ref'`);
+
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const { bundle } = result.response;
+    assert.equal(bundle.manifest.controlSummary.highestAccessLevel, null);
+    assert.equal(bundle.manifest.controlSummary.itarControlledCount, 0);
+    assert.equal(bundle.manifest.controlSummary.restrictedCount, 0);
+    assert.equal(bundle.manifest.controlledAssets.length, 0);
+    assert.equal(bundle.manifest.warnings.some((warning) => /controlled asset/u.test(warning)), false);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates a pg-mem project-memory database with optional fixture rows.
  */
 function createProjectMemoryPool(seedRows: boolean): TestPool {
@@ -2083,6 +2191,25 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       notes TEXT,
       created_by TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE document_revisions (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      document_type TEXT NOT NULL,
+      revision_label TEXT NOT NULL,
+      revision_date DATE,
+      lifecycle_status TEXT NOT NULL DEFAULT 'draft',
+      access_level TEXT NOT NULL DEFAULT 'internal',
+      access_notes TEXT NOT NULL DEFAULT '',
+      effective_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      supersedes_document_revision_id TEXT,
+      source_asset_hash TEXT,
+      created_by TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE part_substitutions (

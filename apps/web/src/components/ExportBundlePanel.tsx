@@ -212,6 +212,7 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
                 <th>Parts</th>
                 <th>Included</th>
                 <th>Omitted</th>
+                <th>Controlled</th>
                 <th>Warnings</th>
                 <th>Assembly</th>
                 <th>Generated</th>
@@ -253,6 +254,9 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
           )}
         </td>
         <td>
+          <BundleControlledCell bundle={bundle} />
+        </td>
+        <td>
           {bundle.warningCount > 0 ? (
             <span className="text-warning">{bundle.warningCount}</span>
           ) : (
@@ -269,7 +273,7 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
       </tr>
       {inlineWarnings.length > 0 && (
         <tr>
-          <td colSpan={9}>
+          <td colSpan={10}>
             <ul className="bundle-inline-warnings">
               {inlineWarnings.map((warning, i) => (
                 <li key={i} className="form-feedback form-feedback--warning">
@@ -282,14 +286,14 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
       )}
       {showManifest && (
         <tr>
-          <td colSpan={9}>
+          <td colSpan={10}>
             <BundleManifestDetail bundle={bundle} onClose={() => setShowManifest(false)} />
           </td>
         </tr>
       )}
       {!showManifest && (
         <tr>
-          <td colSpan={9}>
+          <td colSpan={10}>
             <button
               className="link-button"
               type="button"
@@ -311,6 +315,27 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
  * synchronously by the API, while per-asset bytes are copied asynchronously by the worker.
  * Showing both keeps "manifest exists" honest from "asset bytes are ready for download".
  */
+/**
+ * Renders the controlled-asset summary cell for one bundle row. Shows nothing when
+ * no included asset is bound to a restricted/itar_controlled revision; shows the
+ * highest access level present plus the matching count when one exists.
+ *
+ * The cell stays compact so the table fits its existing column count on common widths;
+ * the full per-asset list lives in the bundle manifest disclosure below the row.
+ */
+function BundleControlledCell({ bundle }: { bundle: ExportBundle }): React.ReactElement {
+  const summary = bundle.manifest.controlSummary;
+  if (!summary || summary.highestAccessLevel === null) {
+    return <span className="text-muted">—</span>;
+  }
+
+  if (summary.highestAccessLevel === "itar_controlled") {
+    return <StatusBadge label={`${summary.itarControlledCount} ITAR`} tone="danger" />;
+  }
+
+  return <StatusBadge label={`${summary.restrictedCount} restricted`} tone="review" />;
+}
+
 function BundleAssemblyCell({ bundle }: { bundle: ExportBundle }): React.ReactElement {
   if (bundle.assemblyStatus === "assembled") {
     return <StatusBadge label="Assembled" tone="verified" />;
