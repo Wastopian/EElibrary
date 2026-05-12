@@ -76,6 +76,68 @@ export function setDocumentControlPoolForTests(databasePool: Pool | null): void 
   documentControlPoolOverride = databasePool;
 }
 
+/** AssetDownloadGate names whether an asset download is unrestricted or gated by ACL. */
+export type AssetDownloadGate =
+  | { status: "unrestricted" }
+  | { status: "gated"; accessLevel: DocumentAccessLevel; revisionLabel: string; documentType: DocumentControlType };
+
+/** AssetDownloadGateResult separates honest "unknown" cases (no DB) from a real decision. */
+export type AssetDownloadGateResult =
+  | { status: "decided"; gate: AssetDownloadGate }
+  | { status: "not_configured" };
+
+/**
+ * Determines whether downloading one asset is gated by an active controlled-document
+ * access level. Returns the highest-restriction non-archived revision found, so the
+ * route layer can refuse the download until the caller explicitly acknowledges the
+ * restriction or has the right ACL grant.
+ *
+ * Access-level precedence (most restrictive first): itar_controlled, restricted,
+ * internal, public. We gate at restricted or above so internal/public stays open.
+ */
+export async function readAssetDownloadGateFromDatabase(assetId: string): Promise<AssetDownloadGateResult> {
+  const databasePool = getDocumentControlDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const result = await databasePool.query<{ access_level: DocumentAccessLevel; revision_label: string; document_type: DocumentControlType }>(
+      `
+        SELECT access_level, revision_label, document_type
+        FROM document_revisions
+        WHERE asset_id = $1
+          AND lifecycle_status != 'archived'
+          AND access_level IN ('restricted', 'itar_controlled')
+        ORDER BY
+          CASE access_level WHEN 'itar_controlled' THEN 1 WHEN 'restricted' THEN 2 ELSE 3 END,
+          updated_at DESC
+        LIMIT 1
+      `,
+      [assetId]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "decided", gate: { status: "unrestricted" } };
+    }
+
+    return {
+      status: "decided",
+      gate: {
+        status: "gated",
+        accessLevel: row.access_level,
+        revisionLabel: row.revision_label,
+        documentType: row.document_type
+      }
+    };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Asset download gate read failed.", error);
+  }
+}
+
 /**
  * Reads controlled document revisions for one part.
  */

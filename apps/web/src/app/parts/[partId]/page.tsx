@@ -135,6 +135,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState);
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
   const missingAssetGroups = assetGroups.filter((group) => group.bestAsset === null);
+  const gatingByAssetId = buildAssetGatingMap(documentControlState);
 
   /**
    * Requests generation through the API while leaving completion and export approval explicit.
@@ -685,7 +686,16 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         {populatedAssetGroups.length > 0 ? (
           <div className="asset-grid">
             {populatedAssetGroups.map((group) => (
-              <EngineeringAssetSummary group={group} key={group.assetType} promotionAction={submitAssetPromotionAction} promotionSummaries={assetPromotionSummaries} reviewAction={submitReviewAction} reviewStatuses={assetReviewStatuses} validationSummaries={assetValidationSummaries} />
+              <EngineeringAssetSummary
+                group={group}
+                key={group.assetType}
+                promotionAction={submitAssetPromotionAction}
+                promotionSummaries={assetPromotionSummaries}
+                reviewAction={submitReviewAction}
+                reviewStatuses={assetReviewStatuses}
+                validationSummaries={assetValidationSummaries}
+                gatedRevision={group.bestAsset ? gatingByAssetId.get(group.bestAsset.id) ?? null : null}
+              />
             ))}
           </div>
         ) : (
@@ -2115,9 +2125,56 @@ function formatExtractionSupport(sourceReadiness: GenerationSourceReadiness): st
 }
 
 /**
+ * Builds a map of asset id to the most-restrictive non-archived controlled revision
+ * for that asset, so the file action area can render a gating badge and a guarded
+ * download path (`?ack=1`) without re-querying per row.
+ *
+ * Precedence (highest first): itar_controlled, restricted. Internal and public
+ * revisions intentionally do not appear in the map — the gate only fires for
+ * restricted-or-above access levels, matching the server-side check.
+ */
+function buildAssetGatingMap(state: PartDocumentControlState): Map<string, ControlledDocumentRevision> {
+  const map = new Map<string, ControlledDocumentRevision>();
+
+  if (state.status !== "available") {
+    return map;
+  }
+
+  for (const revision of state.response.revisions) {
+    if (revision.lifecycleStatus === "archived") continue;
+    if (revision.accessLevel !== "restricted" && revision.accessLevel !== "itar_controlled") continue;
+
+    const existing = map.get(revision.assetId);
+    if (!existing || accessLevelRank(revision.accessLevel) > accessLevelRank(existing.accessLevel)) {
+      map.set(revision.assetId, revision);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Compares access levels with most-restrictive first. ITAR outranks plain restricted.
+ */
+function accessLevelRank(level: DocumentAccessLevel): number {
+  if (level === "itar_controlled") return 2;
+  if (level === "restricted") return 1;
+  return 0;
+}
+
+/**
+ * Returns a UI badge label and tone matching the access level for the gating chip.
+ */
+function gatedAccessBadge(level: DocumentAccessLevel): { label: string; tone: BadgeTone } {
+  if (level === "itar_controlled") return { label: "ITAR controlled", tone: "danger" };
+  if (level === "restricted") return { label: "Restricted", tone: "review" };
+  return { label: level, tone: "neutral" };
+}
+
+/**
  * Renders the best available asset for one engineering asset class.
  */
-function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewAction, reviewStatuses, validationSummaries }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[]; validationSummaries: AssetValidationSummary[] }) {
+function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewAction, reviewStatuses, validationSummaries, gatedRevision }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[]; validationSummaries: AssetValidationSummary[]; gatedRevision: ControlledDocumentRevision | null }) {
   const bestAsset = group.bestAsset;
 
   if (!bestAsset) {
@@ -2201,10 +2258,24 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
         </div>
       </details>
       <div className="asset-review-card__actions">
+        {gatedRevision ? (
+          <div className="asset-gating-notice">
+            <StatusBadge label={gatedAccessBadge(gatedRevision.accessLevel).label} tone={gatedAccessBadge(gatedRevision.accessLevel).tone} />
+            <p className="muted-copy">
+              Active controlled revision <strong className="ui-mono">{gatedRevision.revisionLabel}</strong> ({gatedRevision.documentType}). Downloading requires explicit acknowledgment.
+            </p>
+          </div>
+        ) : null}
         {bestAsset.availabilityStatus !== "missing" && bestAsset.availabilityStatus !== "failed" ? (
-          <a className="asset-download-link" href={buildAssetDownloadUrl(bestAsset.partId, bestAsset.id)} rel="noopener noreferrer" target="_blank">
-            {bestAsset.availabilityStatus === "referenced" ? "View source" : "Download"}
-          </a>
+          gatedRevision ? (
+            <a className="asset-download-link asset-download-link--gated" href={`${buildAssetDownloadUrl(bestAsset.partId, bestAsset.id)}?ack=1`} rel="noopener noreferrer" target="_blank">
+              Acknowledge and download
+            </a>
+          ) : (
+            <a className="asset-download-link" href={buildAssetDownloadUrl(bestAsset.partId, bestAsset.id)} rel="noopener noreferrer" target="_blank">
+              {bestAsset.availabilityStatus === "referenced" ? "View source" : "Download"}
+            </a>
+          )
         ) : null}
         <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
         <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
