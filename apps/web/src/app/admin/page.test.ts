@@ -76,6 +76,10 @@ test("admin workspace renders review, promotion, import, validation, and audit s
       });
     }
 
+    if (url.pathname === "/audit-events") {
+      return jsonResponse(buildAuditEventEnvelope());
+    }
+
     return jsonResponse({
       data: records,
       source: "database",
@@ -108,6 +112,8 @@ test("admin workspace renders review, promotion, import, validation, and audit s
     assert.match(html, /Recent imports/u);
     assert.match(html, /Validation evidence summary/u);
     assert.match(html, /Promotion audit history/u);
+    assert.match(html, /User action audit trail/u);
+    assert.match(html, /project.update/u);
     assert.match(html, /pending review/u);
     assert.match(html, /Eligible now/u);
     assert.match(html, /Blocked/u);
@@ -170,6 +176,10 @@ test("admin workspace renders lifecycle and source-conflict queues from DB-backe
         });
       }
 
+      if (url.pathname === "/audit-events") {
+        return jsonResponse(buildAuditEventEnvelope());
+      }
+
       return jsonResponse({
         data: catalogResult.records,
         source: "database",
@@ -209,6 +219,36 @@ function mockFetch(handler: (url: URL) => Response): () => void {
 
   return () => {
     globalThis.fetch = previousFetch;
+  };
+}
+
+function buildAuditEventEnvelope(): Record<string, unknown> {
+  return {
+    data: {
+      boundary: "Audit events record API action metadata only.",
+      events: [
+        {
+          action: "project.update",
+          actorId: "admin-fixture",
+          actorRole: "admin",
+          id: "audit-admin-project-update",
+          metadata: { operation: "api-project-update", queryKeys: [] },
+          method: "PATCH",
+          occurredAt: "2026-04-17T00:00:00.000Z",
+          operation: "api-project-update",
+          outcome: "succeeded",
+          path: "/projects/project-alpha",
+          requestId: "audit-request-admin",
+          requestIpHash: "hash-ip",
+          statusCode: 200,
+          targetId: "project-alpha",
+          targetType: "project",
+          userAgentHash: "hash-ua"
+        }
+      ],
+      state: "available"
+    },
+    source: "database"
   };
 }
 

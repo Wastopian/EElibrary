@@ -17,6 +17,7 @@ import { FollowUpPanel } from "../../../components/FollowUpPanel";
 import { OperatorChecklist } from "../../../components/OperatorChecklist";
 import { ProjectEditPanel } from "../../../components/ProjectEditPanel";
 import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
+import { ProjectRevisionApprovalGatePanel } from "../../../components/ProjectRevisionApprovalGatePanel";
 import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildCompareUrl, fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
@@ -257,6 +258,16 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           </SectionPanel>
         </section>
 
+        <section className="detail-section" aria-labelledby="project-revision-gates-heading">
+          <SectionHeading id="project-revision-gates-heading" subtitle="Record review decisions for versioned BOM diffs." title="Revision approval gates" />
+          <SectionPanel
+            description="Gate records preserve the diff fingerprint that was reviewed."
+            title={revisions.length > 1 ? "BOM diff gate" : "Need another revision"}
+          >
+            <ProjectRevisionApprovalGatePanel projectId={project.id} revisions={revisions} />
+          </SectionPanel>
+        </section>
+
         <section className="detail-section" aria-labelledby="project-circuit-block-instantiation-heading">
           <SectionHeading
             id="project-circuit-block-instantiation-heading"
@@ -458,6 +469,12 @@ function buildProjectWorkspaceActions(response: ProjectDetailResponse): Workspac
       href: buildProjectEvidenceHref(response.project.id),
       label: "Attach project evidence",
       signal: "Project target"
+    },
+    {
+      body: "Record a review gate for the exact BOM diff between two saved revisions.",
+      href: "#project-revision-gates-heading",
+      label: "Gate BOM revision",
+      signal: response.revisions.length > 1 ? "Diff ready" : "Needs revisions"
     },
     {
       body: "Add a reusable circuit block to this project BOM when repeated circuitry applies.",

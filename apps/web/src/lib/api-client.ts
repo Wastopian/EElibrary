@@ -8,6 +8,7 @@ import type {
   ApprovalBatchCandidatesResponse,
   ApprovalBatchRequest,
   ApprovalBatchResponse,
+  AuditEventListResponse,
   AssetPromotionInput,
   AssetPromotionResponse,
   BomImportCreateInput,
@@ -33,6 +34,13 @@ import type {
   CircuitBlockUpdateResponse,
   ConnectorClass,
   ConnectorSetListResponse,
+  DocumentRedlineCreateInput,
+  DocumentRedlineCreateResponse,
+  DocumentRedlineUpdateInput,
+  DocumentRedlineUpdateResponse,
+  DocumentRevisionCreateInput,
+  DocumentRevisionCreateResponse,
+  DocumentRevisionListResponse,
   EvidenceAttachmentCreateInput,
   EvidenceAttachmentCreateResponse,
   EvidenceAttachmentFileUploadInput,
@@ -78,6 +86,9 @@ import type {
   VendorFolderSection,
   VendorListResponse,
   ProjectRevisionCompareResponse,
+  ProjectRevisionApprovalGateListResponse,
+  ProjectRevisionApprovalGateRequest,
+  ProjectRevisionApprovalGateResponse,
   ProjectRevisionUpdateInput,
   ProjectRevisionUpdateResponse,
   ProjectUpdateInput,
@@ -952,6 +963,27 @@ export async function fetchPartWhereUsed(partId: string): Promise<PartWhereUsedR
 }
 
 /**
+ * Fetches controlled document revision history for one part without changing asset truth.
+ */
+export async function fetchPartDocumentRevisions(partId: string): Promise<DocumentRevisionListResponse | null> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/document-revisions`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part document control request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<DocumentRevisionListResponse>;
+
+  return envelope.data;
+}
+
+/**
  * Fetches global where-used search results for project-memory targets.
  */
 export async function fetchWhereUsedSearch(targetType: WhereUsedTargetType, query: string): Promise<WhereUsedSearchResponse> {
@@ -1105,6 +1137,66 @@ export async function createAssetPromotion(partId: string, assetId: string): Pro
 }
 
 /**
+ * Creates a controlled document revision from an existing part asset.
+ */
+export async function createDocumentRevision(partId: string, input: DocumentRevisionCreateInput): Promise<DocumentRevisionCreateResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/document-revisions`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Document revision");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<DocumentRevisionCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates an engineering redline note for a controlled document revision.
+ */
+export async function createDocumentRedline(documentRevisionId: string, input: DocumentRedlineCreateInput): Promise<DocumentRedlineCreateResponse> {
+  const response = await fetch(buildApiUrl(`/document-revisions/${encodeURIComponent(documentRevisionId)}/redlines`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Document redline");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<DocumentRedlineCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Updates the workflow state or note text for one engineering redline.
+ */
+export async function updateDocumentRedline(redlineId: string, input: DocumentRedlineUpdateInput): Promise<DocumentRedlineUpdateResponse> {
+  const response = await fetch(buildApiUrl(`/document-redlines/${encodeURIComponent(redlineId)}`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Document redline update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<DocumentRedlineUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
  * Updates operator workflow state for one part issue through the API.
  */
 export async function updatePartIssueWorkflow(
@@ -1164,6 +1256,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     const res = await fetch(`${base}/api/token`, { cache: "no-store" });
     if (!res.ok) return {};
     const { token } = (await res.json()) as { token: string };
+    if (typeof token !== "string" || token.length === 0) return {};
     return { Authorization: `Bearer ${token}` };
   } catch {
     return {};
@@ -1183,6 +1276,24 @@ async function fetchApi<TResponse>(path: string): Promise<TResponse> {
   }
 
   return (await response.json()) as TResponse;
+}
+
+/**
+ * Fetches recent API action audit events for the admin workspace.
+ */
+export async function fetchAuditEvents(limit = 30, authHeaders?: Record<string, string>): Promise<AuditEventListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(buildApiUrl(`/audit-events?${params.toString()}`), {
+    cache: "no-store",
+    headers: authHeaders ?? await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Audit events");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<AuditEventListResponse>;
+  return envelope.data;
 }
 
 /**
@@ -1364,6 +1475,36 @@ export async function fetchProjectRevisionCompare(
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectRevisionCompareResponse>;
 
+  return envelope.data;
+}
+
+/**
+ * Fetches persisted BOM revision approval gates for one project.
+ */
+export async function fetchProjectRevisionApprovalGates(projectId: string): Promise<ProjectRevisionApprovalGateListResponse> {
+  const envelope = await fetchApi<ApiEnvelope<ProjectRevisionApprovalGateListResponse>>(`/projects/${encodeURIComponent(projectId)}/revision-approval-gates`);
+  return envelope.data;
+}
+
+/**
+ * Records a BOM revision approval gate decision against the current computed diff.
+ */
+export async function upsertProjectRevisionApprovalGate(
+  projectId: string,
+  input: ProjectRevisionApprovalGateRequest
+): Promise<ProjectRevisionApprovalGateResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/revision-approval-gates`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project revision approval gate");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectRevisionApprovalGateResponse>;
   return envelope.data;
 }
 

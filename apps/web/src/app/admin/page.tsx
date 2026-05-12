@@ -5,6 +5,7 @@
 import Link from "next/link";
 import React from "react";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { AdminQueuePresentation } from "./AdminQueuePresentation";
 import type { AdminQueueOverviewGroup, AdminQueueOverviewStat, AdminQueueTableRow } from "./AdminQueuePresentation";
@@ -12,7 +13,7 @@ import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
-import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
+import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchAuditEvents, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../lib/trust-lineage";
 import { formatReviewStateLabel, reviewStateTone } from "../../lib/detail-view-model";
@@ -21,6 +22,7 @@ import type { BadgeTone } from "@ee-library/ui";
 import type {
   Asset,
   AssetValidationRecord,
+  AuditEvent,
   CatalogDataSource,
   PartApprovalStatus,
   PartIssue,
@@ -48,6 +50,10 @@ type AdminCatalogState =
       message: string;
       health: ApiHealth | null;
     };
+
+type AdminAuditEventState =
+  | { status: "ready"; events: AuditEvent[]; boundary: string }
+  | { status: "unavailable"; message: string };
 
 interface ReviewQueueItem {
   partId: string;
@@ -139,6 +145,7 @@ export default async function AdminPage() {
   }
 
   const { health, records, source, warnings } = catalogState;
+  const auditEventState = await loadAdminAuditEvents();
   const reviewQueue = buildReviewQueue(records);
   const promotionQueue = buildPromotionQueue(records);
   const importRows = buildImportRows(records);
@@ -264,7 +271,8 @@ export default async function AdminPage() {
           { href: "#review-queue-heading", label: "Review queue" },
           { href: "#promotion-queue-heading", label: "Promotion queue" },
           { href: "#ops-health-heading", label: "Imports and validation" },
-          { href: "#audit-heading", label: "Promotion audit history" }
+          { href: "#audit-heading", label: "Promotion audit history" },
+          { href: "#user-action-audit-heading", label: "User action audit" }
         ]}
       />
 
@@ -677,8 +685,142 @@ export default async function AdminPage() {
           )}
         </SectionPanel>
       </section>
+
+      <AdminUserActionAuditSection auditEventState={auditEventState} />
     </main>
   );
+}
+
+/**
+ * Renders the general API action audit trail without exposing request payloads.
+ */
+function AdminUserActionAuditSection({ auditEventState }: { auditEventState: AdminAuditEventState }): React.ReactElement {
+  return (
+    <section className="detail-section" aria-labelledby="user-action-audit-heading">
+      <SectionHeading
+        id="user-action-audit-heading"
+        index="06"
+        title="User action audit trail"
+        subtitle="Recent API write attempts with actor, target, outcome, and request correlation."
+      />
+      <SectionPanel
+        title="Recent user actions"
+        description={auditEventState.status === "ready" ? auditEventState.boundary : "Audit events are unavailable until the API audit store is reachable."}
+      >
+        {auditEventState.status === "ready" && auditEventState.events.length > 0 ? (
+          <div className="admin-table-wrap">
+            <table className="admin-table admin-table--dense">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>Actor</th>
+                  <th>Outcome</th>
+                  <th>Status</th>
+                  <th>Time</th>
+                  <th>Request</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditEventState.events.map((event) => (
+                  <tr key={event.id}>
+                    <td className="ui-mono">{event.action}</td>
+                    <td>
+                      {formatAuditTarget(event)}
+                      <p className="muted-copy">{event.method} {event.path}</p>
+                    </td>
+                    <td>{event.actorId ? `${event.actorId} (${event.actorRole ?? "role unknown"})` : "Unauthenticated"}</td>
+                    <td>
+                      <StatusBadge label={formatAuditOutcome(event.outcome)} tone={auditOutcomeTone(event.outcome)} />
+                    </td>
+                    <td>{event.statusCode}</td>
+                    <td>{formatDateTime(event.occurredAt)}</td>
+                    <td className="ui-mono">{event.requestId.slice(0, 12)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : auditEventState.status === "ready" ? (
+          <EmptyState title="No audit events" body="No API write actions are recorded yet." />
+        ) : (
+          <EmptyState title="Audit trail unavailable" body={auditEventState.message} />
+        )}
+      </SectionPanel>
+    </section>
+  );
+}
+
+/**
+ * Loads recent user-action audit events without blocking the rest of the admin workspace.
+ */
+async function loadAdminAuditEvents(): Promise<AdminAuditEventState> {
+  try {
+    const response = await fetchAuditEvents(20, await getServerApiAuthHeaders());
+    return { boundary: response.boundary, events: response.events, status: "ready" };
+  } catch (error) {
+    return {
+      message: isApiClientError(error) ? `${error.code}: ${error.message}` : "Audit event API request failed.",
+      status: "unavailable"
+    };
+  }
+}
+
+/**
+ * Builds API auth headers for server-rendered admin reads by forwarding the current session cookie.
+ */
+async function getServerApiAuthHeaders(): Promise<Record<string, string>> {
+  let cookieHeader: string | null = null;
+  try {
+    cookieHeader = (await headers()).get("cookie");
+  } catch {
+    cookieHeader = null;
+  }
+
+  const base = process.env["NEXTAUTH_URL"] ?? "http://localhost:3000";
+  const response = await fetch(`${base}/api/token`, {
+    cache: "no-store",
+    headers: cookieHeader ? { cookie: cookieHeader } : {}
+  });
+
+  if (!response.ok) {
+    return {};
+  }
+
+  const body = (await response.json()) as { token?: unknown };
+
+  return typeof body.token === "string" && body.token.length > 0 ? { Authorization: `Bearer ${body.token}` } : {};
+}
+
+/**
+ * Formats one audit target for compact admin tables.
+ */
+function formatAuditTarget(event: AuditEvent): string {
+  return event.targetId ? `${event.targetType}:${event.targetId}` : event.targetType;
+}
+
+/**
+ * Formats audit outcomes for badges.
+ */
+function formatAuditOutcome(outcome: AuditEvent["outcome"]): string {
+  return {
+    denied: "Denied",
+    failed: "Failed",
+    succeeded: "Succeeded"
+  }[outcome];
+}
+
+/**
+ * Maps audit outcomes to the shared badge palette.
+ */
+function auditOutcomeTone(outcome: AuditEvent["outcome"]): BadgeTone {
+  if (outcome === "succeeded") {
+    return "verified";
+  }
+  if (outcome === "denied") {
+    return "danger";
+  }
+  return "review";
 }
 
 /**

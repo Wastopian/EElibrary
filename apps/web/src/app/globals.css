@@ -4361,6 +4361,35 @@ details[open] .trust-breakdown__toggle::before {
   padding: 5px 9px;
 }
 
+.revision-gate-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.revision-gate-panel__controls {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(180px, 0.8fr) minmax(240px, 1.2fr);
+}
+
+.revision-gate-panel__controls label {
+  color: var(--color-text-muted);
+  display: grid;
+  font-size: 0.74rem;
+  font-weight: 800;
+  gap: 5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.revision-gate-panel__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .follow-up-table p,
 .follow-up-table li {
   color: var(--color-text-muted);
@@ -7193,6 +7222,157 @@ details[open] .trust-breakdown__toggle::before {
   min-height: 148px;
 }
 
+.document-control-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.document-control-panel__boundary {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  margin: 0;
+  padding: 12px 14px;
+}
+
+.document-control-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.document-control-form__wide,
+.document-control-form__actions {
+  grid-column: 1 / -1;
+}
+
+.document-control-form__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.document-control-revision-list {
+  display: grid;
+  gap: 14px;
+}
+
+.document-revision-card {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.document-revision-card__header,
+.document-redline__header {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.document-revision-card__header h3 {
+  margin: 0;
+}
+
+.document-revision-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.document-revision-card__facts {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.document-revision-card__facts div {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.document-revision-card__facts dt,
+.document-revision-card__subgrid h4 {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0 0 5px;
+  text-transform: uppercase;
+}
+
+.document-revision-card__facts dd {
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.document-revision-card__notes {
+  color: var(--color-text-muted);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.document-revision-card__subgrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+}
+
+.document-redline-list {
+  display: grid;
+  gap: 8px;
+}
+
+.document-redline {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+}
+
+.document-redline p {
+  margin: 0;
+}
+
+.document-redline__header span {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.document-redline__resolve-form {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.document-redline-form {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.document-redline-form__row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(80px, 0.7fr) minmax(130px, 1fr);
+}
+
 /* --- Shared UI primitives --- */
 .ui-panel {
   background: var(--color-surface-elevated);
@@ -7472,6 +7652,7 @@ details[open] .trust-breakdown__toggle::before {
   .circuit-block-create-panel__form,
   .circuit-block-edit-panel__form,
   .circuit-block-part-panel__form,
+  .revision-gate-panel__controls,
   .evidence-filter-form,
   .evidence-vault-attach__target,
   .where-used-query-guidance,
@@ -7632,6 +7813,9 @@ details[open] .trust-breakdown__toggle::before {
   .asset-review-card__snapshot,
   .ui-asset-card__status-grid,
   .detail-export-summary__grid,
+  .document-control-form,
+  .document-revision-card__facts,
+  .document-revision-card__subgrid,
   .dimension-grid,
   .quick-candidate-list a,
   .result-row,

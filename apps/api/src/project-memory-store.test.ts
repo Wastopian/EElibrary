@@ -32,6 +32,7 @@ import {
   readProjectEvidenceAttachmentsFromDatabase,
   readProjectFleetRiskFromDatabase,
   readProjectFollowUpsFromDatabase,
+  readProjectRevisionApprovalGatesFromDatabase,
   readProjectRevisionCompareFromDatabase,
   readProjectsFromDatabase,
   revokePartSubstitutionInDatabase,
@@ -44,6 +45,7 @@ import {
   updateEvidenceAttachmentInDatabase,
   updateFollowUpInDatabase,
   updateProjectInDatabase,
+  upsertProjectRevisionApprovalGateInDatabase,
   updateProjectRevisionInDatabase
 } from "./project-memory-store";
 import { setStorageClientForTests } from "./file-storage";
@@ -1185,6 +1187,130 @@ test("readProjectRevisionCompareFromDatabase distinguishes quantity and designat
 });
 
 /**
+ * Verifies revision approval gates persist the exact diff fingerprint that was reviewed.
+ */
+test("upsertProjectRevisionApprovalGateInDatabase approves a clean revision diff and reads it back", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+  await seedSecondRevisionForCompare(pool);
+
+  try {
+    const result = await upsertProjectRevisionApprovalGateInDatabase(
+      "project-alpha",
+      {
+        decision: "approve",
+        fromRevisionId: "rev-alpha-a",
+        notes: "Reviewed ECO delta for Rev B.",
+        toRevisionId: "rev-alpha-b"
+      },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "applied");
+    if (result.status !== "applied") return;
+    assert.equal(result.response.gate.gateStatus, "approved");
+    assert.equal(result.response.gate.diffSummary.totalChangedCount, 3);
+    assert.equal(result.response.gate.isCurrent, true);
+    assert.equal(result.response.gate.decidedBy, "test-admin");
+    assert.match(result.response.boundary, /does not approve parts/u);
+
+    const list = await readProjectRevisionApprovalGatesFromDatabase("project-alpha");
+    assert.equal(list.status, "available");
+    if (list.status !== "available") return;
+    assert.equal(list.response.gates.length, 1);
+    assert.equal(list.response.gates[0]?.gateStatus, "approved");
+    assert.equal(list.response.gates[0]?.diffFingerprint, result.response.gate.diffFingerprint);
+    assert.equal(list.response.gates[0]?.isCurrent, true);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies saved approval gates become stale when the reviewed BOM diff changes later.
+ */
+test("readProjectRevisionApprovalGatesFromDatabase marks approval gates stale when the BOM diff changes", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+  await seedSecondRevisionForCompare(pool);
+
+  try {
+    const approved = await upsertProjectRevisionApprovalGateInDatabase(
+      "project-alpha",
+      {
+        decision: "approve",
+        fromRevisionId: "rev-alpha-a",
+        notes: "Approved before the resistor quantity was updated.",
+        toRevisionId: "rev-alpha-b"
+      },
+      "test-admin"
+    );
+    assert.equal(approved.status, "applied");
+    if (approved.status !== "applied") return;
+
+    await pool.query("UPDATE bom_lines SET quantity = 11, updated_at = $1 WHERE id = $2", [
+      "2026-05-01T00:04:00.000Z",
+      "line-beta-2"
+    ]);
+
+    const list = await readProjectRevisionApprovalGatesFromDatabase("project-alpha");
+    assert.equal(list.status, "available");
+    if (list.status !== "available") return;
+    assert.equal(list.response.gates.length, 1);
+    assert.equal(list.response.gates[0]?.gateStatus, "approved");
+    assert.equal(list.response.gates[0]?.isCurrent, false);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies revision approval cannot mark a target revision clean while unresolved match rows remain.
+ */
+test("upsertProjectRevisionApprovalGateInDatabase blocks approval when target revision has unresolved BOM rows", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+  await seedThirdRevisionForCompare(pool);
+
+  try {
+    const blocked = await upsertProjectRevisionApprovalGateInDatabase(
+      "project-alpha",
+      {
+        decision: "approve",
+        fromRevisionId: "rev-alpha-a",
+        toRevisionId: "rev-alpha-c"
+      },
+      "test-admin"
+    );
+    assert.equal(blocked.status, "invalid");
+    if (blocked.status === "invalid") {
+      assert.equal(blocked.code, "APPROVAL_GATE_BLOCKED");
+      assert.match(blocked.message, /weak match/u);
+    }
+
+    const pending = await upsertProjectRevisionApprovalGateInDatabase(
+      "project-alpha",
+      {
+        decision: "open",
+        fromRevisionId: "rev-alpha-a",
+        notes: "Opened while weak row is under review.",
+        toRevisionId: "rev-alpha-c"
+      },
+      "test-admin"
+    );
+    assert.equal(pending.status, "applied");
+    if (pending.status !== "applied") return;
+    assert.equal(pending.response.gate.gateStatus, "pending_review");
+    assert.equal(pending.response.gate.decidedBy, null);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies part substitution create persists a global approved record and forbids self-substitution.
  */
 test("createPartSubstitutionInDatabase persists global approval and rejects self-substitution and missing parts", async () => {
@@ -1987,6 +2113,23 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       readiness_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE project_revision_approval_gates (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      from_project_revision_id TEXT NOT NULL,
+      to_project_revision_id TEXT NOT NULL,
+      gate_status TEXT NOT NULL DEFAULT 'pending_review',
+      diff_fingerprint TEXT NOT NULL,
+      diff_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+      decision_notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL,
+      decided_by TEXT,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (project_id, from_project_revision_id, to_project_revision_id, diff_fingerprint)
     );
 
     CREATE TABLE evidence_attachments (

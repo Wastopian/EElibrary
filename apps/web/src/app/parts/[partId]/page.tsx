@@ -14,7 +14,7 @@ import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartDocumentRevisions, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../../lib/trust-lineage";
 import type { TrustLineageStageSummary, TrustLineageSummary } from "../../../lib/trust-lineage";
@@ -48,7 +48,7 @@ import {
 } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PartWhereUsedResponse, PreviewStatus, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PartWhereUsedResponse, PreviewStatus, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -76,9 +76,15 @@ type PartWhereUsedState =
   | { status: "not_found" }
   | { status: "unavailable"; code: string; message: string };
 
+/** PartDocumentControlState keeps document-control history optional while the catalog can still render. */
+type PartDocumentControlState =
+  | { status: "available"; response: DocumentRevisionListResponse }
+  | { status: "not_found" }
+  | { status: "unavailable"; code: string; message: string };
+
 /** PartDetailPageState keeps catalog setup errors separate from genuine 404s. */
 type PartDetailPageState =
-  | { detail: PartDetailPageDetail; status: "ready"; whereUsedState: PartWhereUsedState }
+  | { detail: PartDetailPageDetail; documentControlState: PartDocumentControlState; status: "ready"; whereUsedState: PartWhereUsedState }
   | { status: "not_found" }
   | { code: string; message: string; partId: string; status: "setup_required"; whereUsedState: PartWhereUsedState };
 
@@ -97,7 +103,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     return <PartDetailSetupState state={pageState} />;
   }
 
-  const { detail, whereUsedState } = pageState;
+  const { detail, documentControlState, whereUsedState } = pageState;
   const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const bestMate = record.buildableMatingSet.bestMate;
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
@@ -124,7 +130,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     tone: scoreTone(metric.confidenceScore),
     value: formatMetricValue(metric)
   }));
-  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState);
+  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState);
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
   const missingAssetGroups = assetGroups.filter((group) => group.bestAsset === null);
 
@@ -179,6 +185,84 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     }
 
     await createAssetPromotion(partId, assetId);
+    revalidatePath(`/parts/${partId}`);
+  }
+
+  /**
+   * Creates a controlled document revision without changing the underlying asset review/export state.
+   */
+  async function createDocumentRevisionAction(formData: FormData) {
+    "use server";
+
+    const assetId = readRequiredFormString(formData.get("assetId"));
+    const revisionLabel = readRequiredFormString(formData.get("revisionLabel"));
+    const documentType = readDocumentControlType(formData.get("documentType"));
+    const lifecycleStatus = readDocumentLifecycleStatus(formData.get("lifecycleStatus"));
+    const accessLevel = readDocumentAccessLevel(formData.get("accessLevel"));
+
+    if (!assetId || !revisionLabel || !documentType || !lifecycleStatus || !accessLevel) {
+      return;
+    }
+
+    const aclEntry = buildDocumentAclEntryFromForm(formData);
+
+    await createDocumentRevision(partId, {
+      accessLevel,
+      accessNotes: readOptionalFormString(formData.get("accessNotes")),
+      aclEntries: aclEntry ? [aclEntry] : [],
+      assetId,
+      documentType,
+      effectiveAt: readOptionalFormString(formData.get("effectiveAt")),
+      expiresAt: readOptionalFormString(formData.get("expiresAt")),
+      lifecycleStatus,
+      revisionDate: readOptionalFormString(formData.get("revisionDate")),
+      revisionLabel,
+      supersedesDocumentRevisionId: readOptionalFormString(formData.get("supersedesDocumentRevisionId"))
+    });
+    revalidatePath(`/parts/${partId}`);
+  }
+
+  /**
+   * Adds an engineering redline note to a controlled document revision.
+   */
+  async function createDocumentRedlineAction(formData: FormData) {
+    "use server";
+
+    const documentRevisionId = readRequiredFormString(formData.get("documentRevisionId"));
+    const note = readRequiredFormString(formData.get("note"));
+    const severity = readDocumentRedlineSeverity(formData.get("severity"));
+    const pageNumber = readPositiveInteger(formData.get("pageNumber"));
+
+    if (!documentRevisionId || !note || !severity) {
+      return;
+    }
+
+    await createDocumentRedline(documentRevisionId, {
+      anchorText: readOptionalFormString(formData.get("anchorText")),
+      note,
+      pageNumber,
+      severity
+    });
+    revalidatePath(`/parts/${partId}`);
+  }
+
+  /**
+   * Moves one engineering redline through its review workflow.
+   */
+  async function updateDocumentRedlineAction(formData: FormData) {
+    "use server";
+
+    const redlineId = readRequiredFormString(formData.get("redlineId"));
+    const redlineStatus = readDocumentRedlineStatus(formData.get("redlineStatus"));
+
+    if (!redlineId || !redlineStatus) {
+      return;
+    }
+
+    await updateDocumentRedline(redlineId, {
+      note: readOptionalFormString(formData.get("note")),
+      redlineStatus
+    });
     revalidatePath(`/parts/${partId}`);
   }
 
@@ -338,6 +422,17 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               <StatusBadge label={latestSource ? `Ingestion ${latestSource.providerId}` : "No source row"} tone={latestSource ? "info" : "neutral"} />
             </div>
           </div>
+        </SectionPanel>
+
+        <div id="document-control-heading" />
+        <SectionPanel description="Controlled revision history, ACL intent, expiry, supersession, and engineering redlines." title="Document control">
+          <DocumentControlPanel
+            addRedlineAction={createDocumentRedlineAction}
+            assets={record.assets}
+            createRevisionAction={createDocumentRevisionAction}
+            state={documentControlState}
+            updateRedlineAction={updateDocumentRedlineAction}
+          />
         </SectionPanel>
 
         <details className="audit-disclosure detail-audit-disclosure">
@@ -702,10 +797,16 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
       return { status: "not_found" };
     }
 
+    const [whereUsedState, documentControlState] = await Promise.all([
+      whereUsedPromise,
+      loadPartDocumentControl(partId)
+    ]);
+
     return {
       detail,
+      documentControlState,
       status: "ready",
-      whereUsedState: await whereUsedPromise
+      whereUsedState
     };
   } catch (error) {
     if (isApiClientError(error)) {
@@ -812,6 +913,319 @@ async function loadPartWhereUsed(partId: string): Promise<PartWhereUsedState> {
       status: "unavailable"
     };
   }
+}
+
+/**
+ * Loads document-control history as a recoverable side-channel for part detail.
+ */
+async function loadPartDocumentControl(partId: string): Promise<PartDocumentControlState> {
+  try {
+    const response = await fetchPartDocumentRevisions(partId);
+
+    return response ? { response, status: "available" } : { status: "not_found" };
+  } catch (error) {
+    if (isApiClientError(error)) {
+      return {
+        code: error.code,
+        message: error.message,
+        status: "unavailable"
+      };
+    }
+
+    return {
+      code: "DOCUMENT_CONTROL_UNAVAILABLE",
+      message: "Controlled document revision history could not be read.",
+      status: "unavailable"
+    };
+  }
+}
+
+/**
+ * Renders controlled document revision history, ACL intent, and redline workflows.
+ */
+function DocumentControlPanel({
+  addRedlineAction,
+  assets,
+  createRevisionAction,
+  state,
+  updateRedlineAction
+}: {
+  addRedlineAction: (formData: FormData) => Promise<void>;
+  assets: Asset[];
+  createRevisionAction: (formData: FormData) => Promise<void>;
+  state: PartDocumentControlState;
+  updateRedlineAction: (formData: FormData) => Promise<void>;
+}) {
+  const documentAssets = assets.filter((asset) => isControlledDocumentAsset(asset));
+  const revisions = state.status === "available" ? state.response.revisions : [];
+
+  if (state.status === "unavailable") {
+    return (
+      <EmptyState
+        body={`Document control requires the database-backed catalog. ${state.message}`}
+        title="Document control unavailable"
+      />
+    );
+  }
+
+  if (documentAssets.length === 0) {
+    return (
+      <EmptyState
+        body="No datasheet or mechanical drawing assets are attached yet, so there is no file to place under document control."
+        title="No controllable documents"
+      />
+    );
+  }
+
+  return (
+    <div className="document-control-panel">
+      <p className="document-control-panel__boundary">
+        <strong>Admin-gated foundation.</strong> ACL entries are recorded for future RBAC and ITAR enforcement; asset review, validation, and export promotion remain separate workflows.
+      </p>
+
+      <form action={createRevisionAction} className="document-control-form">
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-asset-id">Document asset</label>
+          <select className="form-select" id="document-asset-id" name="assetId" required>
+            {documentAssets.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {assetTypeLabel(asset)} / {asset.fileFormat} / {asset.storageKey ? "stored file" : "reference"}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-type">Document type</label>
+          <select className="form-select" id="document-type" name="documentType" defaultValue={documentAssets[0]?.assetType === "mechanical_drawing" ? "mechanical_drawing" : "datasheet"}>
+            <option value="datasheet">Datasheet</option>
+            <option value="mechanical_drawing">Mechanical drawing</option>
+            <option value="controlled_drawing">Controlled drawing</option>
+            <option value="specification">Specification</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-revision-label">Revision</label>
+          <input className="form-input" id="document-revision-label" name="revisionLabel" placeholder="Rev A" required />
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-revision-date">Revision date</label>
+          <input className="form-input" id="document-revision-date" name="revisionDate" type="date" />
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-lifecycle">Lifecycle</label>
+          <select className="form-select" id="document-lifecycle" name="lifecycleStatus" defaultValue="in_review">
+            <option value="draft">Draft</option>
+            <option value="in_review">In review</option>
+            <option value="released">Released</option>
+            <option value="superseded">Superseded</option>
+            <option value="expired">Expired</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-access">Access</label>
+          <select className="form-select" id="document-access" name="accessLevel" defaultValue="internal">
+            <option value="public">Public</option>
+            <option value="internal">Internal</option>
+            <option value="restricted">Restricted</option>
+            <option value="itar_controlled">ITAR controlled</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-supersedes">Replaces revision</label>
+          <select className="form-select" id="document-supersedes" name="supersedesDocumentRevisionId" defaultValue="">
+            <option value="">None</option>
+            {revisions.map((revision) => (
+              <option key={revision.id} value={revision.id}>
+                {revision.revisionLabel} / {formatDocumentType(revision.documentType)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-effective">Effective</label>
+          <input className="form-input" id="document-effective" name="effectiveAt" type="datetime-local" />
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-expires">Expires</label>
+          <input className="form-input" id="document-expires" name="expiresAt" type="datetime-local" />
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-principal-id">Review principal</label>
+          <input className="form-input" id="document-principal-id" name="principalId" placeholder="hardware-team" />
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-principal-type">Principal type</label>
+          <select className="form-select" id="document-principal-type" name="principalType" defaultValue="team">
+            <option value="team">Team</option>
+            <option value="role">Role</option>
+            <option value="user">User</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label" htmlFor="document-permission">Permission</label>
+          <select className="form-select" id="document-permission" name="permission" defaultValue="review">
+            <option value="view">View</option>
+            <option value="review">Review</option>
+            <option value="approve">Approve</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div className="form-row document-control-form__wide">
+          <label className="form-label" htmlFor="document-access-notes">Access notes</label>
+          <textarea className="form-textarea" id="document-access-notes" name="accessNotes" placeholder="Distribution limits, customer program, or review instructions." />
+        </div>
+        <div className="document-control-form__actions">
+          <button className="button-link" type="submit">Create controlled revision</button>
+        </div>
+      </form>
+
+      {state.status === "not_found" || revisions.length === 0 ? (
+        <EmptyState
+          body="No controlled revisions have been recorded for this part yet. Create one from a datasheet or drawing asset above."
+          title="No controlled revisions"
+        />
+      ) : (
+        <div className="document-control-revision-list">
+          {revisions.map((revision) => (
+            <DocumentRevisionCard
+              addRedlineAction={addRedlineAction}
+              key={revision.id}
+              revision={revision}
+              updateRedlineAction={updateRedlineAction}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Renders one controlled document revision with its review notes and ACL grants.
+ */
+function DocumentRevisionCard({
+  addRedlineAction,
+  revision,
+  updateRedlineAction
+}: {
+  addRedlineAction: (formData: FormData) => Promise<void>;
+  revision: ControlledDocumentRevision;
+  updateRedlineAction: (formData: FormData) => Promise<void>;
+}) {
+  const openRedlineCount = revision.redlines.filter((redline) => redline.redlineStatus === "open").length;
+
+  return (
+    <article className="document-revision-card">
+      <div className="document-revision-card__header">
+        <div>
+          <p className="app-kicker">{formatDocumentType(revision.documentType)}</p>
+          <h3>{revision.revisionLabel}</h3>
+          <p className="muted-copy">{revision.revisionDate ? `Revision date ${formatDateOnly(revision.revisionDate)}` : "Revision date not recorded"}</p>
+        </div>
+        <div className="document-revision-card__badges">
+          <StatusBadge label={formatDocumentLifecycle(revision.lifecycleStatus)} tone={documentLifecycleTone(revision.lifecycleStatus)} />
+          <StatusBadge label={formatDocumentAccess(revision.accessLevel)} tone={documentAccessTone(revision.accessLevel)} />
+          <StatusBadge label={`${openRedlineCount} open redline${openRedlineCount === 1 ? "" : "s"}`} tone={openRedlineCount > 0 ? "review" : "verified"} />
+        </div>
+      </div>
+
+      <dl className="document-revision-card__facts">
+        <div>
+          <dt>Asset</dt>
+          <dd className="ui-mono">{revision.asset.fileFormat} / {revision.asset.storageKey ? "stored" : "reference"}</dd>
+        </div>
+        <div>
+          <dt>File hash</dt>
+          <dd className="ui-mono">{revision.sourceAssetHash ?? revision.asset.fileHash ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Effective</dt>
+          <dd>{revision.effectiveAt ? formatDateTime(revision.effectiveAt) : "Not set"}</dd>
+        </div>
+        <div>
+          <dt>Expires</dt>
+          <dd>{revision.expiresAt ? formatDateTime(revision.expiresAt) : "No expiry"}</dd>
+        </div>
+        <div>
+          <dt>Replaces</dt>
+          <dd>{revision.supersedesDocumentRevisionId ?? "None"}</dd>
+        </div>
+        <div>
+          <dt>Replaced by</dt>
+          <dd>{revision.supersededByDocumentRevisionId ?? "None"}</dd>
+        </div>
+      </dl>
+
+      {revision.accessNotes ? <p className="document-revision-card__notes">{revision.accessNotes}</p> : null}
+
+      <div className="document-revision-card__subgrid">
+        <section aria-label="Document ACL entries">
+          <h4>ACL intent</h4>
+          {revision.aclEntries.length > 0 ? (
+            <ul className="info-list">
+              {revision.aclEntries.map((entry) => (
+                <li key={entry.id}>
+                  <span>
+                    {formatAclPrincipal(entry.principalType, entry.principalId)} can {entry.permission}
+                    {entry.expiresAt ? ` until ${formatDateTime(entry.expiresAt)}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted-copy">No explicit ACL grants recorded for this revision.</p>
+          )}
+        </section>
+
+        <section aria-label="Document redlines">
+          <h4>Redlines</h4>
+          {revision.redlines.length > 0 ? (
+            <div className="document-redline-list">
+              {revision.redlines.map((redline) => (
+                <article className="document-redline" key={redline.id}>
+                  <div className="document-redline__header">
+                    <StatusBadge label={formatRedlineStatus(redline.redlineStatus)} tone={redlineStatusTone(redline.redlineStatus, redline.severity)} />
+                    <span>{redline.pageNumber ? `Page ${redline.pageNumber}` : "No page anchor"}</span>
+                  </div>
+                  <p>{redline.note}</p>
+                  {redline.anchorText ? <p className="muted-copy">Anchor: {redline.anchorText}</p> : null}
+                  {redline.redlineStatus === "open" ? (
+                    <form action={updateRedlineAction} className="document-redline__resolve-form">
+                      <input name="redlineId" type="hidden" value={redline.id} />
+                      <input name="redlineStatus" type="hidden" value="resolved" />
+                      <button className="button-link button-link--quiet" type="submit">Resolve</button>
+                    </form>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="muted-copy">No redlines recorded for this revision.</p>
+          )}
+
+          <form action={addRedlineAction} className="document-redline-form">
+            <input name="documentRevisionId" type="hidden" value={revision.id} />
+            <div className="form-row">
+              <label className="form-label" htmlFor={`redline-note-${revision.id}`}>New redline</label>
+              <textarea className="form-textarea" id={`redline-note-${revision.id}`} name="note" placeholder="Review note or markup summary." required />
+            </div>
+            <div className="document-redline-form__row">
+              <input className="form-input" min={1} name="pageNumber" placeholder="Page" type="number" />
+              <select className="form-select" name="severity" defaultValue="review">
+                <option value="info">Info</option>
+                <option value="review">Review</option>
+                <option value="blocker">Blocker</option>
+              </select>
+            </div>
+            <input className="form-input" name="anchorText" placeholder="Anchor text or drawing zone" />
+            <button className="button-link" type="submit">Add redline</button>
+          </form>
+        </section>
+      </div>
+    </article>
+  );
 }
 
 /**
@@ -1495,7 +1909,8 @@ function buildDetailTabs(
   record: PartDetailPageRecord,
   assetGroups: AssetClassSummary[],
   exportActions: { available: boolean }[],
-  whereUsedState: PartWhereUsedState
+  whereUsedState: PartWhereUsedState,
+  documentControlState: PartDocumentControlState
 ) {
   const connectorCount = hasConnectorIntelligence
     ? record.buildableMatingSet.requiredAccessories.length + record.buildableMatingSet.optionalAccessories.length + record.buildableMatingSet.toolingRequirements.length + record.buildableMatingSet.cableOptions.length + (record.buildableMatingSet.bestMate ? 1 : 0)
@@ -1504,9 +1919,11 @@ function buildDetailTabs(
   const cadAttentionCount = assetGroups.filter((group) => group.readiness !== "export_ready" && group.readiness !== "validated_file").length;
   const blockedExportCount = exportActions.filter((action) => !action.available).length;
   const whereUsedCount = whereUsedState.status === "available" ? whereUsedState.response.usages.length : 0;
+  const documentRevisionCount = documentControlState.status === "available" ? documentControlState.response.revisions.length : 0;
 
   return [
     { badge: undefined, href: "#overview-heading", label: "Overview" },
+    { badge: documentRevisionCount > 0 ? `${documentRevisionCount}` : undefined, href: "#document-control-heading", label: "Document control" },
     { badge: whereUsedCount > 0 ? `${whereUsedCount}` : undefined, href: "#where-used-heading", label: "Where-used" },
     { badge: connectorCount > 0 ? `${connectorCount}` : undefined, href: "#mates-heading", label: "Mates & accessories" },
     { badge: alternateCount > 0 ? `${alternateCount}` : undefined, href: "#alternates-heading", label: "Alternates" },
@@ -2051,10 +2468,124 @@ function formatDateTime(value: string): string {
 }
 
 /**
+ * Formats a date-only string without shifting it across time zones.
+ */
+function formatDateOnly(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium"
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+/**
  * Formats a project revision label without duplicating labels that already include "Rev".
  */
 function formatRevisionLabel(value: string): string {
   return /^rev\b/iu.test(value.trim()) ? value : `Rev ${value}`;
+}
+
+/**
+ * Formats controlled document type values for dense workstation copy.
+ */
+function formatDocumentType(type: DocumentControlType): string {
+  return {
+    controlled_drawing: "Controlled drawing",
+    datasheet: "Datasheet",
+    mechanical_drawing: "Mechanical drawing",
+    other: "Other document",
+    specification: "Specification"
+  }[type];
+}
+
+/**
+ * Formats controlled document lifecycle values.
+ */
+function formatDocumentLifecycle(status: DocumentRevisionLifecycleStatus): string {
+  return {
+    archived: "Archived",
+    draft: "Draft",
+    expired: "Expired",
+    in_review: "In review",
+    released: "Released",
+    superseded: "Superseded"
+  }[status];
+}
+
+/**
+ * Maps controlled document lifecycle values into badge tones.
+ */
+function documentLifecycleTone(status: DocumentRevisionLifecycleStatus): BadgeTone {
+  const tones: Record<DocumentRevisionLifecycleStatus, BadgeTone> = {
+    archived: "neutral",
+    draft: "info",
+    expired: "danger",
+    in_review: "review",
+    released: "verified",
+    superseded: "neutral"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Formats controlled document access levels.
+ */
+function formatDocumentAccess(accessLevel: DocumentAccessLevel): string {
+  return {
+    internal: "Internal",
+    itar_controlled: "ITAR controlled",
+    public: "Public",
+    restricted: "Restricted"
+  }[accessLevel];
+}
+
+/**
+ * Maps document access levels into badge tones without claiming enforcement.
+ */
+function documentAccessTone(accessLevel: DocumentAccessLevel): BadgeTone {
+  const tones: Record<DocumentAccessLevel, BadgeTone> = {
+    internal: "info",
+    itar_controlled: "danger",
+    public: "neutral",
+    restricted: "review"
+  };
+
+  return tones[accessLevel];
+}
+
+/**
+ * Formats one ACL principal for revision history.
+ */
+function formatAclPrincipal(principalType: DocumentAclPrincipalType, principalId: string): string {
+  return `${principalType}:${principalId}`;
+}
+
+/**
+ * Formats document redline workflow states.
+ */
+function formatRedlineStatus(status: DocumentRedlineStatus): string {
+  return {
+    open: "Open",
+    rejected: "Rejected",
+    resolved: "Resolved",
+    superseded: "Superseded"
+  }[status];
+}
+
+/**
+ * Maps redline state and severity into badge tones.
+ */
+function redlineStatusTone(status: DocumentRedlineStatus, severity: DocumentRedlineSeverity): BadgeTone {
+  if (status !== "open") {
+    return status === "resolved" ? "verified" : "neutral";
+  }
+
+  return severity === "blocker" ? "danger" : severity === "review" ? "review" : "info";
 }
 
 /**
@@ -2354,6 +2885,128 @@ function readReviewOutcome(value: FormDataEntryValue | null): ReviewOutcome | nu
  */
 function readRequiredFormString(value: FormDataEntryValue | null): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
+ * Reads optional form text while converting blanks to null.
+ */
+function readOptionalFormString(value: FormDataEntryValue | null): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
+ * Reads a controlled document type from form data without trusting arbitrary input.
+ */
+function readDocumentControlType(value: FormDataEntryValue | null): DocumentControlType | null {
+  if (value === "datasheet" || value === "mechanical_drawing" || value === "controlled_drawing" || value === "specification" || value === "other") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a controlled document lifecycle status from form data.
+ */
+function readDocumentLifecycleStatus(value: FormDataEntryValue | null): DocumentRevisionLifecycleStatus | null {
+  if (value === "draft" || value === "in_review" || value === "released" || value === "superseded" || value === "expired" || value === "archived") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a controlled document access level from form data.
+ */
+function readDocumentAccessLevel(value: FormDataEntryValue | null): DocumentAccessLevel | null {
+  if (value === "public" || value === "internal" || value === "restricted" || value === "itar_controlled") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads an ACL principal type from form data.
+ */
+function readDocumentAclPrincipalType(value: FormDataEntryValue | null): DocumentAclPrincipalType | null {
+  if (value === "user" || value === "team" || value === "role") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads an ACL permission from form data.
+ */
+function readDocumentAclPermission(value: FormDataEntryValue | null): DocumentAclPermission | null {
+  if (value === "view" || value === "review" || value === "approve" || value === "admin") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a redline severity from form data.
+ */
+function readDocumentRedlineSeverity(value: FormDataEntryValue | null): DocumentRedlineSeverity | null {
+  if (value === "info" || value === "review" || value === "blocker") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a redline workflow status from form data.
+ */
+function readDocumentRedlineStatus(value: FormDataEntryValue | null): DocumentRedlineStatus | null {
+  if (value === "open" || value === "resolved" || value === "rejected" || value === "superseded") {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Reads a positive integer from form data without accepting zero or text.
+ */
+function readPositiveInteger(value: FormDataEntryValue | null): number | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * Builds a single optional ACL grant from the document-control creation form.
+ */
+function buildDocumentAclEntryFromForm(formData: FormData) {
+  const principalId = readRequiredFormString(formData.get("principalId"));
+  const principalType = readDocumentAclPrincipalType(formData.get("principalType"));
+  const permission = readDocumentAclPermission(formData.get("permission"));
+
+  if (!principalId || !principalType || !permission) {
+    return null;
+  }
+
+  return {
+    permission,
+    principalId,
+    principalType
+  };
+}
+
+/**
+ * Checks whether an asset can be put under document control in the current UI.
+ */
+function isControlledDocumentAsset(asset: Asset): boolean {
+  return asset.assetType === "datasheet" || asset.assetType === "mechanical_drawing";
 }
 
 /**
