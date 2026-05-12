@@ -18,11 +18,13 @@ import { OperatorChecklist } from "../../../components/OperatorChecklist";
 import { ProjectEditPanel } from "../../../components/ProjectEditPanel";
 import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
 import { ProjectRevisionApprovalGatePanel } from "../../../components/ProjectRevisionApprovalGatePanel";
+import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildCompareUrl, fetchApiHealth, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { ApiHealth } from "../../../lib/api-client";
+import type { AuditEvent } from "@ee-library/shared/types";
 import type { BadgeTone } from "@ee-library/ui";
 import type {
   BomImport,
@@ -95,6 +97,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
 
   const { bomHealth, evidence, exportBundles, files, followUps, health, response } = detailState;
   const { bomImports, capabilities, project, revisions, summary, usages } = response;
+  const recentActivity = await loadRecentActivityForProject(project.id);
   const foundationCapabilities = capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = capabilities.filter((capability) => capability.state === "planned");
 
@@ -266,6 +269,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           >
             <ProjectRevisionApprovalGatePanel projectId={project.id} revisions={revisions} />
           </SectionPanel>
+          <RecentActivityStrip events={recentActivity} targetType="project" targetId={project.id} />
         </section>
 
         <section className="detail-section" aria-labelledby="project-circuit-block-instantiation-heading">
@@ -345,6 +349,16 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
       </details>
     </main>
   );
+}
+
+/**
+ * Loads the last few audit events for this project so the detail page can render a
+ * "Recent activity" strip. Auditing is admin-gated; non-admin sessions and any
+ * transport failure resolve to null so the page renders without a strip.
+ */
+async function loadRecentActivityForProject(projectId: string): Promise<AuditEvent[] | null> {
+  const response = await fetchEntityAuditEvents("project", projectId, 5);
+  return response ? response.events : null;
 }
 
 /**

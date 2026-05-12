@@ -14,6 +14,7 @@ import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
 import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchAuditEvents, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
+import type { AuditEventQueryFilters } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../lib/trust-lineage";
 import { formatReviewStateLabel, reviewStateTone } from "../../lib/detail-view-model";
@@ -52,8 +53,8 @@ type AdminCatalogState =
     };
 
 type AdminAuditEventState =
-  | { status: "ready"; events: AuditEvent[]; boundary: string }
-  | { status: "unavailable"; message: string };
+  | { status: "ready"; events: AuditEvent[]; boundary: string; filters: AuditEventQueryFilters }
+  | { status: "unavailable"; message: string; filters: AuditEventQueryFilters };
 
 interface ReviewQueueItem {
   partId: string;
@@ -134,10 +135,28 @@ interface IssueWorkflowRow {
 
 export const dynamic = "force-dynamic";
 
+/** AdminPageSearchParams carries optional URL filters consumed by the user-action audit section. */
+type AdminPageSearchParams = {
+  auditActorId?: string | string[];
+  auditAction?: string | string[];
+  auditTargetType?: string | string[];
+  auditTargetId?: string | string[];
+  auditOutcome?: string | string[];
+};
+
+interface AdminPageProps {
+  searchParams?: Promise<AdminPageSearchParams>;
+}
+
 /**
  * Renders the admin/review/audit workspace using existing catalog projections.
+ * Optional audit-* search params filter the user-action audit timeline so detail
+ * pages can deep-link into a target-scoped audit view.
  */
-export default async function AdminPage() {
+export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const auditFilters = readAuditFiltersFromSearchParams(resolvedSearchParams);
+
   const catalogState = await loadAdminCatalog();
 
   if (catalogState.status === "setup_required") {
@@ -145,7 +164,7 @@ export default async function AdminPage() {
   }
 
   const { health, records, source, warnings } = catalogState;
-  const auditEventState = await loadAdminAuditEvents();
+  const auditEventState = await loadAdminAuditEvents(auditFilters);
   const reviewQueue = buildReviewQueue(records);
   const promotionQueue = buildPromotionQueue(records);
   const importRows = buildImportRows(records);
@@ -695,6 +714,9 @@ export default async function AdminPage() {
  * Renders the general API action audit trail without exposing request payloads.
  */
 function AdminUserActionAuditSection({ auditEventState }: { auditEventState: AdminAuditEventState }): React.ReactElement {
+  const filters = auditEventState.filters;
+  const hasActiveFilters = Boolean(filters.actorId || filters.action || filters.targetType || filters.targetId || filters.outcome);
+
   return (
     <section className="detail-section" aria-labelledby="user-action-audit-heading">
       <SectionHeading
@@ -703,6 +725,46 @@ function AdminUserActionAuditSection({ auditEventState }: { auditEventState: Adm
         title="User action audit trail"
         subtitle="Recent API write attempts with actor, target, outcome, and request correlation."
       />
+      <SectionPanel
+        title="Filter audit timeline"
+        description="Narrow by actor, action, target, or outcome. Filters apply server-side; clear to see the global recent-events view."
+      >
+        <form className="audit-filter-form" method="get" action="/admin">
+          <label className="audit-filter-form__field">
+            <span>Actor id</span>
+            <input defaultValue={filters.actorId ?? ""} name="auditActorId" placeholder="user id" type="search" />
+          </label>
+          <label className="audit-filter-form__field">
+            <span>Action</span>
+            <input defaultValue={filters.action ?? ""} name="auditAction" placeholder="project.update" type="search" />
+          </label>
+          <label className="audit-filter-form__field">
+            <span>Target type</span>
+            <input defaultValue={filters.targetType ?? ""} name="auditTargetType" placeholder="project, part, asset" type="search" />
+          </label>
+          <label className="audit-filter-form__field">
+            <span>Target id</span>
+            <input defaultValue={filters.targetId ?? ""} name="auditTargetId" placeholder="entity id" type="search" />
+          </label>
+          <label className="audit-filter-form__field">
+            <span>Outcome</span>
+            <select defaultValue={filters.outcome ?? ""} name="auditOutcome">
+              <option value="">Any outcome</option>
+              <option value="succeeded">Succeeded</option>
+              <option value="denied">Denied</option>
+              <option value="failed">Failed</option>
+            </select>
+          </label>
+          <div className="audit-filter-form__actions">
+            <button type="submit">Apply filters</button>
+            {hasActiveFilters ? (
+              <Link className="button-link button-link--quiet" href="/admin#user-action-audit-heading">
+                Clear
+              </Link>
+            ) : null}
+          </div>
+        </form>
+      </SectionPanel>
       <SectionPanel
         title="Recent user actions"
         description={auditEventState.status === "ready" ? auditEventState.boundary : "Audit events are unavailable until the API audit store is reachable."}
@@ -754,16 +816,48 @@ function AdminUserActionAuditSection({ auditEventState }: { auditEventState: Adm
 /**
  * Loads recent user-action audit events without blocking the rest of the admin workspace.
  */
-async function loadAdminAuditEvents(): Promise<AdminAuditEventState> {
+async function loadAdminAuditEvents(filters: AuditEventQueryFilters): Promise<AdminAuditEventState> {
   try {
-    const response = await fetchAuditEvents(20, await getServerApiAuthHeaders());
-    return { boundary: response.boundary, events: response.events, status: "ready" };
+    const response = await fetchAuditEvents(20, await getServerApiAuthHeaders(), filters);
+    return { boundary: response.boundary, events: response.events, filters, status: "ready" };
   } catch (error) {
     return {
+      filters,
       message: isApiClientError(error) ? `${error.code}: ${error.message}` : "Audit event API request failed.",
       status: "unavailable"
     };
   }
+}
+
+/**
+ * Narrows search-param strings into the typed AuditEventQueryFilters shape. Untyped
+ * outcome values are dropped so they cannot reach the API.
+ */
+function readAuditFiltersFromSearchParams(searchParams: AdminPageSearchParams): AuditEventQueryFilters {
+  const filters: AuditEventQueryFilters = {};
+  const actorId = readFirst(searchParams.auditActorId);
+  const action = readFirst(searchParams.auditAction);
+  const targetType = readFirst(searchParams.auditTargetType);
+  const targetId = readFirst(searchParams.auditTargetId);
+  const outcome = readFirst(searchParams.auditOutcome);
+
+  if (actorId) filters.actorId = actorId;
+  if (action) filters.action = action;
+  if (targetType) filters.targetType = targetType;
+  if (targetId) filters.targetId = targetId;
+  if (outcome === "succeeded" || outcome === "failed" || outcome === "denied") {
+    filters.outcome = outcome;
+  }
+
+  return filters;
+}
+
+/**
+ * Returns the first value from a Next.js search-param entry that may be string or array.
+ */
+function readFirst(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0];
+  return value;
 }
 
 /**

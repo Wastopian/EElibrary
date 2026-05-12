@@ -25,6 +25,7 @@ import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resol
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
+import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
@@ -775,14 +776,17 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
 /**
  * Handles admin-only audit event reads for security review.
+ * Optional filters (actorId / action / targetType / targetId / outcome / time window)
+ * narrow the timeline so the admin can do per-actor or per-entity audit queries.
  */
 async function handleAuditEventsRead(response: ServerResponse, url: URL): Promise<void> {
   try {
     const limit = readAuditEventLimit(url.searchParams.get("limit"));
+    const filters = readAuditEventFilters(url.searchParams);
     const result = await timeRouteOperation(
       response,
       "audit-events-read",
-      () => readAuditEventsFromDatabase(limit),
+      () => readAuditEventsFromDatabase(limit, filters),
       (value) => value.status
     );
 
@@ -795,6 +799,33 @@ async function handleAuditEventsRead(response: ServerResponse, url: URL): Promis
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
+}
+
+/**
+ * Reads optional audit query filters from URL search params and narrows untrusted
+ * outcome strings to the typed union so a bad value cannot reach the SQL layer.
+ */
+function readAuditEventFilters(searchParams: URLSearchParams): AuditEventListFilters {
+  const filters: AuditEventListFilters = {};
+  const actorId = searchParams.get("actorId");
+  const action = searchParams.get("action");
+  const targetType = searchParams.get("targetType");
+  const targetId = searchParams.get("targetId");
+  const outcome = searchParams.get("outcome");
+  const occurredSince = searchParams.get("occurredSince");
+  const occurredUntil = searchParams.get("occurredUntil");
+
+  if (actorId) filters.actorId = actorId;
+  if (action) filters.action = action;
+  if (targetType) filters.targetType = targetType;
+  if (targetId) filters.targetId = targetId;
+  if (outcome === "succeeded" || outcome === "failed" || outcome === "denied") {
+    filters.outcome = outcome;
+  }
+  if (occurredSince) filters.occurredSince = occurredSince;
+  if (occurredUntil) filters.occurredUntil = occurredUntil;
+
+  return filters;
 }
 
 /**
