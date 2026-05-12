@@ -80,9 +80,13 @@ import type {
   EvidenceReviewStatus,
   EvidenceStorageState,
   EvidenceTargetType,
+  DocumentAccessLevel,
+  DocumentControlType,
   ExportBundle,
   ExportBundleAssemblyError,
   ExportBundleAssemblyStatus,
+  ExportBundleControlSummary,
+  ExportBundleControlledAsset,
   ExportBundleCreateInput,
   ExportBundleCreateResponse,
   ExportBundleFileAvailability,
@@ -5718,9 +5722,19 @@ export async function createExportBundleInDatabase(
     const bundleId = `ebundle-${randomUUID()}`;
     const generatedAt = new Date().toISOString();
 
+    const { controlledAssets, controlSummary } = await buildBundleControlContext(databasePool, includedAssets);
+
+    if (controlSummary.highestAccessLevel === "itar_controlled") {
+      warnings.push(`Bundle contains ${controlSummary.itarControlledCount} ITAR-controlled asset${controlSummary.itarControlledCount === 1 ? "" : "s"}. Confirm export authorization before transmitting.`);
+    } else if (controlSummary.highestAccessLevel === "restricted") {
+      warnings.push(`Bundle contains ${controlSummary.restrictedCount} restricted asset${controlSummary.restrictedCount === 1 ? "" : "s"}. Confirm access controls before transmitting.`);
+    }
+
     const manifest: ExportBundleManifest = {
       bundleFormat: format,
       bundleId,
+      controlledAssets,
+      controlSummary,
       generatedAt,
       includedAssets,
       omissions,
@@ -5784,6 +5798,111 @@ export async function createExportBundleInDatabase(
   } catch (error) {
     throw new CatalogStoreError("query_failed", "Export bundle creation failed.", error);
   }
+}
+
+/**
+ * Resolves controlled-document context for each included bundle asset so the manifest
+ * carries explicit restricted/ITAR markings. Returns an empty list and zero counts
+ * when no included asset is bound to a non-archived restricted/itar_controlled
+ * revision; older bundles created before this query existed default to the same
+ * empty values on read via {@link readEmptyBundleControlSummary}.
+ */
+async function buildBundleControlContext(
+  databasePool: Pool,
+  includedAssets: ExportBundleIncludedAsset[]
+): Promise<{ controlledAssets: ExportBundleControlledAsset[]; controlSummary: ExportBundleControlSummary }> {
+  if (includedAssets.length === 0) {
+    return { controlledAssets: [], controlSummary: readEmptyBundleControlSummary() };
+  }
+
+  const assetIdPlaceholders = includedAssets.map((_, index) => `$${index + 1}`).join(", ");
+  const rows = await databasePool.query<{
+    asset_id: string;
+    id: string;
+    revision_label: string;
+    document_type: DocumentControlType;
+    access_level: DocumentAccessLevel;
+  }>(
+    `
+      SELECT DISTINCT ON (asset_id)
+        asset_id,
+        id,
+        revision_label,
+        document_type,
+        access_level
+      FROM document_revisions
+      WHERE asset_id IN (${assetIdPlaceholders})
+        AND lifecycle_status != 'archived'
+        AND access_level IN ('restricted', 'itar_controlled')
+      ORDER BY
+        asset_id,
+        CASE access_level WHEN 'itar_controlled' THEN 1 WHEN 'restricted' THEN 2 ELSE 3 END,
+        updated_at DESC
+    `,
+    includedAssets.map((asset) => asset.assetId)
+  );
+
+  const includedByAssetId = new Map(includedAssets.map((asset) => [asset.assetId, asset]));
+  const controlledAssets: ExportBundleControlledAsset[] = [];
+  let restrictedCount = 0;
+  let itarControlledCount = 0;
+
+  for (const row of rows.rows) {
+    const included = includedByAssetId.get(row.asset_id);
+    if (!included) continue;
+
+    controlledAssets.push({
+      accessLevel: row.access_level,
+      assetId: row.asset_id,
+      documentRevisionId: row.id,
+      documentType: row.document_type,
+      partId: included.partId,
+      partMpn: included.partMpn,
+      revisionLabel: row.revision_label
+    });
+
+    if (row.access_level === "itar_controlled") {
+      itarControlledCount += 1;
+    } else if (row.access_level === "restricted") {
+      restrictedCount += 1;
+    }
+  }
+
+  const highestAccessLevel: DocumentAccessLevel | null =
+    itarControlledCount > 0 ? "itar_controlled" : restrictedCount > 0 ? "restricted" : null;
+
+  return {
+    controlledAssets,
+    controlSummary: {
+      highestAccessLevel,
+      itarControlledCount,
+      restrictedCount
+    }
+  };
+}
+
+/**
+ * Returns the all-zero control summary for bundles created before controlled-asset
+ * tracking existed. Reads default to this shape so older manifests stay valid.
+ */
+function readEmptyBundleControlSummary(): ExportBundleControlSummary {
+  return { highestAccessLevel: null, itarControlledCount: 0, restrictedCount: 0 };
+}
+
+/**
+ * Normalizes a manifest read from storage so optional controlled-asset fields exist
+ * even on older bundles. Keeps read paths unconditional and lets readers iterate
+ * `controlledAssets` without nil-checks.
+ */
+function normalizeManifestForRead(manifest: ExportBundleManifest): ExportBundleManifest {
+  if (manifest.controlledAssets && manifest.controlSummary) {
+    return manifest;
+  }
+  return {
+    ...manifest,
+    controlledAssets: manifest.controlledAssets ?? [],
+    controlSummary: manifest.controlSummary ?? readEmptyBundleControlSummary()
+  };
 }
 
 /**
@@ -5930,7 +6049,7 @@ function mapExportBundleRow(
     fileAvailability,
     id: row.id,
     includedAssetCount: toNumber(row.included_asset_count),
-    manifest: row.manifest as ExportBundleManifest,
+    manifest: normalizeManifestForRead(row.manifest as ExportBundleManifest),
     omittedAssetCount: toNumber(row.omitted_asset_count),
     partCount: toNumber(row.part_count),
     projectId: row.project_id,

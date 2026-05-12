@@ -2406,6 +2406,35 @@ export interface ExportBundleOmission {
   reason: "not_verified_for_export" | "no_storage_key" | "referenced_only" | "missing" | "format_not_applicable";
 }
 
+/**
+ * ExportBundleControlledAsset records that an included bundle asset is bound to a
+ * controlled document revision. The revision's access level is the most-restrictive
+ * non-archived revision found for that asset at bundle generation time.
+ *
+ * The bundle manifest carries this so a downstream reviewer can see exactly which
+ * assets in the bundle are restricted or ITAR-controlled before transmitting it.
+ */
+export interface ExportBundleControlledAsset {
+  assetId: string;
+  partId: string;
+  partMpn: string;
+  documentRevisionId: string;
+  revisionLabel: string;
+  documentType: DocumentControlType;
+  accessLevel: DocumentAccessLevel;
+}
+
+/**
+ * ExportBundleControlSummary counts controlled assets per access level so the UI can
+ * surface a single banner ("This bundle contains 2 ITAR-controlled assets") without
+ * scanning the full list.
+ */
+export interface ExportBundleControlSummary {
+  restrictedCount: number;
+  itarControlledCount: number;
+  highestAccessLevel: DocumentAccessLevel | null;
+}
+
 /** ExportBundleManifest is the deterministic record of what is and is not in a bundle. */
 export interface ExportBundleManifest {
   bundleId: string;
@@ -2416,6 +2445,17 @@ export interface ExportBundleManifest {
   includedAssets: ExportBundleIncludedAsset[];
   omissions: ExportBundleOmission[];
   warnings: string[];
+  /**
+   * Controlled-document context for the bundle's included assets. Populated at
+   * generation time; empty when the bundle has no controlled assets. Older bundles
+   * generated before this field existed default to an empty array on read.
+   */
+  controlledAssets: ExportBundleControlledAsset[];
+  /**
+   * Roll-up of controlled-asset counts and the highest access level present. Older
+   * bundles default to all-zero with `highestAccessLevel: null` on read.
+   */
+  controlSummary: ExportBundleControlSummary;
 }
 
 /**
