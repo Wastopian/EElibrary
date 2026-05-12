@@ -20,7 +20,7 @@ test("catalog results presentation renders list mode by default", () => {
   assert.match(html, /Review Needed/u);
   assert.match(html, /Top blocker/u);
   assert.match(html, /Connector intelligence/u);
-  assert.match(html, /Trust gates/u);
+  assert.match(html, /Verification steps/u);
 });
 
 /**
@@ -32,7 +32,7 @@ test("catalog results presentation renders dense table mode", () => {
   assert.match(html, /visible rows/u);
   assert.match(html, /Description/u);
   assert.match(html, /CAD\/export/u);
-  assert.match(html, /Trust gates/u);
+  assert.match(html, /Verification steps/u);
   assert.match(html, /Imp/u);
   assert.match(html, /Next action/u);
   assert.match(html, /Open/u);

@@ -11,6 +11,7 @@ import React from "react";
 import { SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { VendorWorkspace } from "../../../components/VendorWorkspace";
 import { fetchVendorDetail, isApiClientError } from "../../../lib/api-client";
+import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { VendorCategory, VendorDetailResponse } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -42,14 +43,15 @@ export default async function VendorDetailPage({ params }: { params: Promise<{ s
   const state = await loadVendorDetail(slug);
 
   if (state.status === "setup_required") {
+    const copy = getSetupStateCopy(state.code);
     return (
       <main className="projects-layout">
         <Link className="back-link" href="/vendors">&larr; All suppliers</Link>
         <section className="projects-hero projects-hero--slim">
           <div className="projects-hero__copy">
             <p className="app-kicker">Suppliers</p>
-            <h1>This page needs a running API</h1>
-            <p className="projects-hero__lede">Start the EE Library app, then try again.</p>
+            <h1>{copy.headline}</h1>
+            <p className="projects-hero__lede">{copy.body}</p>
             <details className="import-guide">
               <summary>Show technical details</summary>
               <p className="mode-warning">{state.message}</p>

@@ -41,13 +41,11 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Next action/u);
     assert.match(html, /Resolve CAD\/export assets/u);
     assert.match(html, /Blocked/u);
-    assert.match(html, /Source rows/u);
-    assert.match(html, /Asset rows/u);
     assert.match(html, /Bundle gate/u);
     assert.match(html, /Alternates and companions/u);
     assert.match(html, /Sourcing and lifecycle/u);
     assert.match(html, /Distributor pricing/u);
-    assert.match(html, /not in the current API contract/u);
+    assert.match(html, /Pricing and stock are not shown here/u);
     assert.match(html, /Top blockers/u);
     assert.match(html, /Risk flags/u);
     assert.match(html, /Review and export state/u);
@@ -91,10 +89,10 @@ test("part detail renders setup guidance when catalog detail is unavailable", as
   try {
     const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: "part-tps7a02dbvr" }) }));
 
-    assert.match(html, /Catalog detail unavailable/u);
-    assert.match(html, /Connect the catalog database/u);
+    assert.match(html, /catalog database is not connected yet/u);
+    assert.match(html, /What you can do now/u);
     assert.match(html, /DB_NOT_CONFIGURED/u);
-    assert.match(html, /Where-used side channel/u);
+    assert.match(html, /Project usage history/u);
     assert.doesNotMatch(html, /No matching parts found/u);
   } finally {
     restoreFetch();
@@ -161,7 +159,6 @@ test("connector detail elevates connector build set near the top of the readines
 
     assert.match(html, /Connector build set/u);
     assert.match(html, /Mates and accessories/u);
-    assert.match(html, /Mapped/u);
     assert.match(html, /Best mate/u);
     assert.match(html, /Required accessories/u);
     assert.match(html, /Implementation-friendly mate and accessory context/u);

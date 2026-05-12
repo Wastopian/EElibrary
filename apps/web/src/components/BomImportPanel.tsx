@@ -204,7 +204,7 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
               <button disabled={!canSave || status.kind === "saving"} type="submit">
                 {status.kind === "saving" ? "Saving BOM..." : "Save mapped BOM"}
               </button>
-              <span>Saved rows stay unmatched until you run exact internal matching from the import table.</span>
+              <span>Saving stores the rows. Matching them to known parts is a separate step in the import table below.</span>
             </div>
           </>
         ) : null}
@@ -284,7 +284,7 @@ function PreviewTable({ preview }: { preview: BomImportPreviewResponse }) {
  */
 function BomImportStatusMessage({ status }: { status: BomImportStatus }) {
   if (status.kind === "idle") {
-    return <p className="bom-import-panel__status bom-import-panel__status--idle">Upload a CSV or XLSX file to preview rows and map columns before anything is persisted.</p>;
+    return <p className="bom-import-panel__status bom-import-panel__status--idle">Upload a CSV or XLSX file to preview rows and map columns. Nothing is saved until you click Save mapped BOM.</p>;
   }
 
   if (status.kind === "previewing") {
@@ -298,7 +298,7 @@ function BomImportStatusMessage({ status }: { status: BomImportStatus }) {
   if (status.kind === "success") {
     return (
       <p className="bom-import-panel__status bom-import-panel__status--success">
-        Saved {status.response.lineCount} BOM rows. Run row matching from the BOM imports table when you are ready to create confirmed usage.
+        Saved {status.response.lineCount} rows. Open the BOM imports table below to match them to known parts when you are ready.
       </p>
     );
   }

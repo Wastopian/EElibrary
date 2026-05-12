@@ -13,6 +13,7 @@ import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
 import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../lib/trust-lineage";
 import { formatReviewStateLabel, reviewStateTone } from "../../lib/detail-view-model";
 import type { ApiHealth } from "../../lib/api-client";
@@ -234,17 +235,13 @@ export default async function AdminPage() {
 
   return (
     <main className="admin-layout">
-      <Link className="back-link" href="/catalog">
-        &larr; Back to catalog
-      </Link>
-
       <section className="admin-hero">
         <div className="admin-hero__layout">
           <div className="admin-hero__copy">
             <p className="app-kicker">Admin workspace</p>
             <h1>Review and trust maintenance</h1>
             <p className="admin-hero__lede">
-              Review generated drafts, inspect part-level blockers, and monitor promotion and import evidence without implying export readiness before evidence is complete.
+              Review pending drafts, clear blockers, and promote files to verified for export. Promotion stays explicit so nothing slips through unreviewed.
             </p>
             <div className="admin-hero__status">
               <StatusBadge label={source === "seed_fallback" ? "Local seed mode" : "DB-backed catalog"} tone={source === "seed_fallback" ? "review" : "verified"} />
@@ -277,11 +274,11 @@ export default async function AdminPage() {
         <SectionHeading
           id="issue-ops-heading"
           index="00"
-          subtitle="Assign, resolve, reopen, and reconcile backend-derived issues without collapsing them into asset review or export promotion."
+          subtitle="Assign, resolve, and reopen open issues. These stay separate from asset review and promotion."
           title="Issue operations"
         />
         <SectionPanel
-          description="Issue workflow state is operational metadata. It does not remove underlying readiness evidence until the backend projection itself changes."
+          description="Editing an issue here does not change part readiness or unlock export. It only updates the issue itself."
           title={`${issueWorkflowRows.length} issue workflow items`}
         >
           {issueWorkflowRows.length > 0 ? (
@@ -381,7 +378,7 @@ export default async function AdminPage() {
               </table>
             </div>
           ) : (
-            <EmptyState title="No issue workflow items" body="No backend-derived issues are currently open or recently resolved in this catalog window." />
+            <EmptyState title="No issue workflow items" body="No issues are open or recently resolved right now." />
           )}
         </SectionPanel>
       </section>
@@ -394,7 +391,7 @@ export default async function AdminPage() {
           title="Import by MPN"
         />
         <SectionPanel
-          description="Uses the same worker-backed import path as the CLI. Success means the part row exists - not that CAD is verified or exportable."
+          description="Same import path the worker uses. Success means the record was created — not that CAD is verified or exportable."
           title="Operator import"
           tone="technical"
         >
@@ -532,9 +529,9 @@ export default async function AdminPage() {
       </section>
 
       <section className="detail-section" aria-labelledby="ops-health-heading">
-        <SectionHeading id="ops-health-heading" index="04" title="Imports and validation" subtitle="Recent import health plus validation evidence status for trust maintenance." />
+        <SectionHeading id="ops-health-heading" index="04" title="Imports and validation" subtitle="Recent import results and validation evidence." />
         <div className="detail-two-col">
-          <SectionPanel title="Recent imports" description="Newest source import rows across this catalog window.">
+          <SectionPanel title="Recent imports" description="Newest source imports.">
             {recentImportRows.length > 0 ? (
               <div className="admin-table-wrap">
                 <table className="admin-table">
@@ -578,7 +575,7 @@ export default async function AdminPage() {
                 ))}
               </ul>
             ) : (
-              <EmptyState title="No failed imports" body="No failed import rows were found in this catalog window." />
+              <EmptyState title="No failed imports" body="No failed import rows were found right now." />
             )}
           </SectionPanel>
         </div>
@@ -1318,14 +1315,11 @@ async function loadAdminCatalog(): Promise<AdminCatalogState> {
 function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogState, { status: "setup_required" }> }) {
   return (
     <main className="admin-layout">
-      <Link className="back-link" href="/catalog">
-        &larr; Back to catalog
-      </Link>
       <section className="admin-hero">
         <div>
           <p className="app-kicker">Admin workspace</p>
           <h1>Review and trust maintenance</h1>
-          <p className="admin-hero__lede">Connect the catalog before using review/promotion/audit operations.</p>
+          <p className="admin-hero__lede">{getSetupStateCopy(catalogState.code).body} Connect the catalog before using review/promotion/audit operations.</p>
         </div>
         <div className="admin-hero__status">
           <StatusBadge label={catalogState.code} tone="review" />
@@ -1358,21 +1352,21 @@ function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogS
  */
 function AdminTruthRail() {
   return (
-    <section aria-label="Admin trust boundaries" className="admin-truth-rail">
+    <section aria-label="Admin guidance" className="admin-truth-rail">
       <div>
-        <span>Review truth</span>
-        <strong>Approval does not verify export.</strong>
-        <p>Reviewed or approved outputs still stay outside export truth until file-backed validation evidence and promotion are complete.</p>
+        <span>Review</span>
+        <strong>Approval does not unlock export.</strong>
+        <p>Approved or reviewed outputs still need file-backed validation evidence and an explicit promotion before export.</p>
       </div>
       <div>
-        <span>Promotion truth</span>
-        <strong>Verified-for-export stays explicit.</strong>
-        <p>Promotion remains a separate action so operators can see exactly which assets are eligible now and which are still blocked.</p>
+        <span>Promotion</span>
+        <strong>Promotion stays explicit.</strong>
+        <p>Promotion is a separate action so you can see exactly which assets are eligible now and which are still blocked.</p>
       </div>
       <div>
-        <span>Coverage gaps</span>
-        <strong>Queues appear only when the backend has evidence.</strong>
-        <p>Issue-driven queues such as identity, connector coverage, lifecycle, and source conflicts stay hidden until backend records exist for them.</p>
+        <span>Coverage</span>
+        <strong>Queues only appear when records exist.</strong>
+        <p>Issue queues like identity, connector coverage, lifecycle, and source conflicts stay hidden until they have records.</p>
       </div>
     </section>
   );

@@ -13,6 +13,7 @@ import { EvidenceAttachmentPanel } from "../../../components/EvidenceAttachmentP
 import { FollowUpPanel } from "../../../components/FollowUpPanel";
 import { WorkspaceJumpNav } from "../../../components/WorkspaceJumpNav";
 import { fetchCircuitBlockDetail, fetchCircuitBlockFollowUps, isApiClientError } from "../../../lib/api-client";
+import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CircuitBlockDetailResponse, CircuitBlockProjectDependency, CircuitBlockStatus, CircuitBlockType, EvidenceAttachment, FollowUpListResponse } from "@ee-library/shared/types";
 
@@ -88,7 +89,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       />
 
       <section className="detail-section" aria-labelledby="circuit-block-summary-heading">
-        <SectionHeading id="circuit-block-summary-heading" index="01" subtitle="Structured circuit memory and reuse constraints." title="Block summary" />
+        <SectionHeading id="circuit-block-summary-heading" index="01" subtitle="Block details and reuse constraints." title="Block summary" />
         <SectionPanel description={detail.boundary} title={detail.circuitBlock.blockKey}>
           <dl className="projects-summary-grid">
             <div>
@@ -126,7 +127,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       </section>
 
       <section className="detail-section" aria-labelledby="circuit-block-edit-heading">
-        <SectionHeading id="circuit-block-edit-heading" index="02" subtitle="Maintain reusable circuit metadata without changing linked part truth." title="Edit circuit block" />
+        <SectionHeading id="circuit-block-edit-heading" index="02" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
         <SectionPanel description="These edits update block metadata only. Block status, scope, and constraints do not approve linked parts or verify export assets." title="Metadata maintenance">
           <CircuitBlockEditPanel circuitBlock={detail.circuitBlock} />
         </SectionPanel>
@@ -134,7 +135,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
 
       <section className="detail-section" aria-labelledby="circuit-block-parts-heading">
         <SectionHeading id="circuit-block-parts-heading" index="03" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
-        <SectionPanel description="Required and optional roles are persisted separately. A block can be approved while a linked part still needs review." title={detail.parts.length > 0 ? `${detail.parts.length} part roles` : "No part roles"}>
+        <SectionPanel description="Required and optional roles are saved separately. A block can be approved while a linked part still needs review." title={detail.parts.length > 0 ? `${detail.parts.length} part roles` : "No part roles"}>
           {detail.parts.length > 0 ? <CircuitBlockPartEditTable circuitBlockId={detail.circuitBlock.id} parts={detail.parts} /> : <EmptyState title="No part roles yet" body="Add internal part roles before this circuit block can support reuse review." />}
         </SectionPanel>
       </section>
@@ -156,14 +157,14 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       </section>
 
       <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-        <SectionHeading id="circuit-block-follow-ups-heading" index="06" subtitle="Persist assignable work from required-role readiness gaps." title="Follow-up work" />
+        <SectionHeading id="circuit-block-follow-ups-heading" index="06" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
         <SectionPanel description="Follow-up workflow state does not approve linked parts or make this circuit export-ready. Refresh creates or updates records from current required-role readiness gaps." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
           <FollowUpPanel followUps={followUps} targetId={detail.circuitBlock.id} targetType="circuit_block" />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-        <SectionHeading id="circuit-block-evidence-heading" index="07" subtitle="Evidence metadata supports review without changing trust state." title="Evidence" />
+        <SectionHeading id="circuit-block-evidence-heading" index="07" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
         <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or unlock export." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
           <div className="project-evidence-panel">
             <div className="project-evidence-panel__boundary">
@@ -218,12 +219,12 @@ function CircuitBlockDetailSetupState({ pageState }: { pageState: Extract<Circui
       <section className="projects-hero">
         <div className="projects-hero__copy">
           <p className="app-kicker">Circuit block detail</p>
-          <h1>Connect the engineering-memory database</h1>
-          <p className="projects-hero__lede">Circuit block detail requires persisted block, part-role, and evidence tables.</p>
-          <div className="projects-hero__status">
-            <StatusBadge label={pageState.code} tone="review" />
-          </div>
-          <p className="mode-warning">{pageState.message}</p>
+          <h1>{getSetupStateCopy(pageState.code).headline}</h1>
+          <p className="projects-hero__lede">{getSetupStateCopy(pageState.code).body} Circuit block detail needs persisted block, part-role, and evidence tables.</p>
+          <details className="audit-disclosure">
+            <summary>Show technical details</summary>
+            <p className="muted-copy">{pageState.code}: {pageState.message}</p>
+          </details>
         </div>
       </section>
     </main>

@@ -10,6 +10,7 @@ import { CatalogResultsPresentation } from "../../components/CatalogResultsPrese
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { OperatorChecklist } from "../../components/OperatorChecklist";
 import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../../lib/detail-view-model";
 import { buildCatalogTrustLineageBadges } from "../../lib/trust-lineage";
 import { importUiCopy } from "../../lib/import-ui-copy";
@@ -145,12 +146,31 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
   return (
     <main>
+      <section aria-label="What EE Library is" className="site-intro">
+        <p className="app-kicker">EE Library</p>
+        <h1>Find a part. Get its files. Trust what you ship.</h1>
+        <p className="site-intro__lede">
+          Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
+        </p>
+        <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
+          <Link className="site-intro__path" href="#quick-check">
+            <strong>Search a part</strong>
+            <span>Type an MPN to see specs, files, and what is missing.</span>
+          </Link>
+          <Link className="site-intro__path" href="/projects">
+            <strong>Open a project</strong>
+            <span>See the parts in a build, plus uploads and BOMs.</span>
+          </Link>
+          <Link className="site-intro__path" href="/vendors">
+            <strong>Browse vendors</strong>
+            <span>PCB shops, sheet metal, and the people you trust.</span>
+          </Link>
+        </div>
+      </section>
+
       <section aria-label="Catalog workbench search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
         <div className="quick-check-workspace__layout">
           <div className="hero-editorial__inner quick-check-workspace__main">
-            <h1>Catalog workbench</h1>
-            <p className="hero-lede">Search by part number, scan matches, then open the right part record.</p>
-
             <form className="quick-check-form" action="/catalog" method="get">
               <input name="manufacturerId" type="hidden" value={manufacturerId} />
               <input name="category" type="hidden" value={category} />
@@ -220,7 +240,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </section>
 
-      <details className="catalog-getting-started">
+      <details className="catalog-getting-started" open>
         <summary>First time here? See 3 quick steps</summary>
         <OperatorChecklist
           primaryActionHref={primaryAction.href}
@@ -399,7 +419,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           ) : null}
 
           {results.length > 0 ? (
-            <CatalogResultsPresentation initialMode="table" rows={catalogResultRows} />
+            <CatalogResultsPresentation initialMode="list" rows={catalogResultRows} />
           ) : (
             <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD filter." title="No matching parts" />
           )}
@@ -1078,13 +1098,14 @@ function buildSetupCatalogState(error: unknown, health: ApiHealth | null): Homep
 }
 
 function HomepageSetupState({ catalogState }: { catalogState: Extract<HomepageCatalogState, { status: "setup_required" }> }) {
+  const copy = getSetupStateCopy(catalogState.code);
   return (
     <main>
       <section aria-label="Quick part readiness check unavailable" className="quick-check-workspace">
         <div className="hero-editorial__inner">
           <p className="app-kicker">EE Library</p>
-          <h1>Quick part readiness check</h1>
-          <p className="hero-lede">Search is paused right now. Start your local data services, then come back here.</p>
+          <h1>{copy.headline}</h1>
+          <p className="hero-lede">{copy.body}</p>
           <div className="catalog-strip" role="status">
             <span className="catalog-strip__label">Status</span>
             <StatusBadge label="Search paused" tone="review" />

@@ -87,7 +87,7 @@ test("evidence vault renders setup guidance instead of attach controls when proj
   try {
     const html = renderToStaticMarkup(await EvidencePage({ searchParams: Promise.resolve({}) }));
 
-    assert.match(html, /Connect project memory before attaching evidence/u);
+    assert.match(html, /catalog database is not connected yet/u);
     assert.match(html, /DB_NOT_CONFIGURED/u);
     assert.match(html, /Attachment unavailable/u);
     assert.doesNotMatch(html, /Find target/u);

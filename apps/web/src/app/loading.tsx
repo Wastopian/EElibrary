@@ -9,9 +9,9 @@ export default function Loading() {
   return (
     <section aria-live="polite" className="workspace-state">
       <div className="workspace-state__card workspace-state__card--review">
-        <p className="workspace-state__eyebrow">Route state</p>
-        <h1>Loading workspace</h1>
-        <p>Preparing normalized component records, readiness evidence, and issue context so the next view stays aligned with real catalog truth.</p>
+        <p className="workspace-state__eyebrow">One moment</p>
+        <h1>Loading...</h1>
+        <p>Pulling the latest part records, files, and review state for this view.</p>
       </div>
     </section>
   );

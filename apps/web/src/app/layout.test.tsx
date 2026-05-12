@@ -19,14 +19,14 @@ test("root layout renders the engineering memory workspace shell", () => {
   );
 
   assert.match(html, /Engineering memory/u);
-  assert.match(html, /Projects - parts - evidence - reuse/u);
+  assert.match(html, /Find parts\. Open projects\. Ship verified files\./u);
   assert.match(html, /Skip to main content/u);
   assert.match(html, /Catalog/u);
   assert.match(html, /Projects/u);
   assert.match(html, /Where-used/u);
   assert.match(html, /Circuit blocks/u);
   assert.match(html, /Admin/u);
-  assert.match(html, /Library views/u);
+  assert.match(html, /Catalog filters/u);
   assert.match(html, /Connectors/u);
   assert.match(html, /Pending review/u);
   assert.match(html, /app-nav__link/u);

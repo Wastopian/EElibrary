@@ -7,6 +7,7 @@ import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { fetchApiHealth, fetchConnectorSetCatalog, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { ConnectorClass, ConnectorSetClassGroup, ConnectorSetEntry, ConnectorSetListResponse, ConnectorSetMatePair } from "@ee-library/shared/types";
@@ -49,13 +50,13 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
       <section className="projects-hero">
         <div className="projects-hero__layout">
           <div className="projects-hero__copy">
-            <p className="app-kicker">Connector memory</p>
+            <p className="app-kicker">Connector sets</p>
             <h1>Connector set catalog</h1>
             <p className="projects-hero__lede">
-              Browse connector parts grouped by connector_class. Each connector lists best-mate and alternate-mate pairs from <code>mate_relations</code>, plus confirmed project usage counts.
+              Find connectors with their matching mates and accessories. Each row shows the best mate, any alternates, and how many projects already use it.
             </p>
             <div className="projects-hero__status">
-              <StatusBadge label="DB-backed connector memory" tone="verified" />
+              <StatusBadge label="Database connected" tone="verified" />
               <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
               <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
             </div>
@@ -104,7 +105,7 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
         <SectionHeading
           id="connector-sets-boundaries-heading"
           index="03"
-          subtitle="Listing connectors and mates does not approve reuse, validate evidence, or unlock export."
+          subtitle="Connector listings are reference material. Always confirm fit and verification before reuse."
           title="Trust boundaries"
         />
         <SectionPanel description={response.boundary} title="Connector set truth">
@@ -173,19 +174,18 @@ async function loadConnectorSetsPage(connectorClassFilter: ConnectorClass | null
 function ConnectorSetsSetupState({ pageState }: { pageState: Extract<ConnectorSetsPageState, { status: "setup_required" }> }) {
   return (
     <main className="projects-layout">
-      <Link className="back-link" href="/catalog">
-        &larr; Back to catalog
-      </Link>
       <section className="projects-hero">
         <div className="projects-hero__copy">
-          <p className="app-kicker">Connector memory</p>
-          <h1>Connect the engineering-memory database</h1>
-          <p className="projects-hero__lede">Connector set browsing requires persisted connector parts plus mate_relations rows. No seed fallback is used here.</p>
+          <p className="app-kicker">Connector sets</p>
+          <h1>{getSetupStateCopy(pageState.code).headline}</h1>
+          <p className="projects-hero__lede">{getSetupStateCopy(pageState.code).body} Connector set browsing needs persisted connector parts and mate_relations rows.</p>
           <div className="projects-hero__status">
-            <StatusBadge label={pageState.code} tone="review" />
             <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
-          <p className="mode-warning">{pageState.message}</p>
+          <details className="audit-disclosure">
+            <summary>Show technical details</summary>
+            <p className="muted-copy">{pageState.code}: {pageState.message}</p>
+          </details>
         </div>
       </section>
     </main>

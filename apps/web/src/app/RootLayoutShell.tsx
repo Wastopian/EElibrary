@@ -31,14 +31,28 @@ export function RootLayoutShell({ children, fontClassName = "" }: RootLayoutShel
               <div className="app-sidebar__brand">
                 <p className="app-kicker">EE Library</p>
                 <p className="app-sidebar__title">Engineering memory</p>
-                <p className="app-sidebar__subtitle">Projects - parts - evidence - reuse.</p>
+                <p className="app-sidebar__subtitle">Find parts. Open projects. Ship verified files.</p>
               </div>
             </Link>
+            <form action="/catalog" className="app-sidebar__search" method="get" role="search">
+              <label className="app-sidebar__search-label" htmlFor="sidebar-search">
+                Search a part number
+              </label>
+              <input
+                aria-label="Search the catalog by part number"
+                autoComplete="off"
+                className="app-sidebar__search-input"
+                id="sidebar-search"
+                name="q"
+                placeholder="MPN or keyword"
+                type="search"
+              />
+            </form>
             <AppNavigation />
-            <section aria-label="Confidence guidance" className="app-sidebar__note">
-              <span>Before export</span>
-              <strong>Only use verified files for release.</strong>
-              <p>Need details? Open any part and select "How to read this" in the trust section.</p>
+            <section aria-label="Release reminder" className="app-sidebar__note">
+              <span>Before release</span>
+              <strong>Only use verified files.</strong>
+              <p>Open any part and expand "How verification works" for the full explanation.</p>
             </section>
           </aside>
           <div className="app-main">

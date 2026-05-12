@@ -166,9 +166,9 @@ test("project detail renders empty child sections honestly", async () => {
     assert.match(html, /No BOM imports yet/u);
     assert.match(html, /Use the CSV intake panel above/u);
     assert.match(html, /No confirmed part usage yet/u);
-    assert.match(html, /No BOM rows to evaluate/u);
+    assert.match(html, /No parts list to check/u);
     assert.match(html, /No follow-ups yet/u);
-    assert.match(html, /No evidence metadata yet/u);
+    assert.match(html, /No evidence yet/u);
   } finally {
     restoreFetch();
   }

@@ -30,7 +30,7 @@ export default async function SystemPage() {
             <p className="app-kicker">System</p>
             <h1>System health</h1>
             <p className="projects-hero__lede">
-              Check whether the API, catalog database, storage, worker, and background queues are ready before importing, reviewing, or exporting engineering records.
+              See what is online and what is offline. Open this when something will not load or an action keeps failing.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label={health ? "API ok" : "API health unavailable"} tone={health ? "verified" : "danger"} />
@@ -45,22 +45,22 @@ export default async function SystemPage() {
       <WorkerStatusBanner apiBaseUrl={apiBaseUrl} databaseUrlConfigured={databaseUrlConfigured} health={health} isLocalDev={isLocalDev} />
 
       <section className="detail-section" aria-labelledby="system-current-heading">
-        <SectionHeading id="system-current-heading" index="01" subtitle="Live service states from the API health contract." title="Current status" />
-        <SectionPanel description="These states are operational signals. They do not change part approval, evidence review, or export readiness by themselves." title="Service readiness">
+        <SectionHeading id="system-current-heading" index="01" subtitle="Live service status." title="Current status" />
+        <SectionPanel description="These states show what is reachable. They do not change part approval, evidence review, or export readiness." title="Service readiness">
           {health ? <SystemHealthOverview health={health} /> : <SystemUnavailableState apiBaseUrl={apiBaseUrl} />}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="system-queues-heading">
-        <SectionHeading id="system-queues-heading" index="02" subtitle="Queued work is visible even before operators open the Admin workspace." title="Background work" />
-        <SectionPanel description="Pending work can still be moving when the worker is online. Failed work needs review before async provider results are trusted." title="Queue status">
+        <SectionHeading id="system-queues-heading" index="02" subtitle="Pending and failed background work." title="Background work" />
+        <SectionPanel description="Pending work can still be moving when the worker is online. Failed work needs a look before its results are trusted." title="Queue status">
           {health ? <SystemQueueTable health={health} /> : <SystemUnavailableState apiBaseUrl={apiBaseUrl} />}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="system-recovery-heading">
-        <SectionHeading id="system-recovery-heading" index="03" subtitle="Plain recovery paths for non-software-savvy operators and maintainers." title="What to check next" />
-        <SectionPanel description="Use these actions when a workspace says setup_required, API down, worker offline, or queued work failed." title="Recovery paths">
+        <SectionHeading id="system-recovery-heading" index="03" subtitle="What to do when something is offline." title="What to check next" />
+        <SectionPanel description="Use these when a page says it is paused, the API is down, or background work has failed." title="Recovery paths">
           <SystemRecoveryPanel apiBaseUrl={apiBaseUrl} health={health} />
         </SectionPanel>
       </section>

@@ -8,6 +8,7 @@ import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-libra
 import { ProjectCreatePanel } from "../../components/ProjectCreatePanel";
 import { ProjectsBrowser } from "../../components/ProjectsBrowser";
 import { fetchApiHealth, fetchProjectFleetRisk, fetchProjectListEnvelope, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CatalogDataSource, ProjectFleetRiskResponse, ProjectFleetRiskRow, ProjectListResponse, ProjectMemoryCapability, ProjectMemoryCapabilityState, ProjectSummary } from "@ee-library/shared/types";
@@ -71,7 +72,7 @@ export default async function ProjectsPage() {
           description={response.projects.length > 0
             ? "Click any project to open its parts and uploads."
             : "No projects yet. Create one below to start tracking parts and uploads."}
-          title={response.projects.length > 0 ? `${response.projects.length} project records` : "No persisted projects"}
+          title={response.projects.length > 0 ? `${response.projects.length} project records` : "No projects yet"}
         >
           {response.projects.length > 0 ? <ProjectsBrowser projects={response.projects} /> : <ProjectsEmptyState />}
         </SectionPanel>
@@ -92,7 +93,7 @@ export default async function ProjectsPage() {
       </section>
 
       <details className="projects-advanced">
-        <summary>Advanced project memory tools</summary>
+        <summary>Advanced project tools</summary>
         <p className="projects-advanced__lede muted-copy">
           Risk dashboards, capability state, and provenance boundaries. Most engineers can ignore these.
         </p>
@@ -109,7 +110,7 @@ export default async function ProjectsPage() {
           <section className="detail-section" aria-labelledby="projects-fleet-risk-heading">
             <SectionHeading
               id="projects-fleet-risk-heading"
-              subtitle="Cross-project risk counts from saved parts list rows, confirmed usage, lifecycle, CAD, and follow-up records."
+              subtitle="Risk and gap counts across every project, drawn from saved BOMs, lifecycle, CAD, and follow-up state."
               title="Fleet risk dashboard"
             />
             <SectionPanel
@@ -123,14 +124,14 @@ export default async function ProjectsPage() {
 
         <section className="detail-section" aria-labelledby="project-foundations-heading">
           <SectionHeading id="project-foundations-heading" subtitle="What the API can read today." title="Current foundations" />
-          <SectionPanel description="Foundations mean the API persists this stage. Approval, evidence, and export remain separate states." title="Readable project memory">
+          <SectionPanel description="Foundations mean the API persists this stage. Approval, evidence, and export remain separate states." title="Readable foundations">
             <CapabilityList capabilities={foundationCapabilities} />
           </SectionPanel>
         </section>
 
         {plannedCapabilities.length > 0 ? (
           <section className="detail-section" aria-labelledby="planned-project-memory-heading">
-            <SectionHeading id="planned-project-memory-heading" subtitle="Visible as planned work, not shipped behavior." title="Planned project memory" />
+            <SectionHeading id="planned-project-features-heading" subtitle="Visible as planned work, not shipped behavior." title="Planned project features" />
             <SectionPanel
               description="The next work turns foundation data into richer project workflows."
               title="Near-term project workflow"
@@ -196,17 +197,15 @@ function ProjectsSetupState({ dashboardState }: { dashboardState: Extract<Projec
   // the genuinely unexpected path where an operator needs the diagnostic detail to debug further.
   const databaseStatus = dashboardState.health?.dependencies.database;
   const showTechnicalMessage = databaseStatus === "connected";
+  const copy = getSetupStateCopy(dashboardState.code);
 
   return (
     <main className="projects-layout">
-      <Link className="back-link" href="/catalog">
-        &larr; Back to catalog
-      </Link>
       <section className="projects-hero">
         <div className="projects-hero__copy">
-          <p className="app-kicker">Project memory</p>
-          <h1>Project pages are paused</h1>
-          <p className="projects-hero__lede">Start local data services, then come back to view project history.</p>
+          <p className="app-kicker">Projects</p>
+          <h1>{copy.headline}</h1>
+          <p className="projects-hero__lede">{copy.body}</p>
           <div className="projects-hero__status">
             <StatusBadge label="Projects paused" tone="review" />
             <StatusBadge label={`Database ${databaseStatus ?? "unknown"}`} tone={databaseStatus === "connected" ? "verified" : "review"} />
@@ -386,7 +385,7 @@ function ProjectsEmptyState() {
   return (
     <EmptyState
       title="No project records yet"
-      body="The project-memory database is reachable, but no project rows are persisted. Create a project first, then upload a CSV BOM from the project detail page."
+      body="The database is reachable, but no projects have been created yet. Create a project first, then upload a CSV BOM from the project page."
     />
   );
 }
@@ -396,7 +395,7 @@ function ProjectsEmptyState() {
  */
 function CapabilityList({ capabilities }: { capabilities: ProjectMemoryCapability[] }) {
   if (capabilities.length === 0) {
-    return <EmptyState title="No capabilities reported" body="The API did not return capability metadata for this project-memory read." />;
+    return <EmptyState title="No capabilities reported" body="We could not read capability information for this view." />;
   }
 
   return (

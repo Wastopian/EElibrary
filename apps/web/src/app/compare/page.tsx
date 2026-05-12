@@ -8,6 +8,7 @@ import { formatMetricLabel } from "@ee-library/shared/catalog-runtime";
 import { EmptyState, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import type { BadgeTone } from "@ee-library/ui";
 import { fetchPartDetail, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { CompareSelectionTray } from "../../components/CompareSelectionTray";
 import { CompareMissingPartsRecovery, CompareNoPartsRecovery } from "../../components/CompareRecoveryStates";
 import {
@@ -69,7 +70,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
           <p className="app-kicker">Compare workspace</p>
           <h1>Part comparison</h1>
           <p className="compare-hero__lede">
-            Up to {MAX_PARTS} internal catalog parts side-by-side. Add parts from Catalog, a part detail workspace, or the compare selection box below. Metrics show normalized values; blank cells mean that metric is not on that part.
+            Look at up to {MAX_PARTS} parts side by side. Add parts from the catalog, from a part page, or in the box below. A blank cell means that metric is not recorded for that part.
           </p>
         </div>
         <Link className="back-link" href="/catalog">
@@ -89,11 +90,11 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
         <>
           {details.length === 1 && records[0] ? (
             <p className="compare-callout" role="status">
-              One part is selected. Use the compare selection box above to add another internal part id, or find another part in Catalog and open its compare workspace.
+              One part is selected. Use the box above to add another part by id, or find another in the catalog and add it from there.
             </p>
           ) : null}
 
-          <SectionPanel description="Identity and lifecycle from current catalog rows—not manufacturing guarantees." title="Summary">
+          <SectionPanel description="Identity and lifecycle from the current catalog. Always confirm against the manufacturer datasheet before final use." title="Summary">
             <div className="admin-table-wrap compare-table-wrap">
               <table className="admin-table compare-table">
                 <thead>
@@ -209,7 +210,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
           </SectionPanel>
 
           {showConnectorRows ? (
-            <SectionPanel description="Connector-only depth: best mate, accessories, family conflicts, and the persisted mating-confidence score. Non-connector parts render an em dash." title="Connector depth">
+            <SectionPanel description="Connector-only depth: best mate, accessories, family conflicts, and the saved mating-confidence score. Non-connector parts show a dash." title="Connector depth">
               <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={connectorRows} />
             </SectionPanel>
           ) : null}
@@ -259,12 +260,14 @@ async function loadComparePage(partIds: string[]): Promise<ComparePageState> {
  * Renders compare setup guidance without pretending missing API data is an empty match set.
  */
 function CompareSetupState({ state }: { state: Extract<ComparePageState, { status: "setup_required" }> }) {
+  const copy = getSetupStateCopy(state.code);
   return (
-    <SectionPanel description="Connect the catalog database to compare parts." title="Connect the catalog database">
-      <EmptyState
-        body={`${state.code}: ${state.message} Compare details stay hidden until the catalog database is connected.`}
-        title="Compare unavailable"
-      />
+    <SectionPanel description={copy.body} title="Connect the catalog database">
+      <EmptyState body={copy.headline} title="Compare unavailable" />
+      <details className="audit-disclosure">
+        <summary>Show technical details</summary>
+        <p className="muted-copy">{state.code}: {state.message}</p>
+      </details>
     </SectionPanel>
   );
 }

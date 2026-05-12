@@ -67,14 +67,14 @@ export function EvidenceVaultAttachPanel({ initialOptions = [] }: EvidenceVaultA
         </label>
         <label className="evidence-vault-attach__manual">
           <span>ID override</span>
-          <input onChange={(event) => setTargetId(event.target.value)} placeholder="Paste a persisted id" value={targetId} />
+          <input onChange={(event) => setTargetId(event.target.value)} placeholder="Paste a saved id" value={targetId} />
         </label>
       </div>
       <EvidenceTargetSelectionSummary option={findTargetOption(initialOptions, targetType, normalizedTargetId)} targetId={normalizedTargetId} targetType={targetType} />
       {normalizedTargetId ? (
         <EvidenceAttachmentPanel submitLabel="Attach evidence" targetId={normalizedTargetId} targetType={targetType} />
       ) : (
-        <p className="evidence-vault-attach__hint">Choose a persisted target or paste an explicit id before attaching link, note, or file evidence.</p>
+        <p className="evidence-vault-attach__hint">Choose a saved target, or paste a target id, before attaching a link, note, or file.</p>
       )}
     </div>
   );

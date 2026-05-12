@@ -105,7 +105,7 @@ test("projects dashboard renders setup guidance when project memory is not confi
   try {
     const html = await renderProjectsPage();
 
-    assert.match(html, /Project pages are paused/u);
+    assert.match(html, /catalog database is not connected yet/u);
     assert.match(html, /Open system checks/u);
     assert.match(html, /Finish setup to open projects/u);
     assert.doesNotMatch(html, /Motor controller alpha/u);

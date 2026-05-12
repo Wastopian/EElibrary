@@ -7,6 +7,7 @@ import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { fetchApiHealth, fetchWhereUsedSearch, isApiClientError } from "../../lib/api-client";
+import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { CircuitBlockPartSubstitutionPolicy, ProjectPartUsageStatus, WhereUsedAssetExportRecord, WhereUsedCircuitBlockDependencyRecord, WhereUsedProjectUsageRecord, WhereUsedSearchResponse, WhereUsedTargetType } from "@ee-library/shared/types";
@@ -70,7 +71,7 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
             <p className="app-kicker">Where-used</p>
             <h1>Usage and dependency search</h1>
             <p className="projects-hero__lede">
-              Search confirmed project usage and circuit block dependencies from persisted engineering memory.
+              Find every place a part, asset, or circuit block has been used. Past use does not approve a part for a new project.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label="Historical context only" tone="review" />
@@ -86,7 +87,7 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
 
       <section className="detail-section" aria-labelledby="where-used-search-heading">
         <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Connect project memory to search where things are used." : "Find a part, circuit block, connector set, or exported asset and see where it appears."} title="Search memory" />
-        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is paused until project memory is ready." : "Search by part id, part number, circuit block id, or block key."} title={pageState.status === "setup_required" ? "Project memory unavailable" : "Where-used lookup"}>
+        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is paused until projects are connected." : "Search by part id, part number, circuit block id, or block key."} title={pageState.status === "setup_required" ? "Projects unavailable" : "Where-used lookup"}>
           {pageState.status === "setup_required"
             ? <WhereUsedSearchSetupState state={pageState} />
             : <WhereUsedSearchForm query={pageState.status === "ready" ? pageState.response.query : pageState.query} targetType={pageState.status === "ready" ? pageState.response.targetType : pageState.targetType} />}
@@ -237,7 +238,8 @@ function WhereUsedSearchForm({ query, targetType }: { query: string; targetType:
  * Renders setup guidance in place of query controls when project memory is unavailable.
  */
 function WhereUsedSearchSetupState({ state }: { state: Extract<WhereUsedPageState, { status: "setup_required" }> }) {
-  return <EmptyState title="Connect project memory" body={`${state.code}: ${state.message}`} />;
+  const copy = getSetupStateCopy(state.code);
+  return <EmptyState title={copy.headline} body={`${copy.body} (${state.code}: ${state.message})`} />;
 }
 
 /**
@@ -304,13 +306,14 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
   }
 
   if (state.status === "setup_required") {
-    return <EmptyState title="Connect project memory" body={`${state.code}: ${state.message}`} />;
+    const copy = getSetupStateCopy(state.code);
+    return <EmptyState title={copy.headline} body={`${copy.body} (${state.code}: ${state.message})`} />;
   }
 
   const { response } = state;
 
   if (!response.supportedTarget) {
-    return <EmptyState title={`${formatWhereUsedTargetType(response.targetType)} where-used is not backed yet`} body={response.unsupportedReason ?? "This target needs persisted where-used links before results can be claimed."} />;
+    return <EmptyState title={`${formatWhereUsedTargetType(response.targetType)} where-used is not searchable yet`} body={response.unsupportedReason ?? "This kind of target is not searchable yet. Try searching by part number, circuit block, or asset."} />;
   }
 
   if (response.state === "empty") {
@@ -332,7 +335,7 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
       {response.projectUsages.length > 0
         ? <WhereUsedProjectUsageTable records={response.projectUsages} />
         : response.assetExports.length === 0
-          ? <EmptyState title="No confirmed project usage" body="Matched identities may still appear in circuit block dependencies or export bundles even when no project BOM has confirmed usage yet." />
+          ? <EmptyState title="No confirmed project usage" body="This part may still appear in circuit blocks or export bundles below, even if no project BOM has used it yet." />
           : null}
       {response.circuitBlockDependencies.length > 0 ? <WhereUsedCircuitDependencyTable records={response.circuitBlockDependencies} /> : null}
       {response.assetExports.length > 0 ? <WhereUsedAssetExportTable records={response.assetExports} /> : null}

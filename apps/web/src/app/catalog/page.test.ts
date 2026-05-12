@@ -26,7 +26,7 @@ test("catalog page renders setup guidance when API returns DB_NOT_CONFIGURED", a
 
     assert.match(html, /Quick part readiness check unavailable/u);
     assert.match(html, /DB_NOT_CONFIGURED/u);
-    assert.match(html, /Search is paused right now/u);
+    assert.match(html, /catalog database is not connected yet/u);
     assert.match(html, /Search will be available after setup/u);
     assert.match(html, /Finish setup to search parts/u);
     assert.doesNotMatch(html, /Filter the readiness catalog/u);
@@ -35,7 +35,7 @@ test("catalog page renders setup guidance when API returns DB_NOT_CONFIGURED", a
   }
 });
 
-test("catalog page renders compact filter bar and dense results table for mocked DB-backed response", async () => {
+test("catalog page renders compact filter bar and explanation-first list results for mocked DB-backed response", async () => {
   const records = getAllPartRecords();
   const record = records[0];
 
@@ -51,9 +51,9 @@ test("catalog page renders compact filter bar and dense results table for mocked
     assert.match(html, /1 matches/u);
     assert.match(html, /Live catalog/u);
     assert.match(html, /Catalog workbench/u);
-    assert.match(html, /Datasheet/u);
-    assert.match(html, /CAD\/export/u);
-    assert.match(html, /Next action/u);
+    assert.match(html, /File status/u);
+    assert.match(html, /Verification steps/u);
+    assert.match(html, /Connector intelligence/u);
     assert.match(html, /Rows per page/u);
     assert.match(html, /First time here\?/u);
     assert.match(html, /Catalog first-run checklist/u);

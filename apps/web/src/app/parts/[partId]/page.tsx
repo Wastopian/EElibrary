@@ -10,10 +10,12 @@ import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, Statu
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
+import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartWhereUsed, isApiClientError } from "../../../lib/api-client";
+import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../../lib/trust-lineage";
 import type { TrustLineageStageSummary, TrustLineageSummary } from "../../../lib/trust-lineage";
 import {
@@ -187,10 +189,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     <main className="detail-layout">
       <div className="detail-nav-links">
         <Link className="back-link" href="/catalog">
-          &larr; Back to catalog search
+          &larr; Back to catalog
         </Link>
         <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
-          Compare workspace
+          Compare with another part
         </Link>
       </div>
 
@@ -216,7 +218,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               <p className="detail-hero__description">{record.part.description}</p>
             )}
             <TrustLineageStrip summary={trustLineage} />
-            <details className="detail-trust-callout">
+            <details className="detail-trust-callout" id="how-verification-works">
               <summary>How verification works</summary>
               <p>
                 <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
@@ -224,11 +226,26 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             </details>
             <div className="signal-strip" role="group" aria-label="Engineering signals">
               <div className="signal-strip__primary">
-                <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
-                <StatusBadge label={record.approval.summary} tone={approvalStatusTone(record.approval.status)} />
-                <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-                <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
-                <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
+                <div className="signal-strip__cell">
+                  <span className="signal-strip__cell-label">Readiness</span>
+                  <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
+                </div>
+                <div className="signal-strip__cell">
+                  <span className="signal-strip__cell-label">Approval</span>
+                  <StatusBadge label={record.approval.summary} tone={approvalStatusTone(record.approval.status)} />
+                </div>
+                <div className="signal-strip__cell">
+                  <span className="signal-strip__cell-label">Export bundle</span>
+                  <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
+                </div>
+                <div className="signal-strip__cell">
+                  <span className="signal-strip__cell-label">Files</span>
+                  <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
+                </div>
+                <div className="signal-strip__cell">
+                  <span className="signal-strip__cell-label">{connectorSummary ? "Connector" : "Recovery"}</span>
+                  <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
+                </div>
               </div>
               <div className="signal-strip__secondary">
                 <StatusBadge label={record.connectorFamily ? `${record.connectorFamily.name}` : "Non-connector"} tone={record.connectorFamily ? "info" : "neutral"} />
@@ -238,9 +255,9 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </div>
           <div className="detail-hero__status">
             <details className="detail-hero__trust-meter">
-              <summary>Catalog trust score</summary>
-              <TrustMeter label="Catalog trust score" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
-              <p className="muted-copy">A blended score from imported sources. Use the verification steps above for the source of truth before export.</p>
+              <summary>Confidence score</summary>
+              <TrustMeter label="Confidence" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
+              <p className="muted-copy">A rough blended score from imported sources. The verification steps above are what actually gate export.</p>
             </details>
             <DetailUseDecision
               assetTruthSummary={assetTruthSummary}
@@ -249,20 +266,16 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               nextAction={primaryNextAction}
               record={record}
             />
-            <DetailHeroWorkbench approval={record.approval} bundleReadiness={bundleReadiness} connectorOrRecoverySummary={connectorSummary ?? recoverySummary} reviewWorkflowSummary={reviewWorkflowSummary} />
           </div>
         </section>
 
-        <DetailHeroFacts
-          assetCount={record.assets.length}
-          bestMateMapped={Boolean(bestMate)}
-          bundleReadiness={bundleReadiness}
-          generationWorkflowCount={record.generationWorkflows.length}
-          hasConnectorIntelligence={hasConnectorIntelligence}
-          sourceCount={record.sources.length}
-        />
-
         <DetailSectionNav tabs={detailTabs} />
+
+        <PartFilesPanel
+          assetGroups={assetGroups}
+          datasheetAsset={datasheetAsset}
+          partId={record.part.id}
+        />
 
         <WorkspaceActionPanel
           actions={buildPartWorkspaceActions(record, bundleReadiness, whereUsedState)}
@@ -299,19 +312,20 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           <SectionPanel description="Key specs in standard units. Always confirm against the official datasheet before final use." title="Key metrics">
             {metricRows.length > 0 ? <MetricTable rows={metricRows} /> : <EmptyState body="No specs are attached to this part yet." title="No specs" />}
           </SectionPanel>
-          <SectionPanel description="Package outline and dimensions." title="Package">
-            <dl className="dimension-grid">
-              {packageDimensionRows(record.package).map((row) => (
-                <div key={row.label}>
-                  <dt>{row.label}</dt>
-                  <dd className="ui-mono">{row.value}</dd>
-                </div>
-              ))}
-            </dl>
+          <SectionPanel description="Package outline and dimensions. Toggle between millimeters and inches for the unit you build in." title="Package">
+            <PackageDimensions
+              partPackage={{
+                bodyHeightMm: record.package.bodyHeightMm,
+                bodyLengthMm: record.package.bodyLengthMm,
+                bodyWidthMm: record.package.bodyWidthMm,
+                pinCount: record.package.pinCount,
+                pitchMm: record.package.pitchMm
+              }}
+            />
           </SectionPanel>
         </div>
 
-        <SectionPanel description="Datasheet revision info. The PDF status is shown separately." title="Datasheet">
+        <SectionPanel description="Which datasheet revision this part record references. Downloads live in the Files and downloads panel above." title="Datasheet revision">
           <div className="datasheet-panel">
             <div>
               <p className="ui-mono">{record.datasheetRevision?.revisionLabel ?? "No revision"}</p>
@@ -545,9 +559,9 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </SectionPanel>
           <SectionPanel description="Distributor pricing and stock are not connected yet." title="Distributor pricing">
             <div className="detail-unavailable-card" role="status">
-              <StatusBadge label="Unavailable" tone="neutral" />
-              <strong>Supplier pricing and stock are not in the current API contract.</strong>
-              <p>The UI stays explicit here instead of inventing sourcing data. Lifecycle, source import status, and provenance remain the current source of truth.</p>
+              <StatusBadge label="Not connected" tone="neutral" />
+              <strong>Pricing and stock are not shown here.</strong>
+              <p>We do not display live distributor data. Use lifecycle, source import, and provenance below for what is actually known.</p>
             </div>
           </SectionPanel>
         </div>
@@ -576,7 +590,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             ))}
           </div>
         ) : (
-          <EmptyState body="No file-backed assets are attached yet. Use the action above to request or add files." title="No usable files yet" />
+          <EmptyState body="No files yet. Use the action above to request a draft or upload one." title="No usable files yet" />
         )}
         {missingAssetGroups.length > 0 ? (
           <details className="audit-disclosure" style={{ marginTop: 12 }}>
@@ -718,11 +732,13 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
  * Renders setup guidance when detail truth cannot be loaded from the catalog API.
  */
 function PartDetailSetupState({ state }: { state: Extract<PartDetailPageState, { status: "setup_required" }> }) {
+  const copy = getSetupStateCopy(state.code);
+
   return (
     <main className="detail-layout">
       <div className="detail-nav-links">
         <Link className="back-link" href="/catalog">
-          &larr; Back to catalog search
+          &larr; Back to catalog
         </Link>
       </div>
 
@@ -730,10 +746,27 @@ function PartDetailSetupState({ state }: { state: Extract<PartDetailPageState, {
         <SectionHeading
           id="part-detail-setup-heading"
           index="01"
-          subtitle="Connect the catalog database to view this part."
-          title="Catalog detail unavailable"
+          subtitle={copy.body}
+          title={copy.headline}
         />
-        <SectionPanel description="Real data only. We do not fill in guessed details." title="Connect the catalog database">
+        <SectionPanel description="Once the catalog is reachable, this part record will load on its own." title="What you can do now">
+          <div className="setup-steps">
+            <div>
+              <strong>Try again in a moment</strong>
+              <span>If you opened this from a link, refresh after a minute.</span>
+            </div>
+            <div>
+              <strong>Check service status</strong>
+              <span>Open <Link href="/system">System</Link> to see what is offline.</span>
+            </div>
+            <div>
+              <strong>Need an admin?</strong>
+              <span>Share the technical details below so they can bring the catalog online.</span>
+            </div>
+          </div>
+        </SectionPanel>
+        <details className="audit-disclosure detail-audit-disclosure">
+          <summary>Show technical details</summary>
           <div className="setup-steps">
             <div>
               <strong>Detail read failed</strong>
@@ -747,8 +780,8 @@ function PartDetailSetupState({ state }: { state: Extract<PartDetailPageState, {
               <code>npm run dev</code>
             </div>
           </div>
-        </SectionPanel>
-        <SectionPanel description="Usage history is loaded separately." title="Where-used side channel">
+        </details>
+        <SectionPanel description="Usage history loads separately, so it can still appear here." title="Project usage history">
           <PartWhereUsedPanel state={state.whereUsedState} />
         </SectionPanel>
       </section>
@@ -775,7 +808,7 @@ async function loadPartWhereUsed(partId: string): Promise<PartWhereUsedState> {
 
     return {
       code: "WHERE_USED_UNAVAILABLE",
-      message: "Where-used history could not be read from project memory.",
+      message: "Where-used history could not be read from projects.",
       status: "unavailable"
     };
   }
@@ -788,7 +821,7 @@ function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   if (state.status === "unavailable") {
     return (
       <EmptyState
-        body={`Confirmed where-used history requires project memory to be available. ${state.message}`}
+        body={`Confirmed where-used history requires projects to be available. ${state.message}`}
         title="Where-used unavailable"
       />
     );
@@ -911,6 +944,88 @@ function DetailUseDecision({
   );
 }
 
+/** PartFilesRow describes one row of the Files and downloads panel. */
+type PartFilesRow = {
+  format: string | null | undefined;
+  href: string | undefined;
+  label: string;
+  status: { label: string; tone: BadgeTone };
+};
+
+/**
+ * Renders the Files and downloads panel near the top of the part detail page so
+ * cross-discipline engineers can find datasheets, footprints, symbols, and 3D
+ * models without scrolling past the trust workflow. Only verified or
+ * file-backed assets receive a download link.
+ */
+function PartFilesPanel({
+  assetGroups,
+  datasheetAsset,
+  partId
+}: {
+  assetGroups: AssetClassSummary[];
+  datasheetAsset: Asset | undefined;
+  partId: string;
+}) {
+  const datasheetRow: PartFilesRow = datasheetAsset
+    ? {
+        format: datasheetAsset.fileFormat,
+        href: isFileBackedAsset(datasheetAsset) ? buildAssetDownloadUrl(partId, datasheetAsset.id) : undefined,
+        label: "Datasheet",
+        status: isFileBackedAsset(datasheetAsset)
+          ? { label: "PDF stored", tone: "verified" }
+          : { label: datasheetAssetLabel(datasheetAsset), tone: "review" }
+      }
+    : { format: undefined, href: undefined, label: "Datasheet", status: { label: "Not attached", tone: "neutral" } };
+
+  const assetRows: PartFilesRow[] = assetGroups.map((group) => {
+    const best = group.bestAsset;
+    if (!best) {
+      return {
+        format: undefined,
+        href: undefined,
+        label: assetTypeLabel(group.assetType),
+        status: { label: "Not yet generated", tone: "neutral" }
+      };
+    }
+    const downloadable = best.availabilityStatus !== "missing" && best.availabilityStatus !== "failed";
+    return {
+      format: best.fileFormat,
+      href: downloadable ? buildAssetDownloadUrl(best.partId, best.id) : undefined,
+      label: assetTypeLabel(group.assetType),
+      status: { label: formatAssetClassReadinessLabel(group.readiness), tone: assetClassReadinessTone(group.readiness) }
+    };
+  });
+
+  const rows = [datasheetRow, ...assetRows];
+
+  return (
+    <SectionPanel
+      description="Datasheet PDF, 3D model, footprint, and symbol with one click each. Generated drafts stay labeled; only verified files unlock export."
+      title="Files and downloads"
+    >
+      <ul className="part-files-list">
+        {rows.map((row) => (
+          <li className="part-files-list__row" key={row.label}>
+            <div className="part-files-list__identity">
+              <strong>{row.label}</strong>
+              {row.format ? <span className="ui-mono part-files-list__format">{row.format}</span> : null}
+            </div>
+            <StatusBadge label={row.status.label} tone={row.status.tone} />
+            {row.href ? (
+              <a className="button-link button-link--quiet part-files-list__action" href={row.href} rel="noopener noreferrer" target="_blank">
+                Download
+              </a>
+            ) : (
+              <span className="muted-copy part-files-list__action">No file yet</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </SectionPanel>
+  );
+}
+
 /**
  * Renders the explanation-first readiness record summary using existing view-model signals.
  */
@@ -969,7 +1084,7 @@ function DetailReadinessSummary({
           <p>Whole-part approval remains separate from generated asset review and explicit export promotion.</p>
         </div>
         <div>
-          <span>Asset truth</span>
+          <span>File status</span>
           <p>{quickReadinessSummary.detail}</p>
         </div>
       </div>
@@ -1160,94 +1275,6 @@ function DetailCompletenessChecklist({ items }: { items: DetailCompletenessCheck
         </article>
       ))}
     </div>
-  );
-}
-
-/**
- * Renders dense overview facts under the hero so engineers can scan record scope before scrolling.
- */
-function DetailHeroFacts({
-  assetCount,
-  bestMateMapped,
-  bundleReadiness,
-  generationWorkflowCount,
-  hasConnectorIntelligence,
-  sourceCount
-}: {
-  assetCount: number;
-  bestMateMapped: boolean;
-  bundleReadiness: { label: string };
-  generationWorkflowCount: number;
-  hasConnectorIntelligence: boolean;
-  sourceCount: number;
-}) {
-  return (
-    <section aria-label="Record scope facts" className="detail-hero-facts">
-      <div>
-        <span>Source rows</span>
-        <strong>{sourceCount}</strong>
-        <p>Provider identities currently attached to this record.</p>
-      </div>
-      <div>
-        <span>Asset rows</span>
-        <strong>{assetCount}</strong>
-        <p>Engineering assets across datasheet, symbol, footprint, drawing, and 3D.</p>
-      </div>
-      <div>
-        <span>Bundle gate</span>
-        <strong>{bundleReadiness.label}</strong>
-        <p>Export still follows verified file-backed truth, not review alone.</p>
-      </div>
-      <div>
-        <span>Generation workflows</span>
-        <strong>{generationWorkflowCount}</strong>
-        <p>Tracked requests and generated drafts remain separate from stored assets.</p>
-      </div>
-      <div>
-        <span>{hasConnectorIntelligence ? "Best mate" : "Connector intelligence"}</span>
-        <strong>{hasConnectorIntelligence ? (bestMateMapped ? "Mapped" : "Missing") : "Not applicable"}</strong>
-        <p>{hasConnectorIntelligence ? "Stored mate mapping stays visible before layout decisions." : "This part does not expose connector-specific relationship data."}</p>
-      </div>
-    </section>
-  );
-}
-
-/**
- * Renders a compact decision rail beside the part hero so engineers can scan the current state quickly.
- */
-function DetailHeroWorkbench({
-  approval,
-  bundleReadiness,
-  connectorOrRecoverySummary,
-  reviewWorkflowSummary
-}: {
-  approval: PartDetailPageRecord["approval"];
-  bundleReadiness: { label: string; reason: string; state: BundleReadinessState };
-  connectorOrRecoverySummary: NonNullable<ReturnType<typeof getConnectorWorkflowSummary>> | ReturnType<typeof getRecoveryWorkflowSummary>;
-  reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
-}) {
-  return (
-    <section aria-label="Top-level decision rail" className="detail-workbench-rail">
-      <div className="detail-workbench-rail__card">
-        <span>Bundle gate</span>
-        <strong>{bundleReadiness.label}</strong>
-        <p>{bundleReadiness.reason}</p>
-      </div>
-      <div className="detail-workbench-rail__card">
-        <span>Connector or recovery</span>
-        <strong>{connectorOrRecoverySummary.label}</strong>
-        <p>{connectorOrRecoverySummary.detail}</p>
-      </div>
-      <div className="detail-workbench-rail__card">
-        <span>Approval and review</span>
-        <strong>{approval.summary}</strong>
-        <p>{approval.detail}</p>
-        <div className="detail-workbench-rail__badges">
-          <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
-          <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -1507,7 +1534,7 @@ function buildPartWorkspaceActions(record: PartDetailPageRecord, bundleReadiness
       body: "Find confirmed project usage and BOM history for this exact internal part.",
       href: buildWhereUsedHref("part", record.part.id),
       label: "Check where-used",
-      signal: whereUsedCount === null ? "Project memory" : `${whereUsedCount} known`
+      signal: whereUsedCount === null ? "Projects" : `${whereUsedCount} known`
     },
     {
       body: "Attach review notes, links, or file evidence to this part without changing approval.",
@@ -1517,8 +1544,8 @@ function buildPartWorkspaceActions(record: PartDetailPageRecord, bundleReadiness
     },
     {
       body: connectorClass === "non_connector"
-        ? "Browse connector memory if this part becomes part of a reusable connector set."
-        : "Open connector memory filtered to this connector class and MPN.",
+        ? "Browse connector sets if this part becomes part of a reusable connector set."
+        : "Open connector sets filtered to this connector class and MPN.",
       href: buildConnectorSetHref(record),
       label: connectorClass === "non_connector" ? "Browse connector sets" : "Review connector set",
       signal: formatConnectorClassSignal(connectorClass)
@@ -2111,26 +2138,6 @@ function buildUseDecision(record: PartDetailPageRecord): { detail: string; headl
     label: "Unknown",
     tone: "neutral"
   };
-}
-
-/**
- * Builds display rows for normalized package dimensions.
- */
-function packageDimensionRows(partPackage: Package) {
-  return [
-    { label: "Pins", value: partPackage.pinCount?.toString() ?? "Unknown" },
-    { label: "Pitch", value: formatMillimeters(partPackage.pitchMm) },
-    { label: "Body length", value: formatMillimeters(partPackage.bodyLengthMm) },
-    { label: "Body width", value: formatMillimeters(partPackage.bodyWidthMm) },
-    { label: "Body height", value: formatMillimeters(partPackage.bodyHeightMm) }
-  ];
-}
-
-/**
- * Formats a nullable millimeter value without pretending unknowns are zero.
- */
-function formatMillimeters(value: number | null): string {
-  return value === null ? "Unknown" : `${value} mm`;
 }
 
 /**
