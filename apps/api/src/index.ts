@@ -26,7 +26,8 @@ import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessi
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
 import type { AuditEventListFilters } from "./audit-log";
-import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
+import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
+import type { AssetDownloadGrant } from "./document-control";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
@@ -713,7 +714,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   if (assetDownloadMatch?.[1] && assetDownloadMatch[2]) {
-    await handleAssetDownload(response, decodeURIComponent(assetDownloadMatch[1]), decodeURIComponent(assetDownloadMatch[2]), url);
+    await handleAssetDownload(request, response, decodeURIComponent(assetDownloadMatch[1]), decodeURIComponent(assetDownloadMatch[2]), url);
     return;
   }
 
@@ -3171,12 +3172,18 @@ function inferStorageContentType(ext: string): string {
 
 /**
  * Redirects to source_url for referenced assets, or reports why a file is not accessible.
- * Restricted and ITAR-controlled assets require an explicit `?ack=1` acknowledgment
- * in the URL so the caller cannot accidentally download a controlled file without
- * intentional intent. Every gating decision lands in the audit-events stream via the
- * middleware capture path.
+ *
+ * For restricted and ITAR-controlled assets the gate is consulted in this order:
+ *   1. If the actor has a `view` or `admin` ACL grant on the gating revision, the
+ *      download is authorized without acknowledgment.
+ *   2. Otherwise, if the actor has the system `admin` role and the request includes
+ *      `?ack=1`, the download is authorized as an admin override.
+ *   3. Otherwise the request is denied with HTTP 403 ASSET_DOWNLOAD_GATED.
+ *
+ * Every decision lands in the audit-events stream via the middleware capture path,
+ * with grant or override context recorded in the audit metadata.
  */
-async function handleAssetDownload(response: ServerResponse, partId: string, assetId: string, url: URL): Promise<void> {
+async function handleAssetDownload(request: IncomingMessage, response: ServerResponse, partId: string, assetId: string, url: URL): Promise<void> {
   try {
     const result = await timeRouteOperation(response, "asset-download-read", () => readAssetDownloadTargetFromDatabase(partId, assetId), (value) => value.status);
 
@@ -3214,20 +3221,39 @@ async function handleAssetDownload(response: ServerResponse, partId: string, ass
     const gateResult = await readAssetDownloadGateFromDatabase(assetId);
 
     if (gateResult.status === "decided" && gateResult.gate.status === "gated") {
-      const acknowledged = url.searchParams.get("ack") === "1";
+      const session = readSessionFromRequest(request);
+      const gate = gateResult.gate;
+      const aclResult = await readAssetDownloadAclGrant(gate.revisionId, {
+        userId: session?.sub ?? null,
+        role: session?.role ?? null
+      });
 
-      if (!acknowledged) {
+      const hasAclGrant = aclResult.status === "granted";
+      const acknowledged = url.searchParams.get("ack") === "1";
+      const isAdminOverride = !hasAclGrant && session?.role === "admin" && acknowledged;
+
+      if (!hasAclGrant && !isAdminOverride) {
+        const reason = session?.sub
+          ? "No ACL grant authorizes this user, and admin override requires ?ack=1."
+          : "No session attached and the gate cannot fall back to admin override.";
         sendJson(response, 403, {
           error: {
             code: "ASSET_DOWNLOAD_GATED",
-            message: `This asset is ${gateResult.gate.accessLevel.replace("_", " ")}. The current controlled revision is "${gateResult.gate.revisionLabel}" (${gateResult.gate.documentType}). Resubmit the download with ?ack=1 to acknowledge the restriction.`,
-            accessLevel: gateResult.gate.accessLevel,
-            revisionLabel: gateResult.gate.revisionLabel,
-            documentType: gateResult.gate.documentType
+            message: `This asset is ${gate.accessLevel.replace("_", " ")}. The current controlled revision is "${gate.revisionLabel}" (${gate.documentType}). ${reason}`,
+            accessLevel: gate.accessLevel,
+            revisionLabel: gate.revisionLabel,
+            documentType: gate.documentType,
+            grantStatus: hasAclGrant ? "granted" : "no_grant"
           }
         });
         return;
       }
+
+      // Surface the grant or override path in response headers so the middleware
+      // capture can attach it to the audit event metadata (the middleware reads
+      // X-EE-* headers as part of its request context).
+      const grant: AssetDownloadGrant | { status: "admin_override" } = hasAclGrant ? aclResult.grant : { status: "admin_override" };
+      response.setHeader("X-EE-Asset-Gate-Grant", grant.status);
     }
 
     if (result.status === "redirect") {
