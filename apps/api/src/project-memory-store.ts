@@ -2,7 +2,7 @@
  * File header: Reads persisted project and BOM memory records from Postgres for the API service.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { BomCsvParseError, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
@@ -42,6 +42,12 @@ import type {
   ProjectRevisionCompareResponse,
   ProjectRevisionCompareRow,
   ProjectRevisionCompareSide,
+  ProjectRevisionApprovalGate,
+  ProjectRevisionApprovalGateDiffSummary,
+  ProjectRevisionApprovalGateListResponse,
+  ProjectRevisionApprovalGateRequest,
+  ProjectRevisionApprovalGateResponse,
+  ProjectRevisionApprovalGateStatus,
   CircuitBlock,
   CircuitBlockCreateInput,
   CircuitBlockCreateResponse,
@@ -357,6 +363,19 @@ export type ProjectRevisionCompareReadResult =
   | { status: "not_configured" }
   | { status: "not_found"; code: string; message: string };
 
+/** ProjectRevisionApprovalGateListReadResult reports persisted BOM approval gates for one project. */
+export type ProjectRevisionApprovalGateListReadResult =
+  | { status: "available"; response: ProjectRevisionApprovalGateListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** ProjectRevisionApprovalGateActionResult reports one gate open/approval/request-changes action. */
+export type ProjectRevisionApprovalGateActionResult =
+  | { status: "applied"; response: ProjectRevisionApprovalGateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
 /** CircuitBlockProjectDependenciesReadResult reports projects that use parts from one circuit block. */
 export type CircuitBlockProjectDependenciesReadResult =
   | { status: "available"; dependencies: CircuitBlockProjectDependency[] }
@@ -420,6 +439,12 @@ const PROJECT_MEMORY_CAPABILITIES: ProjectMemoryCapability[] = [
     state: "foundation"
   },
   {
+    detail: "Revision approval gates preserve the exact BOM diff fingerprint an engineer reviewed without changing part approval or export readiness.",
+    id: "revision_approval_gates",
+    label: "Revision approval gates",
+    state: "foundation"
+  },
+  {
     detail: "Evidence attachment metadata can be preserved for projects, parts, BOM rows, usage, assets, and risk findings without changing trust state.",
     id: "evidence_vault",
     label: "Evidence vault",
@@ -466,6 +491,23 @@ interface DatabaseProjectRevisionRow {
   revision_status: ProjectRevision["revisionStatus"];
   source_reference: string | null;
   released_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+/** DatabaseProjectRevisionApprovalGateRow is the persisted BOM approval gate shape. */
+interface DatabaseProjectRevisionApprovalGateRow {
+  id: string;
+  project_id: string;
+  from_project_revision_id: string;
+  to_project_revision_id: string;
+  gate_status: ProjectRevisionApprovalGateStatus;
+  diff_fingerprint: string;
+  diff_summary: unknown;
+  decision_notes: string;
+  created_by: string;
+  decided_by: string | null;
+  decided_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -6243,28 +6285,63 @@ export async function readProjectRevisionCompareFromDatabase(
       readAggregatedRevisionLines(databasePool, toRevisionId)
     ]);
 
-    const rows = diffAggregatedRevisionLines(fromLines, toLines);
-
     return {
       status: "available",
-      response: {
-        addedCount: rows.filter((row) => row.changeKind === "added").length,
-        designatorChangedCount: rows.filter((row) => row.changeKind === "designator_changed").length,
-        fromBomImportIds: collectBomImportIds(fromLines),
+      response: buildProjectRevisionCompareResponseFromLines({
+        fromLines,
         fromRevisionId,
-        mpnSwapCount: rows.filter((row) => row.changeKind === "mpn_swap").length,
         projectId,
-        quantityChangedCount: rows.filter((row) => row.changeKind === "quantity_changed").length,
-        removedCount: rows.filter((row) => row.changeKind === "removed").length,
-        rows,
-        toBomImportIds: collectBomImportIds(toLines),
-        toRevisionId,
-        unchangedCount: rows.filter((row) => row.changeKind === "unchanged").length
-      }
+        toLines,
+        toRevisionId
+      })
     };
   } catch (error) {
     throw new CatalogStoreError("query_failed", "Project revision compare read failed.", error);
   }
+}
+
+/**
+ * Builds the public compare response from already-aggregated revision lines.
+ */
+function buildProjectRevisionCompareResponseFromLines({
+  fromLines,
+  fromRevisionId,
+  projectId,
+  toLines,
+  toRevisionId
+}: {
+  fromLines: Map<string, AggregatedRevisionLine>;
+  fromRevisionId: string;
+  projectId: string;
+  toLines: Map<string, AggregatedRevisionLine>;
+  toRevisionId: string;
+}): ProjectRevisionCompareResponse {
+  const rows = diffAggregatedRevisionLines(fromLines, toLines);
+
+  return {
+    addedCount: countProjectRevisionCompareRows(rows, "added"),
+    designatorChangedCount: countProjectRevisionCompareRows(rows, "designator_changed"),
+    fromBomImportIds: collectBomImportIds(fromLines),
+    fromRevisionId,
+    mpnSwapCount: countProjectRevisionCompareRows(rows, "mpn_swap"),
+    projectId,
+    quantityChangedCount: countProjectRevisionCompareRows(rows, "quantity_changed"),
+    removedCount: countProjectRevisionCompareRows(rows, "removed"),
+    rows,
+    toBomImportIds: collectBomImportIds(toLines),
+    toRevisionId,
+    unchangedCount: countProjectRevisionCompareRows(rows, "unchanged")
+  };
+}
+
+/**
+ * Counts compare rows for one change kind while keeping compare response assembly deterministic.
+ */
+function countProjectRevisionCompareRows(
+  rows: ProjectRevisionCompareResponse["rows"],
+  changeKind: ProjectRevisionCompareResponse["rows"][number]["changeKind"]
+): number {
+  return rows.filter((row) => row.changeKind === changeKind).length;
 }
 
 /**
@@ -6562,6 +6639,384 @@ function collectBomImportIds(lines: Map<string, AggregatedRevisionLine>): string
     }
   }
   return Array.from(ids).sort();
+}
+
+// ---------------------------------------------------------------------------
+// Versioned BOM approval gates
+// ---------------------------------------------------------------------------
+
+/** PROJECT_REVISION_APPROVAL_GATE_BOUNDARY_COPY keeps the gate scope narrow and auditable. */
+const PROJECT_REVISION_APPROVAL_GATE_BOUNDARY_COPY =
+  "A BOM approval gate records review of one computed revision diff only. It does not approve parts, validate evidence, release the revision, or unlock export.";
+
+/**
+ * Reads every persisted BOM revision approval gate for one project.
+ */
+export async function readProjectRevisionApprovalGatesFromDatabase(projectId: string): Promise<ProjectRevisionApprovalGateListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await projectExists(databasePool, projectId))) {
+      return { status: "not_found" };
+    }
+
+    const result = await databasePool.query<DatabaseProjectRevisionApprovalGateRow>(
+      `
+        SELECT
+          id,
+          project_id,
+          from_project_revision_id,
+          to_project_revision_id,
+          gate_status,
+          diff_fingerprint,
+          diff_summary,
+          decision_notes,
+          created_by,
+          decided_by,
+          decided_at,
+          created_at,
+          updated_at
+        FROM project_revision_approval_gates
+        WHERE project_id = $1
+        ORDER BY updated_at DESC, id ASC
+      `,
+      [projectId]
+    );
+
+    const gates: ProjectRevisionApprovalGate[] = [];
+    for (const row of result.rows) {
+      gates.push(mapProjectRevisionApprovalGateRow(row, await isRevisionApprovalGateCurrent(databasePool, row)));
+    }
+
+    return {
+      status: "available",
+      response: {
+        boundary: PROJECT_REVISION_APPROVAL_GATE_BOUNDARY_COPY,
+        gates,
+        projectId,
+        state: gates.length > 0 ? "available" : "empty"
+      }
+    };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Project revision approval gate read failed.", error);
+  }
+}
+
+/**
+ * Creates or updates the approval gate for the current revision diff fingerprint.
+ */
+export async function upsertProjectRevisionApprovalGateInDatabase(
+  projectId: string,
+  input: ProjectRevisionApprovalGateRequest,
+  actor: string
+): Promise<ProjectRevisionApprovalGateActionResult> {
+  const validation = validateProjectRevisionApprovalGateInput(input);
+  if (validation) {
+    return validation;
+  }
+
+  const compareResult = await readProjectRevisionCompareFromDatabase(projectId, input.fromRevisionId, input.toRevisionId);
+  if (compareResult.status !== "available") {
+    return compareResult;
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const approvalBlockers = input.decision === "approve"
+    ? await collectRevisionApprovalBlockers(databasePool, input.toRevisionId, compareResult.response)
+    : [];
+  if (approvalBlockers.length > 0) {
+    return {
+      code: "APPROVAL_GATE_BLOCKED",
+      message: `BOM revision approval is blocked: ${approvalBlockers.join(" ")}`,
+      status: "invalid"
+    };
+  }
+
+  const diffSummary = buildProjectRevisionApprovalGateDiffSummary(compareResult.response);
+  const diffFingerprint = buildProjectRevisionDiffFingerprint(compareResult.response);
+  const gateStatus = mapApprovalGateDecisionToStatus(input.decision);
+  const now = new Date();
+  const decidedBy = input.decision === "open" ? null : actor;
+  const decidedAt = input.decision === "open" ? null : now;
+  const decisionNotes = (input.notes ?? "").trim();
+
+  try {
+    const result = await databasePool.query<DatabaseProjectRevisionApprovalGateRow>(
+      `
+        INSERT INTO project_revision_approval_gates (
+          id,
+          project_id,
+          from_project_revision_id,
+          to_project_revision_id,
+          gate_status,
+          diff_fingerprint,
+          diff_summary,
+          decision_notes,
+          created_by,
+          decided_by,
+          decided_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $12)
+        ON CONFLICT (project_id, from_project_revision_id, to_project_revision_id, diff_fingerprint)
+        DO UPDATE SET
+          gate_status = EXCLUDED.gate_status,
+          diff_summary = EXCLUDED.diff_summary,
+          decision_notes = EXCLUDED.decision_notes,
+          decided_by = EXCLUDED.decided_by,
+          decided_at = EXCLUDED.decided_at,
+          updated_at = EXCLUDED.updated_at
+        RETURNING
+          id,
+          project_id,
+          from_project_revision_id,
+          to_project_revision_id,
+          gate_status,
+          diff_fingerprint,
+          diff_summary,
+          decision_notes,
+          created_by,
+          decided_by,
+          decided_at,
+          created_at,
+          updated_at
+      `,
+      [
+        randomUUID(),
+        projectId,
+        input.fromRevisionId,
+        input.toRevisionId,
+        gateStatus,
+        diffFingerprint,
+        JSON.stringify(diffSummary),
+        decisionNotes,
+        actor,
+        decidedBy,
+        decidedAt,
+        now
+      ]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("Approval gate upsert returned no row.");
+    }
+
+    const isCurrent = await isRevisionApprovalGateCurrent(databasePool, row);
+
+    return {
+      status: "applied",
+      response: {
+        boundary: PROJECT_REVISION_APPROVAL_GATE_BOUNDARY_COPY,
+        compare: compareResult.response,
+        gate: mapProjectRevisionApprovalGateRow(row, isCurrent)
+      }
+    };
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Project revision approval gate write failed.", error);
+  }
+}
+
+/**
+ * Validates a gate request before computing the diff.
+ */
+function validateProjectRevisionApprovalGateInput(
+  input: ProjectRevisionApprovalGateRequest
+): { status: "invalid"; code: string; message: string } | null {
+  if (!input || typeof input.fromRevisionId !== "string" || input.fromRevisionId.trim().length === 0) {
+    return {
+      code: "FROM_REVISION_REQUIRED",
+      message: "BOM approval gate requires a fromRevisionId.",
+      status: "invalid"
+    };
+  }
+  if (typeof input.toRevisionId !== "string" || input.toRevisionId.trim().length === 0) {
+    return {
+      code: "TO_REVISION_REQUIRED",
+      message: "BOM approval gate requires a toRevisionId.",
+      status: "invalid"
+    };
+  }
+  if (input.decision !== "open" && input.decision !== "approve" && input.decision !== "request_changes") {
+    return {
+      code: "INVALID_GATE_DECISION",
+      message: "BOM approval gate decision must be open, approve, or request_changes.",
+      status: "invalid"
+    };
+  }
+  return null;
+}
+
+/**
+ * Maps an operator action into the persisted gate status.
+ */
+function mapApprovalGateDecisionToStatus(decision: ProjectRevisionApprovalGateRequest["decision"]): ProjectRevisionApprovalGateStatus {
+  if (decision === "approve") {
+    return "approved";
+  }
+  if (decision === "request_changes") {
+    return "changes_requested";
+  }
+  return "pending_review";
+}
+
+/**
+ * Collects hard blockers for marking a revision diff approved.
+ */
+async function collectRevisionApprovalBlockers(
+  databasePool: Pool | PoolClient,
+  revisionId: string,
+  compare: ProjectRevisionCompareResponse
+): Promise<string[]> {
+  const blockers: string[] = [];
+
+  if (compare.toBomImportIds.length === 0) {
+    blockers.push("The target revision has no BOM imports.");
+  }
+
+  const unresolved = await databasePool.query<{ match_status: BomLineMatchStatus; line_count: string | number }>(
+    `
+      SELECT match_status, COUNT(*)::text AS line_count
+      FROM bom_lines
+      WHERE project_revision_id = $1
+        AND match_status IN ('unmatched', 'weak_match', 'ambiguous')
+      GROUP BY match_status
+      ORDER BY match_status ASC
+    `,
+    [revisionId]
+  );
+
+  for (const row of unresolved.rows) {
+    blockers.push(`${toNumber(row.line_count)} ${row.match_status.replace(/_/gu, " ")} row(s) remain on the target revision.`);
+  }
+
+  return blockers;
+}
+
+/**
+ * Builds the compact summary stored with the approval gate.
+ */
+function buildProjectRevisionApprovalGateDiffSummary(compare: ProjectRevisionCompareResponse): ProjectRevisionApprovalGateDiffSummary {
+  const totalChangedCount =
+    compare.addedCount +
+    compare.removedCount +
+    compare.mpnSwapCount +
+    compare.quantityChangedCount +
+    compare.designatorChangedCount;
+
+  return {
+    addedCount: compare.addedCount,
+    designatorChangedCount: compare.designatorChangedCount,
+    fromBomImportIds: compare.fromBomImportIds,
+    mpnSwapCount: compare.mpnSwapCount,
+    quantityChangedCount: compare.quantityChangedCount,
+    removedCount: compare.removedCount,
+    toBomImportIds: compare.toBomImportIds,
+    totalChangedCount,
+    unchangedCount: compare.unchangedCount
+  };
+}
+
+/**
+ * Hashes the exact compare payload that a gate decision reviewed.
+ */
+function buildProjectRevisionDiffFingerprint(compare: ProjectRevisionCompareResponse): string {
+  const payload = {
+    fromBomImportIds: compare.fromBomImportIds,
+    fromRevisionId: compare.fromRevisionId,
+    projectId: compare.projectId,
+    rows: compare.rows.map((row) => ({
+      changeDetail: row.changeDetail,
+      changeKind: row.changeKind,
+      from: row.from,
+      identityKey: row.identityKey,
+      identityKind: row.identityKind,
+      matchedPartId: row.matchedPartId,
+      rawMpn: row.rawMpn,
+      to: row.to
+    })),
+    toBomImportIds: compare.toBomImportIds,
+    toRevisionId: compare.toRevisionId
+  };
+
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+/**
+ * Checks whether a persisted gate still matches the current diff between its two revisions.
+ */
+async function isRevisionApprovalGateCurrent(
+  databasePool: Pool | PoolClient,
+  row: DatabaseProjectRevisionApprovalGateRow
+): Promise<boolean> {
+  try {
+    const currentFromLines = await readAggregatedRevisionLines(databasePool, row.from_project_revision_id);
+    const currentToLines = await readAggregatedRevisionLines(databasePool, row.to_project_revision_id);
+    const currentCompare = buildProjectRevisionCompareResponseFromLines({
+      fromLines: currentFromLines,
+      fromRevisionId: row.from_project_revision_id,
+      projectId: row.project_id,
+      toLines: currentToLines,
+      toRevisionId: row.to_project_revision_id
+    });
+
+    return buildProjectRevisionDiffFingerprint(currentCompare) === row.diff_fingerprint;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Maps a database gate row into the shared response shape.
+ */
+function mapProjectRevisionApprovalGateRow(
+  row: DatabaseProjectRevisionApprovalGateRow,
+  isCurrent: boolean
+): ProjectRevisionApprovalGate {
+  return {
+    createdAt: toIsoTimestamp(row.created_at),
+    createdBy: row.created_by,
+    decidedAt: row.decided_at ? toIsoTimestamp(row.decided_at) : null,
+    decidedBy: row.decided_by,
+    decisionNotes: row.decision_notes,
+    diffFingerprint: row.diff_fingerprint,
+    diffSummary: mapApprovalGateDiffSummary(row.diff_summary),
+    fromRevisionId: row.from_project_revision_id,
+    gateStatus: row.gate_status,
+    id: row.id,
+    isCurrent,
+    projectId: row.project_id,
+    toRevisionId: row.to_project_revision_id,
+    updatedAt: toIsoTimestamp(row.updated_at)
+  };
+}
+
+/**
+ * Normalizes diff summary JSON into numbers and arrays for API consumers.
+ */
+function mapApprovalGateDiffSummary(value: unknown): ProjectRevisionApprovalGateDiffSummary {
+  const record = toRecord(value);
+
+  return {
+    addedCount: Number(record["addedCount"] ?? 0),
+    designatorChangedCount: Number(record["designatorChangedCount"] ?? 0),
+    fromBomImportIds: toStringArray(record["fromBomImportIds"]),
+    mpnSwapCount: Number(record["mpnSwapCount"] ?? 0),
+    quantityChangedCount: Number(record["quantityChangedCount"] ?? 0),
+    removedCount: Number(record["removedCount"] ?? 0),
+    toBomImportIds: toStringArray(record["toBomImportIds"]),
+    totalChangedCount: Number(record["totalChangedCount"] ?? 0),
+    unchangedCount: Number(record["unchangedCount"] ?? 0)
+  };
 }
 
 /**

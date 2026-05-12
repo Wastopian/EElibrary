@@ -5,7 +5,7 @@
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { extname, basename } from "node:path";
 import { performance } from "node:perf_hooks";
 import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
@@ -22,14 +22,18 @@ import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
 import { buildProjectFilesResponse, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
-import { assertAuthSecretConfigured, isAuthError, readOptionalSession, requireAdmin } from "./auth";
+import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
-import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase } from "./project-memory-store";
+import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
+import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
   ApprovalBatchAction,
   ApprovalBatchRequest,
+  AuditEventMetadata,
+  AuditEventTargetType,
   AssetPromotionInput,
   BomImportCreateInput,
   BomImportPreviewInput,
@@ -44,6 +48,16 @@ import type {
   CircuitBlockType,
   CircuitBlockUpdateInput,
   ConnectorClass,
+  DocumentAccessLevel,
+  DocumentAclPermission,
+  DocumentAclPrincipalType,
+  DocumentControlType,
+  DocumentRedlineCreateInput,
+  DocumentRedlineSeverity,
+  DocumentRedlineStatus,
+  DocumentRedlineUpdateInput,
+  DocumentRevisionCreateInput,
+  DocumentRevisionLifecycleStatus,
   EvidenceAttachmentCreateInput,
   EvidenceAttachmentFileUploadInput,
   EvidenceAttachmentListFilters,
@@ -71,6 +85,7 @@ import type {
   PartSubstitutionCreateInput,
   ProjectCreateInput,
   ProjectFileUploadInput,
+  ProjectRevisionApprovalGateRequest,
   VendorCreateInput,
   VendorFileUploadInput,
   ProjectRevisionStatus,
@@ -120,8 +135,27 @@ interface RouteTelemetry {
   timings: RouteTiming[];
 }
 
+/** RequestAuditContext carries a request id until the middleware writes an audit event. */
+interface RequestAuditContext {
+  /** Stable request id returned in headers and persisted to audit_events. */
+  requestId: string;
+}
+
+/** AuditRouteDescriptor is the route-level target/action classification saved for unsafe methods. */
+interface AuditRouteDescriptor {
+  /** Provider-neutral action label, usually derived from the API operation. */
+  action: string;
+  /** Broad target family for future RBAC and ECO policies. */
+  targetType: AuditEventTargetType;
+  /** Best-effort target id from route params, without reading request bodies. */
+  targetId: string | null;
+}
+
 /** responseTelemetry carries request timing state until sendJson writes the response. */
 const responseTelemetry = new WeakMap<ServerResponse, RouteTelemetry>();
+
+/** requestAuditContexts carries immutable request ids until the audit middleware flushes. */
+const requestAuditContexts = new WeakMap<ServerResponse, RequestAuditContext>();
 
 /**
  * Handles every incoming HTTP request with explicit route boundaries.
@@ -134,15 +168,21 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
   beginRouteTelemetry(response, request.method ?? "UNKNOWN", url.pathname);
+  beginRequestAuditContext(response, request);
   const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(url.pathname);
   const providerAcquisitionJobMatch = /^\/provider-acquisition-jobs\/([^/]+)$/u.exec(url.pathname);
+  const auditEventsMatch = /^\/audit-events$/u.exec(url.pathname);
   const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(url.pathname);
   const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
+  const partDocumentRevisionsMatch = /^\/parts\/([^/]+)\/document-revisions$/u.exec(url.pathname);
+  const documentRevisionRedlinesMatch = /^\/document-revisions\/([^/]+)\/redlines$/u.exec(url.pathname);
+  const documentRedlineDetailMatch = /^\/document-redlines\/([^/]+)$/u.exec(url.pathname);
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
   const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(url.pathname);
   const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(url.pathname);
   const projectRevisionCompareMatch = /^\/projects\/([^/]+)\/revisions\/compare$/u.exec(url.pathname);
+  const projectRevisionApprovalGatesMatch = /^\/projects\/([^/]+)\/revision-approval-gates$/u.exec(url.pathname);
   const projectRevisionDetailMatch = /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u.exec(url.pathname);
   const projectBomImportsMatch = /^\/projects\/([^/]+)\/bom-imports$/u.exec(url.pathname);
   const projectUsagesMatch = /^\/projects\/([^/]+)\/usages$/u.exec(url.pathname);
@@ -173,6 +213,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const vendorDetailMatch = /^\/vendors\/([^/]+)$/u.exec(url.pathname);
   const vendorFileUploadMatch = /^\/vendors\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
 
+  try {
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
     await handleProviderLookupCreate(request, response);
     return;
@@ -349,6 +390,27 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && partDocumentRevisionsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleDocumentRevisionCreate(request, response, decodeURIComponent(partDocumentRevisionsMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "POST" && documentRevisionRedlinesMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleDocumentRedlineCreate(request, response, decodeURIComponent(documentRevisionRedlinesMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "PATCH" && documentRedlineDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleDocumentRedlineUpdate(request, response, decodeURIComponent(documentRedlineDetailMatch[1]), session.sub);
+    return;
+  }
+
   if (request.method === "POST" && reviewActionMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -405,6 +467,13 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && projectRevisionApprovalGatesMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectRevisionApprovalGateApply(request, response, decodeURIComponent(projectRevisionApprovalGatesMatch[1]), session.sub);
+    return;
+  }
+
   if (request.method === "POST" && substitutionRevokeMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -414,7 +483,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, project POST/PATCH, project revision PATCH, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
+      error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -443,6 +512,13 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     );
 
     sendJson(response, 200, health);
+    return;
+  }
+
+  if (request.method === "GET" && auditEventsMatch) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleAuditEventsRead(response, url);
     return;
   }
 
@@ -483,6 +559,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (projectRevisionCompareMatch?.[1]) {
     await handleProjectRevisionCompareRead(response, decodeURIComponent(projectRevisionCompareMatch[1]), url);
+    return;
+  }
+
+  if (projectRevisionApprovalGatesMatch?.[1]) {
+    await handleProjectRevisionApprovalGatesRead(response, decodeURIComponent(projectRevisionApprovalGatesMatch[1]));
     return;
   }
 
@@ -580,6 +661,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (partUsagesMatch?.[1]) {
     await handlePartWhereUsedRead(response, decodeURIComponent(partUsagesMatch[1]));
+    return;
+  }
+
+  if (partDocumentRevisionsMatch?.[1]) {
+    await handlePartDocumentRevisionsRead(response, decodeURIComponent(partDocumentRevisionsMatch[1]));
     return;
   }
 
@@ -682,6 +768,33 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   sendJson(response, 404, { error: "Route not found" });
+  } finally {
+    await flushRequestAuditEvent(request, response, url);
+  }
+}
+
+/**
+ * Handles admin-only audit event reads for security review.
+ */
+async function handleAuditEventsRead(response: ServerResponse, url: URL): Promise<void> {
+  try {
+    const limit = readAuditEventLimit(url.searchParams.get("limit"));
+    const result = await timeRouteOperation(
+      response,
+      "audit-events-read",
+      () => readAuditEventsFromDatabase(limit),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendAuditLogNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
 }
 
 /**
@@ -2181,6 +2294,79 @@ async function handleProjectRevisionCompareRead(response: ServerResponse, projec
 }
 
 /**
+ * Handles persisted BOM revision approval gate reads scoped to one project.
+ */
+async function handleProjectRevisionApprovalGatesRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-revision-approval-gates-read",
+      () => readProjectRevisionApprovalGatesFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated BOM revision approval gate decisions for one project.
+ */
+async function handleProjectRevisionApprovalGateApply(request: IncomingMessage, response: ServerResponse, projectId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<ProjectRevisionApprovalGateRequest>(request);
+
+  if (!body || typeof body.fromRevisionId !== "string" || typeof body.toRevisionId !== "string" || typeof body.decision !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_REVISION_APPROVAL_GATE_REQUEST",
+        message: "Body requires fromRevisionId, toRevisionId, and decision."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-revision-approval-gate-apply",
+      () => upsertProjectRevisionApprovalGateInDatabase(projectId, body, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only project BOM import collection requests.
  */
 async function handleProjectBomImportsRead(response: ServerResponse, projectId: string): Promise<void> {
@@ -2591,6 +2777,174 @@ async function handleApprovalBatchApply(request: IncomingMessage, response: Serv
           message: result.message
         }
       });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles controlled document revision reads for the part workspace.
+ */
+async function handlePartDocumentRevisionsRead(response: ServerResponse, partId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "document-revisions-read",
+      () => readDocumentRevisionsForPartFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendDocumentControlNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated controlled document revision creation from an existing asset.
+ */
+async function handleDocumentRevisionCreate(request: IncomingMessage, response: ServerResponse, partId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<DocumentRevisionCreateInput>(request);
+
+  if (!body || !isDocumentRevisionCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_DOCUMENT_REVISION",
+        message: "Document revisions require an assetId and revisionLabel."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "document-revision-create",
+      () => createDocumentRevisionInDatabase(partId, body, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendDocumentControlNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "conflict") {
+      sendJson(response, 409, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated engineering redline note creation for a controlled revision.
+ */
+async function handleDocumentRedlineCreate(request: IncomingMessage, response: ServerResponse, documentRevisionId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<DocumentRedlineCreateInput>(request);
+
+  if (!body || !isDocumentRedlineCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_DOCUMENT_REDLINE",
+        message: "Document redlines require a note and optional severity/page anchor."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "document-redline-create",
+      () => createDocumentRedlineInDatabase(documentRevisionId, body, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendDocumentControlNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated redline workflow updates without mutating controlled document release state.
+ */
+async function handleDocumentRedlineUpdate(request: IncomingMessage, response: ServerResponse, redlineId: string, actor: string): Promise<void> {
+  const body = await readJsonBody<DocumentRedlineUpdateInput>(request);
+
+  if (!body || !isDocumentRedlineUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_DOCUMENT_REDLINE_UPDATE",
+        message: "Document redline updates require a supported redlineStatus."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "document-redline-update",
+      () => updateDocumentRedlineInDatabase(redlineId, body, actor),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendDocumentControlNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
       return;
     }
 
@@ -3490,6 +3844,78 @@ function isFollowUpUpdateInput(value: unknown): value is FollowUpUpdateInput {
 }
 
 /**
+ * Checks controlled document revision creation request shape before store validation.
+ */
+function isDocumentRevisionCreateInput(value: unknown): value is DocumentRevisionCreateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<DocumentRevisionCreateInput>;
+
+  return typeof body.assetId === "string" &&
+    body.assetId.trim().length > 0 &&
+    typeof body.revisionLabel === "string" &&
+    body.revisionLabel.trim().length > 0 &&
+    (body.documentType === undefined || isDocumentControlType(body.documentType)) &&
+    (body.revisionDate === undefined || body.revisionDate === null || typeof body.revisionDate === "string") &&
+    (body.lifecycleStatus === undefined || isDocumentRevisionLifecycleStatus(body.lifecycleStatus)) &&
+    (body.accessLevel === undefined || isDocumentAccessLevel(body.accessLevel)) &&
+    isOptionalBodyString(body.accessNotes) &&
+    isOptionalBodyString(body.effectiveAt) &&
+    isOptionalBodyString(body.expiresAt) &&
+    isOptionalBodyString(body.supersedesDocumentRevisionId) &&
+    (body.aclEntries === undefined || (Array.isArray(body.aclEntries) && body.aclEntries.every(isDocumentAclEntryCreateInput)));
+}
+
+/**
+ * Checks initial document ACL grant shape before store validation.
+ */
+function isDocumentAclEntryCreateInput(value: unknown): value is NonNullable<DocumentRevisionCreateInput["aclEntries"]>[number] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<NonNullable<DocumentRevisionCreateInput["aclEntries"]>[number]>;
+
+  return isDocumentAclPrincipalType(body.principalType) &&
+    typeof body.principalId === "string" &&
+    body.principalId.trim().length > 0 &&
+    isDocumentAclPermission(body.permission) &&
+    isOptionalBodyString(body.expiresAt);
+}
+
+/**
+ * Checks document redline creation request shape before store validation.
+ */
+function isDocumentRedlineCreateInput(value: unknown): value is DocumentRedlineCreateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<DocumentRedlineCreateInput>;
+
+  return typeof body.note === "string" &&
+    body.note.trim().length > 0 &&
+    (body.severity === undefined || isDocumentRedlineSeverity(body.severity)) &&
+    (body.pageNumber === undefined || body.pageNumber === null || typeof body.pageNumber === "number") &&
+    isOptionalBodyString(body.anchorText);
+}
+
+/**
+ * Checks document redline update request shape before store validation.
+ */
+function isDocumentRedlineUpdateInput(value: unknown): value is DocumentRedlineUpdateInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const body = value as Partial<DocumentRedlineUpdateInput>;
+
+  return isDocumentRedlineStatus(body.redlineStatus) && isOptionalBodyString(body.note);
+}
+
+/**
  * Reads provider-neutral evidence vault filters from query params.
  */
 function readEvidenceAttachmentListFilters(url: URL): EvidenceAttachmentListFilters {
@@ -3516,6 +3942,55 @@ function isEvidenceTargetType(value: unknown): value is EvidenceTargetType {
     value === "risk_finding" ||
     value === "circuit_block" ||
     value === "circuit_block_part";
+}
+
+/**
+ * Checks controlled document type values.
+ */
+function isDocumentControlType(value: unknown): value is DocumentControlType {
+  return value === "datasheet" || value === "mechanical_drawing" || value === "controlled_drawing" || value === "specification" || value === "other";
+}
+
+/**
+ * Checks controlled document lifecycle values.
+ */
+function isDocumentRevisionLifecycleStatus(value: unknown): value is DocumentRevisionLifecycleStatus {
+  return value === "draft" || value === "in_review" || value === "released" || value === "superseded" || value === "expired" || value === "archived";
+}
+
+/**
+ * Checks controlled document access-level values.
+ */
+function isDocumentAccessLevel(value: unknown): value is DocumentAccessLevel {
+  return value === "public" || value === "internal" || value === "restricted" || value === "itar_controlled";
+}
+
+/**
+ * Checks controlled document ACL principal values.
+ */
+function isDocumentAclPrincipalType(value: unknown): value is DocumentAclPrincipalType {
+  return value === "user" || value === "team" || value === "role";
+}
+
+/**
+ * Checks controlled document ACL permission values.
+ */
+function isDocumentAclPermission(value: unknown): value is DocumentAclPermission {
+  return value === "view" || value === "review" || value === "approve" || value === "admin";
+}
+
+/**
+ * Checks controlled document redline severity values.
+ */
+function isDocumentRedlineSeverity(value: unknown): value is DocumentRedlineSeverity {
+  return value === "info" || value === "review" || value === "blocker";
+}
+
+/**
+ * Checks controlled document redline status values.
+ */
+function isDocumentRedlineStatus(value: unknown): value is DocumentRedlineStatus {
+  return value === "open" || value === "resolved" || value === "rejected" || value === "superseded";
 }
 
 /**
@@ -3662,6 +4137,211 @@ function normalizeOptionalBodyString(value: string | null | undefined): string |
 }
 
 /**
+ * Reads the audit event limit query parameter with conservative bounds for admin tables.
+ */
+function readAuditEventLimit(value: string | null): number {
+  const parsed = value ? Number(value) : 30;
+
+  if (!Number.isFinite(parsed)) {
+    return 30;
+  }
+
+  return Math.max(1, Math.min(100, Math.trunc(parsed)));
+}
+
+/**
+ * Starts audit context for one request and preserves any caller-provided request id when safe.
+ */
+function beginRequestAuditContext(response: ServerResponse, request: IncomingMessage): void {
+  requestAuditContexts.set(response, {
+    requestId: readRequestId(request.headers["x-request-id"]) ?? randomUUID()
+  });
+}
+
+/**
+ * Writes the audit event for unsafe API methods after the response status is known.
+ */
+async function flushRequestAuditEvent(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+  const context = requestAuditContexts.get(response);
+  requestAuditContexts.delete(response);
+
+  if (!context) {
+    return;
+  }
+
+  const method = request.method ?? "UNKNOWN";
+  const descriptor = describeAuditableRequest(method, url);
+
+  if (!descriptor) {
+    return;
+  }
+
+  const session = readSessionFromRequest(request);
+  const statusCode = response.headersSent ? response.statusCode : 500;
+  const operation = classifyRouteOperation(method, url.pathname);
+
+  try {
+    await createAuditEventInDatabase({
+      action: descriptor.action,
+      actorId: session?.sub ?? null,
+      actorRole: session?.role ?? null,
+      metadata: buildAuditMetadata(url, operation),
+      method,
+      operation,
+      outcome: classifyAuditOutcome(statusCode),
+      path: url.pathname,
+      requestId: context.requestId,
+      requestIpHash: hashAuditHeader(readRequestSource(request)),
+      statusCode,
+      targetId: descriptor.targetId,
+      targetType: descriptor.targetType,
+      userAgentHash: hashAuditHeader(readHeaderValue(request.headers["user-agent"]))
+    });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.warn("Audit event write failed", error);
+    }
+  }
+}
+
+/**
+ * Classifies unsafe HTTP requests into audit action and target metadata.
+ */
+function describeAuditableRequest(method: string, url: URL): AuditRouteDescriptor | null {
+  if (method !== "POST" && method !== "PATCH" && method !== "DELETE") {
+    return null;
+  }
+
+  const operation = classifyRouteOperation(method, url.pathname);
+  const action = operation.replace(/^api-/u, "").replace(/-/gu, ".");
+  const target = classifyAuditTarget(url.pathname);
+
+  return {
+    action,
+    targetId: target.targetId,
+    targetType: target.targetType
+  };
+}
+
+/**
+ * Extracts a route target from known API paths without reading request bodies.
+ */
+function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetType; targetId: string | null } {
+  const checks: Array<{ pattern: RegExp; targetType: AuditEventTargetType; idIndex: number }> = [
+    { idIndex: 2, pattern: /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u, targetType: "asset" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/reviews$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/asset-promotions$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/generation-requests$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/document-revisions$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/document-revisions\/([^/]+)\/redlines$/u, targetType: "document_revision" },
+    { idIndex: 1, pattern: /^\/document-redlines\/([^/]+)$/u, targetType: "document_revision" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/source-reconciliation$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/substitutions$/u, targetType: "part" },
+    { idIndex: 1, pattern: /^\/substitutions\/([^/]+)\/revoke$/u, targetType: "substitution" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/bom-imports$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/follow-ups$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/files\/([^/]+)$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/export-bundles$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/approval-batch$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/circuit-block-instantiations$/u, targetType: "project" },
+    { idIndex: 2, pattern: /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u, targetType: "project_revision" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/revision-approval-gates$/u, targetType: "project_revision_approval_gate" },
+    { idIndex: 1, pattern: /^\/bom-imports\/([^/]+)\/match$/u, targetType: "bom_import" },
+    { idIndex: 1, pattern: /^\/evidence-attachments\/([^/]+)$/u, targetType: "evidence_attachment" },
+    { idIndex: 1, pattern: /^\/follow-ups\/([^/]+)$/u, targetType: "follow_up" },
+    { idIndex: 1, pattern: /^\/circuit-blocks\/([^/]+)$/u, targetType: "circuit_block" },
+    { idIndex: 1, pattern: /^\/circuit-blocks\/([^/]+)\/parts$/u, targetType: "circuit_block" },
+    { idIndex: 2, pattern: /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u, targetType: "circuit_block_part" },
+    { idIndex: 1, pattern: /^\/circuit-blocks\/([^/]+)\/follow-ups$/u, targetType: "circuit_block" },
+    { idIndex: 1, pattern: /^\/provider-acquisition-jobs\/([^/]+)$/u, targetType: "provider_acquisition_job" },
+    { idIndex: 1, pattern: /^\/vendors\/([^/]+)\/files\/([^/]+)$/u, targetType: "vendor" }
+  ];
+
+  if (pathname === "/projects") return { targetId: null, targetType: "project" };
+  if (pathname === "/evidence-attachments" || pathname === "/evidence-attachments/files") return { targetId: null, targetType: "evidence_attachment" };
+  if (pathname === "/circuit-blocks") return { targetId: null, targetType: "circuit_block" };
+  if (pathname === "/imports/provider") return { targetId: null, targetType: "provider_import" };
+  if (pathname === "/provider-acquisition-jobs") return { targetId: null, targetType: "provider_acquisition_job" };
+  if (pathname === "/vendors") return { targetId: null, targetType: "vendor" };
+
+  for (const check of checks) {
+    const match = check.pattern.exec(pathname);
+    const rawId = match?.[check.idIndex];
+    if (rawId) {
+      return { targetId: decodeURIComponent(rawId), targetType: check.targetType };
+    }
+  }
+
+  return { targetId: null, targetType: "api_route" };
+}
+
+/**
+ * Builds safe audit metadata from route-level facts only.
+ */
+function buildAuditMetadata(url: URL, operation: string): AuditEventMetadata {
+  const queryKeys = Array.from(new Set(Array.from(url.searchParams.keys()))).sort();
+
+  return {
+    operation,
+    queryKeys
+  };
+}
+
+/**
+ * Converts status codes into audit outcomes without inferring business approval.
+ */
+function classifyAuditOutcome(statusCode: number): "succeeded" | "failed" | "denied" {
+  if (statusCode === 401 || statusCode === 403) {
+    return "denied";
+  }
+  if (statusCode >= 400) {
+    return "failed";
+  }
+  return "succeeded";
+}
+
+/**
+ * Reads a client-supplied request id only if it is compact and header-safe.
+ */
+function readRequestId(value: string | string[] | undefined): string | null {
+  const raw = readHeaderValue(value);
+  if (!raw || !/^[A-Za-z0-9._:-]{8,128}$/u.test(raw)) {
+    return null;
+  }
+  return raw;
+}
+
+/**
+ * Reads the best available request source string for hashing.
+ */
+function readRequestSource(request: IncomingMessage): string | null {
+  return readHeaderValue(request.headers["x-forwarded-for"]) ?? request.socket?.remoteAddress ?? null;
+}
+
+/**
+ * Normalizes a possibly repeated HTTP header to one compact string.
+ */
+function readHeaderValue(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  return value ?? null;
+}
+
+/**
+ * Hashes source-identifying request headers so the audit log can correlate requests without storing raw IP or UA values.
+ */
+function hashAuditHeader(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
  * Starts telemetry for one HTTP response so every route can share one sendJson hook.
  */
 function beginRouteTelemetry(response: ServerResponse, method: string, pathname: string): void {
@@ -3782,6 +4462,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts") return "api-search";
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
   if (method === "GET" && pathname === "/where-used") return "api-where-used-search";
+  if (method === "GET" && pathname === "/audit-events") return "api-audit-events-read";
   if (method === "GET" && pathname === "/connector-sets") return "api-connector-set-list";
   if (method === "GET" && /^\/projects\/[^/]+\/approval-candidates$/u.test(pathname)) return "api-approval-batch-candidates";
   if (method === "POST" && /^\/projects\/[^/]+\/approval-batch$/u.test(pathname)) return "api-approval-batch-apply";
@@ -3791,6 +4472,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "PATCH" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-update";
   if (method === "GET" && /^\/projects\/[^/]+\/revisions$/u.test(pathname)) return "api-project-revisions";
   if (method === "GET" && /^\/projects\/[^/]+\/revisions\/compare$/u.test(pathname)) return "api-project-revision-compare";
+  if (method === "GET" && /^\/projects\/[^/]+\/revision-approval-gates$/u.test(pathname)) return "api-project-revision-approval-gates-read";
+  if (method === "POST" && /^\/projects\/[^/]+\/revision-approval-gates$/u.test(pathname)) return "api-project-revision-approval-gate-apply";
   if (method === "PATCH" && /^\/projects\/[^/]+\/revisions\/[^/]+$/u.test(pathname)) return "api-project-revision-update";
   if (method === "GET" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-project-bom-imports";
   if (method === "POST" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-bom-import-create";
@@ -3829,6 +4512,10 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
   if (method === "GET" && /^\/parts\/[^/]+\/usages$/u.test(pathname)) return "api-part-where-used";
+  if (method === "GET" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revisions-read";
+  if (method === "POST" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revision-create";
+  if (method === "POST" && /^\/document-revisions\/[^/]+\/redlines$/u.test(pathname)) return "api-document-redline-create";
+  if (method === "PATCH" && /^\/document-redlines\/[^/]+$/u.test(pathname)) return "api-document-redline-update";
   if (method === "GET" && /^\/parts\/[^/]+$/u.test(pathname)) return "api-part-detail";
   if (method === "POST" && pathname === "/provider-lookups") return "api-provider-lookup";
   if (method === "POST" && pathname === "/provider-acquisition-jobs") return "api-provider-acquisition-job-create";
@@ -3864,6 +4551,7 @@ function roundDuration(value: number): number {
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
+    ...buildAuditHeaders(response),
     ...buildTelemetryHeaders(response, statusCode)
   });
   response.end(JSON.stringify(payload, null, 2));
@@ -3875,9 +4563,19 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
 function sendRedirect(response: ServerResponse, url: string): void {
   response.writeHead(302, {
     Location: url,
+    ...buildAuditHeaders(response),
     ...buildTelemetryHeaders(response, 302)
   });
   response.end();
+}
+
+/**
+ * Adds the current request id to API responses when audit context exists.
+ */
+function buildAuditHeaders(response: ServerResponse): Record<string, string> {
+  const context = requestAuditContexts.get(response);
+
+  return context ? { "X-EE-Request-Id": context.requestId } : {};
 }
 
 /**
@@ -3916,6 +4614,30 @@ function sendProjectMemoryNotConfigured(response: ServerResponse): void {
     error: {
       code: "DB_NOT_CONFIGURED",
       message: "Project memory reads require a configured database so project, BOM, and usage state can be read."
+    }
+  });
+}
+
+/**
+ * Sends the standard audit-log not-configured response without seed fallback.
+ */
+function sendAuditLogNotConfigured(response: ServerResponse): void {
+  sendJson(response, 503, {
+    error: {
+      code: "DB_NOT_CONFIGURED",
+      message: "Audit log reads require a configured database so user action history can be reviewed."
+    }
+  });
+}
+
+/**
+ * Sends the standard document-control not-configured response without seed fallback.
+ */
+function sendDocumentControlNotConfigured(response: ServerResponse): void {
+  sendJson(response, 503, {
+    error: {
+      code: "DB_NOT_CONFIGURED",
+      message: "Document control requires a configured database so revision, ACL, and redline history can be persisted."
     }
   });
 }

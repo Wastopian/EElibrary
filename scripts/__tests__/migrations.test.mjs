@@ -90,3 +90,30 @@ test("discoverMigrations includes the part substitutions migration", async () =>
     `expected a *_part_substitutions.sql migration in ${files.join(", ")}`
   );
 });
+
+test("discoverMigrations includes the project revision approval gates migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("project_revision_approval_gates.sql")),
+    `expected a *_project_revision_approval_gates.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the audit events migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("audit_events.sql")),
+    `expected a *_audit_events.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the document control migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("document_control.sql")),
+    `expected a *_document_control.sql migration in ${files.join(", ")}`
+  );
+});

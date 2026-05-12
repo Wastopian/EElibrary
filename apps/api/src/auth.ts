@@ -10,6 +10,14 @@ export interface ApiSession {
   role: "admin" | "user";
 }
 
+/** apiSessionRequestKey stores the verified session on the current request for audit middleware. */
+const apiSessionRequestKey = Symbol.for("ee-library.api.session");
+
+/** AuditedIncomingMessage is an IncomingMessage that may carry a verified API session. */
+type AuditedIncomingMessage = IncomingMessage & {
+  [apiSessionRequestKey]?: ApiSession;
+};
+
 /**
  * Minimum byte length for AUTH_SECRET. HS256 nominally accepts any length but a 32-byte
  * (256-bit) secret matches the underlying SHA-256 block and is the smallest length that
@@ -114,6 +122,7 @@ export async function requireAuth(
   const testSession = readTestSession();
 
   if (testSession) {
+    rememberRequestSession(request, testSession);
     return testSession;
   }
 
@@ -129,12 +138,20 @@ export async function requireAuth(
     };
   }
 
+  rememberRequestSession(request, session);
+
   return session;
 }
 
 /** readOptionalSession returns a verified session when one is present without changing anonymous lookup flows. */
 export async function readOptionalSession(request: IncomingMessage): Promise<ApiSession | null> {
-  return verifyBearerToken(request.headers["authorization"] as string | undefined);
+  const session = await verifyBearerToken(request.headers["authorization"] as string | undefined);
+
+  if (session) {
+    rememberRequestSession(request, session);
+  }
+
+  return session;
 }
 
 /** requireAdmin returns the session or an HTTP error descriptor for non-admin requests. */
@@ -161,4 +178,18 @@ export function isAuthError(
   result: ApiSession | { statusCode: number; code: string; message: string }
 ): result is { statusCode: number; code: string; message: string } {
   return "statusCode" in result;
+}
+
+/**
+ * Reads the session already verified during request handling for audit logging.
+ */
+export function readSessionFromRequest(request: IncomingMessage): ApiSession | null {
+  return (request as AuditedIncomingMessage)[apiSessionRequestKey] ?? null;
+}
+
+/**
+ * Stores the verified session on the request without changing route handler signatures.
+ */
+function rememberRequestSession(request: IncomingMessage, session: ApiSession): void {
+  (request as AuditedIncomingMessage)[apiSessionRequestKey] = session;
 }

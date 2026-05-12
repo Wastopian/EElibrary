@@ -4,8 +4,10 @@
 
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -330,6 +332,116 @@ export const datasheetRevisions = pgTable(
       "datasheet_revisions_pin_table_status_check",
       literalCheck(`pin_table_status IN ('not_available', 'available', 'needs_review')`)
     ),
+  ]
+);
+
+/** documentRevisions stores controlled datasheet/drawing history on top of existing asset provenance. */
+export const documentRevisions = pgTable(
+  "document_revisions",
+  {
+    id: text("id").primaryKey(),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    assetId: text("asset_id")
+      .notNull()
+      .references(() => assets.id),
+    documentType: text("document_type").notNull(),
+    revisionLabel: text("revision_label").notNull(),
+    revisionDate: date("revision_date"),
+    lifecycleStatus: text("lifecycle_status").notNull().default("draft"),
+    accessLevel: text("access_level").notNull().default("internal"),
+    accessNotes: text("access_notes").notNull().default(""),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    supersedesDocumentRevisionId: text("supersedes_document_revision_id").references(
+      (): AnyPgColumn => documentRevisions.id
+    ),
+    sourceAssetHash: text("source_asset_hash"),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.partId, t.assetId, t.revisionLabel),
+    index("idx_document_revisions_part").on(t.partId, t.lifecycleStatus, t.updatedAt),
+    index("idx_document_revisions_asset").on(t.assetId, t.updatedAt),
+    index("idx_document_revisions_supersedes").on(t.supersedesDocumentRevisionId),
+    index("idx_document_revisions_expiry").on(t.expiresAt),
+    index("idx_document_revisions_access").on(t.accessLevel, t.lifecycleStatus),
+    check(
+      "document_revisions_document_type_check",
+      literalCheck(`document_type IN ('datasheet', 'mechanical_drawing', 'controlled_drawing', 'specification', 'other')`)
+    ),
+    check(
+      "document_revisions_lifecycle_status_check",
+      literalCheck(`lifecycle_status IN ('draft', 'in_review', 'released', 'superseded', 'expired', 'archived')`)
+    ),
+    check(
+      "document_revisions_access_level_check",
+      literalCheck(`access_level IN ('public', 'internal', 'restricted', 'itar_controlled')`)
+    ),
+  ]
+);
+
+/** documentAclEntries records intended access/review grants for future RBAC and ITAR gates. */
+export const documentAclEntries = pgTable(
+  "document_acl_entries",
+  {
+    id: text("id").primaryKey(),
+    documentRevisionId: text("document_revision_id")
+      .notNull()
+      .references(() => documentRevisions.id, { onDelete: "cascade" }),
+    principalType: text("principal_type").notNull(),
+    principalId: text("principal_id").notNull(),
+    permission: text("permission").notNull(),
+    grantedBy: text("granted_by").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.documentRevisionId, t.principalType, t.principalId, t.permission),
+    index("idx_document_acl_entries_revision").on(t.documentRevisionId, t.permission),
+    index("idx_document_acl_entries_principal").on(t.principalType, t.principalId, t.permission),
+    check(
+      "document_acl_entries_principal_type_check",
+      literalCheck(`principal_type IN ('user', 'team', 'role')`)
+    ),
+    check(
+      "document_acl_entries_permission_check",
+      literalCheck(`permission IN ('view', 'review', 'approve', 'admin')`)
+    ),
+  ]
+);
+
+/** documentRedlines stores engineering review notes without mutating release state on its own. */
+export const documentRedlines = pgTable(
+  "document_redlines",
+  {
+    id: text("id").primaryKey(),
+    documentRevisionId: text("document_revision_id")
+      .notNull()
+      .references(() => documentRevisions.id, { onDelete: "cascade" }),
+    redlineStatus: text("redline_status").notNull().default("open"),
+    pageNumber: integer("page_number"),
+    anchorText: text("anchor_text"),
+    note: text("note").notNull(),
+    severity: text("severity").notNull().default("review"),
+    createdBy: text("created_by").notNull(),
+    resolvedBy: text("resolved_by"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_document_redlines_revision").on(t.documentRevisionId, t.redlineStatus, t.createdAt),
+    index("idx_document_redlines_status").on(t.redlineStatus, t.severity, t.updatedAt),
+    check(
+      "document_redlines_status_check",
+      literalCheck(`redline_status IN ('open', 'resolved', 'rejected', 'superseded')`)
+    ),
+    check("document_redlines_page_number_check", literalCheck(`page_number IS NULL OR page_number >= 1`)),
+    check("document_redlines_severity_check", literalCheck(`severity IN ('info', 'review', 'blocker')`)),
   ]
 );
 
@@ -1082,6 +1194,41 @@ export const projectPartUsages = pgTable(
   ]
 );
 
+/** projectRevisionApprovalGates stores explicit BOM diff review gates without mutating part trust. */
+export const projectRevisionApprovalGates = pgTable(
+  "project_revision_approval_gates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    fromProjectRevisionId: text("from_project_revision_id")
+      .notNull()
+      .references(() => projectRevisions.id),
+    toProjectRevisionId: text("to_project_revision_id")
+      .notNull()
+      .references(() => projectRevisions.id),
+    gateStatus: text("gate_status").notNull().default("pending_review"),
+    diffFingerprint: text("diff_fingerprint").notNull(),
+    diffSummary: jsonb("diff_summary").notNull().default({}),
+    decisionNotes: text("decision_notes").notNull().default(""),
+    createdBy: text("created_by").notNull(),
+    decidedBy: text("decided_by"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.projectId, t.fromProjectRevisionId, t.toProjectRevisionId, t.diffFingerprint),
+    index("idx_project_revision_approval_gates_project").on(t.projectId, t.updatedAt),
+    index("idx_project_revision_approval_gates_target").on(t.toProjectRevisionId, t.gateStatus, t.updatedAt),
+    check(
+      "project_revision_approval_gates_status_check",
+      literalCheck(`gate_status IN ('pending_review', 'approved', 'changes_requested')`)
+    ),
+  ]
+);
+
 /** circuitBlocks stores reusable circuit knowledge as structured engineering memory. */
 export const circuitBlocks = pgTable(
   "circuit_blocks",
@@ -1232,6 +1379,39 @@ export const users = pgTable(
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
     check("users_role_check", literalCheck(`role IN ('admin', 'user')`)),
+  ]
+);
+
+/** auditEvents stores API user-action facts without request bodies or secrets. */
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: text("id").primaryKey(),
+    requestId: text("request_id").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    actorId: text("actor_id"),
+    actorRole: text("actor_role"),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    method: text("method").notNull(),
+    path: text("path").notNull(),
+    operation: text("operation").notNull(),
+    statusCode: integer("status_code").notNull(),
+    outcome: text("outcome").notNull(),
+    requestIpHash: text("request_ip_hash"),
+    userAgentHash: text("user_agent_hash"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => [
+    index("idx_audit_events_occurred_at").on(t.occurredAt, t.id),
+    index("idx_audit_events_actor").on(t.actorId, t.occurredAt),
+    index("idx_audit_events_target").on(t.targetType, t.targetId, t.occurredAt),
+    index("idx_audit_events_action").on(t.action, t.outcome, t.occurredAt),
+    index("idx_audit_events_request").on(t.requestId),
+    check("audit_events_actor_role_check", literalCheck(`actor_role IS NULL OR actor_role IN ('admin', 'user')`)),
+    check("audit_events_status_code_check", literalCheck(`status_code >= 100 AND status_code <= 599`)),
+    check("audit_events_outcome_check", literalCheck(`outcome IN ('succeeded', 'failed', 'denied')`)),
   ]
 );
 

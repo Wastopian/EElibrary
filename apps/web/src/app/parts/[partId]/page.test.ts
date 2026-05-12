@@ -12,7 +12,7 @@ import {
   buildUnavailablePartEnrichmentSummary
 } from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
-import type { PartWhereUsedResponse } from "@ee-library/shared/types";
+import type { DocumentRevisionListResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
 
 /**
  * Verifies the detail page renders V3-style readiness record truth without whole-part approval claims.
@@ -50,12 +50,14 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Risk flags/u);
     assert.match(html, /Review and export state/u);
     assert.match(html, /Where-used/u);
+    assert.match(html, /Document control/u);
     assert.match(html, /Next workspaces/u);
     assert.match(html, /Compare this part/u);
     assert.match(html, /Check where-used/u);
     assert.match(html, /Attach evidence/u);
     assert.match(html, /Review export blockers/u);
     assert.match(html, /No confirmed project usage/u);
+    assert.match(html, /No controlled revisions/u);
     assert.match(html, /draft CAD needs review/u);
     assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
     assert.match(html, /Files and models/u);
@@ -493,6 +495,13 @@ function mockFetch(handler: (url: URL) => Response, whereUsedHandler?: (url: URL
       });
     }
 
+    if (isDocumentControlRequest(url)) {
+      return jsonResponse({
+        data: buildEmptyDocumentControlResponse(readDocumentControlPartId(url)),
+        source: "database"
+      });
+    }
+
     return handler(url);
   }) as typeof fetch;
 
@@ -509,10 +518,26 @@ function isWhereUsedRequest(url: URL): boolean {
 }
 
 /**
+ * Detects the part-scoped document-control API request added beside detail reads.
+ */
+function isDocumentControlRequest(url: URL): boolean {
+  return /^\/parts\/[^/]+\/document-revisions$/u.test(url.pathname);
+}
+
+/**
  * Reads the part id from the where-used URL for default empty where-used fixtures.
  */
 function readWhereUsedPartId(url: URL): string {
   const match = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
+
+  return match?.[1] ? decodeURIComponent(match[1]) : "part-unknown";
+}
+
+/**
+ * Reads the part id from the document-control URL for default empty fixtures.
+ */
+function readDocumentControlPartId(url: URL): string {
+  const match = /^\/parts\/([^/]+)\/document-revisions$/u.exec(url.pathname);
 
   return match?.[1] ? decodeURIComponent(match[1]) : "part-unknown";
 }
@@ -525,6 +550,18 @@ function buildEmptyWhereUsedResponse(partId: string): PartWhereUsedResponse {
     partId,
     state: "empty",
     usages: []
+  };
+}
+
+/**
+ * Builds the default empty document-control response for tests that only care about detail payloads.
+ */
+function buildEmptyDocumentControlResponse(partId: string): DocumentRevisionListResponse {
+  return {
+    boundary: "Document control test boundary.",
+    partId,
+    revisions: [],
+    state: "empty"
   };
 }
 

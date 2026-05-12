@@ -241,6 +241,27 @@ export type SourceExtractionStatus = "available" | "needs_review" | "not_availab
 /** SourceExtractionSource identifies the source class without leaking provider-specific parsers. */
 export type SourceExtractionSource = "provider_structured_metadata" | "datasheet_metadata" | "asset_reference" | "manual_internal";
 
+/** DocumentControlType names controlled document classes without adding provider-specific document names. */
+export type DocumentControlType = "datasheet" | "mechanical_drawing" | "controlled_drawing" | "specification" | "other";
+
+/** DocumentRevisionLifecycleStatus tracks controlled document state separately from asset review/export state. */
+export type DocumentRevisionLifecycleStatus = "draft" | "in_review" | "released" | "superseded" | "expired" | "archived";
+
+/** DocumentAccessLevel records the intended access boundary before future RBAC/ITAR policy enforcement. */
+export type DocumentAccessLevel = "public" | "internal" | "restricted" | "itar_controlled";
+
+/** DocumentAclPrincipalType keeps ACL grants provider-neutral and independent from a future identity directory. */
+export type DocumentAclPrincipalType = "user" | "team" | "role";
+
+/** DocumentAclPermission names review permissions without claiming full policy enforcement exists yet. */
+export type DocumentAclPermission = "view" | "review" | "approve" | "admin";
+
+/** DocumentRedlineStatus tracks review-note lifecycle without changing release state by itself. */
+export type DocumentRedlineStatus = "open" | "resolved" | "rejected" | "superseded";
+
+/** DocumentRedlineSeverity lets engineering notes distinguish comments from release blockers. */
+export type DocumentRedlineSeverity = "info" | "review" | "blocker";
+
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
   id: string;
@@ -560,7 +581,7 @@ export type ProjectMemoryCapabilityState = "foundation" | "planned";
 
 /** ProjectMemoryCapability names one project-memory capability and whether it is foundation-only or planned. */
 export interface ProjectMemoryCapability {
-  id: "project_records" | "bom_import_records" | "bom_upload" | "bom_matching" | "where_used" | "bom_health" | "evidence_vault" | "circuit_blocks";
+  id: "project_records" | "bom_import_records" | "bom_upload" | "bom_matching" | "where_used" | "bom_health" | "revision_approval_gates" | "evidence_vault" | "circuit_blocks";
   label: string;
   state: ProjectMemoryCapabilityState;
   detail: string;
@@ -1383,6 +1404,137 @@ export interface DatasheetRevision {
   lastUpdatedAt: string;
 }
 
+/** DocumentControlAssetSummary exposes only asset metadata needed to review a controlled document row. */
+export interface DocumentControlAssetSummary {
+  id: string;
+  partId: string;
+  assetType: AssetType;
+  fileFormat: FileFormat;
+  storageKey: string | null;
+  fileHash: string | null;
+  provenance: AssetProvenance;
+  availabilityStatus: AssetAvailabilityStatus;
+  sourceUrl: string | null;
+}
+
+/** ControlledDocumentAclEntry records a review/access grant without embedding directory-specific user data. */
+export interface ControlledDocumentAclEntry {
+  id: string;
+  documentRevisionId: string;
+  principalType: DocumentAclPrincipalType;
+  principalId: string;
+  permission: DocumentAclPermission;
+  grantedBy: string;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+/** DocumentRedline is one engineering review note tied to a controlled document revision. */
+export interface DocumentRedline {
+  id: string;
+  documentRevisionId: string;
+  redlineStatus: DocumentRedlineStatus;
+  pageNumber: number | null;
+  anchorText: string | null;
+  note: string;
+  severity: DocumentRedlineSeverity;
+  createdBy: string;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ControlledDocumentRevision links one catalog asset to revision, supersession, access, and review history. */
+export interface ControlledDocumentRevision {
+  id: string;
+  partId: string;
+  assetId: string;
+  documentType: DocumentControlType;
+  revisionLabel: string;
+  revisionDate: string | null;
+  lifecycleStatus: DocumentRevisionLifecycleStatus;
+  accessLevel: DocumentAccessLevel;
+  accessNotes: string;
+  effectiveAt: string | null;
+  expiresAt: string | null;
+  supersedesDocumentRevisionId: string | null;
+  supersededByDocumentRevisionId: string | null;
+  sourceAssetHash: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  asset: DocumentControlAssetSummary;
+  aclEntries: ControlledDocumentAclEntry[];
+  redlines: DocumentRedline[];
+}
+
+/** DocumentAclEntryCreateInput records one initial grant when creating a controlled revision. */
+export interface DocumentAclEntryCreateInput {
+  principalType: DocumentAclPrincipalType;
+  principalId: string;
+  permission: DocumentAclPermission;
+  expiresAt?: string | null;
+}
+
+/** DocumentRevisionCreateInput creates a controlled revision from an existing document asset. */
+export interface DocumentRevisionCreateInput {
+  assetId: string;
+  documentType?: DocumentControlType;
+  revisionLabel: string;
+  revisionDate?: string | null;
+  lifecycleStatus?: DocumentRevisionLifecycleStatus;
+  accessLevel?: DocumentAccessLevel;
+  accessNotes?: string | null;
+  effectiveAt?: string | null;
+  expiresAt?: string | null;
+  supersedesDocumentRevisionId?: string | null;
+  aclEntries?: DocumentAclEntryCreateInput[];
+}
+
+/** DocumentRedlineCreateInput captures an engineering redline note without changing document release state. */
+export interface DocumentRedlineCreateInput {
+  note: string;
+  severity?: DocumentRedlineSeverity;
+  pageNumber?: number | null;
+  anchorText?: string | null;
+}
+
+/** DocumentRedlineUpdateInput changes review-note state or text without mutating the underlying asset. */
+export interface DocumentRedlineUpdateInput {
+  redlineStatus: DocumentRedlineStatus;
+  note?: string | null;
+}
+
+/** DocumentRevisionListResponse returns controlled document history for one part workspace. */
+export interface DocumentRevisionListResponse {
+  partId: string;
+  state: ProjectMemoryReadState;
+  revisions: ControlledDocumentRevision[];
+  boundary: string;
+}
+
+/** DocumentRevisionCreateResponse returns the created revision plus refreshed document-control history. */
+export interface DocumentRevisionCreateResponse {
+  revision: ControlledDocumentRevision;
+  documentControl: DocumentRevisionListResponse;
+  boundary: string;
+}
+
+/** DocumentRedlineCreateResponse returns the created redline plus refreshed document-control history. */
+export interface DocumentRedlineCreateResponse {
+  redline: DocumentRedline;
+  documentControl: DocumentRevisionListResponse;
+  boundary: string;
+}
+
+/** DocumentRedlineUpdateResponse returns the updated redline plus refreshed document-control history. */
+export interface DocumentRedlineUpdateResponse {
+  redline: DocumentRedline;
+  documentControl: DocumentRevisionListResponse;
+  boundary: string;
+}
+
 /** MateRelation stores best/alternate mating connector relationships. */
 export interface MateRelation {
   id: string;
@@ -2167,6 +2319,65 @@ export interface ApiErrorEnvelope {
 }
 
 // ---------------------------------------------------------------------------
+// Security foundation: user action audit events
+// ---------------------------------------------------------------------------
+
+/** AuditActorRole mirrors the authenticated role captured at the API boundary. */
+export type AuditActorRole = "admin" | "user";
+
+/** AuditEventOutcome records whether a user action succeeded, failed validation, or was denied. */
+export type AuditEventOutcome = "succeeded" | "failed" | "denied";
+
+/** AuditEventTargetType keeps user-action targets broad enough for future RBAC and ECO workflows. */
+export type AuditEventTargetType =
+  | "api_route"
+  | "asset"
+  | "bom_import"
+  | "circuit_block"
+  | "circuit_block_part"
+  | "document_revision"
+  | "evidence_attachment"
+  | "follow_up"
+  | "part"
+  | "project"
+  | "project_revision"
+  | "project_revision_approval_gate"
+  | "provider_acquisition_job"
+  | "provider_import"
+  | "substitution"
+  | "vendor";
+
+/** AuditEventMetadata stores safe request context only; request bodies and secrets are intentionally excluded. */
+export type AuditEventMetadata = Record<string, string | number | boolean | null | string[]>;
+
+/** AuditEvent is one immutable API action record used for security review and future policy gates. */
+export interface AuditEvent {
+  id: string;
+  requestId: string;
+  occurredAt: string;
+  actorId: string | null;
+  actorRole: AuditActorRole | null;
+  action: string;
+  targetType: AuditEventTargetType;
+  targetId: string | null;
+  method: string;
+  path: string;
+  operation: string;
+  statusCode: number;
+  outcome: AuditEventOutcome;
+  requestIpHash: string | null;
+  userAgentHash: string | null;
+  metadata: AuditEventMetadata;
+}
+
+/** AuditEventListResponse returns recent action events plus the logging boundary reviewers need. */
+export interface AuditEventListResponse {
+  state: ProjectMemoryReadState;
+  events: AuditEvent[];
+  boundary: string;
+}
+
+// ---------------------------------------------------------------------------
 // P0-FUNC5: Export bundle types
 // ---------------------------------------------------------------------------
 
@@ -2505,6 +2716,69 @@ export interface ProjectRevisionCompareResponse {
   mpnSwapCount: number;
   unchangedCount: number;
   rows: ProjectRevisionCompareRow[];
+}
+
+/** ProjectRevisionApprovalGateStatus records one BOM diff review decision without changing part trust state. */
+export type ProjectRevisionApprovalGateStatus = "pending_review" | "approved" | "changes_requested";
+
+/** ProjectRevisionApprovalGateDecision names the review action submitted from the project workspace. */
+export type ProjectRevisionApprovalGateDecision = "open" | "approve" | "request_changes";
+
+/** ProjectRevisionApprovalGateDiffSummary stores the compact, reviewable shape of one revision diff. */
+export interface ProjectRevisionApprovalGateDiffSummary {
+  addedCount: number;
+  removedCount: number;
+  mpnSwapCount: number;
+  quantityChangedCount: number;
+  designatorChangedCount: number;
+  unchangedCount: number;
+  totalChangedCount: number;
+  fromBomImportIds: string[];
+  toBomImportIds: string[];
+}
+
+/** ProjectRevisionApprovalGate is one persisted gate for a specific revision-to-revision BOM diff. */
+export interface ProjectRevisionApprovalGate {
+  id: string;
+  projectId: string;
+  fromRevisionId: string;
+  toRevisionId: string;
+  gateStatus: ProjectRevisionApprovalGateStatus;
+  diffFingerprint: string;
+  diffSummary: ProjectRevisionApprovalGateDiffSummary;
+  decisionNotes: string;
+  createdBy: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** True when the currently computed diff still matches the persisted approval fingerprint. */
+  isCurrent: boolean;
+}
+
+/** ProjectRevisionApprovalGateRequest creates or updates the gate for a computed revision diff. */
+export interface ProjectRevisionApprovalGateRequest {
+  fromRevisionId: string;
+  toRevisionId: string;
+  decision: ProjectRevisionApprovalGateDecision;
+  notes?: string | null;
+}
+
+/** ProjectRevisionApprovalGateListResponse lists persisted gates for one project. */
+export interface ProjectRevisionApprovalGateListResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  gates: ProjectRevisionApprovalGate[];
+  /** Trust boundary copy reminding readers that a BOM gate is not part approval or export readiness. */
+  boundary: string;
+}
+
+/** ProjectRevisionApprovalGateResponse returns the persisted gate plus the diff it reviewed. */
+export interface ProjectRevisionApprovalGateResponse {
+  gate: ProjectRevisionApprovalGate;
+  compare: ProjectRevisionCompareResponse;
+  /** Trust boundary copy shown beside the approval action. */
+  boundary: string;
 }
 
 // ---------------------------------------------------------------------------
