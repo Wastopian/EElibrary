@@ -14,7 +14,8 @@ import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchPartDetail, fetchPartDocumentRevisions, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDocumentRevisions, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../../lib/trust-lineage";
 import type { TrustLineageStageSummary, TrustLineageSummary } from "../../../lib/trust-lineage";
@@ -48,7 +49,7 @@ import {
 } from "../../../lib/detail-view-model";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PartWhereUsedResponse, PreviewStatus, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PartWhereUsedResponse, PreviewStatus, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +106,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
   const { detail, documentControlState, whereUsedState } = pageState;
   const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
+  const recentActivity = await loadRecentActivityForPart(record.part.id);
   const bestMate = record.buildableMatingSet.bestMate;
   const datasheetAsset = record.datasheetRevision?.fileAssetId ? record.assets.find((asset) => asset.id === record.datasheetRevision?.fileAssetId) : undefined;
   const exportActions = bundleReadiness.exportActions;
@@ -366,6 +368,8 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           description="Quick links for this part."
           title="Next workspaces"
         />
+
+        <RecentActivityStrip events={recentActivity} targetType="part" targetId={record.part.id} />
 
         <DetailReadinessSummary
           approval={record.approval}
@@ -913,6 +917,16 @@ async function loadPartWhereUsed(partId: string): Promise<PartWhereUsedState> {
       status: "unavailable"
     };
   }
+}
+
+/**
+ * Loads the last few audit events for this part so detail pages can render a compact
+ * "Recent activity" strip. Auditing is admin-gated; for non-admin sessions or any
+ * transport failure the helper returns null so the page renders without a strip.
+ */
+async function loadRecentActivityForPart(partId: string): Promise<AuditEvent[] | null> {
+  const response = await fetchEntityAuditEvents("part", partId, 5);
+  return response ? response.events : null;
 }
 
 /**

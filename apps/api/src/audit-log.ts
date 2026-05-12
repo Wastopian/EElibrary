@@ -121,14 +121,67 @@ export async function createAuditEventInDatabase(input: AuditEventCreateInput): 
 }
 
 /**
- * Reads recent audit events for the admin workspace.
+ * AuditEventListFilters narrows the admin / per-entity timeline query. Every field
+ * is optional; when omitted the query falls back to the global recent-events view.
+ * Time filters accept ISO-8601 strings and are inclusive.
  */
-export async function readAuditEventsFromDatabase(limit: number): Promise<AuditEventReadResult> {
+export interface AuditEventListFilters {
+  actorId?: string | undefined;
+  action?: string | undefined;
+  targetType?: string | undefined;
+  targetId?: string | undefined;
+  outcome?: AuditEventOutcome | undefined;
+  occurredSince?: string | undefined;
+  occurredUntil?: string | undefined;
+}
+
+/**
+ * Reads recent audit events for the admin workspace and the per-entity history
+ * strips on detail pages. `limit` stays the first argument so existing callers
+ * keep working; `filters` is optional and narrows the result set on the server.
+ */
+export async function readAuditEventsFromDatabase(limit: number, filters: AuditEventListFilters = {}): Promise<AuditEventReadResult> {
   const databasePool = getAuditLogDatabasePool();
 
   if (!databasePool) {
     return { status: "not_configured" };
   }
+
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  if (filters.actorId) {
+    values.push(filters.actorId);
+    conditions.push(`actor_id = $${values.length}`);
+  }
+  if (filters.action) {
+    values.push(filters.action);
+    conditions.push(`action = $${values.length}`);
+  }
+  if (filters.targetType) {
+    values.push(filters.targetType);
+    conditions.push(`target_type = $${values.length}`);
+  }
+  if (filters.targetId) {
+    values.push(filters.targetId);
+    conditions.push(`target_id = $${values.length}`);
+  }
+  if (filters.outcome) {
+    values.push(filters.outcome);
+    conditions.push(`outcome = $${values.length}`);
+  }
+  if (filters.occurredSince) {
+    values.push(filters.occurredSince);
+    conditions.push(`occurred_at >= $${values.length}`);
+  }
+  if (filters.occurredUntil) {
+    values.push(filters.occurredUntil);
+    conditions.push(`occurred_at <= $${values.length}`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+  values.push(boundedLimit);
 
   try {
     const result = await databasePool.query<DatabaseAuditEventRow>(
@@ -151,10 +204,11 @@ export async function readAuditEventsFromDatabase(limit: number): Promise<AuditE
           user_agent_hash,
           metadata
         FROM audit_events
+        ${whereClause}
         ORDER BY occurred_at DESC, id DESC
-        LIMIT $1
+        LIMIT $${values.length}
       `,
-      [Math.max(1, Math.min(100, Math.trunc(limit)))]
+      values
     );
 
     const events = result.rows.map(mapAuditEventRow);

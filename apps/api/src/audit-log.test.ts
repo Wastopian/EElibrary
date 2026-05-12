@@ -141,6 +141,116 @@ async function invokeApiPost(
 }
 
 /**
+ * Verifies filtered reads narrow to one target without leaking other events.
+ */
+test("audit log store filters reads by target_type and target_id", async () => {
+  const pool = createAuditLogPool();
+  setAuditLogPoolForTests(pool);
+
+  try {
+    await createAuditEventInDatabase({
+      action: "project.update",
+      actorId: "user-1",
+      actorRole: "admin",
+      metadata: {},
+      method: "PATCH",
+      operation: "api-project-update",
+      outcome: "succeeded",
+      path: "/projects/project-alpha",
+      requestId: "req-1",
+      requestIpHash: null,
+      statusCode: 200,
+      targetId: "project-alpha",
+      targetType: "project",
+      userAgentHash: null
+    });
+    await createAuditEventInDatabase({
+      action: "asset.promote",
+      actorId: "user-1",
+      actorRole: "admin",
+      metadata: {},
+      method: "POST",
+      operation: "api-asset-promote",
+      outcome: "succeeded",
+      path: "/parts/part-7/promotions",
+      requestId: "req-2",
+      requestIpHash: null,
+      statusCode: 201,
+      targetId: "part-7",
+      targetType: "part",
+      userAgentHash: null
+    });
+
+    const projectOnly = await readAuditEventsFromDatabase(10, { targetType: "project", targetId: "project-alpha" });
+    assert.equal(projectOnly.status, "available");
+    if (projectOnly.status !== "available") return;
+    assert.equal(projectOnly.response.events.length, 1);
+    assert.equal(projectOnly.response.events[0]?.targetType, "project");
+    assert.equal(projectOnly.response.events[0]?.targetId, "project-alpha");
+  } finally {
+    setAuditLogPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the outcome filter narrows to the requested outcome and rejects nothing else.
+ */
+test("audit log store filters reads by outcome", async () => {
+  const pool = createAuditLogPool();
+  setAuditLogPoolForTests(pool);
+
+  try {
+    await createAuditEventInDatabase({
+      action: "project.create",
+      actorId: null,
+      actorRole: null,
+      metadata: {},
+      method: "POST",
+      operation: "api-project-create",
+      outcome: "denied",
+      path: "/projects",
+      requestId: "req-d",
+      requestIpHash: null,
+      statusCode: 401,
+      targetId: null,
+      targetType: "project",
+      userAgentHash: null
+    });
+    await createAuditEventInDatabase({
+      action: "project.create",
+      actorId: "user-1",
+      actorRole: "admin",
+      metadata: {},
+      method: "POST",
+      operation: "api-project-create",
+      outcome: "succeeded",
+      path: "/projects",
+      requestId: "req-s",
+      requestIpHash: null,
+      statusCode: 201,
+      targetId: "project-beta",
+      targetType: "project",
+      userAgentHash: null
+    });
+
+    const denied = await readAuditEventsFromDatabase(10, { outcome: "denied" });
+    assert.equal(denied.status, "available");
+    if (denied.status !== "available") return;
+    assert.equal(denied.response.events.length, 1);
+    assert.equal(denied.response.events[0]?.outcome, "denied");
+
+    const all = await readAuditEventsFromDatabase(10);
+    assert.equal(all.status, "available");
+    if (all.status !== "available") return;
+    assert.equal(all.response.events.length, 2);
+  } finally {
+    setAuditLogPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates an in-memory audit log database.
  */
 function createAuditLogPool(): TestPool {

@@ -8496,3 +8496,108 @@ details[open] .trust-breakdown__toggle::before {
     grid-template-columns: 1fr;
   }
 }
+
+/* Admin audit-filter form */
+.audit-filter-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+}
+
+.audit-filter-form__field {
+  display: grid;
+  font-size: 0.84rem;
+  gap: 4px;
+}
+
+.audit-filter-form__field span {
+  color: var(--color-text-muted, #6E6459);
+  font-weight: 600;
+}
+
+.audit-filter-form__actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+/* Recent activity strip on entity detail pages */
+.recent-activity-strip {
+  background: var(--color-surface, #f7f7f4);
+  border: 1px solid var(--color-border-light, #e6e2da);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 14px 16px;
+}
+
+.recent-activity-strip__header {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.recent-activity-strip__header h3 {
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin: 2px 0 0;
+}
+
+.recent-activity-strip__view-all {
+  color: var(--color-accent, #4B1D3F);
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.recent-activity-strip__list {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-activity-strip__item {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(110px, max-content) minmax(0, 1fr) auto;
+  padding: 6px 0;
+}
+
+.recent-activity-strip__item + .recent-activity-strip__item {
+  border-top: 1px solid var(--color-border-light, #ece8e0);
+}
+
+.recent-activity-strip__when {
+  color: var(--color-text-muted, #6E6459);
+  font-size: 0.84rem;
+}
+
+.recent-activity-strip__what {
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-activity-strip__result {
+  justify-self: end;
+}
+
+@media (max-width: 720px) {
+  .recent-activity-strip__item {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+
+  .recent-activity-strip__result {
+    justify-self: start;
+  }
+}

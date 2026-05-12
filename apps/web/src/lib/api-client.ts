@@ -1279,10 +1279,35 @@ async function fetchApi<TResponse>(path: string): Promise<TResponse> {
 }
 
 /**
- * Fetches recent API action audit events for the admin workspace.
+ * AuditEventQueryFilters narrows the admin and per-entity audit-log queries from
+ * the web side. Every field maps to one URL search param consumed by the API's
+ * `GET /audit-events` route.
  */
-export async function fetchAuditEvents(limit = 30, authHeaders?: Record<string, string>): Promise<AuditEventListResponse> {
+export interface AuditEventQueryFilters {
+  actorId?: string | undefined;
+  action?: string | undefined;
+  targetType?: string | undefined;
+  targetId?: string | undefined;
+  outcome?: "succeeded" | "failed" | "denied" | undefined;
+  occurredSince?: string | undefined;
+  occurredUntil?: string | undefined;
+}
+
+/**
+ * Fetches recent API action audit events for the admin workspace.
+ * Optional filters narrow the result set; without filters the call returns the
+ * global recent-events view used by the admin user-action timeline.
+ */
+export async function fetchAuditEvents(limit = 30, authHeaders?: Record<string, string>, filters: AuditEventQueryFilters = {}): Promise<AuditEventListResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (filters.actorId) params.set("actorId", filters.actorId);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.targetType) params.set("targetType", filters.targetType);
+  if (filters.targetId) params.set("targetId", filters.targetId);
+  if (filters.outcome) params.set("outcome", filters.outcome);
+  if (filters.occurredSince) params.set("occurredSince", filters.occurredSince);
+  if (filters.occurredUntil) params.set("occurredUntil", filters.occurredUntil);
+
   const response = await fetch(buildApiUrl(`/audit-events?${params.toString()}`), {
     cache: "no-store",
     headers: authHeaders ?? await getAuthHeaders()
@@ -1294,6 +1319,19 @@ export async function fetchAuditEvents(limit = 30, authHeaders?: Record<string, 
 
   const envelope = (await response.json()) as ApiEnvelope<AuditEventListResponse>;
   return envelope.data;
+}
+
+/**
+ * Fetches the most recent audit events for one entity so detail pages can render
+ * a "Recent activity" strip. Returns null on any failure (unauthenticated, audit
+ * store unavailable, transport error) so the calling page degrades gracefully.
+ */
+export async function fetchEntityAuditEvents(targetType: string, targetId: string, limit = 5, authHeaders?: Record<string, string>): Promise<AuditEventListResponse | null> {
+  try {
+    return await fetchAuditEvents(limit, authHeaders, { targetType, targetId });
+  } catch {
+    return null;
+  }
 }
 
 /**
