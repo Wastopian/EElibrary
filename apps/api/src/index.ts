@@ -26,7 +26,7 @@ import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessi
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
 import type { AuditEventListFilters } from "./audit-log";
-import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
+import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
@@ -713,7 +713,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   if (assetDownloadMatch?.[1] && assetDownloadMatch[2]) {
-    await handleAssetDownload(response, decodeURIComponent(assetDownloadMatch[1]), decodeURIComponent(assetDownloadMatch[2]));
+    await handleAssetDownload(response, decodeURIComponent(assetDownloadMatch[1]), decodeURIComponent(assetDownloadMatch[2]), url);
     return;
   }
 
@@ -3171,8 +3171,12 @@ function inferStorageContentType(ext: string): string {
 
 /**
  * Redirects to source_url for referenced assets, or reports why a file is not accessible.
+ * Restricted and ITAR-controlled assets require an explicit `?ack=1` acknowledgment
+ * in the URL so the caller cannot accidentally download a controlled file without
+ * intentional intent. Every gating decision lands in the audit-events stream via the
+ * middleware capture path.
  */
-async function handleAssetDownload(response: ServerResponse, partId: string, assetId: string): Promise<void> {
+async function handleAssetDownload(response: ServerResponse, partId: string, assetId: string, url: URL): Promise<void> {
   try {
     const result = await timeRouteOperation(response, "asset-download-read", () => readAssetDownloadTargetFromDatabase(partId, assetId), (value) => value.status);
 
@@ -3204,6 +3208,26 @@ async function handleAssetDownload(response: ServerResponse, partId: string, ass
         }
       });
       return;
+    }
+
+    // Check controlled-document gating before issuing the download URL or redirect.
+    const gateResult = await readAssetDownloadGateFromDatabase(assetId);
+
+    if (gateResult.status === "decided" && gateResult.gate.status === "gated") {
+      const acknowledged = url.searchParams.get("ack") === "1";
+
+      if (!acknowledged) {
+        sendJson(response, 403, {
+          error: {
+            code: "ASSET_DOWNLOAD_GATED",
+            message: `This asset is ${gateResult.gate.accessLevel.replace("_", " ")}. The current controlled revision is "${gateResult.gate.revisionLabel}" (${gateResult.gate.documentType}). Resubmit the download with ?ack=1 to acknowledge the restriction.`,
+            accessLevel: gateResult.gate.accessLevel,
+            revisionLabel: gateResult.gate.revisionLabel,
+            documentType: gateResult.gate.documentType
+          }
+        });
+        return;
+      }
     }
 
     if (result.status === "redirect") {
@@ -4239,7 +4263,13 @@ async function flushRequestAuditEvent(request: IncomingMessage, response: Server
  * Classifies unsafe HTTP requests into audit action and target metadata.
  */
 function describeAuditableRequest(method: string, url: URL): AuditRouteDescriptor | null {
-  if (method !== "POST" && method !== "PATCH" && method !== "DELETE") {
+  const isMutation = method === "POST" || method === "PATCH" || method === "DELETE";
+  // Asset downloads are audited on GET too so we record every attempt against
+  // restricted or ITAR-controlled documents, including denials and acknowledged
+  // successes. The gate logic itself lives in handleAssetDownload.
+  const isAuditableGet = method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(url.pathname);
+
+  if (!isMutation && !isAuditableGet) {
     return null;
   }
 

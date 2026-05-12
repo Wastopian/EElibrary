@@ -8,6 +8,7 @@ import { newDb } from "pg-mem";
 import {
   createDocumentRedlineInDatabase,
   createDocumentRevisionInDatabase,
+  readAssetDownloadGateFromDatabase,
   readDocumentRevisionsForPartFromDatabase,
   setDocumentControlPoolForTests,
   updateDocumentRedlineInDatabase
@@ -123,6 +124,101 @@ test("document control creates and resolves redline notes", async () => {
     assert.equal(resolved.response.redline.redlineStatus, "resolved");
     assert.equal(resolved.response.redline.resolvedBy, "reviewer-b");
     assert.equal(resolved.response.documentControl.revisions[0]?.lifecycleStatus, "in_review");
+  } finally {
+    setDocumentControlPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies readAssetDownloadGateFromDatabase reports unrestricted when no controlled
+ * revision exists on the asset.
+ */
+test("asset download gate is unrestricted when no controlled revision exists", async () => {
+  const pool = createDocumentControlPool();
+  setDocumentControlPoolForTests(pool);
+
+  try {
+    await seedPartAndAsset(pool);
+
+    const result = await readAssetDownloadGateFromDatabase("asset-datasheet-alpha");
+    assert.equal(result.status, "decided");
+    if (result.status !== "decided") return;
+    assert.equal(result.gate.status, "unrestricted");
+  } finally {
+    setDocumentControlPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the gate reports the most-restrictive non-archived revision (ITAR over
+ * plain restricted) so the route layer can block accidental controlled downloads.
+ */
+test("asset download gate returns the most-restrictive non-archived revision", async () => {
+  const pool = createDocumentControlPool();
+  setDocumentControlPoolForTests(pool);
+
+  try {
+    await seedPartAndAsset(pool);
+
+    // Released restricted revision
+    await createDocumentRevisionInDatabase("part-alpha", {
+      accessLevel: "restricted",
+      assetId: "asset-datasheet-alpha",
+      documentType: "datasheet",
+      lifecycleStatus: "released",
+      revisionLabel: "Rev A",
+      revisionDate: "2026-05-01"
+    }, "admin-user");
+
+    // Newer ITAR-controlled revision (should win the gate)
+    await createDocumentRevisionInDatabase("part-alpha", {
+      accessLevel: "itar_controlled",
+      assetId: "asset-datasheet-alpha",
+      documentType: "datasheet",
+      lifecycleStatus: "in_review",
+      revisionLabel: "Rev B",
+      revisionDate: "2026-05-15"
+    }, "admin-user");
+
+    const result = await readAssetDownloadGateFromDatabase("asset-datasheet-alpha");
+    assert.equal(result.status, "decided");
+    if (result.status !== "decided") return;
+    assert.equal(result.gate.status, "gated");
+    if (result.gate.status !== "gated") return;
+    assert.equal(result.gate.accessLevel, "itar_controlled");
+    assert.equal(result.gate.revisionLabel, "Rev B");
+  } finally {
+    setDocumentControlPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the gate ignores archived revisions so a stale ITAR revision cannot
+ * keep gating an asset after it has been re-released to internal/public.
+ */
+test("asset download gate ignores archived revisions", async () => {
+  const pool = createDocumentControlPool();
+  setDocumentControlPoolForTests(pool);
+
+  try {
+    await seedPartAndAsset(pool);
+
+    await createDocumentRevisionInDatabase("part-alpha", {
+      accessLevel: "itar_controlled",
+      assetId: "asset-datasheet-alpha",
+      documentType: "datasheet",
+      lifecycleStatus: "archived",
+      revisionLabel: "Rev Old",
+      revisionDate: "2026-04-01"
+    }, "admin-user");
+
+    const result = await readAssetDownloadGateFromDatabase("asset-datasheet-alpha");
+    assert.equal(result.status, "decided");
+    if (result.status !== "decided") return;
+    assert.equal(result.gate.status, "unrestricted");
   } finally {
     setDocumentControlPoolForTests(null);
     await pool.end();
