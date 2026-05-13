@@ -16,6 +16,7 @@ test("ImportByMpnPanel renders honest idle copy and primary route targets", () =
   assert.match(html, /Import one exact part number/u);
   assert.match(html, /does not verify CAD files or export bundles/u);
   assert.match(html, new RegExp(importUiCopy.buttonSubmit, "u"));
+  assert.match(html, /Octopart \/ Nexar/u);
   assert.match(html, /id="import-by-mpn"/u);
 });
 
@@ -31,6 +32,7 @@ test("ImportByMpnPanel supports catalog acquisition from no-match without implyi
 
   assert.match(html, /Import this exact part number/u);
   assert.match(html, /Exact part-number import only/u);
+  assert.match(html, /Octopart\/Nexar/u);
   assert.match(html, /value="TPS7A02DBVR"/u);
   assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   assert.match(html, /Add provider-specific lookup context/u);

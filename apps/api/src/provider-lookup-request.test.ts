@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseProviderLookupRequest } from "./provider-lookup-request";
+import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 
 test("parseProviderLookupRequest rejects missing and unsupported lookup values", () => {
   const missingLookup = parseProviderLookupRequest({ query: "" });
@@ -37,4 +37,12 @@ test("parseProviderLookupRequest accepts concrete exact lookup values including 
   }
   assert.equal(providerIdLookup.lookupRequest.query, "C1091");
   assert.equal(providerIdLookup.lookupRequest.manufacturerName, "FH");
+});
+
+test("formatProviderLookupFailureMessage maps Octopart provider failures without leaking internals", () => {
+  const message = formatProviderLookupFailureMessage(new Error("Octopart/Nexar GraphQL returned errors: Forbidden field"));
+
+  assert.match(message, /supported provider catalog/u);
+  assert.match(message, /credentials/u);
+  assert.doesNotMatch(message, /Forbidden field/u);
 });

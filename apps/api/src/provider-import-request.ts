@@ -69,6 +69,14 @@ export function formatProviderImportFailureMessage(error: unknown): string {
     return "Could not reach the provider catalog. Check your network connection and try again.";
   }
 
+  if (/Octopart\/Nexar credentials are not configured/u.test(error.message)) {
+    return "Octopart/Nexar import requires configured provider credentials.";
+  }
+
+  if (/Unable to fetch Octopart\/Nexar/u.test(error.message) || /Octopart\/Nexar GraphQL returned errors/u.test(error.message)) {
+    return "Could not reach the Octopart/Nexar provider. Check credentials, network access, and provider plan permissions.";
+  }
+
   if (/not found for/u.test(error.message) || /metadata record not found/u.test(error.message)) {
     return "No matching catalog entry was found for that lookup. Try another MPN or provider part id.";
   }

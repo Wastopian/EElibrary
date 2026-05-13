@@ -187,11 +187,14 @@ npm run dev:api
 npm run dev:worker
 npm run ingest:local
 npm run ingest:jlcparts
+npm run ingest:octopart
 npm run imports:providers
 npm run operations:worker
 ```
 
 The web app defaults to `http://127.0.0.1:3000`; the API defaults to `http://127.0.0.1:4000`. DB-backed search and import flows require `DATABASE_URL` to point at a reachable Postgres database. If the database is unavailable, the UI stays honest and does not invent catalog records.
+
+Octopart intake uses Nexar GraphQL from the worker only. Configure either `NEXAR_ACCESS_TOKEN` for a short local run or `NEXAR_CLIENT_ID` plus `NEXAR_CLIENT_SECRET` for OAuth client-credentials refresh before running `npm run ingest:octopart` or selecting the `octopart` provider in the import UI.
 
 ## First Workbench Loop
 

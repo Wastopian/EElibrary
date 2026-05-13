@@ -21,6 +21,7 @@
     "generate:drafts": "tsx src/index.ts generate-drafts",
     "ingest": "tsx src/index.ts ingest",
     "ingest:jlcparts": "tsx src/index.ts ingest jlcparts",
+    "ingest:octopart": "tsx src/index.ts ingest octopart",
     "imports": "tsx src/index.ts imports",
     "lint": "tsc -p tsconfig.json --noEmit",
     "operations": "tsx src/index.ts operations",

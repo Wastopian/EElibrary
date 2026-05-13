@@ -80,3 +80,12 @@ test("formatProviderImportFailureMessage maps not-found imports to actionable co
   const message = formatProviderImportFailureMessage(new Error("jlcparts metadata record not found for ABC123"));
   assert.match(message, /No matching catalog entry/u);
 });
+
+test("formatProviderImportFailureMessage maps Octopart credential and provider failures", () => {
+  const missingCredentials = formatProviderImportFailureMessage(new Error("Octopart/Nexar credentials are not configured. Set NEXAR_ACCESS_TOKEN or NEXAR_CLIENT_ID and NEXAR_CLIENT_SECRET."));
+  const unavailable = formatProviderImportFailureMessage(new Error("Unable to fetch Octopart/Nexar GraphQL response (401)"));
+
+  assert.match(missingCredentials, /requires configured provider credentials/u);
+  assert.match(unavailable, /Octopart\/Nexar provider/u);
+  assert.doesNotMatch(missingCredentials, /CLIENT_SECRET/u);
+});
