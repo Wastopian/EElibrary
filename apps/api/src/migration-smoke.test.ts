@@ -76,6 +76,9 @@ const circuitBlocksMigrationSql = readFileSync(new URL("../../../infra/postgres/
 /** followUpRecordsMigrationSql loads the migration 027 follow-up records migration under test. */
 const followUpRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/027_follow_up_records.sql", import.meta.url), "utf8");
 
+/** supplyOfferingsMigrationSql loads the migration 036 supply offering snapshot migration under test. */
+const supplyOfferingsMigrationSql = readFileSync(new URL("../../../infra/postgres/036_supply_offerings.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -589,6 +592,95 @@ test("follow-up records migration preserves assignable workflow state", () => {
     /check/i
   );
   assert.match(followUpRecordsMigrationSql, /CREATE TABLE IF NOT EXISTS follow_up_records/u);
+});
+
+/**
+ * Verifies supply-offering migration keeps commercial snapshots source-linked and constrained.
+ */
+test("supply offering migration preserves provider-specific commercial snapshots", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-supply', 'Supply Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-supply', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-supply-ldo', 'TPS7A02DBVR', 'mfr-supply', 'Power management', 'active', 'pkg-supply', 0.8);
+  `);
+  applyMigrationSql(db, hardeningMigrationSql);
+  applyMigrationSql(db, providerImportHardeningMigrationSql);
+  applyMigrationSql(db, supplyOfferingsMigrationSql);
+
+  db.public.none(`
+    INSERT INTO source_records (id, provider_id, provider_part_key, part_id, source_url, fetched_at, raw_payload, normalized_at)
+    VALUES ('source-supply-1', 'octopart', 'TPS7A02DBVR', 'part-supply-ldo', 'https://example.test/supply', '2026-05-11T00:00:00.000Z', '{"mpn":"TPS7A02DBVR"}'::jsonb, '2026-05-11T00:01:00.000Z');
+
+    INSERT INTO supply_offerings (
+      id,
+      part_id,
+      provider_id,
+      source_record_id,
+      provider_part_key,
+      provider_sku,
+      inventory_status,
+      inventory_quantity,
+      moq,
+      lead_time_days,
+      packaging,
+      currency_code,
+      preferred_rank,
+      last_seen_at
+    )
+    VALUES (
+      'offer-supply-1',
+      'part-supply-ldo',
+      'octopart',
+      'source-supply-1',
+      'TPS7A02DBVR',
+      'SKU-123',
+      'in_stock',
+      250,
+      1,
+      3,
+      'Tape and reel',
+      'USD',
+      1,
+      '2026-05-11T00:02:00.000Z'
+    );
+
+    INSERT INTO price_breaks (id, supply_offering_id, min_quantity, unit_price, currency_code, captured_at)
+    VALUES ('price-supply-1', 'offer-supply-1', 100, 0.42, 'USD', '2026-05-11T00:02:00.000Z');
+  `);
+
+  const joined = db.public.one(`
+    SELECT
+      so.provider_id,
+      so.source_record_id,
+      so.inventory_status,
+      pb.min_quantity,
+      pb.unit_price::float AS unit_price
+    FROM supply_offerings so
+    JOIN price_breaks pb ON pb.supply_offering_id = so.id
+    WHERE so.id = 'offer-supply-1'
+  `);
+
+  assert.deepEqual(joined, {
+    inventory_status: "in_stock",
+    min_quantity: 100,
+    provider_id: "octopart",
+    source_record_id: "source-supply-1",
+    unit_price: 0.42,
+  });
+  assert.throws(
+    () => db.public.none(`INSERT INTO supply_offerings (id, part_id, provider_id, source_record_id, provider_part_key, inventory_status) VALUES ('offer-bad-status', 'part-supply-ldo', 'octopart', 'source-supply-1', 'BAD', 'maybe')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO price_breaks (id, supply_offering_id, min_quantity, unit_price, currency_code) VALUES ('price-bad-negative', 'offer-supply-1', 1, -0.1, 'USD')`),
+    /check/i
+  );
+  assert.match(supplyOfferingsMigrationSql, /CREATE TABLE IF NOT EXISTS supply_offerings/u);
+  assert.match(supplyOfferingsMigrationSql, /CREATE TABLE IF NOT EXISTS price_breaks/u);
+  assert.match(supplyOfferingsMigrationSql, /source_record_id TEXT NOT NULL REFERENCES source_records/u);
 });
 
 /**

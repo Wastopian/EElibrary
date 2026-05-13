@@ -63,6 +63,7 @@ import type {
   PartSubstitutionCreateResponse,
   PartSubstitutionListResponse,
   PartSubstitutionRevokeResponse,
+  PartSupplyOffersResponse,
   PartWhereUsedResponse,
   PartIssueCode,
   PartIssueWorkflowUpdateInput,
@@ -958,6 +959,27 @@ export async function fetchPartWhereUsed(partId: string): Promise<PartWhereUsedR
   }
 
   const envelope = (await response.json()) as ApiEnvelope<PartWhereUsedResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches source-linked supply offer snapshots for one part without implying live availability.
+ */
+export async function fetchPartSupplyOffers(partId: string): Promise<PartSupplyOffersResponse | null> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/supply-offers`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part supply offers request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartSupplyOffersResponse>;
 
   return envelope.data;
 }

@@ -117,6 +117,30 @@
           "validationStatus": "needs_review"
         }
       ],
+      "supplyOfferings": [
+        {
+          "providerSku": "TPS7A02DBVR",
+          "inventoryStatus": "unknown",
+          "inventoryQuantity": null,
+          "moq": 1,
+          "leadTimeDays": null,
+          "packaging": "cut tape / reel",
+          "currencyCode": "USD",
+          "preferredRank": 1,
+          "priceBreaks": [
+            {
+              "minQuantity": 1,
+              "unitPrice": 0.58,
+              "currencyCode": "USD"
+            },
+            {
+              "minQuantity": 100,
+              "unitPrice": 0.31,
+              "currencyCode": "USD"
+            }
+          ]
+        }
+      ],
       "generationWorkflows": [
         {
           "confidenceScore": 0.77,

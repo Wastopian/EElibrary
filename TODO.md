@@ -1,6 +1,6 @@
 # EE Library — active backlog
 
-**Updated:** 2026-05-08
+**Updated:** 2026-05-11
 
 ## Where things live
 
@@ -48,6 +48,8 @@ These keep onboarding and boundaries honest for contributors and operators.
 
 1. **Subcategory search facets** — Ship only when **persisted** catalog fields and indexing justify filters; avoid dead UI facets.
 2. **Provider merge, extraction, and CAD depth** — Incremental milestones: richer multi-provider merge policy, broader datasheet extraction, production-grade CAD outputs—each scoped with matrix updates, not “big bang” claims.
+
+3. **Distributor offer ingestion** - _Foundation landed 2026-05-11: `supply_offerings` / `price_breaks`, worker persistence, JLC/LCSC and local-catalog snapshot normalization, plus a read-only part-detail panel now exist for source-linked commercial snapshots._ Remaining: Octopart or equivalent paid distributor adapter, refresh scheduling, and stale-row policy.
 
 ### 4. Usability and workstation UX
 

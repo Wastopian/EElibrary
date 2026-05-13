@@ -49,6 +49,16 @@ test("jlcparts provider normalizes structured metadata without implying CAD avai
       ["operating_temperature_range", null, -55, 155, "deg C"]
     ]
   );
+  assert.equal(normalized.supplyOfferings.length, 1);
+  assert.equal(normalized.supplyOfferings[0]?.inventoryStatus, "in_stock");
+  assert.equal(normalized.supplyOfferings[0]?.inventoryQuantity, 1);
+  assert.deepEqual(
+    normalized.supplyOfferings[0]?.priceBreaks.map((priceBreak) => [priceBreak.minQuantity, priceBreak.unitPrice, priceBreak.currencyCode]),
+    [
+      [1, 0.0005, "USD"],
+      [1000, 0.0004, "USD"]
+    ]
+  );
 });
 
 /**
@@ -66,45 +76,65 @@ test("jlcparts provider returns exact candidate rows for supported lookups", asy
       lcsc: string;
       mfr: string;
       price: unknown;
+      stock: number | null;
       url: string | null;
     };
   };
   const restoreFetch = mockFetch((url) => {
-    if (url.pathname.endsWith("/index.json")) {
+    if (url.pathname.endsWith("/manifest.json")) {
       return jsonResponse({
-        categories: {
-          Resistors: {
-            "Chip Resistor - Surface Mount": {
-              datahash: "hash",
-              sourcename: "ResistorsChip_Resistor___Surface_Mount",
-              stockhash: "stock-hash"
-            }
+        attributesLut: "attributes-lut.json.gz",
+        categories: [
+          {
+            category: "Resistors",
+            componentCount: 1,
+            id: 1067,
+            shards: ["components-resistors_chip_resistor_surface_mount__b1111123-001.jsonl.gz"],
+            subcategory: "Chip Resistor - Surface Mount"
           }
-        },
-        created: "2026-04-12T06:57:40+00:00"
+        ],
+        created: "2026-04-12T06:57:40+00:00",
+        files: {},
+        totalComponents: 1,
+        version: 2
       });
     }
 
-    if (url.pathname.endsWith("/ResistorsChip_Resistor___Surface_Mount.json.gz")) {
+    if (url.pathname.endsWith("/attributes-lut.json.gz")) {
+      return new Response(gzipSync(Buffer.from(JSON.stringify(Object.entries(payload.component.attributes)))));
+    }
+
+    if (url.pathname.endsWith("/components-resistors_chip_resistor_surface_mount__b1111123-001.jsonl.gz")) {
+      const attributeIndexes = Object.keys(payload.component.attributes).map((_, index) => index);
+      const schema = {
+        attributes: 0,
+        datasheet: 1,
+        description: 2,
+        img: 3,
+        joints: 4,
+        lcsc: 5,
+        mfr: 6,
+        price: 7,
+        stock: 8,
+        url: 9
+      };
+      const row = [
+        attributeIndexes,
+        payload.component.datasheet,
+        payload.component.description,
+        payload.component.img,
+        payload.component.joints,
+        payload.component.lcsc,
+        payload.component.mfr,
+        payload.component.price,
+        payload.component.stock,
+        payload.component.url
+      ];
+
       return new Response(
         gzipSync(
           Buffer.from(
-            JSON.stringify({
-              components: [
-                [
-                  payload.component.attributes,
-                  payload.component.datasheet,
-                  payload.component.description,
-                  payload.component.img,
-                  payload.component.joints,
-                  payload.component.lcsc,
-                  payload.component.mfr,
-                  payload.component.price,
-                  payload.component.url
-                ]
-              ],
-              schema: ["attributes", "datasheet", "description", "img", "joints", "lcsc", "mfr", "price", "url"]
-            })
+            `${JSON.stringify(schema)}\n${JSON.stringify(row)}\n`
           )
         )
       );
@@ -253,7 +283,11 @@ function buildRawPayload(extraAttributes: Record<string, unknown> = {}): RawProv
         joints: 2,
         lcsc: "C1091",
         mfr: "RC-02W300JT",
-        price: [],
+        price: [
+          { price: 0.0005, qFrom: 1, qTo: 999 },
+          { price: 0.0004, qFrom: 1000, qTo: 2999 }
+        ],
+        stock: 1,
         url: "Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT"
       },
       indexCreatedAt: "2026-04-12T06:57:40+00:00",
@@ -322,6 +356,7 @@ function buildSparsePayload({
         lcsc: "C-SPARSE-1",
         mfr,
         price: [],
+        stock: null,
         url: null
       },
       indexCreatedAt: "2026-04-12T06:57:40+00:00",

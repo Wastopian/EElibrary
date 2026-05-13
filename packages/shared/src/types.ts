@@ -262,6 +262,9 @@ export type DocumentRedlineStatus = "open" | "resolved" | "rejected" | "supersed
 /** DocumentRedlineSeverity lets engineering notes distinguish comments from release blockers. */
 export type DocumentRedlineSeverity = "info" | "review" | "blocker";
 
+/** InventoryStatus records commercial availability snapshots without claiming live stock truth. */
+export type InventoryStatus = "in_stock" | "out_of_stock" | "backorder" | "unknown";
+
 /** Manufacturer is the normalized maker entity used by search and detail pages. */
 export interface Manufacturer {
   id: string;
@@ -319,6 +322,66 @@ export interface SourceRecord {
   importStatus: SourceImportStatus;
   importErrorDetails: string | null;
   lastUpdatedAt: string;
+}
+
+/** PriceBreak is one provider-specific price tier captured from a supply snapshot. */
+export interface PriceBreak {
+  id: string;
+  supplyOfferingId: string;
+  minQuantity: number;
+  unitPrice: number;
+  currencyCode: string;
+  capturedAt: string;
+}
+
+/** SupplyOffering stores provider-specific commercial context without changing canonical part truth. */
+export interface SupplyOffering {
+  id: string;
+  partId: string;
+  providerId: string;
+  sourceRecordId: string;
+  providerPartKey: string;
+  providerSku: string | null;
+  inventoryStatus: InventoryStatus;
+  inventoryQuantity: number | null;
+  moq: number | null;
+  leadTimeDays: number | null;
+  packaging: string | null;
+  currencyCode: string;
+  preferredRank: number | null;
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+  sourceUrl: string | null;
+  priceBreaks: PriceBreak[];
+}
+
+/** LowestSupplyPriceSummary identifies the lowest recorded price tier without turning it into procurement approval. */
+export interface LowestSupplyPriceSummary {
+  offeringId: string;
+  providerId: string;
+  minQuantity: number;
+  unitPrice: number;
+  currencyCode: string;
+}
+
+/** PartSupplyOfferSummary counts freshness and stock signals for one part's commercial snapshots. */
+export interface PartSupplyOfferSummary {
+  offerCount: number;
+  inStockOfferCount: number;
+  staleOfferCount: number;
+  lastSeenAt: string | null;
+  lowestUnitPrice: LowestSupplyPriceSummary | null;
+}
+
+/** PartSupplyOffersResponse returns source-linked supply snapshots beside part detail truth. */
+export interface PartSupplyOffersResponse {
+  state: "available" | "empty";
+  partId: string;
+  staleAfterDays: number;
+  summary: PartSupplyOfferSummary;
+  offers: SupplyOffering[];
+  boundary: string;
 }
 
 /** ProviderImportDiagnostic is the compact debug view for provider import health. */

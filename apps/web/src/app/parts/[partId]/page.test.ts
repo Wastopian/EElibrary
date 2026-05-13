@@ -12,7 +12,7 @@ import {
   buildUnavailablePartEnrichmentSummary
 } from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
-import type { DocumentRevisionListResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
+import type { DocumentRevisionListResponse, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
 
 /**
  * Verifies the detail page renders V3-style readiness record truth without whole-part approval claims.
@@ -44,8 +44,8 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Bundle gate/u);
     assert.match(html, /Alternates and companions/u);
     assert.match(html, /Sourcing and lifecycle/u);
-    assert.match(html, /Distributor pricing/u);
-    assert.match(html, /Pricing and stock are not shown here/u);
+    assert.match(html, /Distributor offers/u);
+    assert.match(html, /No distributor offers recorded/u);
     assert.match(html, /Top blockers/u);
     assert.match(html, /Risk flags/u);
     assert.match(html, /Review and export state/u);
@@ -480,9 +480,13 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
 });
 
 /**
- * Replaces global fetch for detail and where-used API calls and returns a restore callback.
+ * Replaces global fetch for detail, where-used, document-control, and supply-offer API calls.
  */
-function mockFetch(handler: (url: URL) => Response, whereUsedHandler?: (url: URL) => Response): () => void {
+function mockFetch(
+  handler: (url: URL) => Response,
+  whereUsedHandler?: (url: URL) => Response,
+  supplyOffersHandler?: (url: URL) => Response
+): () => void {
   const previousFetch = globalThis.fetch;
 
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -498,6 +502,13 @@ function mockFetch(handler: (url: URL) => Response, whereUsedHandler?: (url: URL
     if (isDocumentControlRequest(url)) {
       return jsonResponse({
         data: buildEmptyDocumentControlResponse(readDocumentControlPartId(url)),
+        source: "database"
+      });
+    }
+
+    if (isSupplyOffersRequest(url)) {
+      return supplyOffersHandler ? supplyOffersHandler(url) : jsonResponse({
+        data: buildEmptySupplyOffersResponse(readSupplyOffersPartId(url)),
         source: "database"
       });
     }
@@ -525,6 +536,13 @@ function isDocumentControlRequest(url: URL): boolean {
 }
 
 /**
+ * Detects the part-scoped supply-offer API request added beside detail reads.
+ */
+function isSupplyOffersRequest(url: URL): boolean {
+  return /^\/parts\/[^/]+\/supply-offers$/u.test(url.pathname);
+}
+
+/**
  * Reads the part id from the where-used URL for default empty where-used fixtures.
  */
 function readWhereUsedPartId(url: URL): string {
@@ -538,6 +556,15 @@ function readWhereUsedPartId(url: URL): string {
  */
 function readDocumentControlPartId(url: URL): string {
   const match = /^\/parts\/([^/]+)\/document-revisions$/u.exec(url.pathname);
+
+  return match?.[1] ? decodeURIComponent(match[1]) : "part-unknown";
+}
+
+/**
+ * Reads the part id from the supply-offer URL for default empty fixtures.
+ */
+function readSupplyOffersPartId(url: URL): string {
+  const match = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
 
   return match?.[1] ? decodeURIComponent(match[1]) : "part-unknown";
 }
@@ -562,6 +589,26 @@ function buildEmptyDocumentControlResponse(partId: string): DocumentRevisionList
     partId,
     revisions: [],
     state: "empty"
+  };
+}
+
+/**
+ * Builds the default empty supply-offer response for tests that only care about detail payloads.
+ */
+function buildEmptySupplyOffersResponse(partId: string): PartSupplyOffersResponse {
+  return {
+    boundary: "Supply offers test boundary.",
+    offers: [],
+    partId,
+    staleAfterDays: 14,
+    state: "empty",
+    summary: {
+      inStockOfferCount: 0,
+      lastSeenAt: null,
+      lowestUnitPrice: null,
+      offerCount: 0,
+      staleOfferCount: 0
+    }
   };
 }
 

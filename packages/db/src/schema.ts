@@ -109,6 +109,71 @@ export const sourceRecords = pgTable(
   ]
 );
 
+/** supplyOfferings stores source-linked distributor/local-catalog commercial snapshots. */
+export const supplyOfferings = pgTable(
+  "supply_offerings",
+  {
+    id: text("id").primaryKey(),
+    partId: text("part_id")
+      .notNull()
+      .references(() => parts.id),
+    providerId: text("provider_id").notNull(),
+    sourceRecordId: text("source_record_id")
+      .notNull()
+      .references(() => sourceRecords.id),
+    providerPartKey: text("provider_part_key").notNull(),
+    providerSku: text("provider_sku"),
+    inventoryStatus: text("inventory_status").notNull().default("unknown"),
+    inventoryQuantity: integer("inventory_quantity"),
+    moq: integer("moq"),
+    leadTimeDays: integer("lead_time_days"),
+    packaging: text("packaging"),
+    currencyCode: text("currency_code").notNull().default("USD"),
+    preferredRank: integer("preferred_rank"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uq_supply_offerings_provider_sku").on(t.partId, t.providerId, t.providerPartKey, t.providerSku),
+    index("idx_supply_offerings_part").on(t.partId, t.inventoryStatus, t.lastSeenAt),
+    index("idx_supply_offerings_source_record").on(t.sourceRecordId),
+    index("idx_supply_offerings_provider_part").on(t.providerId, t.providerPartKey, t.lastSeenAt),
+    check(
+      "supply_offerings_inventory_status_check",
+      literalCheck(`inventory_status IN ('in_stock', 'out_of_stock', 'backorder', 'unknown')`)
+    ),
+    check("supply_offerings_inventory_quantity_check", literalCheck(`inventory_quantity IS NULL OR inventory_quantity >= 0`)),
+    check("supply_offerings_moq_check", literalCheck(`moq IS NULL OR moq >= 1`)),
+    check("supply_offerings_lead_time_days_check", literalCheck(`lead_time_days IS NULL OR lead_time_days >= 0`)),
+    check("supply_offerings_currency_code_check", literalCheck(`currency_code LIKE '___' AND currency_code = upper(currency_code)`)),
+    check("supply_offerings_preferred_rank_check", literalCheck(`preferred_rank IS NULL OR preferred_rank >= 1`)),
+  ]
+);
+
+/** priceBreaks stores provider-specific price tiers for one supply snapshot. */
+export const priceBreaks = pgTable(
+  "price_breaks",
+  {
+    id: text("id").primaryKey(),
+    supplyOfferingId: text("supply_offering_id")
+      .notNull()
+      .references(() => supplyOfferings.id, { onDelete: "cascade" }),
+    minQuantity: integer("min_quantity").notNull(),
+    unitPrice: numeric("unit_price", { precision: 18, scale: 8 }).notNull(),
+    currencyCode: text("currency_code").notNull().default("USD"),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.supplyOfferingId, t.minQuantity, t.currencyCode, t.capturedAt),
+    index("idx_price_breaks_offering").on(t.supplyOfferingId, t.minQuantity, t.capturedAt),
+    index("idx_price_breaks_price").on(t.currencyCode, t.unitPrice, t.minQuantity),
+    check("price_breaks_min_quantity_check", literalCheck(`min_quantity >= 1`)),
+    check("price_breaks_unit_price_check", literalCheck(`unit_price >= 0`)),
+    check("price_breaks_currency_code_check", literalCheck(`currency_code LIKE '___' AND currency_code = upper(currency_code)`)),
+  ]
+);
+
 export const providerAcquisitionJobs = pgTable(
   "provider_acquisition_jobs",
   {

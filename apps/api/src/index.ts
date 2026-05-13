@@ -28,6 +28,7 @@ import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit
 import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
+import { readPartSupplyOffersFromDatabase } from "./supply-offers";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
@@ -205,6 +206,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(url.pathname);
   const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(url.pathname);
   const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
+  const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
   const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(url.pathname);
   const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
   const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
@@ -668,6 +670,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (partDocumentRevisionsMatch?.[1]) {
     await handlePartDocumentRevisionsRead(response, decodeURIComponent(partDocumentRevisionsMatch[1]));
+    return;
+  }
+
+  if (partSupplyOffersMatch?.[1]) {
+    await handlePartSupplyOffersRead(response, decodeURIComponent(partSupplyOffersMatch[1]));
     return;
   }
 
@@ -2676,6 +2683,34 @@ async function handlePartWhereUsedRead(response: ServerResponse, partId: string)
 }
 
 /**
+ * Handles read-only supply offer snapshots for one internal part.
+ */
+async function handlePartSupplyOffersRead(response: ServerResponse, partId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-supply-offers-read",
+      () => readPartSupplyOffersFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendSupplyOffersNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles global where-used search across supported project-memory dependency records.
  */
 async function handleWhereUsedSearchRead(response: ServerResponse, url: URL): Promise<void> {
@@ -4599,6 +4634,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
   if (method === "GET" && /^\/parts\/[^/]+\/usages$/u.test(pathname)) return "api-part-where-used";
+  if (method === "GET" && /^\/parts\/[^/]+\/supply-offers$/u.test(pathname)) return "api-part-supply-offers";
   if (method === "GET" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revisions-read";
   if (method === "POST" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revision-create";
   if (method === "POST" && /^\/document-revisions\/[^/]+\/redlines$/u.test(pathname)) return "api-document-redline-create";
@@ -4725,6 +4761,18 @@ function sendDocumentControlNotConfigured(response: ServerResponse): void {
     error: {
       code: "DB_NOT_CONFIGURED",
       message: "Document control requires a configured database so revision, ACL, and redline history can be persisted."
+    }
+  });
+}
+
+/**
+ * Sends the standard supply-offer not-configured response without seed fallback.
+ */
+function sendSupplyOffersNotConfigured(response: ServerResponse): void {
+  sendJson(response, 503, {
+    error: {
+      code: "DB_NOT_CONFIGURED",
+      message: "Supply offers require a configured database so source-linked commercial snapshots can be read."
     }
   });
 }

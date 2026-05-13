@@ -52,6 +52,12 @@ function buildTestManifest(overrides: Partial<ExportBundleManifest> = {}): Expor
         storageKey: "assets/part-1/symbol.lib"
       }
     ],
+    controlSummary: {
+      highestAccessLevel: null,
+      itarControlledCount: 0,
+      restrictedCount: 0
+    },
+    controlledAssets: [],
     omissions: [],
     projectId: TEST_PROJECT_ID,
     revisionLabel: null,

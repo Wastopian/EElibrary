@@ -47,6 +47,8 @@ test("persistNormalizedPartRows persists connector relationships and generation 
   assert.match(sql, /INSERT INTO similar_part_relations/u);
   assert.match(sql, /INSERT INTO companion_recommendations/u);
   assert.match(sql, /INSERT INTO source_extraction_signals/u);
+  assert.match(sql, /INSERT INTO supply_offerings/u);
+  assert.match(sql, /INSERT INTO price_breaks/u);
   assert.match(sql, /INSERT INTO generation_workflows/u);
   assert.match(sql, /INSERT INTO review_records/u);
   assert.match(sql, /INSERT INTO asset_validation_records/u);
@@ -56,6 +58,8 @@ test("persistNormalizedPartRows persists connector relationships and generation 
   assert.match(sql, /INSERT INTO part_issues/u);
   assert.match(sql, /INSERT INTO part_risk_flags/u);
   assert.ok(tableCallIndex(calls, "connector_families") < tableCallIndex(calls, "parts"));
+  assert.ok(tableCallIndex(calls, "source_records") < tableCallIndex(calls, "supply_offerings"));
+  assert.ok(tableCallIndex(calls, "supply_offerings") < tableCallIndex(calls, "price_breaks"));
   assert.ok(tableCallIndex(calls, "generation_workflows") < tableCallIndex(calls, "review_records"));
   assert.ok(tableCallIndex(calls, "review_records") < tableCallIndex(calls, "asset_validation_records"));
 });
@@ -146,6 +150,43 @@ test("persistProviderImportFailureRows stores failed import diagnostics", async 
   assert.equal(sourceCall.values?.[9], null);
   assert.equal(sourceCall.values?.[10], "failed");
   assert.match(String(sourceCall.values?.[11]), /provider returned 500/u);
+});
+
+/**
+ * Verifies supply offering snapshots and price tiers are persisted with source provenance.
+ */
+test("persistNormalizedPartRows persists supply offerings and replaces stale price tiers", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const firstImport = buildSupplyImportPart("2026-04-12T00:00:00.000Z", 1200, [
+      { minQuantity: 1, unitPrice: 0.12 },
+      { minQuantity: 100, unitPrice: 0.08 }
+    ]);
+    const refreshedImport = buildSupplyImportPart("2026-04-12T03:00:00.000Z", 800, [
+      { minQuantity: 1, unitPrice: 0.11 }
+    ]);
+
+    await persistNormalizedPartRows(client, firstImport);
+    await persistNormalizedPartRows(client, refreshedImport);
+
+    const offeringRows = await client.query<{ inventory_quantity: number; last_seen_at: Date | string; source_record_id: string }>(
+      "SELECT inventory_quantity, last_seen_at, source_record_id FROM supply_offerings WHERE id = 'supply-repeat-c1'"
+    );
+    const priceRows = await client.query<{ min_quantity: number; unit_price: string }>(
+      "SELECT min_quantity, unit_price FROM price_breaks WHERE supply_offering_id = 'supply-repeat-c1' ORDER BY min_quantity ASC"
+    );
+
+    assert.equal(offeringRows.rows.length, 1);
+    assert.equal(offeringRows.rows[0]?.inventory_quantity, 800);
+    assert.equal(offeringRows.rows[0]?.source_record_id, "source-repeat-provider-c1");
+    assert.equal(new Date(offeringRows.rows[0]?.last_seen_at ?? 0).toISOString(), "2026-04-12T03:00:00.000Z");
+    assert.deepEqual(priceRows.rows.map((row) => [row.min_quantity, Number(row.unit_price)]), [[1, 0.11]]);
+  } finally {
+    client.release();
+    await pool.end();
+  }
 });
 
 /**
@@ -537,6 +578,36 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
         similarPartId: "part-similar"
       }
     ],
+    supplyOfferings: [
+      {
+        createdAt: "2026-04-12T00:00:00.000Z",
+        currencyCode: "USD",
+        id: "supply-test",
+        inventoryQuantity: 1200,
+        inventoryStatus: "in_stock",
+        lastSeenAt: "2026-04-12T00:00:00.000Z",
+        leadTimeDays: null,
+        moq: 1,
+        packaging: "reel",
+        partId: "part-test",
+        preferredRank: 1,
+        priceBreaks: [
+          {
+            capturedAt: "2026-04-12T00:00:00.000Z",
+            currencyCode: "USD",
+            id: "price-test-1",
+            minQuantity: 1,
+            supplyOfferingId: "supply-test",
+            unitPrice: 0.12
+          }
+        ],
+        providerId: "test-provider",
+        providerPartKey: "TEST",
+        providerSku: "TEST-SKU",
+        sourceRecordId: "source-test",
+        updatedAt: "2026-04-12T00:00:00.000Z"
+      }
+    ],
     sourceRecord: {
       fetchedAt: "2026-04-12T00:00:00.000Z",
       id: "source-test",
@@ -606,6 +677,7 @@ function buildMinimalImportPart(
     reviewRecords: [],
     validationRecords: [],
     similarPartRelations: [],
+    supplyOfferings: [],
     sourceRecord: {
       fetchedAt: lastUpdatedAt,
       id: "source-repeat-provider-c1",
@@ -621,6 +693,47 @@ function buildMinimalImportPart(
       sourceLastSeenAt: lastUpdatedAt,
       sourceUrl: "https://example.test/c1"
     }
+  };
+}
+
+/**
+ * Builds a minimal import with one supply offering for persistence refresh tests.
+ */
+function buildSupplyImportPart(
+  lastUpdatedAt: string,
+  inventoryQuantity: number,
+  priceBreaks: Array<{ minQuantity: number; unitPrice: number }>
+): NormalizedProviderPart {
+  return {
+    ...buildMinimalImportPart(lastUpdatedAt, 0.7),
+    supplyOfferings: [
+      {
+        createdAt: lastUpdatedAt,
+        currencyCode: "USD",
+        id: "supply-repeat-c1",
+        inventoryQuantity,
+        inventoryStatus: inventoryQuantity > 0 ? "in_stock" : "out_of_stock",
+        lastSeenAt: lastUpdatedAt,
+        leadTimeDays: null,
+        moq: 1,
+        packaging: "cut tape",
+        partId: "part-repeat-c1",
+        preferredRank: 1,
+        priceBreaks: priceBreaks.map((priceBreak, index) => ({
+          capturedAt: lastUpdatedAt,
+          currencyCode: "USD",
+          id: `price-repeat-c1-${priceBreak.minQuantity}-${index + 1}`,
+          minQuantity: priceBreak.minQuantity,
+          supplyOfferingId: "supply-repeat-c1",
+          unitPrice: priceBreak.unitPrice
+        })),
+        providerId: "repeat-provider",
+        providerPartKey: "C1",
+        providerSku: "C1",
+        sourceRecordId: "source-repeat-provider-c1",
+        updatedAt: lastUpdatedAt
+      }
+    ]
   };
 }
 
@@ -682,6 +795,7 @@ function buildConnectorConflictSupportPart(
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    supplyOfferings: [],
     sourceRecord: {
       fetchedAt: "2026-04-16T00:00:00.000Z",
       id: `source-${providerId}-${providerPartKey.toLowerCase()}`,
@@ -790,6 +904,7 @@ function buildConnectorConflictSourcePart(): NormalizedProviderPart {
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    supplyOfferings: [],
     sourceRecord: {
       fetchedAt: "2026-04-16T00:05:00.000Z",
       id: "source-source-provider-src",
@@ -886,6 +1001,7 @@ function buildBestMateConflictSourcePart(): NormalizedProviderPart {
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    supplyOfferings: [],
     sourceRecord: {
       fetchedAt: "2026-04-16T00:10:00.000Z",
       id: "source-best-conflict-src",
@@ -917,6 +1033,8 @@ function createMinimalImportPool(): TestPool {
     CREATE TABLE connector_families (id TEXT PRIMARY KEY, name TEXT, series TEXT, description TEXT);
     CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE supply_offerings (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, provider_part_key TEXT, provider_sku TEXT, inventory_status TEXT, inventory_quantity INTEGER, moq INTEGER, lead_time_days INTEGER, packaging TEXT, currency_code TEXT, preferred_rank INTEGER, last_seen_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
+    CREATE TABLE price_breaks (id TEXT PRIMARY KEY, supply_offering_id TEXT, min_quantity INTEGER, unit_price NUMERIC, currency_code TEXT, captured_at TIMESTAMPTZ);
     CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
@@ -1124,6 +1242,7 @@ function buildDuplicateTestPart(
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    supplyOfferings: [],
     sourceRecord: {
       fetchedAt: "2026-04-20T00:00:00.000Z",
       id: `source-${providerId}-${providerPartKey.toLowerCase()}`,

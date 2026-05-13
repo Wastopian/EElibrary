@@ -6,14 +6,14 @@ import { gunzipSync } from "node:zlib";
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
-import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
+import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
 
 /** JLC_PARTS_PROVIDER_ID is the canonical worker-only provider identifier. */
 const JLC_PARTS_PROVIDER_ID = "jlcparts";
 
-/** INDEX_URL points at the static structured jlcparts catalog index. */
-const INDEX_URL = "https://yaqwsx.github.io/jlcparts/data/index.json";
+/** INDEX_URL points at the current static structured jlcparts catalog manifest. */
+const INDEX_URL = "https://yaqwsx.github.io/jlcparts/data/manifest.json";
 
 /** DATA_BASE_URL points at compressed static category payloads. */
 const DATA_BASE_URL = "https://yaqwsx.github.io/jlcparts/data";
@@ -29,26 +29,29 @@ const DEFAULT_IMPORT_REQUESTS: ProviderPartRequest[] = [
   }
 ];
 
-/** PRIORITY_CATEGORY_SOURCENAMES checks the known sample category before broad scanning. */
-const PRIORITY_CATEGORY_SOURCENAMES = ["ResistorsChip_Resistor___Surface_Mount"];
+/** PRIORITY_SUBCATEGORIES checks the known sample category before broad scanning. */
+const PRIORITY_SUBCATEGORIES = ["Chip Resistor - Surface Mount"];
 
-/** FETCH_CONCURRENCY is the number of category files fetched in parallel during full enumeration. */
+/** FETCH_CONCURRENCY is the number of category entries fetched in parallel during full enumeration. */
 const FETCH_CONCURRENCY = 6;
 
-/** CATEGORY_HINT_PREFIX namespaces the category sourcename stored in acquisition job source_url. */
-const CATEGORY_HINT_PREFIX = "jlcparts:category:";
+/** CATEGORY_HINT_PREFIX namespaces a manifest shard name stored in acquisition job source_url. */
+const CATEGORY_HINT_PREFIX = "jlcparts:shard:";
 
 /** INDEX_CACHE_TTL_MS keeps the index fresh without re-fetching it for every drain job. */
 const INDEX_CACHE_TTL_MS = 5 * 60 * 1000;
 
-/** CATEGORY_CACHE_TTL_MS keeps recently accessed category files in memory across drain batches. */
+/** CATEGORY_CACHE_TTL_MS keeps recently accessed shard files in memory across drain batches. */
 const CATEGORY_CACHE_TTL_MS = 15 * 60 * 1000;
 
-/** MAX_CACHED_CATEGORIES bounds peak memory use during a drain run (~5 MB per category file). */
+/** MAX_CACHED_CATEGORIES bounds peak memory use during a drain run for gzipped JSONL shards. */
 const MAX_CACHED_CATEGORIES = 50;
 
 /** cachedIndex stores the provider index between drain jobs so it is only fetched once per process. */
 let cachedIndex: { index: JlcPartsIndex; cachedAt: number } | null = null;
+
+/** cachedAttributesLut stores the manifest attribute lookup table used to decode row attribute ids. */
+let cachedAttributesLut: { attributes: JlcPartsAttributesLut; cachedAt: number; manifestCreatedAt: string } | null = null;
 
 /**
  * categoryFileCache keeps recently accessed compressed category payloads in memory.
@@ -60,20 +63,32 @@ const categoryFileCache = new Map<string, { file: JlcPartsCategoryFile; cachedAt
 
 /** JlcPartsIndex describes the public catalog index envelope. */
 interface JlcPartsIndex {
-  /** Source catalog generation timestamp from the jlcparts index. */
+  /** Attribute lookup file used to decode compact component rows. */
+  attributesLut: string;
+  /** Source catalog generation timestamp from the jlcparts manifest. */
   created: string;
-  /** Category and subcategory metadata keyed by display names. */
-  categories: Record<string, Record<string, JlcPartsCategoryMetadata>>;
+  /** Category and subcategory metadata exposed by the manifest. */
+  categories: JlcPartsCategoryMetadata[];
+  /** Manifest file metadata keyed by shard filename. */
+  files: Record<string, { sha256: string }>;
+  /** Number of catalog components in the manifest. */
+  totalComponents: number;
+  /** Manifest schema version. */
+  version: number;
 }
 
-/** JlcPartsCategoryMetadata describes one compressed category payload. */
+/** JlcPartsCategoryMetadata describes one manifest category with one or more JSONL shards. */
 interface JlcPartsCategoryMetadata {
-  /** Content hash exposed by the jlcparts feed. */
-  datahash: string;
-  /** Filename stem for the compressed category payload. */
-  sourcename: string;
-  /** Stock content hash exposed by the jlcparts feed. */
-  stockhash: string;
+  /** Top-level category display name. */
+  category: string;
+  /** Number of component rows reported by the manifest. */
+  componentCount: number;
+  /** Stable numeric category id from the manifest. */
+  id: number;
+  /** Gzipped JSONL component shard filenames for this category. */
+  shards: string[];
+  /** Subcategory display name. */
+  subcategory: string;
 }
 
 /** JlcPartsCategoryEntry carries category context while searching the feed. */
@@ -88,11 +103,14 @@ interface JlcPartsCategoryEntry {
 
 /** JlcPartsCategoryFile is the compressed category payload shape. */
 interface JlcPartsCategoryFile {
-  /** Column names for the component row arrays. */
-  schema: string[];
+  /** Column names and array offsets for the compact component row arrays. */
+  schema: Record<string, number>;
   /** Component rows matching the schema order. */
   components: unknown[][];
 }
+
+/** JlcPartsAttributesLut maps compact row attribute ids to full attribute envelopes. */
+type JlcPartsAttributesLut = Array<[string, JlcPartsAttribute]>;
 
 /** JlcPartsAttribute describes one structured attribute from the provider feed. */
 interface JlcPartsAttribute {
@@ -120,6 +138,8 @@ interface JlcPartsComponent {
   datasheet: string | null;
   /** Price breaks retained only in the raw source record. */
   price: unknown;
+  /** Stock snapshot value from the provider manifest, if exposed. */
+  stock: number | null;
   /** Provider image filename retained only in the raw source record. */
   img: string | null;
   /** Provider URL slug used to build the source URL. */
@@ -136,7 +156,7 @@ interface JlcPartsRawPayload {
   categoryName: string;
   /** Subcategory display name. */
   subcategoryName: string;
-  /** Source filename stem for the category payload. */
+  /** Manifest shard filename for the category payload. */
   categorySourceName: string;
   /** Matched provider component row. */
   component: JlcPartsComponent;
@@ -198,27 +218,33 @@ export async function* enumerateJlcPartRequests(): AsyncGenerator<ProviderPartRe
 
 /**
  * Fetches and extracts all ProviderPartRequests from one category entry, embedding
- * the category sourcename as a hint so drain jobs can go directly to the right file.
+ * each shard filename as a hint so drain jobs can go directly to the right file.
  */
 async function fetchCategoryPartRequests(entry: JlcPartsCategoryEntry): Promise<ProviderPartRequest[]> {
-  const categoryFile = await fetchCategoryFile(entry.metadata.sourcename);
-  return extractRequestsFromCategoryFile(categoryFile, entry.metadata.sourcename);
+  const requests: ProviderPartRequest[] = [];
+
+  for (const shardName of entry.metadata.shards) {
+    const categoryFile = await fetchCategoryFile(shardName);
+    requests.push(...extractRequestsFromCategoryFile(categoryFile, shardName));
+  }
+
+  return requests;
 }
 
 /**
- * Extracts ProviderPartRequests from a parsed category payload. The sourcename is embedded
- * in providerUrl as a namespaced hint so fetchJlcPartsRawPart can skip the full category
+ * Extracts ProviderPartRequests from a parsed category payload. The shard name is embedded
+ * in providerUrl as a namespaced hint so fetchJlcPartsRawPart can skip the full manifest
  * scan when processing the resulting acquisition jobs.
  */
-function extractRequestsFromCategoryFile(categoryFile: JlcPartsCategoryFile, sourcename: string): ProviderPartRequest[] {
-  const lcscIndex = categoryFile.schema.indexOf("lcsc");
-  const mfrIndex = categoryFile.schema.indexOf("mfr");
+function extractRequestsFromCategoryFile(categoryFile: JlcPartsCategoryFile, shardName: string): ProviderPartRequest[] {
+  const lcscIndex = categoryFile.schema.lcsc;
+  const mfrIndex = categoryFile.schema.mfr;
 
-  if (lcscIndex === -1 || mfrIndex === -1) {
+  if (lcscIndex === undefined || mfrIndex === undefined) {
     return [];
   }
 
-  const hint = buildCategoryHint(sourcename);
+  const hint = buildCategoryHint(shardName);
   const requests: ProviderPartRequest[] = [];
 
   for (const row of categoryFile.components) {
@@ -238,22 +264,22 @@ function extractRequestsFromCategoryFile(categoryFile: JlcPartsCategoryFile, sou
 }
 
 /**
- * Encodes a category sourcename as a namespaced hint string stored in providerUrl.
+ * Encodes a manifest shard filename as a namespaced hint string stored in providerUrl.
  */
-function buildCategoryHint(sourcename: string): string {
-  return `${CATEGORY_HINT_PREFIX}${sourcename}`;
+function buildCategoryHint(shardName: string): string {
+  return `${CATEGORY_HINT_PREFIX}${shardName}`;
 }
 
 /**
- * Decodes a category sourcename from providerUrl, or returns null when no hint is present.
+ * Decodes a manifest shard filename from providerUrl, or returns null when no hint is present.
  */
 function extractCategoryHint(providerUrl: string | undefined): string | null {
   if (!providerUrl?.startsWith(CATEGORY_HINT_PREFIX)) {
     return null;
   }
 
-  const sourcename = providerUrl.slice(CATEGORY_HINT_PREFIX.length);
-  return sourcename.length > 0 ? sourcename : null;
+  const shardName = providerUrl.slice(CATEGORY_HINT_PREFIX.length);
+  return shardName.length > 0 ? shardName : null;
 }
 
 /** jlcpartsProviderAdapter fetches and normalizes structured JLCPCB/LCSC metadata. */
@@ -293,14 +319,13 @@ export const jlcpartsProviderAdapter: ProviderAdapter = {
 /**
  * Fetches one raw provider component by exact MPN or LCSC catalog id.
  *
- * Fast path: when request.providerUrl carries a jlcparts:category: hint (set during bulk
- * enqueue), the function goes directly to that category file and returns immediately on
- * a match — no full-catalog scan required. This reduces each drain job from potentially
- * hundreds of HTTP fetches to a single cache lookup (index warm) or two fetches (cold start).
+ * Fast path: when request.providerUrl carries a jlcparts:shard: hint (set during bulk
+ * enqueue), the function goes directly to that manifest shard and returns immediately on
+ * a match. This reduces each drain job from a full manifest scan to a single cached shard.
  *
- * Fallback: if no hint is present, or the hinted category file does not contain the part
+ * Fallback: if no hint is present, or the hinted shard does not contain the part
  * (e.g. the feed was updated and a part moved categories), the full priority-ordered scan
- * runs as before. The already-tried category is skipped to avoid a double fetch.
+ * runs as before. The already-tried shard is skipped to avoid a double fetch.
  */
 async function fetchJlcPartsRawPart(
   request: ProviderPartRequest,
@@ -312,30 +337,32 @@ async function fetchJlcPartsRawPart(
   const allEntries = flattenCategoryEntries(index);
 
   if (categoryHint !== null) {
-    const hintedEntry = allEntries.find((entry) => entry.metadata.sourcename === categoryHint);
+    const hintedEntry = allEntries.find((entry) => entry.metadata.shards.includes(categoryHint));
 
     if (hintedEntry !== undefined) {
       const categoryFile = await fetchCategoryFile(categoryHint);
-      const component = findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
+      const component = await findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
 
       if (component !== null) {
-        return buildRawPayload(index, hintedEntry, component);
+        return buildRawPayload(index, hintedEntry, categoryHint, component);
       }
     }
   }
 
-  const categoryEntries = prioritizeCategoryEntries(allEntries, PRIORITY_CATEGORY_SOURCENAMES);
+  const categoryEntries = prioritizeCategoryEntries(allEntries, PRIORITY_SUBCATEGORIES);
 
   for (const entry of categoryEntries) {
-    if (categoryHint !== null && entry.metadata.sourcename === categoryHint) {
-      continue;
-    }
+    for (const shardName of entry.metadata.shards) {
+      if (categoryHint !== null && shardName === categoryHint) {
+        continue;
+      }
 
-    const categoryFile = await fetchCategoryFile(entry.metadata.sourcename);
-    const component = findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
+      const categoryFile = await fetchCategoryFile(shardName);
+      const component = await findMatchingComponent(categoryFile, identifiers, request.manufacturerName, options);
 
-    if (component !== null) {
-      return buildRawPayload(index, entry, component);
+      if (component !== null) {
+        return buildRawPayload(index, entry, shardName, component);
+      }
     }
   }
 
@@ -345,12 +372,12 @@ async function fetchJlcPartsRawPart(
 /**
  * Assembles the canonical raw payload envelope from a matched index entry and component.
  */
-function buildRawPayload(index: JlcPartsIndex, entry: JlcPartsCategoryEntry, component: JlcPartsComponent): RawProviderPayload {
+function buildRawPayload(index: JlcPartsIndex, entry: JlcPartsCategoryEntry, shardName: string, component: JlcPartsComponent): RawProviderPayload {
   return {
     fetchedAt: new Date().toISOString(),
     payload: {
       categoryName: entry.categoryName,
-      categorySourceName: entry.metadata.sourcename,
+      categorySourceName: shardName,
       component,
       indexCreatedAt: index.created,
       subcategoryName: entry.subcategoryName
@@ -369,16 +396,16 @@ function isJlcPartsNotFoundError(error: unknown): boolean {
 /**
  * Finds the requested component by exact id before doing full row validation.
  */
-function findMatchingComponent(
+async function findMatchingComponent(
   categoryFile: JlcPartsCategoryFile,
   identifiers: { mpn: string | null; providerPartId: string | null },
   manufacturerName: string | undefined,
   options: { allowEitherIdentifier?: boolean }
-): JlcPartsComponent | null {
-  const lcscIndex = categoryFile.schema.indexOf("lcsc");
-  const mfrIndex = categoryFile.schema.indexOf("mfr");
+): Promise<JlcPartsComponent | null> {
+  const lcscIndex = categoryFile.schema.lcsc;
+  const mfrIndex = categoryFile.schema.mfr;
 
-  if (lcscIndex === -1 || mfrIndex === -1) {
+  if (lcscIndex === undefined || mfrIndex === undefined) {
     throw new Error("Invalid jlcparts category schema: missing lcsc or mfr");
   }
 
@@ -397,7 +424,7 @@ function findMatchingComponent(
       continue;
     }
 
-    const component = mapComponentRow(categoryFile.schema, row);
+    const component = await mapComponentRow(categoryFile.schema, row);
 
     if (matchesPartRequest(component, identifiers, manufacturerName, options)) {
       return component;
@@ -466,6 +493,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    supplyOfferings: buildSupplyOfferings(component, partId, sourceRecordId, lastUpdatedAt),
     validationRecords: [],
     sourceRecord: {
       fetchedAt: rawPayload.fetchedAt,
@@ -498,16 +526,57 @@ async function fetchIndex(): Promise<JlcPartsIndex> {
   const response = await fetch(INDEX_URL);
 
   if (!response.ok) {
-    throw new Error(`Unable to fetch jlcparts index: ${response.status} ${response.statusText}`);
+    throw new Error(`Unable to fetch jlcparts manifest: ${response.status} ${response.statusText}`);
   }
 
   const index = (await response.json()) as JlcPartsIndex;
+
+  if (!Array.isArray(index.categories) || typeof index.attributesLut !== "string") {
+    throw new Error("Invalid jlcparts manifest payload");
+  }
+
   cachedIndex = { cachedAt: Date.now(), index };
   return index;
 }
 
 /**
- * Fetches and decompresses one provider category payload, keeping it in-process for
+ * Fetches the manifest attribute lookup table used by compact component rows.
+ */
+async function fetchAttributesLut(): Promise<JlcPartsAttributesLut> {
+  const index = await fetchIndex();
+
+  if (
+    cachedAttributesLut !== null &&
+    cachedAttributesLut.manifestCreatedAt === index.created &&
+    Date.now() - cachedAttributesLut.cachedAt < INDEX_CACHE_TTL_MS
+  ) {
+    return cachedAttributesLut.attributes;
+  }
+
+  const response = await fetch(`${DATA_BASE_URL}/${index.attributesLut}`);
+
+  if (!response.ok) {
+    throw new Error(`Unable to fetch jlcparts attributes lookup: ${response.status} ${response.statusText}`);
+  }
+
+  const compressedBytes = Buffer.from(await response.arrayBuffer());
+  const attributes = JSON.parse(gunzipSync(compressedBytes).toString("utf8")) as JlcPartsAttributesLut;
+
+  if (!Array.isArray(attributes)) {
+    throw new Error("Invalid jlcparts attributes lookup payload");
+  }
+
+  cachedAttributesLut = {
+    attributes,
+    cachedAt: Date.now(),
+    manifestCreatedAt: index.created
+  };
+
+  return attributes;
+}
+
+/**
+ * Fetches and decompresses one provider JSONL shard, keeping it in-process for
  * CATEGORY_CACHE_TTL_MS. During a drain run, jobs from the same category arrive
  * consecutively (same requested_at in the queue) so this eliminates redundant downloads
  * and gunzip passes for the common case. Evicts the oldest entry when the cache is full.
@@ -526,30 +595,47 @@ async function fetchCategoryFile(sourceName: string): Promise<JlcPartsCategoryFi
     }
   }
 
-  const response = await fetch(`${DATA_BASE_URL}/${sourceName}.json.gz`);
+  const sourcePath = sourceName.endsWith(".gz") ? sourceName : `${sourceName}.json.gz`;
+  const response = await fetch(`${DATA_BASE_URL}/${sourcePath}`);
 
   if (!response.ok) {
     throw new Error(`Unable to fetch jlcparts category ${sourceName}: ${response.status} ${response.statusText}`);
   }
 
   const compressedBytes = Buffer.from(await response.arrayBuffer());
-  const payload = JSON.parse(gunzipSync(compressedBytes).toString("utf8")) as JlcPartsCategoryFile;
-
-  if (!Array.isArray(payload.schema) || !Array.isArray(payload.components)) {
-    throw new Error(`Invalid jlcparts category payload: ${sourceName}`);
-  }
+  const payload = parseCategoryJsonl(gunzipSync(compressedBytes).toString("utf8"), sourceName);
 
   categoryFileCache.set(sourceName, { cachedAt: Date.now(), file: payload });
   return payload;
 }
 
 /**
+ * Parses a gzipped JSONL shard into a compact schema and row list.
+ */
+function parseCategoryJsonl(text: string, sourceName: string): JlcPartsCategoryFile {
+  const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  const rawSchema = lines[0] ? JSON.parse(lines[0]) as unknown : null;
+
+  if (!rawSchema || typeof rawSchema !== "object" || Array.isArray(rawSchema)) {
+    throw new Error(`Invalid jlcparts category payload: ${sourceName}`);
+  }
+
+  const schema = rawSchema as Record<string, number>;
+  const components = lines.slice(1)
+    .map((line) => JSON.parse(line) as unknown)
+    .filter((row): row is unknown[] => Array.isArray(row));
+
+  return { components, schema };
+}
+
+/**
  * Applies a provider category schema to a raw component row.
  */
-function mapComponentRow(schema: string[], row: unknown[]): JlcPartsComponent {
-  const mapped = new Map(schema.map((fieldName, index) => [fieldName, row[index]]));
+async function mapComponentRow(schema: Record<string, number>, row: unknown[]): Promise<JlcPartsComponent> {
+  const attributesLut = await fetchAttributesLut();
+  const mapped = new Map(Object.entries(schema).map(([fieldName, index]) => [fieldName, row[index]]));
   const component = {
-    attributes: readAttributes(mapped.get("attributes")),
+    attributes: readAttributes(mapped.get("attributes"), attributesLut),
     datasheet: readNullableString(mapped.get("datasheet")),
     description: readRequiredString(mapped.get("description"), "description"),
     img: readNullableString(mapped.get("img")),
@@ -557,6 +643,7 @@ function mapComponentRow(schema: string[], row: unknown[]): JlcPartsComponent {
     lcsc: readRequiredString(mapped.get("lcsc"), "lcsc"),
     mfr: readRequiredString(mapped.get("mfr"), "mfr"),
     price: mapped.get("price") ?? null,
+    stock: readNullableNumber(mapped.get("stock")),
     url: readNullableString(mapped.get("url"))
   };
 
@@ -691,6 +778,90 @@ function buildMetrics(component: JlcPartsComponent, partId: string, datasheetRev
 }
 
 /**
+ * Builds a source-linked commercial snapshot from JLC/LCSC stock and price tier fields.
+ */
+function buildSupplyOfferings(component: JlcPartsComponent, partId: string, sourceRecordId: string, lastSeenAt: string): NormalizedSupplyOffering[] {
+  const componentKey = slugify(component.lcsc);
+  const offeringId = `supply-jlcparts-${componentKey}`;
+  const priceBreaks = readJlcPriceBreaks(component.price, offeringId, componentKey, lastSeenAt);
+  const stockQuantity = component.stock !== null && component.stock >= 0 ? Math.trunc(component.stock) : null;
+
+  if (priceBreaks.length === 0 && stockQuantity === null) {
+    return [];
+  }
+
+  return [
+    {
+      createdAt: lastSeenAt,
+      currencyCode: priceBreaks[0]?.currencyCode ?? "USD",
+      id: offeringId,
+      inventoryQuantity: stockQuantity,
+      inventoryStatus: stockQuantity === null ? "unknown" : stockQuantity > 0 ? "in_stock" : "out_of_stock",
+      lastSeenAt,
+      leadTimeDays: null,
+      moq: readMoqFromPriceBreaks(priceBreaks),
+      packaging: null,
+      partId,
+      preferredRank: 1,
+      priceBreaks,
+      providerId: JLC_PARTS_PROVIDER_ID,
+      providerPartKey: component.lcsc,
+      providerSku: component.lcsc,
+      sourceRecordId,
+      updatedAt: lastSeenAt
+    }
+  ];
+}
+
+/**
+ * Reads JLC price tier objects without inventing tiers when the provider omits them.
+ */
+function readJlcPriceBreaks(price: unknown, offeringId: string, componentKey: string, capturedAt: string): NormalizedSupplyPriceBreak[] {
+  if (!Array.isArray(price)) {
+    return [];
+  }
+
+  return price.flatMap((tier, index) => {
+    if (!tier || typeof tier !== "object") {
+      return [];
+    }
+
+    const tierRecord = tier as Record<string, unknown>;
+    const minQuantity = readPositiveInteger(tierRecord.qFrom ?? tierRecord.minQuantity ?? tierRecord.quantity);
+    const unitPrice = readNonNegativeNumber(tierRecord.price ?? tierRecord.unitPrice);
+    const currencyCode = readCurrencyCode(tierRecord.currencyCode ?? tierRecord.currency);
+
+    if (minQuantity === null || unitPrice === null) {
+      return [];
+    }
+
+    return [
+      {
+        capturedAt,
+        currencyCode,
+        id: `price-jlcparts-${componentKey}-${currencyCode.toLowerCase()}-${minQuantity}-${index + 1}`,
+        minQuantity,
+        supplyOfferingId: offeringId,
+        unitPrice
+      }
+    ];
+  });
+}
+
+/**
+ * Reads the lowest positive price tier quantity as the offering MOQ.
+ */
+function readMoqFromPriceBreaks(priceBreaks: NormalizedSupplyPriceBreak[]): number | null {
+  return priceBreaks.reduce<number | null>((lowest, priceBreak) => {
+    if (lowest === null || priceBreak.minQuantity < lowest) {
+      return priceBreak.minQuantity;
+    }
+
+    return lowest;
+  }, null);
+}
+
+/**
  * Reads the subset of structured provider attributes supported in this first slice.
  */
 function readMetricCandidates(attributes: Record<string, JlcPartsAttribute>): MetricCandidate[] {
@@ -794,24 +965,22 @@ function readRequestedIdentifiers(request: ProviderPartRequest): { mpn: string |
  * Flattens provider category metadata into deterministic search entries.
  */
 function flattenCategoryEntries(index: JlcPartsIndex): JlcPartsCategoryEntry[] {
-  return Object.entries(index.categories).flatMap(([categoryName, subcategories]) =>
-    Object.entries(subcategories).map(([subcategoryName, metadata]) => ({
-      categoryName,
-      metadata,
-      subcategoryName
-    }))
-  );
+  return index.categories.map((metadata) => ({
+    categoryName: metadata.category,
+    metadata,
+    subcategoryName: metadata.subcategory
+  }));
 }
 
 /**
- * Moves known category sourcenames to the front while preserving a complete fallback scan.
+ * Moves known subcategories to the front while preserving a complete fallback scan.
  */
-function prioritizeCategoryEntries(entries: JlcPartsCategoryEntry[], prioritySourceNames: string[]): JlcPartsCategoryEntry[] {
-  const priority = new Map(prioritySourceNames.map((sourceName, index) => [sourceName, index]));
+function prioritizeCategoryEntries(entries: JlcPartsCategoryEntry[], prioritySubcategories: string[]): JlcPartsCategoryEntry[] {
+  const priority = new Map(prioritySubcategories.map((subcategoryName, index) => [normalizeComparableText(subcategoryName), index]));
 
   return [...entries].sort((first, second) => {
-    const firstPriority = priority.get(first.metadata.sourcename) ?? Number.MAX_SAFE_INTEGER;
-    const secondPriority = priority.get(second.metadata.sourcename) ?? Number.MAX_SAFE_INTEGER;
+    const firstPriority = priority.get(normalizeComparableText(first.subcategoryName)) ?? Number.MAX_SAFE_INTEGER;
+    const secondPriority = priority.get(normalizeComparableText(second.subcategoryName)) ?? Number.MAX_SAFE_INTEGER;
 
     return firstPriority - secondPriority || first.categoryName.localeCompare(second.categoryName) || first.subcategoryName.localeCompare(second.subcategoryName);
   });
@@ -1082,9 +1251,54 @@ function readNullableNumber(value: unknown): number | null {
 }
 
 /**
+ * Reads a positive integer from provider numeric or numeric-string values.
+ */
+function readPositiveInteger(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.trunc(parsed) : null;
+}
+
+/**
+ * Reads a non-negative finite number from provider numeric or numeric-string values.
+ */
+function readNonNegativeNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Reads an ISO 4217 currency code, defaulting to USD for JLC price tiers.
+ */
+function readCurrencyCode(value: unknown): string {
+  const candidate = typeof value === "string" ? value.trim().toUpperCase() : "USD";
+
+  return /^[A-Z]{3}$/u.test(candidate) ? candidate : "USD";
+}
+
+/**
  * Reads the provider attributes map from an untrusted row value.
  */
-function readAttributes(value: unknown): Record<string, JlcPartsAttribute> {
+function readAttributes(value: unknown, attributesLut: JlcPartsAttributesLut = []): Record<string, JlcPartsAttribute> {
+  if (Array.isArray(value)) {
+    return value.reduce<Record<string, JlcPartsAttribute>>((attributes, rawIndex) => {
+      if (typeof rawIndex !== "number" || !Number.isInteger(rawIndex)) {
+        return attributes;
+      }
+
+      const entry = attributesLut[rawIndex];
+      const attributeName = entry?.[0];
+      const attribute = entry?.[1];
+
+      if (attributeName && attribute) {
+        attributes[attributeName] = attribute;
+      }
+
+      return attributes;
+    }, {});
+  }
+
   if (!value || typeof value !== "object") {
     return {};
   }

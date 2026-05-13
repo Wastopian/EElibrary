@@ -465,6 +465,7 @@ function buildAdminDbPart(config: {
     reviewRecords: [],
     validationRecords: [],
     similarPartRelations: [],
+    supplyOfferings: [],
     sourceRecord: {
       fetchedAt: config.lastUpdatedAt,
       id: `source-db-admin-provider-${config.providerPartKey.toLowerCase()}`,

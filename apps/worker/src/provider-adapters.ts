@@ -21,6 +21,7 @@ import type {
   ProviderLookupCandidateBase,
   ReviewRecord,
   SimilarPartRelation,
+  InventoryStatus,
   SourceExtractionSignal,
   SourceRecord
 } from "@ee-library/shared/types";
@@ -59,6 +60,60 @@ export interface RawProviderPayload {
   payload: unknown;
 }
 
+/** NormalizedSupplyPriceBreak is one persisted commercial price tier from a provider snapshot. */
+export interface NormalizedSupplyPriceBreak {
+  /** Stable deterministic tier id used for idempotent provider imports. */
+  id: string;
+  /** Parent supply offering id. */
+  supplyOfferingId: string;
+  /** Minimum order quantity for this unit price. */
+  minQuantity: number;
+  /** Provider-captured unit price without procurement approval semantics. */
+  unitPrice: number;
+  /** ISO 4217 currency code reported or conservatively defaulted by the provider adapter. */
+  currencyCode: string;
+  /** ISO timestamp for when this commercial snapshot was captured. */
+  capturedAt: string;
+}
+
+/** NormalizedSupplyOffering stores provider commercial context before repository persistence. */
+export interface NormalizedSupplyOffering {
+  /** Stable deterministic offering id used for repeat imports. */
+  id: string;
+  /** Canonical part id receiving this commercial context. */
+  partId: string;
+  /** Provider adapter id that produced the snapshot. */
+  providerId: string;
+  /** Source record id preserving raw payload provenance for the snapshot. */
+  sourceRecordId: string;
+  /** Provider-specific part key, such as an LCSC code. */
+  providerPartKey: string;
+  /** Provider SKU when it differs from the provider part key. */
+  providerSku: string | null;
+  /** Availability snapshot status; it must not be treated as live stock truth. */
+  inventoryStatus: InventoryStatus;
+  /** Captured quantity when the provider exposes one. */
+  inventoryQuantity: number | null;
+  /** Minimum order quantity when exposed or inferable from price tiers. */
+  moq: number | null;
+  /** Lead time in days when the provider exposes one. */
+  leadTimeDays: number | null;
+  /** Provider packaging label, such as reel or cut tape. */
+  packaging: string | null;
+  /** Default currency for this offering and its tiers. */
+  currencyCode: string;
+  /** Provider-neutral rank used only for display ordering. */
+  preferredRank: number | null;
+  /** ISO timestamp for when the provider last exposed this offering. */
+  lastSeenAt: string;
+  /** ISO timestamp for first persistence of this deterministic offering id. */
+  createdAt: string;
+  /** ISO timestamp for the latest provider refresh of this offering. */
+  updatedAt: string;
+  /** Child price tiers captured with this offering snapshot. */
+  priceBreaks: NormalizedSupplyPriceBreak[];
+}
+
 /** NormalizedProviderPart contains provider-neutral records ready for persistence. */
 export interface NormalizedProviderPart {
   /** Canonical manufacturer record. */
@@ -75,6 +130,8 @@ export interface NormalizedProviderPart {
   datasheetRevisions: DatasheetRevision[];
   /** Normalized metrics parsed from the provider payload. */
   metrics: PartMetric[];
+  /** Supply offerings parsed from provider commercial snapshots. */
+  supplyOfferings: NormalizedSupplyOffering[];
   /** Asset registry records parsed from the provider payload. */
   assets: Asset[];
   /** Best and alternate mate connector relationships parsed from the provider payload. */
