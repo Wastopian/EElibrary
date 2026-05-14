@@ -656,6 +656,22 @@ function mapProviderAcquisitionFailure(error: unknown): { code: string; message:
       };
     }
 
+    if (/Octopart\/Nexar credentials are not configured/u.test(error.message)) {
+      return {
+        code: "PROVIDER_CREDENTIALS_MISSING",
+        message: "Octopart/Nexar acquisition requires configured provider credentials.",
+        rawError
+      };
+    }
+
+    if (/Unable to fetch Octopart\/Nexar/u.test(error.message) || /Octopart\/Nexar GraphQL returned errors/u.test(error.message)) {
+      return {
+        code: "PROVIDER_UNAVAILABLE",
+        message: "Could not reach the Octopart/Nexar provider. Check credentials, network access, and provider plan permissions.",
+        rawError
+      };
+    }
+
     if (/not found for/u.test(error.message) || /metadata record not found/u.test(error.message)) {
       return {
         code: "PROVIDER_IMPORT_FAILED",

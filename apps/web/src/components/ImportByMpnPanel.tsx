@@ -293,6 +293,7 @@ export function ImportByMpnPanel({
           <span>Provider</span>
           <select disabled={status.kind === "submitting"} onChange={(event) => setProviderId(event.target.value)} value={providerId}>
             <option value="jlcparts">JLCPCB / LCSC (jlcparts)</option>
+            <option value="octopart">Octopart / Nexar (octopart)</option>
             <option value="local-catalog">Local catalog (development)</option>
           </select>
         </label>
@@ -339,6 +340,7 @@ export function ImportByMpnPanel({
         <details className="import-by-mpn-panel__cli muted-copy">
           <summary>Advanced: worker CLI</summary>
           <pre className="import-by-mpn-panel__pre">{`npm run ingest -w @ee-library/worker -- jlcparts <MPN_OR_LCSC_ID>
+npm run ingest -w @ee-library/worker -- octopart <MPN_OR_NEXAR_PART_ID>
 npm run imports:providers`}</pre>
         </details>
       ) : null}

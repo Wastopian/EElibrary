@@ -8,14 +8,29 @@ import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { CircuitBlockEditPanel } from "../../../components/CircuitBlockEditPanel";
 import { CircuitBlockPartEditTable } from "../../../components/CircuitBlockPartEditTable";
+import { CircuitBlockKnownRisksPanel } from "../../../components/CircuitBlockKnownRisksPanel";
 import { CircuitBlockPartAddPanel } from "../../../components/CircuitBlockPartAddPanel";
 import { EvidenceAttachmentPanel } from "../../../components/EvidenceAttachmentPanel";
 import { FollowUpPanel } from "../../../components/FollowUpPanel";
 import { WorkspaceJumpNav } from "../../../components/WorkspaceJumpNav";
 import { fetchCircuitBlockDetail, fetchCircuitBlockFollowUps, isApiClientError } from "../../../lib/api-client";
+import {
+  getCircuitBlockReuseReadiness,
+  type CircuitBlockReuseStageState,
+  type CircuitBlockReuseStageSummary
+} from "../../../lib/circuit-block-reuse-readiness";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CircuitBlockDetailResponse, CircuitBlockProjectDependency, CircuitBlockStatus, CircuitBlockType, EvidenceAttachment, FollowUpListResponse } from "@ee-library/shared/types";
+import type {
+  CircuitBlock,
+  CircuitBlockDetailResponse,
+  CircuitBlockInstantiationHistoryRecord,
+  CircuitBlockProjectDependency,
+  CircuitBlockStatus,
+  CircuitBlockType,
+  EvidenceAttachment,
+  FollowUpListResponse
+} from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -78,15 +93,21 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <WorkspaceJumpNav
         ariaLabel="Circuit block detail sections"
         items={[
+          { href: "#circuit-block-reuse-readiness-heading", label: "Reuse readiness" },
           { href: "#circuit-block-summary-heading", label: "Summary" },
           { href: "#circuit-block-edit-heading", label: "Edit" },
           { href: "#circuit-block-parts-heading", label: "Parts" },
           { href: "#circuit-block-add-part-heading", label: "Add part" },
+          { href: "#circuit-block-instantiations-heading", label: "Reuse history" },
+          { href: "#circuit-block-known-risks-heading", label: "Known risks" },
           { href: "#circuit-block-deps-heading", label: "Dependent projects" },
           { href: "#circuit-block-follow-ups-heading", label: "Follow-ups" },
-          { href: "#circuit-block-evidence-heading", label: "Evidence" }
+          { href: "#circuit-block-evidence-heading", label: "Evidence" },
+          { href: "#circuit-block-next-workspaces-heading", label: "Next workspaces" }
         ]}
       />
+
+      <CircuitBlockReuseReadinessStrip detail={detail} />
 
       <section className="detail-section" aria-labelledby="circuit-block-summary-heading">
         <SectionHeading id="circuit-block-summary-heading" index="01" subtitle="Block details and reuse constraints." title="Block summary" />
@@ -147,8 +168,42 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </SectionPanel>
       </section>
 
+      <section className="detail-section" aria-labelledby="circuit-block-instantiations-heading">
+        <SectionHeading
+          id="circuit-block-instantiations-heading"
+          index="05"
+          subtitle="Engineering memory: every time this reusable block was dropped into a project BOM."
+          title="Reuse history"
+        />
+        <SectionPanel
+          description="Instantiation rows record where this pattern was used. They do not approve linked parts, validate assets, or unlock export — they preserve the decision trail."
+          title={detail.instantiations.length > 0 ? `${detail.instantiations.length} instantiation${detail.instantiations.length === 1 ? "" : "s"}` : "No instantiations yet"}
+        >
+          {detail.instantiations.length > 0
+            ? <CircuitBlockInstantiationHistoryTable instantiations={detail.instantiations} />
+            : <EmptyState title="No reuse instantiations yet" body="When this block is instantiated into a project BOM, the project, revision, and BOM lines created will appear here." />}
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="circuit-block-known-risks-heading">
+        <SectionHeading
+          id="circuit-block-known-risks-heading"
+          index="06"
+          subtitle="Engineering memory the team learned the hard way: errata, limitations, and cautions tied to this reusable pattern."
+          title="Known risks &amp; limitations"
+        />
+        <SectionPanel
+          description="Known risks preserve institutional memory; unresolved blocking risks gate the reusable-stage verdict, but no severity changes linked-part approval, validation, or export status. Resolved rows stay visible so past project audits remain consistent."
+          title={detail.knownRisks.length > 0
+            ? `${detail.knownRisks.length} recorded risk${detail.knownRisks.length === 1 ? "" : "s"} (${detail.summary.activeKnownRiskCount} active${detail.summary.activeBlockingRiskCount > 0 ? `, ${detail.summary.activeBlockingRiskCount} blocking` : ""})`
+            : "No known risks recorded"}
+        >
+          <CircuitBlockKnownRisksPanel circuitBlockId={detail.circuitBlock.id} knownRisks={detail.knownRisks} />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="circuit-block-deps-heading">
-        <SectionHeading id="circuit-block-deps-heading" index="05" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
+        <SectionHeading id="circuit-block-deps-heading" index="07" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
         <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or unlock export." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
           {detail.projectDependencies.length > 0
             ? <CircuitBlockProjectDependencyTable dependencies={detail.projectDependencies} />
@@ -156,15 +211,15 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-        <SectionHeading id="circuit-block-follow-ups-heading" index="06" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
+      <section className="detail-section" aria-labelledby="circuit-block-follow-ups-heading">
+        <SectionHeading id="circuit-block-follow-ups-heading" index="08" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
         <SectionPanel description="Follow-up workflow state does not approve linked parts or make this circuit export-ready. Refresh creates or updates records from current required-role readiness gaps." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
           <FollowUpPanel followUps={followUps} targetId={detail.circuitBlock.id} targetType="circuit_block" />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-        <SectionHeading id="circuit-block-evidence-heading" index="07" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
+        <SectionHeading id="circuit-block-evidence-heading" index="09" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
         <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or unlock export." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
           <div className="project-evidence-panel">
             <div className="project-evidence-panel__boundary">
@@ -173,6 +228,21 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
             <EvidenceAttachmentPanel submitLabel="Attach circuit evidence" targetId={detail.circuitBlock.id} targetType="circuit_block" />
             {detail.evidence.length > 0 ? <CircuitBlockEvidenceTable evidence={detail.evidence} /> : <EmptyState title="No circuit evidence yet" body="Attach design review links or notes when this reusable circuit is reviewed." />}
           </div>
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="circuit-block-next-workspaces-heading">
+        <SectionHeading
+          id="circuit-block-next-workspaces-heading"
+          index="10"
+          subtitle="Cross-link into the workspaces that work alongside this block. Each link is read-only context — none of these change reuse readiness or part approval."
+          title="Next workspaces"
+        />
+        <SectionPanel
+          description="Engineering teams typically move from a block to: a project that needs to reuse it, the global where-used view, or the full library."
+          title="Open a related workspace"
+        >
+          <CircuitBlockNextWorkspaces circuitBlock={detail.circuitBlock} dependentProjects={detail.projectDependencies} />
         </SectionPanel>
       </section>
     </main>
@@ -262,6 +332,189 @@ function CircuitBlockStat({ label, tone, value }: { label: string; tone: BadgeTo
 }
 
 /**
+ * Renders the four-stage reuse-readiness strip above the detail body.
+ *
+ * Mirrors the part-detail trust lineage strip so engineers see a scannable verdict on whether
+ * the block is defined, has roles, has approved/ready parts, and is itself approved for reuse —
+ * without conflating those gates with part-level approval or export readiness.
+ */
+function CircuitBlockReuseReadinessStrip({ detail }: { detail: CircuitBlockDetailResponse }) {
+  const summary = getCircuitBlockReuseReadiness(detail);
+  const guidance = summarizeReuseReadinessGuidance(summary.stages);
+
+  return (
+    <section className="detail-section" aria-labelledby="circuit-block-reuse-readiness-heading">
+      <SectionHeading
+        id="circuit-block-reuse-readiness-heading"
+        index="00"
+        subtitle="Defined → roles complete → parts ready → reusable. Each gate is independent."
+        title="Reuse readiness"
+      />
+      <section className="trust-lineage-strip" role="group" aria-label="Circuit block reuse readiness">
+        <div className="trust-lineage-strip__guidance">
+          <strong>{guidance.title}</strong>
+          <p>{guidance.detail}</p>
+        </div>
+        <details className="trust-lineage-strip__steps">
+          <summary>Show reuse gates</summary>
+          <ol className="trust-lineage-strip__stages">
+            {summary.stages.map((stage, index) => (
+              <li
+                key={stage.stage}
+                className="trust-lineage-strip__item"
+                data-state={stage.state}
+              >
+                <div className="trust-lineage-strip__item-header">
+                  <StatusBadge label={stage.label} tone={reuseStageBadgeTone(stage)} />
+                  <span className={`trust-lineage-strip__state trust-lineage-strip__state--${stage.state}`}>
+                    {stage.badgeLabel}
+                  </span>
+                </div>
+                <p className="trust-lineage-strip__detail">{stage.detail}</p>
+                {index < summary.stages.length - 1 ? (
+                  <span aria-hidden="true" className="trust-lineage-strip__connector">→</span>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+          <p className="trust-lineage-strip__boundary muted-copy">{summary.boundary}</p>
+        </details>
+      </section>
+    </section>
+  );
+}
+
+/**
+ * Produces a short headline + detail line based on the worst stage state.
+ *
+ * Keeps the headline honest: a blocked or pending later stage always wins over a passed
+ * earlier stage, mirroring the part-detail trust strip's "headline first, drill down second"
+ * pattern. This is the only place block-level reuse readiness is summarized.
+ */
+function summarizeReuseReadinessGuidance(stages: CircuitBlockReuseStageSummary[]): { title: string; detail: string } {
+  const firstBlocked = stages.find((stage) => stage.state === "blocked");
+
+  if (firstBlocked) {
+    return {
+      detail: firstBlocked.detail,
+      title: `Reuse blocked at "${firstBlocked.label}"`
+    };
+  }
+
+  const firstPending = stages.find((stage) => stage.state === "pending");
+
+  if (firstPending) {
+    return {
+      detail: firstPending.detail,
+      title: `Reuse pending at "${firstPending.label}"`
+    };
+  }
+
+  const reusable = stages[stages.length - 1];
+  const notApplicable = stages.find((stage) => stage.state === "not_applicable");
+
+  if (notApplicable) {
+    return {
+      detail: notApplicable.detail,
+      title: `Reuse retired at "${notApplicable.label}"`
+    };
+  }
+
+  return {
+    detail: reusable?.detail ?? "All reuse gates passed. Linked-part approval and export readiness remain separate per part.",
+    title: "Ready to reuse"
+  };
+}
+
+/**
+ * Renders the instantiation history table: one row per reuse event.
+ *
+ * Each row links the operator to the destination project, revision, and BOM import so the
+ * "this pattern was used here" decision trail stays one click away. The BOM line count is
+ * shown as engineering memory, not a trust signal.
+ */
+function CircuitBlockInstantiationHistoryTable({ instantiations }: { instantiations: CircuitBlockInstantiationHistoryRecord[] }) {
+  return (
+    <div className="projects-table-wrap">
+      <table className="projects-table">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Revision</th>
+            <th>BOM import</th>
+            <th>Lines</th>
+            <th>Optional?</th>
+            <th>Instantiated</th>
+            <th>By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {instantiations.map((record) => (
+            <tr key={record.instantiation.id}>
+              <td>
+                <Link href={`/projects/${encodeURIComponent(record.project.id)}`}>
+                  <span className="ui-mono">{record.project.projectKey}</span>
+                </Link>
+                <div className="muted-copy">{record.project.name}</div>
+              </td>
+              <td>
+                <span className="ui-mono">{record.revision.revisionLabel}</span>
+                <div className="muted-copy">{record.revision.revisionStatus}</div>
+              </td>
+              <td>
+                {record.bomImport ? (
+                  <>
+                    <strong>{record.bomImport.sourceFilename}</strong>
+                    <div className="muted-copy">{record.bomImport.sourceFormat.toUpperCase()} · {record.bomImport.importStatus}</div>
+                  </>
+                ) : (
+                  <span className="muted-copy">BOM import removed</span>
+                )}
+              </td>
+              <td>{record.instantiatedBomLineCount}</td>
+              <td>{record.instantiation.includeOptional ? "Included" : "Required only"}</td>
+              <td>{formatDateTime(record.instantiation.createdAt)}</td>
+              <td>{record.instantiation.createdBy ?? <span className="muted-copy">Unrecorded</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Maps a reuse-readiness stage onto a status badge tone.
+ *
+ * Keeps the badge consistent with the rest of the detail page without leaking the helper's
+ * `ViewTone` into the UI library types.
+ */
+function reuseStageBadgeTone(stage: CircuitBlockReuseStageSummary): BadgeTone {
+  if (stage.state === "passed") return stage.tone === "verified" ? "verified" : "info";
+  if (stage.state === "blocked") return stage.tone === "danger" ? "danger" : "review";
+  if (stage.state === "pending") return stage.tone === "review" ? "review" : "neutral";
+  return "neutral";
+}
+
+/**
+ * Formats a stage state into the short suffix shown next to each stage badge.
+ */
+function formatReuseStageStateLabel(state: CircuitBlockReuseStageState): string {
+  switch (state) {
+    case "blocked":
+      return "blocked";
+    case "not_applicable":
+      return "n/a";
+    case "passed":
+      return "passed";
+    case "pending":
+      return "pending";
+    default:
+      return state;
+  }
+}
+
+/**
  * Renders projects that depend on this circuit block through confirmed part usages.
  */
 function CircuitBlockProjectDependencyTable({ dependencies }: { dependencies: CircuitBlockProjectDependency[] }) {
@@ -297,6 +550,78 @@ function CircuitBlockProjectDependencyTable({ dependencies }: { dependencies: Ci
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Renders the cross-workspace nav for engineering teams working from a block to its neighbours.
+ *
+ * Three links are surfaced: open a dependent project to instantiate this block into its BOM,
+ * see every usage of the block in the global where-used workspace, or jump back to the full
+ * library. None of these links change reuse readiness or part approval — they exist so an
+ * engineer can move from "what is this block" to "where do I use it" without leaving the page.
+ */
+function CircuitBlockNextWorkspaces({
+  circuitBlock,
+  dependentProjects
+}: {
+  circuitBlock: CircuitBlock;
+  dependentProjects: CircuitBlockProjectDependency[];
+}) {
+  const whereUsedHref = `/where-used?targetType=circuit_block&q=${encodeURIComponent(circuitBlock.blockKey)}`;
+  const topDependent = dependentProjects[0];
+
+  return (
+    <div className="circuit-block-next-workspaces">
+      <article className="circuit-block-next-workspaces__card">
+        <header>
+          <p className="app-kicker">Use in a project</p>
+          <h3>{topDependent ? `Reuse in ${topDependent.project.projectKey}` : "Pick a project to instantiate"}</h3>
+        </header>
+        <p>
+          {topDependent
+            ? `${topDependent.project.name} already overlaps with ${topDependent.matchedPartCount} of ${topDependent.totalBlockPartCount} part role${topDependent.totalBlockPartCount === 1 ? "" : "s"} in this block. Open the project to add this block to a BOM revision.`
+            : "No project depends on this block yet. Open the projects workspace to pick a target BOM revision."}
+        </p>
+        <Link
+          className="button-primary"
+          href={topDependent
+            ? `/projects/${encodeURIComponent(topDependent.project.id)}#project-circuit-block-instantiation-heading`
+            : "/projects"}
+        >
+          {topDependent ? `Open ${topDependent.project.projectKey}` : "Browse projects"}
+        </Link>
+      </article>
+
+      <article className="circuit-block-next-workspaces__card">
+        <header>
+          <p className="app-kicker">Where-used</p>
+          <h3>Every project that touched this block</h3>
+        </header>
+        <p>
+          Search confirmed BOM usages, circuit-block dependencies, and exported-asset trails. Past usage does not approve linked parts or unlock exports.
+        </p>
+        <Link className="button-primary" href={whereUsedHref}>
+          Open where-used for {circuitBlock.blockKey}
+        </Link>
+      </article>
+
+      <article className="circuit-block-next-workspaces__card">
+        <header>
+          <p className="app-kicker">Library</p>
+          <h3>Browse all circuit blocks</h3>
+        </header>
+        <p>
+          Filter by type, status, or reuse readiness to find a block that matches what you are designing right now.
+        </p>
+        <Link
+          className="button-secondary"
+          href={`/circuit-blocks?type=${encodeURIComponent(circuitBlock.blockType)}`}
+        >
+          See all {formatCircuitBlockType(circuitBlock.blockType).toLowerCase()} blocks
+        </Link>
+      </article>
     </div>
   );
 }

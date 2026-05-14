@@ -64,5 +64,9 @@ export function formatProviderLookupFailureMessage(error: unknown): string {
     return "Could not reach a supported provider catalog. Check your network connection and try again.";
   }
 
+  if (/Unable to fetch Octopart\/Nexar/u.test(error.message) || /Octopart\/Nexar GraphQL returned errors/u.test(error.message)) {
+    return "Could not reach a supported provider catalog. Check Octopart/Nexar credentials, network access, and provider plan permissions.";
+  }
+
   return "Provider lookup did not complete.";
 }

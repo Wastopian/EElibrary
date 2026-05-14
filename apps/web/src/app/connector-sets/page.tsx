@@ -6,23 +6,26 @@ import Link from "next/link";
 import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
-import { fetchApiHealth, fetchConnectorSetCatalog, isApiClientError } from "../../lib/api-client";
+import { fetchApiHealth, fetchConnectorSetCatalog, isApiClientError, resolveConnectorSetIntent } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { ConnectorClass, ConnectorSetClassGroup, ConnectorSetEntry, ConnectorSetListResponse, ConnectorSetMatePair } from "@ee-library/shared/types";
+import type { ConnectorClass, ConnectorSetClassGroup, ConnectorSetEntry, ConnectorSetIntentCandidate, ConnectorSetIntentResolution, ConnectorSetListResponse, ConnectorSetMatePair, ConnectorSetResolvedRelation } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
 /** ConnectorSetsPageSearchParams mirrors the GET query that drives this catalog view. */
 type ConnectorSetsPageSearchParams = {
+  awg?: string | string[];
   connectorClass?: string | string[];
+  pins?: string | string[];
   q?: string | string[];
+  sealing?: string | string[];
 };
 
 /** ConnectorSetsPageState separates ready reads from setup failures. */
 type ConnectorSetsPageState =
-  | { health: ApiHealth | null; response: ConnectorSetListResponse; status: "ready" }
+  | { health: ApiHealth | null; resolution: ConnectorSetIntentResolution | null; response: ConnectorSetListResponse; status: "ready" }
   | { code: string; health: ApiHealth | null; message: string; status: "setup_required" };
 
 /** ConnectorSetsPageProps carries Next.js search params as an awaited value. */
@@ -37,13 +40,16 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
   const resolved = await searchParams;
   const connectorClassFilter = readConnectorClassParam(readSingleParam(resolved.connectorClass));
   const queryFilter = readSingleParam(resolved.q);
-  const pageState = await loadConnectorSetsPage(connectorClassFilter, queryFilter);
+  const pinCountFilter = readPositiveIntegerParam(readSingleParam(resolved.pins));
+  const cableGaugeFilter = readPositiveIntegerParam(readSingleParam(resolved.awg));
+  const sealingFilter = readSingleParam(resolved.sealing);
+  const pageState = await loadConnectorSetsPage(connectorClassFilter, queryFilter, pinCountFilter, cableGaugeFilter, sealingFilter);
 
   if (pageState.status === "setup_required") {
     return <ConnectorSetsSetupState pageState={pageState} />;
   }
 
-  const { health, response } = pageState;
+  const { health, resolution, response } = pageState;
 
   return (
     <main className="projects-layout">
@@ -82,14 +88,28 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
           title="Filter connector catalog"
         />
         <SectionPanel description="Filters are server-side; selecting a class only changes the rendered scope without re-classifying any part." title="Catalog filters">
-          <ConnectorSetsFilterForm connectorClassFilter={response.connectorClassFilter} query={response.query ?? ""} />
+          <ConnectorSetsFilterForm cableGauge={cableGaugeFilter} connectorClassFilter={response.connectorClassFilter} pinCount={pinCountFilter} query={response.query ?? ""} sealing={sealingFilter} />
         </SectionPanel>
       </section>
+
+      {resolution ? (
+        <section className="detail-section" aria-labelledby="connector-sets-intent-heading">
+          <SectionHeading
+            id="connector-sets-intent-heading"
+            index="02"
+            subtitle={`${resolution.candidates.length} candidate${resolution.candidates.length === 1 ? "" : "s"} with buildability state and warnings.`}
+            title="Intent resolver"
+          />
+          <SectionPanel description={resolution.boundary} title={`Resolver candidates for "${resolution.intent.class}"`}>
+            {resolution.candidates.length > 0 ? <ConnectorIntentCandidates candidates={resolution.candidates} /> : <EmptyState title="No intent candidates" body="Try a family, series, pin count, or cable gauge that exists in the seeded connector catalog." />}
+          </SectionPanel>
+        </section>
+      ) : null}
 
       <section className="detail-section" aria-labelledby="connector-sets-list-heading">
         <SectionHeading
           id="connector-sets-list-heading"
-          index="02"
+          index={resolution ? "03" : "02"}
           subtitle={`${response.totalConnectorCount} connectors across ${response.groups.length} class${response.groups.length === 1 ? "" : "es"}.`}
           title="Connector families"
         />
@@ -104,7 +124,7 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
       <section className="detail-section" aria-labelledby="connector-sets-boundaries-heading">
         <SectionHeading
           id="connector-sets-boundaries-heading"
-          index="03"
+          index={resolution ? "04" : "03"}
           subtitle="Connector listings are reference material. Always confirm fit and verification before reuse."
           title="Trust boundaries"
         />
@@ -135,17 +155,33 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
 /**
  * Loads the connector-set catalog while preserving setup failures.
  */
-async function loadConnectorSetsPage(connectorClassFilter: ConnectorClass | null, query: string): Promise<ConnectorSetsPageState> {
+async function loadConnectorSetsPage(
+  connectorClassFilter: ConnectorClass | null,
+  query: string,
+  pinCount: number | null,
+  cableGauge: number | null,
+  sealing: string
+): Promise<ConnectorSetsPageState> {
   const healthPromise = fetchApiHealth().catch(() => null);
 
   try {
     const filters: { connectorClass?: ConnectorClass; query?: string } = {};
     if (connectorClassFilter) filters.connectorClass = connectorClassFilter;
     if (query.trim().length > 0) filters.query = query.trim();
-    const [health, response] = await Promise.all([healthPromise, fetchConnectorSetCatalog(filters)]);
+    const resolutionPromise = query.trim().length > 0
+      ? resolveConnectorSetIntent({
+          cableGauge,
+          class: query.trim(),
+          pinCount,
+          query: query.trim(),
+          sealing: sealing.trim().length > 0 ? sealing.trim() : null
+        }).catch(() => null)
+      : Promise.resolve(null);
+    const [health, response, resolution] = await Promise.all([healthPromise, fetchConnectorSetCatalog(filters), resolutionPromise]);
 
     return {
       health,
+      resolution,
       response,
       status: "ready"
     };
@@ -225,7 +261,7 @@ function ConnectorSetStat({ label, tone, value }: { label: string; tone: BadgeTo
 /**
  * Renders the connector class filter and MPN search form.
  */
-function ConnectorSetsFilterForm({ connectorClassFilter, query }: { connectorClassFilter: ConnectorClass | null; query: string }) {
+function ConnectorSetsFilterForm({ cableGauge, connectorClassFilter, pinCount, query, sealing }: { cableGauge: number | null; connectorClassFilter: ConnectorClass | null; pinCount: number | null; query: string; sealing: string }) {
   return (
     <form className="where-used-search-form" method="get">
       <label>
@@ -239,11 +275,85 @@ function ConnectorSetsFilterForm({ connectorClassFilter, query }: { connectorCla
         </select>
       </label>
       <label className="where-used-search-form__query">
-        <span>Search MPN or manufacturer</span>
-        <input defaultValue={query} name="q" placeholder="EH-1.25 or JST" type="search" />
+        <span>Intent, MPN, or manufacturer</span>
+        <input defaultValue={query} name="q" placeholder="JST PH 2 pin or AMPSEAL 18 AWG" type="search" />
+      </label>
+      <label>
+        <span>Pins</span>
+        <input defaultValue={pinCount ?? ""} min="1" name="pins" placeholder="2" type="number" />
+      </label>
+      <label>
+        <span>Sealing</span>
+        <input defaultValue={sealing} name="sealing" placeholder="sealed or IP67" />
+      </label>
+      <label>
+        <span>AWG</span>
+        <input defaultValue={cableGauge ?? ""} min="1" name="awg" placeholder="24" type="number" />
       </label>
       <button className="button-primary" type="submit">Apply filters</button>
     </form>
+  );
+}
+
+/**
+ * Renders resolver candidates with buildability, confidence, and family warnings separated.
+ */
+function ConnectorIntentCandidates({ candidates }: { candidates: ConnectorSetIntentCandidate[] }) {
+  return (
+    <div className="connector-sets-list">
+      {candidates.map((candidate) => (
+        <article className="connector-sets-card" key={candidate.connector.partId}>
+          <header>
+            <Link href={`/parts/${encodeURIComponent(candidate.connector.partId)}`} className="ui-mono">{candidate.connector.mpn}</Link>
+            <p className="muted-copy">{candidate.connector.manufacturerName} - {candidate.connector.connectorFamilyName ?? "No family"} - {candidate.connector.packagePinCount ?? "?"} pins</p>
+            <div className="projects-hero__status">
+              <StatusBadge label={candidate.buildabilityState.replace(/_/gu, " ")} tone={candidate.buildabilityState === "buildable" ? "verified" : candidate.buildabilityState === "pending" ? "review" : "danger"} />
+              <StatusBadge label={`${Math.round(candidate.confidenceScore * 100)}% confidence`} tone={candidate.confidenceScore >= 0.8 ? "verified" : "review"} />
+            </div>
+          </header>
+          <div className="projects-truth-rail projects-truth-rail--compact">
+            <ConnectorIntentRelation label="Mate" relation={candidate.mate} />
+            <ConnectorIntentRelationList label="Required accessories" relations={candidate.requiredAccessories} />
+            <ConnectorIntentRelationList label="Optional accessories" relations={candidate.optionalAccessories} />
+            <ConnectorIntentRelation label="Cable option" relation={candidate.cableOption} />
+            <ConnectorIntentRelationList label="Tooling" relations={candidate.tooling} />
+          </div>
+          {candidate.familyConfusionWarnings.length > 0 ? (
+            <div className="connector-warning-list">
+              {candidate.familyConfusionWarnings.map((warning) => (
+                <p className="muted-copy" key={warning.code}><strong>{warning.summary}</strong> {warning.detail}</p>
+              ))}
+            </div>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Renders a single resolver relation without implying that missing data is available.
+ */
+function ConnectorIntentRelation({ label, relation }: { label: string; relation: ConnectorSetIntentCandidate["mate"] }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{relation ? relation.part.mpn : "Pending"}</strong>
+      <p>{relation ? `${relation.part.manufacturerName} - ${Math.round(relation.confidenceScore * 100)}% - ${relation.compatibilityStatus}` : "No stored relation satisfies this part of the intent yet."}</p>
+    </div>
+  );
+}
+
+/**
+ * Renders resolver relation lists with an explicit pending empty state.
+ */
+function ConnectorIntentRelationList({ label, relations }: { label: string; relations: ConnectorSetResolvedRelation[] }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{relations.length > 0 ? `${relations.length} mapped` : "Pending"}</strong>
+      <p>{relations.length > 0 ? relations.map((relation) => `${relation.part.mpn} (${Math.round(relation.confidenceScore * 100)}%)`).join(", ") : "No stored rows are available for this group."}</p>
+    </div>
   );
 }
 
@@ -257,7 +367,7 @@ function ConnectorSetGroupsList({ groups }: { groups: ConnectorSetClassGroup[] }
         <div className="connector-sets-group" key={group.connectorClass}>
           <h3 className="connector-sets-group__heading">
             {group.connectorClass}
-            <span className="muted-copy"> · {group.entries.length} connector{group.entries.length === 1 ? "" : "s"}</span>
+            <span className="muted-copy"> - {group.entries.length} connector{group.entries.length === 1 ? "" : "s"}</span>
           </h3>
           <div className="connector-sets-list">
             {group.entries.map((entry) => (
@@ -278,7 +388,7 @@ function ConnectorSetCard({ entry }: { entry: ConnectorSetEntry }) {
     <article className="connector-sets-card">
       <header>
         <Link href={`/parts/${encodeURIComponent(entry.partId)}`} className="ui-mono">{entry.mpn}</Link>
-        <p className="muted-copy">{entry.manufacturerName} · lifecycle {entry.lifecycleStatus} · approval {entry.approvalStatus ?? "missing"} · readiness {entry.readinessStatus ?? "unknown"}</p>
+        <p className="muted-copy">{entry.manufacturerName} - lifecycle {entry.lifecycleStatus} - approval {entry.approvalStatus ?? "missing"} - readiness {entry.readinessStatus ?? "unknown"}</p>
         <p className="muted-copy">Project usages: <strong>{entry.projectUsageCount}</strong></p>
       </header>
       {entry.matePairs.length > 0 ? (
@@ -321,7 +431,7 @@ function ConnectorSetMateRow({ pair }: { pair: ConnectorSetMatePair }) {
       <td>{pair.confidenceScore === null ? "n/a" : pair.confidenceScore.toFixed(2)}</td>
       <td>
         <span>{pair.matePartApprovalStatus ?? "approval missing"}</span>
-        <p className="muted-copy">{pair.matePartReadinessStatus ?? "readiness unknown"} · lifecycle {pair.matePartLifecycleStatus}</p>
+        <p className="muted-copy">{pair.matePartReadinessStatus ?? "readiness unknown"} - lifecycle {pair.matePartLifecycleStatus}</p>
       </td>
       <td>{pair.projectUsageCount}</td>
     </tr>
@@ -346,4 +456,13 @@ function readConnectorClassParam(value: string): ConnectorClass | null {
     return value;
   }
   return null;
+}
+
+/**
+ * Parses a positive integer search parameter and drops invalid values.
+ */
+function readPositiveIntegerParam(value: string): number | null {
+  const parsed = Number(value);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }

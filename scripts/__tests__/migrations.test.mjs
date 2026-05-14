@@ -117,3 +117,12 @@ test("discoverMigrations includes the document control migration", async () => {
     `expected a *_document_control.sql migration in ${files.join(", ")}`
   );
 });
+
+test("discoverMigrations includes the supply offerings migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("supply_offerings.sql")),
+    `expected a *_supply_offerings.sql migration in ${files.join(", ")}`
+  );
+});

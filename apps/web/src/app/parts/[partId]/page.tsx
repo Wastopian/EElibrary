@@ -14,7 +14,7 @@ import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDocumentRevisions, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDocumentRevisions, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../../lib/trust-lineage";
@@ -47,9 +47,11 @@ import {
   shouldRenderGenerationOptions,
   shouldRenderReviewActions
 } from "../../../lib/detail-view-model";
+import { getCircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
+import type { CircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, MateRelation, Package, PartAcquisitionSummary, PartWhereUsedResponse, PreviewStatus, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -83,9 +85,15 @@ type PartDocumentControlState =
   | { status: "not_found" }
   | { status: "unavailable"; code: string; message: string };
 
+/** PartSupplyOffersState keeps sourcing snapshots optional beside canonical part truth. */
+type PartSupplyOffersState =
+  | { status: "available"; response: PartSupplyOffersResponse }
+  | { status: "not_found" }
+  | { status: "unavailable"; code: string; message: string };
+
 /** PartDetailPageState keeps catalog setup errors separate from genuine 404s. */
 type PartDetailPageState =
-  | { detail: PartDetailPageDetail; documentControlState: PartDocumentControlState; status: "ready"; whereUsedState: PartWhereUsedState }
+  | { detail: PartDetailPageDetail; documentControlState: PartDocumentControlState; status: "ready"; supplyOffersState: PartSupplyOffersState; whereUsedState: PartWhereUsedState }
   | { status: "not_found" }
   | { code: string; message: string; partId: string; status: "setup_required"; whereUsedState: PartWhereUsedState };
 
@@ -104,7 +112,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     return <PartDetailSetupState state={pageState} />;
   }
 
-  const { detail, documentControlState, whereUsedState } = pageState;
+  const { detail, documentControlState, supplyOffersState, whereUsedState } = pageState;
   const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const recentActivity = await loadRecentActivityForPart(record.part.id);
   const bestMate = record.buildableMatingSet.bestMate;
@@ -132,7 +140,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     tone: scoreTone(metric.confidenceScore),
     value: formatMetricValue(metric)
   }));
-  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState);
+  const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState, supplyOffersState);
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
   const missingAssetGroups = assetGroups.filter((group) => group.bestAsset === null);
   const gatingByAssetId = buildAssetGatingMap(documentControlState);
@@ -634,7 +642,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="sourcing-heading"
           index="05"
-          subtitle="Lifecycle status and where the data came from. Pricing is not connected yet."
+          subtitle="Lifecycle status, source provenance, and recorded commercial snapshots."
           title="Sourcing and lifecycle"
         />
         <div className="detail-two-col">
@@ -657,12 +665,8 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               </div>
             </div>
           </SectionPanel>
-          <SectionPanel description="Distributor pricing and stock are not connected yet." title="Distributor pricing">
-            <div className="detail-unavailable-card" role="status">
-              <StatusBadge label="Not connected" tone="neutral" />
-              <strong>Pricing and stock are not shown here.</strong>
-              <p>We do not display live distributor data. Use lifecycle, source import, and provenance below for what is actually known.</p>
-            </div>
+          <SectionPanel description="Source-linked commercial snapshots; refresh imports before buying." title="Distributor offers">
+            <SupplyOffersPanel state={supplyOffersState} />
           </SectionPanel>
         </div>
       </section>
@@ -803,6 +807,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
  */
 async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> {
   const whereUsedPromise = loadPartWhereUsed(partId);
+  const supplyOffersPromise = loadPartSupplyOffers(partId);
 
   try {
     const detail = await fetchPartDetail(partId);
@@ -811,15 +816,17 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
       return { status: "not_found" };
     }
 
-    const [whereUsedState, documentControlState] = await Promise.all([
+    const [whereUsedState, documentControlState, supplyOffersState] = await Promise.all([
       whereUsedPromise,
-      loadPartDocumentControl(partId)
+      loadPartDocumentControl(partId),
+      supplyOffersPromise
     ]);
 
     return {
       detail,
       documentControlState,
       status: "ready",
+      supplyOffersState,
       whereUsedState
     };
   } catch (error) {
@@ -924,6 +931,31 @@ async function loadPartWhereUsed(partId: string): Promise<PartWhereUsedState> {
     return {
       code: "WHERE_USED_UNAVAILABLE",
       message: "Where-used history could not be read from projects.",
+      status: "unavailable"
+    };
+  }
+}
+
+/**
+ * Loads supply offer snapshots as a recoverable side-channel so detail truth stays renderable.
+ */
+async function loadPartSupplyOffers(partId: string): Promise<PartSupplyOffersState> {
+  try {
+    const response = await fetchPartSupplyOffers(partId);
+
+    return response ? { response, status: "available" } : { status: "not_found" };
+  } catch (error) {
+    if (isApiClientError(error)) {
+      return {
+        code: error.code,
+        message: error.message,
+        status: "unavailable"
+      };
+    }
+
+    return {
+      code: "SUPPLY_OFFERS_UNAVAILABLE",
+      message: "Supply offer snapshots could not be read from the catalog.",
       status: "unavailable"
     };
   }
@@ -1253,7 +1285,129 @@ function DocumentRevisionCard({
 }
 
 /**
- * Renders confirmed project usage history without feeding it into approval or export labels.
+ * Renders source-linked commercial snapshots without treating them as live stock or approval.
+ */
+function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
+  if (state.status === "unavailable") {
+    return (
+      <EmptyState
+        body={`Supply snapshots require the database-backed catalog. ${state.message}`}
+        title="Supply offers unavailable"
+      />
+    );
+  }
+
+  if (state.status === "not_found") {
+    return (
+      <EmptyState
+        body="The detail source did not return a catalog part identity for this supply-offer request."
+        title="No distributor offers recorded"
+      />
+    );
+  }
+
+  if (state.response.offers.length === 0) {
+    return (
+      <EmptyState
+        body="No source-record-linked distributor offers are recorded for this part yet. Run a provider import that captures commercial snapshots before using this workspace for sourcing decisions."
+        title="No distributor offers recorded"
+      />
+    );
+  }
+
+  const { response } = state;
+  const { summary } = response;
+
+  return (
+    <div className="supply-offers-panel">
+      <p className="document-control-panel__boundary">
+        <strong>Commercial snapshot.</strong> {response.boundary}
+      </p>
+
+      <div className="detail-sourcing-grid" style={{ marginBottom: 12 }}>
+        <div>
+          <span>Recorded offers</span>
+          <strong>{summary.offerCount}</strong>
+          <p>{summary.inStockOfferCount} in-stock snapshot{summary.inStockOfferCount === 1 ? "" : "s"} recorded.</p>
+        </div>
+        <div>
+          <span>Lowest price tier</span>
+          <strong>{summary.lowestUnitPrice ? formatSupplyPrice(summary.lowestUnitPrice.unitPrice, summary.lowestUnitPrice.currencyCode) : "No price tiers"}</strong>
+          <p>{summary.lowestUnitPrice ? `${formatSupplySourceLabel(summary.lowestUnitPrice)} at ${summary.lowestUnitPrice.minQuantity}+ units.` : "No provider price breaks are attached yet."}</p>
+        </div>
+        <div>
+          <span>Freshness</span>
+          <strong>{summary.lastSeenAt ? formatDateTime(summary.lastSeenAt) : "Not seen"}</strong>
+          <p>{summary.staleOfferCount} offer{summary.staleOfferCount === 1 ? "" : "s"} older than {response.staleAfterDays} days.</p>
+        </div>
+      </div>
+
+      <div className="ui-table-wrap">
+        <table className="ui-table supply-offers-table">
+          <thead>
+            <tr>
+              <th scope="col">Supplier</th>
+              <th scope="col">Availability</th>
+              <th scope="col">Terms</th>
+              <th scope="col">Price break</th>
+              <th scope="col">Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {response.offers.map((offer) => (
+              <SupplyOfferRow key={offer.id} offer={offer} staleAfterDays={response.staleAfterDays} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders one supply-offer row with source and freshness context.
+ */
+function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; staleAfterDays: number }) {
+  const bestBreak = getBestPriceBreak(offer.priceBreaks);
+  const supplierLabel = formatSupplySourceLabel(offer);
+
+  return (
+    <tr>
+      <td>
+        <strong>{supplierLabel}</strong>
+        <p>{offer.supplierName ? `via ${offer.providerId}` : `Provider ${offer.providerId}`}</p>
+        <p>{offer.providerSku ? `SKU ${offer.providerSku}` : `Provider key ${offer.providerPartKey}`}</p>
+        {offer.sourceUrl ? <a href={offer.sourceUrl}>Source record</a> : <span className="muted-copy">No source URL</span>}
+      </td>
+      <td>
+        <StatusBadge label={formatInventoryStatus(offer.inventoryStatus)} tone={inventoryStatusTone(offer.inventoryStatus)} />
+        <p>{offer.inventoryQuantity === null ? "Quantity not captured" : `${formatInteger(offer.inventoryQuantity)} available`}</p>
+      </td>
+      <td>
+        <strong>{formatSupplyTerms(offer)}</strong>
+        <p>{offer.packaging ?? "Packaging not captured"}{offer.preferredRank ? ` / preferred rank ${offer.preferredRank}` : ""}</p>
+      </td>
+      <td>
+        <strong>{bestBreak ? formatPriceBreak(bestBreak) : "No price tier"}</strong>
+        <p>{offer.priceBreaks.length > 1 ? `${offer.priceBreaks.length} tiers captured` : "Single or no tier captured"}</p>
+      </td>
+      <td>
+        <StatusBadge label={isSupplyOfferStale(offer.lastSeenAt, staleAfterDays) ? "Stale" : "Current"} tone={isSupplyOfferStale(offer.lastSeenAt, staleAfterDays) ? "review" : "info"} />
+        <p>{formatDateTime(offer.lastSeenAt)}</p>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Renders confirmed project usage history and circuit-block dependencies without feeding
+ * either signal into approval or export labels.
+ *
+ * The panel keeps both signals visibly distinct: project usages are concrete BOM history,
+ * circuit-block dependencies are reusable-design memory. A part can have one and not the
+ * other (a part appearing in three reusable blocks but never instantiated yet, or a part
+ * confirmed in two projects but not yet promoted into a reusable block). Neither row count
+ * implies the part is approved, validated, or export-ready — the panel boundary repeats that.
  */
 function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   if (state.status === "unavailable") {
@@ -1274,10 +1428,12 @@ function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
     );
   }
 
-  if (state.response.usages.length === 0) {
+  const { usages, circuitBlockDependencies } = state.response;
+
+  if (usages.length === 0 && circuitBlockDependencies.length === 0) {
     return (
       <EmptyState
-        body="No confirmed project usage records exist for this part. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
+        body="No confirmed project usage records and no circuit block dependencies exist for this part. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
         title="No confirmed project usage"
       />
     );
@@ -1286,49 +1442,177 @@ function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   return (
     <div className="where-used-panel">
       <p className="where-used-panel__boundary">
-        <strong>Usage evidence only.</strong> Project usage does not approve this part or make exports available.
+        <strong>Usage evidence only.</strong> Project usage and circuit-block dependency do not approve this part or make exports available.
       </p>
-      <div className="where-used-table-wrap">
-        <table className="where-used-table">
-          <thead>
-            <tr>
-              <th>Project</th>
-              <th>Revision</th>
-              <th>Usage status</th>
-              <th>Designators</th>
-              <th>Qty</th>
-              <th>Context</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.response.usages.map(({ bomLine, project, projectRevision, usage }) => (
-              <tr key={usage.id}>
-                <td>
-                  <Link href={`/projects/${project.id}`}>{project.name}</Link>
-                  <p className="ui-mono">{project.projectKey}</p>
-                </td>
-                <td>
-                  <span>{formatRevisionLabel(projectRevision.revisionLabel)}</span>
-                  <p>{projectRevision.revisionStatus}</p>
-                </td>
-                <td>
-                  <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
-                </td>
-                <td className="ui-mono">{formatDesignators(usage.designators)}</td>
-                <td>{formatQuantity(usage.quantity)}</td>
-                <td>
-                  <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage context recorded"}</span>
-                  {bomLine ? <p className="ui-mono">BOM row {bomLine.rowNumber}</p> : <p>No BOM row linked</p>}
-                </td>
-                <td>{formatDateTime(usage.updatedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+
+      <section aria-labelledby="part-where-used-projects-heading" className="where-used-panel__section">
+        <header className="where-used-panel__section-heading">
+          <h3 id="part-where-used-projects-heading">Projects</h3>
+          <p className="muted-copy">
+            {usages.length > 0
+              ? `Confirmed in ${usages.length} ${usages.length === 1 ? "project usage row" : "project usage rows"}.`
+              : "No confirmed project usage rows. Weak, ambiguous, and unmatched BOM rows are excluded."}
+          </p>
+        </header>
+        {usages.length === 0
+          ? <EmptyState title="No confirmed project usage" body="Once a matching BOM row promotes to a confirmed usage record, it will appear here." />
+          : (
+            <div className="where-used-table-wrap">
+              <table className="where-used-table">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Revision</th>
+                    <th>Usage status</th>
+                    <th>Designators</th>
+                    <th>Qty</th>
+                    <th>Context</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usages.map(({ bomLine, project, projectRevision, usage }) => (
+                    <tr key={usage.id}>
+                      <td>
+                        <Link href={`/projects/${project.id}`}>{project.name}</Link>
+                        <p className="ui-mono">{project.projectKey}</p>
+                      </td>
+                      <td>
+                        <span>{formatRevisionLabel(projectRevision.revisionLabel)}</span>
+                        <p>{projectRevision.revisionStatus}</p>
+                      </td>
+                      <td>
+                        <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
+                      </td>
+                      <td className="ui-mono">{formatDesignators(usage.designators)}</td>
+                      <td>{formatQuantity(usage.quantity)}</td>
+                      <td>
+                        <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage context recorded"}</span>
+                        {bomLine ? <p className="ui-mono">BOM row {bomLine.rowNumber}</p> : <p>No BOM row linked</p>}
+                      </td>
+                      <td>{formatDateTime(usage.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </section>
+
+      <section aria-labelledby="part-where-used-blocks-heading" className="where-used-panel__section">
+        <header className="where-used-panel__section-heading">
+          <h3 id="part-where-used-blocks-heading">Circuit blocks</h3>
+          <p className="muted-copy">
+            {circuitBlockDependencies.length > 0
+              ? `Linked to ${circuitBlockDependencies.length} reusable ${circuitBlockDependencies.length === 1 ? "block" : "blocks"}. Reuse readiness here mirrors the block detail strip and does not approve this part.`
+              : "No reusable block references this part yet. Promoting a working circuit into a reusable block is how engineering memory grows."}
+          </p>
+        </header>
+        {circuitBlockDependencies.length === 0
+          ? <EmptyState title="No circuit block dependencies" body="When this part is added to a role in a reusable circuit block, that block will appear here with its reuse-readiness verdict." />
+          : <PartCircuitBlockDependencyTable dependencies={circuitBlockDependencies} />}
+      </section>
     </div>
   );
+}
+
+/**
+ * Renders the per-block dependency rows showing which roles this part fills inside each
+ * reusable circuit block, alongside the block's reuse-readiness headline.
+ *
+ * The headline is derived locally from the persisted `CircuitBlockSummary` using the same
+ * shared helper as the library and detail strip, so a part page can never claim a block is
+ * "ready to reuse" when the detail strip would say it is blocked.
+ */
+function PartCircuitBlockDependencyTable({ dependencies }: { dependencies: PartCircuitBlockDependencyRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Block</th>
+            <th>Status</th>
+            <th>Reuse</th>
+            <th>Roles for this part</th>
+            <th>Required roles</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dependencies.map(({ summary, blockParts }) => {
+            const headline: CircuitBlockReuseHeadline = getCircuitBlockReuseHeadline(summary);
+            return (
+              <tr key={summary.circuitBlock.id}>
+                <td>
+                  <Link href={`/circuit-blocks/${encodeURIComponent(summary.circuitBlock.id)}`}>
+                    {summary.circuitBlock.name}
+                  </Link>
+                  <p className="ui-mono">{summary.circuitBlock.blockKey}</p>
+                  <p className="muted-copy">{summary.circuitBlock.reuseScope || summary.circuitBlock.description}</p>
+                </td>
+                <td>
+                  <StatusBadge
+                    label={formatCircuitBlockStatusLabel(summary.circuitBlock.status)}
+                    tone={circuitBlockStatusToneForWhereUsed(summary.circuitBlock.status)}
+                  />
+                </td>
+                <td>
+                  <StatusBadge label={headline.label} tone={headlineToneToBadgeForWhereUsed(headline.tone)} />
+                  <p className="muted-copy">{headline.detail}</p>
+                </td>
+                <td>
+                  <ul className="where-used-role-list">
+                    {blockParts.map((blockPart) => (
+                      <li key={blockPart.id}>
+                        <span className="ui-mono">{blockPart.role}</span>
+                        {" "}
+                        <StatusBadge label={blockPart.isRequired ? "Required" : "Optional"} tone={blockPart.isRequired ? "review" : "neutral"} />
+                      </li>
+                    ))}
+                  </ul>
+                </td>
+                <td>{summary.requiredPartCount}</td>
+                <td>{formatDateTime(summary.circuitBlock.updatedAt)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Formats `CircuitBlockStatus` enum values for the part-detail circuit-block dependency table.
+ */
+function formatCircuitBlockStatusLabel(status: PartCircuitBlockDependencyRecord["summary"]["circuitBlock"]["status"]): string {
+  return {
+    approved: "Approved",
+    deprecated: "Deprecated",
+    draft: "Draft",
+    in_review: "In review",
+    restricted: "Restricted"
+  }[status];
+}
+
+/**
+ * Maps `CircuitBlockStatus` to a badge tone for the part-detail where-used table.
+ *
+ * Block status is intentionally surfaced as reference context, never as part approval.
+ */
+function circuitBlockStatusToneForWhereUsed(status: PartCircuitBlockDependencyRecord["summary"]["circuitBlock"]["status"]): BadgeTone {
+  if (status === "approved") return "verified";
+  if (status === "in_review" || status === "restricted") return "review";
+  if (status === "deprecated") return "neutral";
+  return "info";
+}
+
+/**
+ * Maps the reuse-headline `ViewTone` onto a `BadgeTone` accepted by StatusBadge.
+ */
+function headlineToneToBadgeForWhereUsed(tone: CircuitBlockReuseHeadline["tone"]): BadgeTone {
+  if (tone === "generated") return "info";
+  return tone;
 }
 
 /**
@@ -1934,7 +2218,8 @@ function buildDetailTabs(
   assetGroups: AssetClassSummary[],
   exportActions: { available: boolean }[],
   whereUsedState: PartWhereUsedState,
-  documentControlState: PartDocumentControlState
+  documentControlState: PartDocumentControlState,
+  supplyOffersState: PartSupplyOffersState
 ) {
   const connectorCount = hasConnectorIntelligence
     ? record.buildableMatingSet.requiredAccessories.length + record.buildableMatingSet.optionalAccessories.length + record.buildableMatingSet.toolingRequirements.length + record.buildableMatingSet.cableOptions.length + (record.buildableMatingSet.bestMate ? 1 : 0)
@@ -1944,6 +2229,7 @@ function buildDetailTabs(
   const blockedExportCount = exportActions.filter((action) => !action.available).length;
   const whereUsedCount = whereUsedState.status === "available" ? whereUsedState.response.usages.length : 0;
   const documentRevisionCount = documentControlState.status === "available" ? documentControlState.response.revisions.length : 0;
+  const supplyOfferCount = supplyOffersState.status === "available" ? supplyOffersState.response.offers.length : 0;
 
   return [
     { badge: undefined, href: "#overview-heading", label: "Overview" },
@@ -1951,7 +2237,7 @@ function buildDetailTabs(
     { badge: whereUsedCount > 0 ? `${whereUsedCount}` : undefined, href: "#where-used-heading", label: "Where-used" },
     { badge: connectorCount > 0 ? `${connectorCount}` : undefined, href: "#mates-heading", label: "Mates & accessories" },
     { badge: alternateCount > 0 ? `${alternateCount}` : undefined, href: "#alternates-heading", label: "Alternates" },
-    { badge: undefined, href: "#sourcing-heading", label: "Sourcing" },
+    { badge: supplyOfferCount > 0 ? `${supplyOfferCount}` : undefined, href: "#sourcing-heading", label: "Sourcing" },
     { badge: cadAttentionCount > 0 ? `${cadAttentionCount}` : assetGroups.length > 0 ? `${assetGroups.length}` : undefined, href: "#files-heading", label: "CAD assets" },
     { badge: blockedExportCount > 0 ? `${blockedExportCount}` : undefined, href: "#approval-heading", label: "Approval & export" }
   ];
@@ -2701,6 +2987,103 @@ function usageStatusTone(status: ProjectPartUsageStatus): BadgeTone {
   };
 
   return tones[status];
+}
+
+/**
+ * Formats commercial inventory status labels without implying a live provider check.
+ */
+function formatInventoryStatus(status: InventoryStatus): string {
+  const labels: Record<InventoryStatus, string> = {
+    backorder: "Backorder",
+    in_stock: "In stock",
+    out_of_stock: "Out of stock",
+    unknown: "Unknown"
+  };
+
+  return labels[status];
+}
+
+/**
+ * Maps commercial inventory status into sourcing badge tones.
+ */
+function inventoryStatusTone(status: InventoryStatus): BadgeTone {
+  const tones: Record<InventoryStatus, BadgeTone> = {
+    backorder: "review",
+    in_stock: "verified",
+    out_of_stock: "danger",
+    unknown: "neutral"
+  };
+
+  return tones[status];
+}
+
+/**
+ * Formats supplier identity while falling back to provider provenance when the seller is not captured.
+ */
+function formatSupplySourceLabel(source: { providerId: string; supplierName: string | null }): string {
+  return source.supplierName ?? source.providerId;
+}
+
+/**
+ * Formats MOQ and lead-time terms while preserving missing values as unknown.
+ */
+function formatSupplyTerms(offer: SupplyOffering): string {
+  const moq = offer.moq === null ? "MOQ unknown" : `MOQ ${formatInteger(offer.moq)}`;
+  const leadTime = offer.leadTimeDays === null ? "lead time unknown" : `${offer.leadTimeDays} day${offer.leadTimeDays === 1 ? "" : "s"} lead`;
+
+  return `${moq} / ${leadTime}`;
+}
+
+/**
+ * Selects the lowest price break for one offer and keeps the MOQ tie-break deterministic.
+ */
+function getBestPriceBreak(priceBreaks: PriceBreak[]): PriceBreak | null {
+  const sorted = [...priceBreaks].sort((left, right) => left.unitPrice - right.unitPrice || left.minQuantity - right.minQuantity);
+
+  return sorted[0] ?? null;
+}
+
+/**
+ * Formats a price tier with currency and quantity context.
+ */
+function formatPriceBreak(priceBreak: PriceBreak): string {
+  return `${formatSupplyPrice(priceBreak.unitPrice, priceBreak.currencyCode)} at ${formatInteger(priceBreak.minQuantity)}+`;
+}
+
+/**
+ * Formats a provider price with a safe fallback for unexpected currency codes.
+ */
+function formatSupplyPrice(unitPrice: number, currencyCode: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      currency: currencyCode,
+      maximumFractionDigits: unitPrice < 1 ? 6 : 2,
+      minimumFractionDigits: unitPrice < 1 ? 4 : 2,
+      style: "currency"
+    }).format(unitPrice);
+  } catch {
+    return `${unitPrice.toFixed(unitPrice < 1 ? 4 : 2)} ${currencyCode}`;
+  }
+}
+
+/**
+ * Formats integer-like quantities with thousands separators.
+ */
+function formatInteger(value: number): string {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
+
+/**
+ * Checks whether a commercial snapshot is older than the API's freshness window.
+ */
+function isSupplyOfferStale(lastSeenAt: string, staleAfterDays: number): boolean {
+  const parsed = Date.parse(lastSeenAt);
+
+  if (!Number.isFinite(parsed)) {
+    return true;
+  }
+
+  return Date.now() - parsed > staleAfterDays * 24 * 60 * 60 * 1000;
 }
 
 /**

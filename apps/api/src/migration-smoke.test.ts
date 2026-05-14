@@ -76,6 +76,15 @@ const circuitBlocksMigrationSql = readFileSync(new URL("../../../infra/postgres/
 /** followUpRecordsMigrationSql loads the migration 027 follow-up records migration under test. */
 const followUpRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/027_follow_up_records.sql", import.meta.url), "utf8");
 
+/** supplyOfferingsMigrationSql loads the migration 036 supply offering snapshot migration under test. */
+const supplyOfferingsMigrationSql = readFileSync(new URL("../../../infra/postgres/036_supply_offerings.sql", import.meta.url), "utf8");
+
+/** supplyOfferSupplierRefreshMigrationSql loads the migration 037 supplier and retirement metadata migration. */
+const supplyOfferSupplierRefreshMigrationSql = readFileSync(new URL("../../../infra/postgres/037_supply_offer_supplier_refresh.sql", import.meta.url), "utf8");
+
+/** circuitBlockKnownRisksMigrationSql loads the migration 038 known-risk memory migration under test. */
+const circuitBlockKnownRisksMigrationSql = readFileSync(new URL("../../../infra/postgres/038_circuit_block_known_risks.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -544,6 +553,84 @@ test("circuit block migration preserves reusable part roles and evidence targets
 });
 
 /**
+ * Verifies the known-risk memory migration layers cleanly on top of circuit blocks and
+ * preserves provenance fields (recorded_by/recorded_at, severity, resolved_at) so engineering
+ * memory survives `circuit_blocks` updates without ever implying the linked part is approved.
+ */
+test("circuit block known risk migration preserves engineering memory provenance", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-memory', 'Memory Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-memory', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-memory-ldo', 'TPS7A02DBVR', 'mfr-memory', 'Power management', 'active', 'pkg-memory', 0.8);
+  `);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, projectHealthEvidenceMigrationSql);
+  applyMigrationSql(db, circuitBlocksMigrationSql);
+  applyMigrationSql(db, circuitBlockKnownRisksMigrationSql);
+
+  db.public.none(`
+    INSERT INTO circuit_blocks (id, block_key, name, description, block_type, owner, status, reuse_scope, constraints)
+    VALUES ('cblock-known-risks', 'POWER-LDO-RISKS', 'LDO rail with risks', 'Reusable regulator rail.', 'power', 'hardware', 'approved', 'Sensor boards', '{}'::jsonb);
+
+    INSERT INTO circuit_block_known_risks (id, circuit_block_id, title, detail, severity, recorded_by, recorded_at)
+    VALUES (
+      'risk-inrush',
+      'cblock-known-risks',
+      'Inrush spike on cold start',
+      'Output cap > 22µF caused VIN dip on Bravo Rev B. Recommend slow-start resistor.',
+      'caution',
+      'gerry@hardware',
+      '2026-04-30T12:00:00.000Z'
+    );
+
+    INSERT INTO circuit_block_known_risks (id, circuit_block_id, title, severity)
+    VALUES ('risk-erratum', 'cblock-known-risks', 'Silicon RevG erratum', 'blocking');
+  `);
+
+  const inrush = db.public.one(`
+    SELECT severity, recorded_by, resolved_at FROM circuit_block_known_risks WHERE id = 'risk-inrush'
+  `);
+  const blockingActive = db.public.one(`
+    SELECT COUNT(*)::int AS active_blocking
+    FROM circuit_block_known_risks
+    WHERE circuit_block_id = 'cblock-known-risks'
+      AND severity = 'blocking'
+      AND resolved_at IS NULL
+  `);
+
+  assert.deepEqual(inrush, { severity: "caution", recorded_by: "gerry@hardware", resolved_at: null });
+  assert.equal(blockingActive.active_blocking, 1);
+
+  assert.throws(
+    () =>
+      db.public.none(
+        `INSERT INTO circuit_block_known_risks (id, circuit_block_id, title, severity) VALUES ('risk-bad', 'cblock-known-risks', 'Bad severity', 'critical')`
+      ),
+    /check/i
+  );
+  assert.throws(
+    () =>
+      db.public.none(
+        `INSERT INTO circuit_block_known_risks (id, circuit_block_id, title, severity) VALUES ('risk-empty-title', 'cblock-known-risks', '', 'caution')`
+      ),
+    /check/i
+  );
+  assert.throws(
+    () =>
+      db.public.none(
+        `INSERT INTO circuit_block_known_risks (id, circuit_block_id, title, severity, resolved_at, resolved_by) VALUES ('risk-bad-resolution', 'cblock-known-risks', 'Resolved without timestamp', 'caution', NULL, 'gerry@hardware')`
+      ),
+    /check/i
+  );
+
+  assert.match(circuitBlockKnownRisksMigrationSql, /CREATE TABLE IF NOT EXISTS circuit_block_known_risks/u);
+  assert.match(circuitBlockKnownRisksMigrationSql, /idx_circuit_block_known_risks_active/u);
+});
+
+/**
  * Verifies follow-up records persist assignable work without changing source readiness tables.
  */
 test("follow-up records migration preserves assignable workflow state", () => {
@@ -589,6 +676,126 @@ test("follow-up records migration preserves assignable workflow state", () => {
     /check/i
   );
   assert.match(followUpRecordsMigrationSql, /CREATE TABLE IF NOT EXISTS follow_up_records/u);
+});
+
+/**
+ * Verifies supply-offering migration keeps commercial snapshots source-linked and constrained.
+ */
+test("supply offering migration preserves provider-specific commercial snapshots", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-supply', 'Supply Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-supply', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-supply-ldo', 'TPS7A02DBVR', 'mfr-supply', 'Power management', 'active', 'pkg-supply', 0.8);
+  `);
+  applyMigrationSql(db, hardeningMigrationSql);
+  applyMigrationSql(db, providerImportHardeningMigrationSql);
+  applyMigrationSql(db, supplyOfferingsMigrationSql);
+  applyMigrationSql(db, supplyOfferSupplierRefreshMigrationSql);
+
+  db.public.none(`
+    INSERT INTO source_records (id, provider_id, provider_part_key, part_id, source_url, fetched_at, raw_payload, normalized_at)
+    VALUES ('source-supply-1', 'octopart', 'TPS7A02DBVR', 'part-supply-ldo', 'https://example.test/supply', '2026-05-11T00:00:00.000Z', '{"mpn":"TPS7A02DBVR"}'::jsonb, '2026-05-11T00:01:00.000Z');
+
+    INSERT INTO supply_offerings (
+      id,
+      part_id,
+      provider_id,
+      source_record_id,
+      provider_part_key,
+      supplier_name,
+      provider_sku,
+      inventory_status,
+      inventory_quantity,
+      moq,
+      lead_time_days,
+      packaging,
+      currency_code,
+      preferred_rank,
+      last_seen_at,
+      retired_at,
+      retirement_reason
+    )
+    VALUES (
+      'offer-supply-1',
+      'part-supply-ldo',
+      'octopart',
+      'source-supply-1',
+      'TPS7A02DBVR',
+      'Digi-Key',
+      'SKU-123',
+      'in_stock',
+      250,
+      1,
+      3,
+      'Tape and reel',
+      'USD',
+      1,
+      '2026-05-11T00:02:00.000Z',
+      NULL,
+      NULL
+    ), (
+      'offer-supply-retired',
+      'part-supply-ldo',
+      'octopart',
+      'source-supply-1',
+      'TPS7A02DBVR',
+      'Old Seller',
+      'OLD-SKU',
+      'in_stock',
+      999,
+      1,
+      1,
+      'Tube',
+      'USD',
+      2,
+      '2026-05-11T00:02:00.000Z',
+      '2026-05-12T00:02:00.000Z',
+      'missing_from_latest_provider_snapshot'
+    );
+
+    INSERT INTO price_breaks (id, supply_offering_id, min_quantity, unit_price, currency_code, captured_at)
+    VALUES ('price-supply-1', 'offer-supply-1', 100, 0.42, 'USD', '2026-05-11T00:02:00.000Z');
+  `);
+
+  const joined = db.public.one(`
+    SELECT
+      so.provider_id,
+      so.supplier_name,
+      so.source_record_id,
+      so.inventory_status,
+      pb.min_quantity,
+      pb.unit_price::float AS unit_price
+    FROM supply_offerings so
+    JOIN price_breaks pb ON pb.supply_offering_id = so.id
+    WHERE so.id = 'offer-supply-1'
+  `);
+
+  assert.deepEqual(joined, {
+    inventory_status: "in_stock",
+    min_quantity: 100,
+    provider_id: "octopart",
+    supplier_name: "Digi-Key",
+    source_record_id: "source-supply-1",
+    unit_price: 0.42,
+  });
+  const activeOffers = db.public.one(`SELECT COUNT(*)::int AS active_count FROM supply_offerings WHERE retired_at IS NULL`);
+  assert.equal(activeOffers.active_count, 1);
+  assert.throws(
+    () => db.public.none(`INSERT INTO supply_offerings (id, part_id, provider_id, source_record_id, provider_part_key, inventory_status) VALUES ('offer-bad-status', 'part-supply-ldo', 'octopart', 'source-supply-1', 'BAD', 'maybe')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO price_breaks (id, supply_offering_id, min_quantity, unit_price, currency_code) VALUES ('price-bad-negative', 'offer-supply-1', 1, -0.1, 'USD')`),
+    /check/i
+  );
+  assert.match(supplyOfferingsMigrationSql, /CREATE TABLE IF NOT EXISTS supply_offerings/u);
+  assert.match(supplyOfferingsMigrationSql, /CREATE TABLE IF NOT EXISTS price_breaks/u);
+  assert.match(supplyOfferingsMigrationSql, /source_record_id TEXT NOT NULL REFERENCES source_records/u);
+  assert.match(supplyOfferSupplierRefreshMigrationSql, /ADD COLUMN IF NOT EXISTS supplier_name/u);
+  assert.match(supplyOfferSupplierRefreshMigrationSql, /ADD COLUMN IF NOT EXISTS retired_at/u);
 });
 
 /**

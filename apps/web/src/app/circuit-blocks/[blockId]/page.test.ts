@@ -48,6 +48,82 @@ test("circuit block detail renders part roles and evidence without overriding re
     assert.match(html, /Attach circuit evidence/u);
     assert.match(html, /Circuit review/u);
     assert.match(html, /does not approve the block/u);
+    assert.match(html, /Next workspaces/u);
+    assert.match(html, /Open where-used for ALPHA-POWER/u);
+    assert.match(html, /Pick a project to instantiate/u);
+    assert.match(html, /See all power blocks/u);
+    assert.match(html, /Known risks/u);
+    assert.match(html, /No known risks recorded/u);
+    assert.match(html, /Recording or resolving a known risk does not approve/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies the known-risks section renders active and resolved rows with severity badges and
+ * surfaces the unresolved-blocking-risk gate in the reuse-readiness strip detail copy.
+ */
+test("circuit block detail renders known risks with severity badges and gates on unresolved blocking risks", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/circuit-blocks/cblock-alpha-power") {
+      const fixture = buildCircuitBlockDetailResponse();
+      fixture.knownRisks = [
+        {
+          circuitBlockId: "cblock-alpha-power",
+          createdAt: "2026-05-01T12:00:00.000Z",
+          detail: "Output cap > 22uF caused VIN dip on Bravo Rev B.",
+          evidenceUrl: null,
+          id: "cbrisk-alpha-inrush",
+          recordedAt: "2026-05-01T12:00:00.000Z",
+          recordedBy: "gerry@hardware",
+          resolutionNotes: null,
+          resolvedAt: null,
+          resolvedBy: null,
+          severity: "blocking",
+          title: "Silicon RevG erratum",
+          updatedAt: "2026-05-01T12:00:00.000Z"
+        },
+        {
+          circuitBlockId: "cblock-alpha-power",
+          createdAt: "2026-04-20T08:00:00.000Z",
+          detail: "Old observation, no longer applies after layout fix.",
+          evidenceUrl: null,
+          id: "cbrisk-alpha-resolved",
+          recordedAt: "2026-04-20T08:00:00.000Z",
+          recordedBy: "gerry@hardware",
+          resolutionNotes: "Resolved in Bravo Rev C layout.",
+          resolvedAt: "2026-04-30T09:00:00.000Z",
+          resolvedBy: "gerry@hardware",
+          severity: "caution",
+          title: "Original inrush note",
+          updatedAt: "2026-04-30T09:00:00.000Z"
+        }
+      ];
+      fixture.summary.activeKnownRiskCount = 1;
+      fixture.summary.activeBlockingRiskCount = 1;
+      return jsonResponse({ data: fixture, source: "database" });
+    }
+
+    if (url.pathname === "/circuit-blocks/cblock-alpha-power/follow-ups") {
+      return jsonResponse({
+        data: buildCircuitBlockFollowUpsResponse("cblock-alpha-power"),
+        source: "database"
+      });
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderCircuitBlockDetailPage("cblock-alpha-power");
+
+    assert.match(html, /Known risks/u);
+    assert.match(html, /Silicon RevG erratum/u);
+    assert.match(html, /Blocking/u);
+    assert.match(html, /Resolved \(1\)/u);
+    assert.match(html, /Original inrush note/u);
+    assert.match(html, /unresolved blocking risk/iu);
   } finally {
     restoreFetch();
   }
@@ -236,9 +312,13 @@ function buildCircuitBlockDetailResponse(): CircuitBlockDetailResponse {
         }
       }
     ],
+    instantiations: [],
+    knownRisks: [],
     projectDependencies: [],
     state: "available",
     summary: {
+      activeBlockingRiskCount: 0,
+      activeKnownRiskCount: 0,
       approvedPartCount: 1,
       circuitBlock,
       evidenceAttachmentCount: 1,

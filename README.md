@@ -82,8 +82,9 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 **Catalog and parts**
 
 - `/` and `/catalog` open into the dense catalog workbench (filters: readiness, approval, CAD, lifecycle, connector class, sort, etc.).
-- Exact no-match MPN searches expose a direct **Import exact MPN** path for configured providers (`local-catalog`, `jlcparts`).
+- Exact no-match MPN searches expose a direct **Import exact MPN** path for configured providers (`local-catalog`, `jlcparts`, `octopart` when Nexar credentials are configured).
 - Part detail is answer-first: use decision, datasheet and CAD/export state, connector buildable set, provenance, approved substitutes, next actions.
+- Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, freshness warnings, stale refresh scheduling, retired-row handling, and no live-stock claim.
 - Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
 
 **Project and BOM memory**
@@ -129,7 +130,7 @@ After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED
 ## Current Boundaries
 
 - **`/compare`** (basic readiness metrics) and **`/system`** health are in the workspace sidebar. **`/tools`** (calculators) stays out of primary navigation until that route exists.
-- Exact-MPN import is not broad live distributor search.
+- Exact-MPN import and supply-offer snapshots are not broad live distributor search.
 - Imported does not mean approved, CAD-verified, or export-ready.
 - BOM upload preserves raw context; matching and usage follow explicit operator actions and deterministic rules—weak rows do not silently become confirmed usage.
 - Multi-provider conflict handling is **partial**; richer merge policy and extraction/generation depth remain **planned** (see implementation status).
@@ -186,11 +187,15 @@ npm run dev:api
 npm run dev:worker
 npm run ingest:local
 npm run ingest:jlcparts
+npm run ingest:octopart
 npm run imports:providers
 npm run operations:worker
+npm run refresh:supply-offers
 ```
 
 The web app defaults to `http://127.0.0.1:3000`; the API defaults to `http://127.0.0.1:4000`. DB-backed search and import flows require `DATABASE_URL` to point at a reachable Postgres database. If the database is unavailable, the UI stays honest and does not invent catalog records.
+
+Octopart intake uses Nexar GraphQL from the worker only. Configure either `NEXAR_ACCESS_TOKEN` for a short local run or `NEXAR_CLIENT_ID` plus `NEXAR_CLIENT_SECRET` for OAuth client-credentials refresh before running `npm run ingest:octopart` or selecting the `octopart` provider in the import UI.
 
 ## First Workbench Loop
 

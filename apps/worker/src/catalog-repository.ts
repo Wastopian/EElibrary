@@ -6,6 +6,7 @@ import { Pool, type PoolClient } from "pg";
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { buildBuildableMatingSet, getConnectorRelationEffectiveConfidence } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
+import { SUPPLY_OFFER_MISSING_FROM_PROVIDER_REASON } from "@ee-library/shared/supply-offers";
 import type {
   AccessoryRequirement,
   Asset,
@@ -33,7 +34,7 @@ import type {
   SourceReconciliationRecord,
   SourceRecord
 } from "@ee-library/shared/types";
-import type { NormalizedProviderPart } from "./provider-adapters";
+import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak } from "./provider-adapters";
 
 /** pool is lazy so worker status can run without requiring a database. */
 let pool: Pool | null = null;
@@ -534,6 +535,12 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
   for (const metric of normalizedPart.metrics) {
     await persistMetric(client, metric);
   }
+
+  for (const supplyOffering of normalizedPart.supplyOfferings) {
+    await persistSupplyOffering(client, supplyOffering);
+  }
+
+  await retireMissingSupplyOfferings(client, normalizedPart);
 
   for (const signal of normalizedPart.extractionSignals) {
     await persistSourceExtractionSignal(client, signal);
@@ -1230,6 +1237,164 @@ async function persistMetric(client: PoolClient, metric: PartMetric): Promise<vo
       metric.sourceRevisionId,
       metric.sourceRecordId,
       metric.lastUpdatedAt
+    ]
+  );
+}
+
+/**
+ * Upserts one provider commercial offering and replaces its price tiers with the latest snapshot.
+ */
+async function persistSupplyOffering(client: PoolClient, offering: NormalizedSupplyOffering): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO supply_offerings (
+        id,
+        part_id,
+        provider_id,
+        source_record_id,
+        provider_part_key,
+        supplier_name,
+        provider_sku,
+        inventory_status,
+        inventory_quantity,
+        moq,
+        lead_time_days,
+        packaging,
+        currency_code,
+        preferred_rank,
+        last_seen_at,
+        retired_at,
+        retirement_reason,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NULL, $16, $17)
+      ON CONFLICT (id) DO UPDATE SET
+        part_id = EXCLUDED.part_id,
+        provider_id = EXCLUDED.provider_id,
+        source_record_id = EXCLUDED.source_record_id,
+        provider_part_key = EXCLUDED.provider_part_key,
+        supplier_name = EXCLUDED.supplier_name,
+        provider_sku = EXCLUDED.provider_sku,
+        inventory_status = EXCLUDED.inventory_status,
+        inventory_quantity = EXCLUDED.inventory_quantity,
+        moq = EXCLUDED.moq,
+        lead_time_days = EXCLUDED.lead_time_days,
+        packaging = EXCLUDED.packaging,
+        currency_code = EXCLUDED.currency_code,
+        preferred_rank = EXCLUDED.preferred_rank,
+        last_seen_at = EXCLUDED.last_seen_at,
+        retired_at = NULL,
+        retirement_reason = NULL,
+        created_at = supply_offerings.created_at,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      offering.id,
+      offering.partId,
+      offering.providerId,
+      offering.sourceRecordId,
+      offering.providerPartKey,
+      offering.supplierName,
+      offering.providerSku,
+      offering.inventoryStatus,
+      offering.inventoryQuantity,
+      offering.moq,
+      offering.leadTimeDays,
+      offering.packaging,
+      offering.currencyCode,
+      offering.preferredRank,
+      offering.lastSeenAt,
+      offering.createdAt,
+      offering.updatedAt
+    ]
+  );
+
+  await client.query("DELETE FROM price_breaks WHERE supply_offering_id = $1", [offering.id]);
+
+  for (const priceBreak of offering.priceBreaks) {
+    await persistSupplyPriceBreak(client, priceBreak);
+  }
+}
+
+/**
+ * Retires active commercial rows from the same source record when the latest provider
+ * snapshot no longer includes them. This keeps the audit trail while preventing old
+ * offers from continuing to render as current sourcing context.
+ */
+async function retireMissingSupplyOfferings(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
+  const activeOfferingIds = normalizedPart.supplyOfferings.map((offering) => offering.id);
+  const retiredAt = normalizedPart.sourceRecord.sourceLastSeenAt ?? normalizedPart.part.lastUpdatedAt;
+
+  try {
+    await client.query(
+      `
+        UPDATE supply_offerings
+        SET
+          retired_at = $4,
+          retirement_reason = $5,
+          updated_at = $4
+        WHERE part_id = $1
+          AND source_record_id = $2
+          AND retired_at IS NULL
+          AND NOT (id = ANY($3::text[]))
+      `,
+      [
+        normalizedPart.part.id,
+        normalizedPart.sourceRecord.id,
+        activeOfferingIds,
+        retiredAt,
+        SUPPLY_OFFER_MISSING_FROM_PROVIDER_REASON
+      ]
+    );
+  } catch (error) {
+    if (isSupplyOfferingRetirementSchemaMissing(error)) {
+      return;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Detects older deployments or narrow test schemas that predate supply-offer retirement columns.
+ */
+function isSupplyOfferingRetirementSchemaMissing(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+
+  return code === "42P01" || code === "42703" || /relation "supply_offerings" does not exist|column .*retired_at/u.test(message);
+}
+
+/**
+ * Inserts one price tier for a supply offering after the parent snapshot has been upserted.
+ */
+async function persistSupplyPriceBreak(client: PoolClient, priceBreak: NormalizedSupplyPriceBreak): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO price_breaks (
+        id,
+        supply_offering_id,
+        min_quantity,
+        unit_price,
+        currency_code,
+        captured_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id) DO UPDATE SET
+        supply_offering_id = EXCLUDED.supply_offering_id,
+        min_quantity = EXCLUDED.min_quantity,
+        unit_price = EXCLUDED.unit_price,
+        currency_code = EXCLUDED.currency_code,
+        captured_at = EXCLUDED.captured_at
+    `,
+    [
+      priceBreak.id,
+      priceBreak.supplyOfferingId,
+      priceBreak.minQuantity,
+      priceBreak.unitPrice,
+      priceBreak.currencyCode,
+      priceBreak.capturedAt
     ]
   );
 }

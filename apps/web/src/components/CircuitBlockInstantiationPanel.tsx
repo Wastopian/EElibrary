@@ -7,6 +7,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { fetchCircuitBlocks, instantiateCircuitBlockIntoBom, isApiClientError } from "../lib/api-client";
+import { getCircuitBlockReuseHeadline } from "../lib/circuit-block-reuse-readiness";
+import type { BadgeTone } from "@ee-library/ui";
+import type { CircuitBlockReuseHeadline } from "../lib/circuit-block-reuse-readiness";
 import type {
   CircuitBlockInstantiationCreateResponse,
   CircuitBlockSummary,
@@ -44,6 +47,8 @@ export function CircuitBlockInstantiationPanel({
   const [includeOptional, setIncludeOptional] = useState(false);
   const [designatorPrefix, setDesignatorPrefix] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
+  const [filterText, setFilterText] = useState<string>("");
+  const [hideBlocked, setHideBlocked] = useState<boolean>(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,10 +70,34 @@ export function CircuitBlockInstantiationPanel({
     };
   }, []);
 
-  const selectedBlock = useMemo(() => {
-    if (libraryState.kind !== "loaded") return null;
-    return libraryState.blocks.find((entry) => entry.circuitBlock.id === selectedBlockId) ?? null;
-  }, [libraryState, selectedBlockId]);
+  const blockEntries = useMemo(() => {
+    if (libraryState.kind !== "loaded") return [] as Array<{ summary: CircuitBlockSummary; headline: CircuitBlockReuseHeadline }>;
+    return libraryState.blocks.map((summary) => ({ headline: getCircuitBlockReuseHeadline(summary), summary }));
+  }, [libraryState]);
+
+  const filteredBlockEntries = useMemo(() => {
+    const trimmedText = filterText.trim().toLowerCase();
+    return blockEntries.filter(({ summary, headline }) => {
+      if (hideBlocked && headline.state === "blocked") return false;
+      if (trimmedText.length === 0) return true;
+      const haystack = [
+        summary.circuitBlock.blockKey,
+        summary.circuitBlock.name,
+        summary.circuitBlock.description,
+        summary.circuitBlock.reuseScope,
+        summary.circuitBlock.owner ?? ""
+      ]
+        .join(" \u0001 ")
+        .toLowerCase();
+      return haystack.includes(trimmedText);
+    });
+  }, [blockEntries, filterText, hideBlocked]);
+
+  const selectedEntry = useMemo(() => {
+    return blockEntries.find((entry) => entry.summary.circuitBlock.id === selectedBlockId) ?? null;
+  }, [blockEntries, selectedBlockId]);
+
+  const selectedBlock = selectedEntry?.summary ?? null;
 
   const handleSubmit = async (): Promise<void> => {
     if (!selectedBlockId || !selectedRevisionId) return;
@@ -124,6 +153,26 @@ export function CircuitBlockInstantiationPanel({
         This does not change part approval, readiness, or export verification.
       </p>
 
+      <div className="form-row form-row--inline">
+        <label className="form-label" htmlFor="instantiation-filter-text">Filter library</label>
+        <input
+          className="form-input"
+          id="instantiation-filter-text"
+          placeholder="search by name, key, owner, or scope"
+          type="search"
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+        />
+        <label className="checkbox-label">
+          <input
+            checked={hideBlocked}
+            type="checkbox"
+            onChange={(e) => setHideBlocked(e.target.checked)}
+          />
+          {" "}Hide blocked
+        </label>
+      </div>
+
       <div className="form-row">
         <label className="form-label" htmlFor="instantiation-block">Circuit block</label>
         <select
@@ -136,12 +185,23 @@ export function CircuitBlockInstantiationPanel({
           }}
         >
           <option value="">Select a circuit block…</option>
-          {libraryState.blocks.map((entry) => (
-            <option key={entry.circuitBlock.id} value={entry.circuitBlock.id}>
-              {entry.circuitBlock.name} ({entry.circuitBlock.blockKey}) — {entry.requiredPartCount} required, {entry.optionalPartCount} optional
+          {filteredBlockEntries.map(({ summary, headline }) => (
+            <option key={summary.circuitBlock.id} value={summary.circuitBlock.id}>
+              [{formatReuseStateLabel(headline.state)}] {summary.circuitBlock.name} ({summary.circuitBlock.blockKey}) — {summary.requiredPartCount} required, {summary.optionalPartCount} optional
             </option>
           ))}
         </select>
+        {filteredBlockEntries.length === 0 && (
+          <small className="form-hint">
+            No blocks match the current filter. {hideBlocked ? "Try unchecking \u201cHide blocked\u201d or " : ""}Clear the search to see the full library.
+          </small>
+        )}
+        {selectedEntry && (
+          <div className="instantiation-panel__verdict">
+            <StatusBadge label={selectedEntry.headline.label} tone={headlineToneToBadge(selectedEntry.headline.tone)} />
+            <span className="form-hint">{selectedEntry.headline.detail}</span>
+          </div>
+        )}
       </div>
 
       <div className="form-row">
@@ -239,4 +299,30 @@ export function CircuitBlockInstantiationPanel({
       )}
     </div>
   );
+}
+
+/**
+ * Maps the reuse-headline state onto a short scan label for the select option prefix.
+ */
+function formatReuseStateLabel(state: CircuitBlockReuseHeadline["state"]): string {
+  switch (state) {
+    case "reusable":
+      return "READY";
+    case "pending":
+      return "PENDING";
+    case "blocked":
+      return "BLOCKED";
+    case "not_applicable":
+      return "DEPRECATED";
+    default:
+      return state;
+  }
+}
+
+/**
+ * Maps the reuse-headline `ViewTone` onto a `BadgeTone` accepted by StatusBadge.
+ */
+function headlineToneToBadge(tone: CircuitBlockReuseHeadline["tone"]): BadgeTone {
+  if (tone === "generated") return "info";
+  return tone;
 }

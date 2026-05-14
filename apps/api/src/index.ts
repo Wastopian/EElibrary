@@ -10,8 +10,9 @@ import { extname, basename } from "node:path";
 import { performance } from "node:perf_hooks";
 import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
+import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
@@ -28,7 +29,8 @@ import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit
 import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
-import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
+import { readPartSupplyOffersFromDatabase } from "./supply-offers";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -43,13 +45,19 @@ import type {
   CatalogDataSource,
   CircuitBlockCreateInput,
   CircuitBlockInstantiationCreateInput,
+  CircuitBlockKnownRiskCreateInput,
+  CircuitBlockKnownRiskResolveInput,
+  CircuitBlockKnownRiskSeverity,
+  CircuitBlockListFilters,
   CircuitBlockPartCreateInput,
   CircuitBlockPartSubstitutionPolicy,
   CircuitBlockPartUpdateInput,
+  CircuitBlockReuseReadinessFilter,
   CircuitBlockStatus,
   CircuitBlockType,
   CircuitBlockUpdateInput,
   ConnectorClass,
+  ConnectorSetIntentInput,
   DocumentAccessLevel,
   DocumentAclPermission,
   DocumentAclPrincipalType,
@@ -196,6 +204,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
   const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(url.pathname);
   const circuitBlockPartUpdateMatch = /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u.exec(url.pathname);
+  const circuitBlockKnownRiskCreateMatch = /^\/circuit-blocks\/([^/]+)\/known-risks$/u.exec(url.pathname);
+  const circuitBlockKnownRiskResolveMatch = /^\/circuit-blocks\/([^/]+)\/known-risks\/([^/]+)\/resolve$/u.exec(url.pathname);
   const circuitBlockFollowUpsMatch = /^\/circuit-blocks\/([^/]+)\/follow-ups$/u.exec(url.pathname);
   const circuitBlockProjectDepsMatch = /^\/circuit-blocks\/([^/]+)\/project-dependencies$/u.exec(url.pathname);
   const circuitBlockDetailMatch = /^\/circuit-blocks\/([^/]+)$/u.exec(url.pathname);
@@ -205,6 +215,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(url.pathname);
   const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(url.pathname);
   const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
+  const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
   const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(url.pathname);
   const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
   const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
@@ -364,6 +375,25 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && circuitBlockKnownRiskCreateMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockKnownRiskCreate(request, response, decodeURIComponent(circuitBlockKnownRiskCreateMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && circuitBlockKnownRiskResolveMatch?.[1] && circuitBlockKnownRiskResolveMatch?.[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCircuitBlockKnownRiskResolve(
+      request,
+      response,
+      decodeURIComponent(circuitBlockKnownRiskResolveMatch[1]),
+      decodeURIComponent(circuitBlockKnownRiskResolveMatch[2])
+    );
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/imports/provider") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -483,6 +513,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/connector-sets/resolve") {
+    await handleConnectorSetIntentResolve(request, response);
+    return;
+  }
+
   if (request.method !== "GET") {
     sendJson(response, 405, {
       error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
@@ -550,7 +585,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   }
 
   if (url.pathname === "/circuit-blocks") {
-    await handleCircuitBlockListRead(response);
+    await handleCircuitBlockListRead(response, url);
     return;
   }
 
@@ -668,6 +703,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (partDocumentRevisionsMatch?.[1]) {
     await handlePartDocumentRevisionsRead(response, decodeURIComponent(partDocumentRevisionsMatch[1]));
+    return;
+  }
+
+  if (partSupplyOffersMatch?.[1]) {
+    await handlePartSupplyOffersRead(response, decodeURIComponent(partSupplyOffersMatch[1]));
     return;
   }
 
@@ -1741,6 +1781,112 @@ async function handleCircuitBlockPartUpdate(request: IncomingMessage, response: 
 }
 
 /**
+ * Handles recording one engineering-memory observation against a circuit block.
+ *
+ * The store performs schema-aware validation (trimmed title, allow-listed severity, defaults
+ * etc); this handler validates only the gross shape so unrelated rejections come through as
+ * 400 rather than 500.
+ */
+async function handleCircuitBlockKnownRiskCreate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  circuitBlockId: string
+): Promise<void> {
+  const body = await readJsonBody<CircuitBlockKnownRiskCreateInput>(request);
+
+  if (!body || !isCircuitBlockKnownRiskCreateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK_KNOWN_RISK",
+        message: "Known risk creation requires at least a non-empty title."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-known-risk-create",
+      () => createCircuitBlockKnownRiskInDatabase(circuitBlockId, body),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles resolving one known-risk row. Resolution preserves the original observation
+ * (the row is updated, not deleted) so projects that reused the block while the risk was
+ * open can still be audited.
+ */
+async function handleCircuitBlockKnownRiskResolve(
+  request: IncomingMessage,
+  response: ServerResponse,
+  circuitBlockId: string,
+  knownRiskId: string
+): Promise<void> {
+  const body = await readJsonBody<CircuitBlockKnownRiskResolveInput>(request);
+  const resolveInput: CircuitBlockKnownRiskResolveInput = body ?? {};
+
+  if (!isCircuitBlockKnownRiskResolveInput(resolveInput)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CIRCUIT_BLOCK_KNOWN_RISK_RESOLVE",
+        message: "Known risk resolution accepts optional resolvedBy and resolutionNotes string fields."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "circuit-block-known-risk-resolve",
+      () => resolveCircuitBlockKnownRiskInDatabase(circuitBlockId, knownRiskId, resolveInput),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only project-memory list requests.
  */
 async function handleProjectListRead(response: ServerResponse): Promise<void> {
@@ -1789,12 +1935,14 @@ async function handleProjectFleetRiskRead(response: ServerResponse): Promise<voi
 /**
  * Handles read-only circuit block library requests.
  */
-async function handleCircuitBlockListRead(response: ServerResponse): Promise<void> {
+async function handleCircuitBlockListRead(response: ServerResponse, url: URL): Promise<void> {
+  const filters = parseCircuitBlockListFilters(url);
+
   try {
     const result = await timeRouteOperation(
       response,
       "circuit-block-list-read",
-      () => readCircuitBlocksFromDatabase(),
+      () => readCircuitBlocksFromDatabase(filters),
       (value) => value.status
     );
 
@@ -1807,6 +1955,52 @@ async function handleCircuitBlockListRead(response: ServerResponse): Promise<voi
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
+}
+
+/**
+ * Parses optional library filter query parameters into a `CircuitBlockListFilters` record.
+ *
+ * Unknown values are silently dropped so the API never returns an error for a curious URL.
+ * The response echoes back the filters it actually applied so the UI can self-correct.
+ */
+function parseCircuitBlockListFilters(url: URL): CircuitBlockListFilters {
+  const query = (url.searchParams.get("q") ?? "").trim();
+  const blockTypeRaw = (url.searchParams.get("type") ?? "").trim();
+  const statusRaw = (url.searchParams.get("status") ?? "").trim();
+  const owner = (url.searchParams.get("owner") ?? "").trim();
+  const readinessRaw = (url.searchParams.get("readiness") ?? "").trim();
+
+  const allowedBlockTypes: ReadonlySet<CircuitBlockType> = new Set<CircuitBlockType>([
+    "power",
+    "mcu_support",
+    "interface",
+    "protection",
+    "connector_set",
+    "sensor_front_end",
+    "other"
+  ]);
+  const allowedStatuses: ReadonlySet<CircuitBlockStatus> = new Set<CircuitBlockStatus>([
+    "draft",
+    "in_review",
+    "approved",
+    "deprecated",
+    "restricted"
+  ]);
+  const allowedReadiness: ReadonlySet<CircuitBlockReuseReadinessFilter> = new Set<CircuitBlockReuseReadinessFilter>([
+    "reusable",
+    "pending",
+    "blocked"
+  ]);
+
+  return {
+    blockType: allowedBlockTypes.has(blockTypeRaw as CircuitBlockType) ? (blockTypeRaw as CircuitBlockType) : null,
+    owner: owner.length > 0 ? owner : null,
+    query: query.length > 0 ? query : null,
+    reuseReadiness: allowedReadiness.has(readinessRaw as CircuitBlockReuseReadinessFilter)
+      ? (readinessRaw as CircuitBlockReuseReadinessFilter)
+      : null,
+    status: allowedStatuses.has(statusRaw as CircuitBlockStatus) ? (statusRaw as CircuitBlockStatus) : null
+  };
 }
 
 /**
@@ -2676,6 +2870,34 @@ async function handlePartWhereUsedRead(response: ServerResponse, partId: string)
 }
 
 /**
+ * Handles read-only supply offer snapshots for one internal part.
+ */
+async function handlePartSupplyOffersRead(response: ServerResponse, partId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-supply-offers-read",
+      () => readPartSupplyOffersFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendSupplyOffersNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles global where-used search across supported project-memory dependency records.
  */
 async function handleWhereUsedSearchRead(response: ServerResponse, url: URL): Promise<void> {
@@ -2729,6 +2951,63 @@ async function handleConnectorSetCatalogRead(response: ServerResponse, url: URL)
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
+}
+
+/**
+ * Handles typed connector-set intent resolution against persisted catalog relationship rows.
+ */
+async function handleConnectorSetIntentResolve(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<Partial<ConnectorSetIntentInput>>(request);
+  const intent = parseConnectorSetIntentInput(body);
+
+  if (!intent) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_CONNECTOR_SET_INTENT",
+        message: "Connector-set intent requires a non-empty class string. Optional fields are query, pinCount, sealing, and cableGauge."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "connector-set-intent-resolve",
+      () => readCatalogRecordsFromDatabase(),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, resolveConnectorSetIntent(intent, result.records), "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Parses connector intent from JSON while rejecting values that would make confidence misleading.
+ */
+function parseConnectorSetIntentInput(input: Partial<ConnectorSetIntentInput> | null): ConnectorSetIntentInput | null {
+  const query = typeof input?.query === "string" && input.query.trim().length > 0 ? input.query.trim() : null;
+  const parsedTextIntent = query ? parseConnectorSetIntentText(query) : null;
+  const connectorClass = typeof input?.class === "string" && input.class.trim().length > 0 ? input.class.trim() : parsedTextIntent?.class ?? "";
+
+  if (connectorClass.length === 0) {
+    return null;
+  }
+
+  return {
+    cableGauge: typeof input?.cableGauge === "number" && Number.isFinite(input.cableGauge) ? Math.trunc(input.cableGauge) : parsedTextIntent?.cableGauge ?? null,
+    class: connectorClass,
+    pinCount: typeof input?.pinCount === "number" && Number.isFinite(input.pinCount) ? Math.trunc(input.pinCount) : parsedTextIntent?.pinCount ?? null,
+    query,
+    sealing: typeof input?.sealing === "string" && input.sealing.trim().length > 0 ? input.sealing.trim() : parsedTextIntent?.sealing ?? null
+  };
 }
 
 /**
@@ -3830,6 +4109,44 @@ function isCircuitBlockPartCreateInput(value: unknown): value is CircuitBlockPar
 }
 
 /**
+ * Checks the gross shape of a known-risk create request before deep validation in the store.
+ *
+ * Accepts at minimum a non-empty `title`; other fields fall back to the store-side defaults
+ * (`severity = caution`, `detail = ""`, etc). Severity is allow-listed here to mirror the
+ * SQL CHECK constraint so unknown values get a 400 instead of a 500.
+ */
+function isCircuitBlockKnownRiskCreateInput(value: unknown): value is CircuitBlockKnownRiskCreateInput {
+  if (!value || typeof value !== "object") return false;
+
+  const body = value as Partial<CircuitBlockKnownRiskCreateInput>;
+
+  if (typeof body.title !== "string" || body.title.trim().length === 0) return false;
+
+  if (body.severity !== undefined && !isCircuitBlockKnownRiskSeverity(body.severity)) return false;
+
+  return isOptionalBodyString(body.detail) &&
+    isOptionalBodyString(body.recordedBy) &&
+    isOptionalBodyString(body.evidenceUrl);
+}
+
+/**
+ * Checks the gross shape of a known-risk resolve request. Both fields are optional strings;
+ * an empty body (`{}`) is allowed so the endpoint can be called without provenance data.
+ */
+function isCircuitBlockKnownRiskResolveInput(value: unknown): value is CircuitBlockKnownRiskResolveInput {
+  if (!value || typeof value !== "object") return false;
+
+  const body = value as Partial<CircuitBlockKnownRiskResolveInput>;
+
+  return isOptionalBodyString(body.resolvedBy) && isOptionalBodyString(body.resolutionNotes);
+}
+
+/** Allow-list check for CircuitBlockKnownRiskSeverity at the HTTP boundary. */
+function isCircuitBlockKnownRiskSeverity(value: unknown): value is CircuitBlockKnownRiskSeverity {
+  return value === "info" || value === "limitation" || value === "caution" || value === "blocking";
+}
+
+/**
  * Checks circuit block part-role update request shape before persistence validation.
  */
 function isCircuitBlockPartUpdateInput(value: unknown): value is CircuitBlockPartUpdateInput {
@@ -4551,6 +4868,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/where-used") return "api-where-used-search";
   if (method === "GET" && pathname === "/audit-events") return "api-audit-events-read";
   if (method === "GET" && pathname === "/connector-sets") return "api-connector-set-list";
+  if (method === "POST" && pathname === "/connector-sets/resolve") return "api-connector-set-intent-resolve";
   if (method === "GET" && /^\/projects\/[^/]+\/approval-candidates$/u.test(pathname)) return "api-approval-batch-candidates";
   if (method === "POST" && /^\/projects\/[^/]+\/approval-batch$/u.test(pathname)) return "api-approval-batch-apply";
   if (method === "GET" && pathname === "/projects") return "api-project-list";
@@ -4591,6 +4909,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && /^\/circuit-blocks\/[^/]+\/follow-ups$/u.test(pathname)) return "api-circuit-block-follow-ups-sync";
   if (method === "POST" && /^\/circuit-blocks\/[^/]+\/parts$/u.test(pathname)) return "api-circuit-block-part-create";
   if (method === "PATCH" && /^\/circuit-blocks\/[^/]+\/parts\/[^/]+$/u.test(pathname)) return "api-circuit-block-part-update";
+  if (method === "POST" && /^\/circuit-blocks\/[^/]+\/known-risks$/u.test(pathname)) return "api-circuit-block-known-risk-create";
+  if (method === "POST" && /^\/circuit-blocks\/[^/]+\/known-risks\/[^/]+\/resolve$/u.test(pathname)) return "api-circuit-block-known-risk-resolve";
   if (method === "POST" && /^\/projects\/[^/]+\/circuit-block-instantiations$/u.test(pathname)) return "api-circuit-block-instantiation-create";
   if (method === "GET" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitutions-read";
   if (method === "POST" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitution-create";
@@ -4599,6 +4919,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
   if (method === "GET" && /^\/parts\/[^/]+\/usages$/u.test(pathname)) return "api-part-where-used";
+  if (method === "GET" && /^\/parts\/[^/]+\/supply-offers$/u.test(pathname)) return "api-part-supply-offers";
   if (method === "GET" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revisions-read";
   if (method === "POST" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revision-create";
   if (method === "POST" && /^\/document-revisions\/[^/]+\/redlines$/u.test(pathname)) return "api-document-redline-create";
@@ -4725,6 +5046,18 @@ function sendDocumentControlNotConfigured(response: ServerResponse): void {
     error: {
       code: "DB_NOT_CONFIGURED",
       message: "Document control requires a configured database so revision, ACL, and redline history can be persisted."
+    }
+  });
+}
+
+/**
+ * Sends the standard supply-offer not-configured response without seed fallback.
+ */
+function sendSupplyOffersNotConfigured(response: ServerResponse): void {
+  sendJson(response, 503, {
+    error: {
+      code: "DB_NOT_CONFIGURED",
+      message: "Supply offers require a configured database so source-linked commercial snapshots can be read."
     }
   });
 }
