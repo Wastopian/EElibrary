@@ -113,7 +113,7 @@ keep the trust-stage diff row immediately adjacent.
 
 ---
 
-## 5. Day-zero value from a single CSV
+## 5. Day-zero value from a single CSV ✅ first slice shipped (2026-05-13)
 
 **Why it matters.** The biggest reason small teams stay on Excel is "I would have to set up
 the new tool." If a brand-new operator can drop one BOM CSV and immediately see BOM health,
@@ -133,17 +133,27 @@ zero additional setup. This converts the demo.
 
 **Concrete first slice.**
 
-- Add a `/projects/new?import=...` flow that creates a project + draft revision, imports the
-  CSV, runs deterministic matching, computes BOM health, and lands the operator on the
-  diagnostics + health view — all in a single guided step with explicit recovery copy for
-  weak/unmatched rows.
-- Add a "Compare against existing projects" panel that runs where-used overlap automatically
-  on the first import when other projects exist.
-- Keep the unhappy paths (no DATABASE_URL, no manufacturers seeded, API unreachable) honest
-  via the existing setup-state copy.
+- ✅ `POST /projects/from-csv` (`apps/api/src/index.ts`) chains
+  `createProjectFromCsvInDatabase` (`apps/api/src/project-memory-store.ts`) so one call
+  derives a project name/key from the dropped filename, creates the project + first draft
+  revision, persists the BOM import with the auto-mapped column layout, and runs deterministic
+  matching — all four steps in one HTTP call.
+- ✅ `/projects/new` (`apps/web/src/app/projects/new/page.tsx`) renders a server-action drop
+  zone, redirects to the project's diagnostics anchor on success, and surfaces targeted
+  recovery copy for missing-MPN-mapping, project-key conflicts, unsupported formats,
+  oversized files, parse errors, unauthorized callers, and not-configured persistence.
+- ✅ Projects index page (`apps/web/src/app/projects/page.tsx`) leads with a "Drop a BOM, see
+  your project" CTA pointing at `/projects/new`.
+- Next slice (still pending): add a "Compare against existing projects" overlap panel that
+  runs where-used overlap automatically when other projects exist; surface BOM health + fleet
+  risk inline on first landing instead of requiring a follow-up navigation.
 
 **Honesty rules.** Matching never silently invents catalog rows; weak rows stay distinct from
-matched usages; "compare against existing" never claims overlap that does not exist.
+matched usages; "compare against existing" never claims overlap that does not exist. The
+shipped chained helper enforces this by refusing the upload when no MPN column is
+recognizable (operator is told to map columns manually in the per-project panel), by
+preserving the imported/reviewed/approved/verified_for_export trust lineage, and by
+explicitly distinguishing matched (confirmed usage) from weak/ambiguous (saved but separate).
 
 ---
 

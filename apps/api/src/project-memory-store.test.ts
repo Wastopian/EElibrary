@@ -16,6 +16,7 @@ import {
   createCircuitBlockPartInDatabase,
   resolveCircuitBlockKnownRiskInDatabase,
   createEvidenceAttachmentInDatabase,
+  createProjectFromCsvInDatabase,
   createProjectInDatabase,
   matchBomImportRowsInDatabase,
   readApprovalBatchCandidatesFromDatabase,
@@ -1281,6 +1282,205 @@ test("project memory write routes create projects, persist BOM imports, and run 
     setProjectMemoryStorePoolForTests(null);
     setStorageClientForTests(null);
     await pool.end();
+    restoreTestAuth(previousTestAuth);
+    restoreNodeEnv(previousNodeEnv);
+  }
+});
+
+/**
+ * Verifies day-zero CSV onboarding chains project, BOM import, and matching for one drop.
+ */
+test("createProjectFromCsvInDatabase chains project, BOM import, and matching in one call", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const result = await createProjectFromCsvInDatabase(
+      {
+        rawContent: [
+          "Refs,MPN,Maker,Qty",
+          "U1,TPS7A02DBVR,Texas Instruments,1",
+          "U2,TPS7A02DBVR,,1",
+          "R5,UNKNOWN-PART,Acme,2"
+        ].join("\n"),
+        sourceFilename: "Beta_Driver_BOM_v2.csv",
+        sourceFormat: "csv"
+      },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "created");
+    if (result.status !== "created") {
+      return;
+    }
+
+    assert.equal(result.response.project.name, "Beta Driver BOM");
+    assert.equal(result.response.project.projectKey, "BETA-DRIVER-BOM");
+    assert.equal(result.response.initialRevision.projectId, result.response.project.id);
+    assert.equal(result.response.bomImport.projectId, result.response.project.id);
+    assert.equal(result.response.summary.parsedRowCount, 3);
+    assert.equal(result.response.summary.savedLineCount, 3);
+    assert.equal(result.response.summary.matchedLineCount, 1);
+    assert.equal(result.response.summary.weakMatchLineCount, 1);
+    assert.equal(result.response.summary.unmatchedLineCount, 1);
+    assert.match(result.response.boundary, /not approval/u);
+
+    const detail = await readProjectDetailFromDatabase(result.response.project.id);
+    assert.equal(detail.status, "available");
+    if (detail.status === "available") {
+      assert.equal(detail.response.summary.bomImportCount, 1);
+      assert.equal(detail.response.summary.usageCount, 1);
+    }
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies day-zero CSV onboarding refuses to invent identity when no MPN column exists.
+ */
+test("createProjectFromCsvInDatabase reports missing_mpn_mapping when no MPN column is detected", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const result = await createProjectFromCsvInDatabase(
+      {
+        rawContent: "Designator,Description,Quantity\nU1,Microcontroller,1\n",
+        sourceFilename: "no-mpn.csv",
+        sourceFormat: "csv"
+      },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "missing_mpn_mapping");
+    if (result.status === "missing_mpn_mapping") {
+      assert.deepEqual(result.headers, ["Designator", "Description", "Quantity"]);
+      assert.ok(!result.suggestedMapping.mpn, "expected suggested MPN column to be unset");
+    }
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies day-zero CSV onboarding does not fall back to fake data when persistence is unavailable.
+ */
+test("createProjectFromCsvInDatabase reports not_configured without a project-memory database", async () => {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  delete process.env.DATABASE_URL;
+  setProjectMemoryStorePoolForTests(null);
+
+  try {
+    const result = await createProjectFromCsvInDatabase(
+      {
+        rawContent: "Refs,MPN,Maker,Qty\nU1,TPS7A02DBVR,Texas Instruments,1\n",
+        sourceFilename: "alpha.csv",
+        sourceFormat: "csv"
+      },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "not_configured");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    restoreDatabaseUrl(previousDatabaseUrl);
+  }
+});
+
+/**
+ * Verifies the day-zero CSV onboarding HTTP route returns 201 with the chained envelope on success
+ * and surfaces the missing-MPN-mapping recovery payload on the targeted 422 path so the page can
+ * render specific recovery copy instead of a generic failure message.
+ */
+test("project from CSV route returns 201 with chained envelope and 422 with mapping recovery payload", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const pool = createProjectMemoryPool(true);
+  process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const { handleRequest } = await import("./index");
+    const created = await invokeApiPost("/projects/from-csv", {
+      rawContent: [
+        "Refs,MPN,Maker,Qty",
+        "U1,TPS7A02DBVR,Texas Instruments,1",
+        "R2,RC0603FR-0710KL,Yageo,1"
+      ].join("\n"),
+      sourceFilename: "GammaBoard.csv",
+      sourceFormat: "csv"
+    }, handleRequest);
+
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.headers["X-EE-Operation"], "api-project-from-csv-create");
+    assert.equal(created.body.data.project.projectKey, "GAMMABOARD");
+    assert.equal(created.body.data.summary.matchedLineCount, 2);
+    assert.match(created.body.data.boundary, /not approval/u);
+
+    const missingMpn = await invokeApiPost("/projects/from-csv", {
+      rawContent: "Designator,Description,Quantity\nU1,Microcontroller,1\n",
+      sourceFilename: "no-mpn.csv",
+      sourceFormat: "csv"
+    }, handleRequest);
+
+    assert.equal(missingMpn.statusCode, 422);
+    assert.equal(missingMpn.body.error.code, "BOM_MPN_MAPPING_REQUIRED");
+    assert.deepEqual(missingMpn.body.error.headers, ["Designator", "Description", "Quantity"]);
+    assert.ok(!missingMpn.body.error.suggestedMapping.mpn, "expected route 422 to surface no MPN column");
+
+    const conflict = await invokeApiPost("/projects/from-csv", {
+      projectKey: "GAMMABOARD",
+      rawContent: "Refs,MPN,Maker,Qty\nU1,TPS7A02DBVR,Texas Instruments,1\n",
+      sourceFilename: "second-upload.csv",
+      sourceFormat: "csv"
+    }, handleRequest);
+
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.body.error.code, "PROJECT_KEY_CONFLICT");
+
+    const invalid = await invokeApiPost("/projects/from-csv", {
+      sourceFilename: "missing-content.csv"
+    }, handleRequest);
+
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.body.error.code, "INVALID_PROJECT_FROM_CSV_REQUEST");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+    restoreTestAuth(previousTestAuth);
+    restoreNodeEnv(previousNodeEnv);
+  }
+});
+
+/**
+ * Verifies the day-zero CSV onboarding route reports the not-configured state instead of guessing.
+ */
+test("project from CSV route returns DB_NOT_CONFIGURED when project memory is unavailable", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  delete process.env.DATABASE_URL;
+  setProjectMemoryStorePoolForTests(null);
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiPost("/projects/from-csv", {
+      rawContent: "Refs,MPN,Maker,Qty\nU1,TPS7A02DBVR,Texas Instruments,1\n",
+      sourceFilename: "alpha.csv",
+      sourceFormat: "csv"
+    }, handleRequest);
+
+    assert.equal(result.statusCode, 503);
+    assert.equal(result.body.error.code, "DB_NOT_CONFIGURED");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    restoreDatabaseUrl(previousDatabaseUrl);
     restoreTestAuth(previousTestAuth);
     restoreNodeEnv(previousNodeEnv);
   }

@@ -84,6 +84,8 @@ import type {
   ProjectFileUploadResponse,
   ProjectFleetRiskResponse,
   ProjectFolderCategory,
+  ProjectFromCsvInput,
+  ProjectFromCsvResponse,
   ProjectListResponse,
   VendorCreateInput,
   VendorCreateResponse,
@@ -138,17 +140,22 @@ export class ApiClientError extends Error {
   readonly action: string;
   /** Machine-readable API error code. */
   readonly code: string;
+  /** Optional structured payload from the API error envelope (e.g. suggestedMapping). */
+  readonly details: Record<string, unknown>;
   /** HTTP status returned by the API. */
   readonly statusCode: number;
 
   /**
    * Creates a typed API error with enough detail for setup and degraded-state rendering.
+   * The details map carries any additional fields the API surfaced on the error envelope so
+   * route-level recovery copy can render specific guidance (e.g. missing-MPN-mapping headers).
    */
-  constructor(action: string, statusCode: number, code: string, message: string) {
+  constructor(action: string, statusCode: number, code: string, message: string, details: Record<string, unknown> = {}) {
     super(`${action} failed (${code}): ${message}`);
     this.name = "ApiClientError";
     this.action = action;
     this.code = code;
+    this.details = details;
     this.statusCode = statusCode;
   }
 }
@@ -292,6 +299,30 @@ export async function createProject(input: ProjectCreateInput): Promise<ProjectC
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Creates a project, persists the dropped CSV/XLSX as a BOM import, and runs
+ * deterministic matching in one chained call so day-zero onboarding can land on
+ * the diagnostics view in a single click. Errors carry structured details
+ * (e.g. suggestedMapping/headers for missing MPN columns) so the calling page
+ * can render targeted recovery copy instead of a generic failure message.
+ */
+export async function createProjectFromCsv(input: ProjectFromCsvInput): Promise<ProjectFromCsvResponse> {
+  const response = await fetch(buildApiUrl("/projects/from-csv"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project from CSV");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFromCsvResponse>;
 
   return envelope.data;
 }
@@ -1446,8 +1477,16 @@ async function buildApiError(response: Response, action: string): Promise<Error>
     const envelopeError = errorEnvelope.error;
     const errorCode = typeof envelopeError === "object" && envelopeError !== null && "code" in envelopeError && typeof envelopeError.code === "string" ? envelopeError.code : `HTTP_${response.status}`;
     const errorMessage = typeof envelopeError === "object" && envelopeError !== null && "message" in envelopeError && typeof envelopeError.message === "string" ? envelopeError.message : fallbackMessage;
+    const errorDetails: Record<string, unknown> = {};
+    if (typeof envelopeError === "object" && envelopeError !== null) {
+      for (const [key, value] of Object.entries(envelopeError as Record<string, unknown>)) {
+        if (key !== "code" && key !== "message") {
+          errorDetails[key] = value;
+        }
+      }
+    }
 
-    return new ApiClientError(action, response.status, errorCode, errorMessage);
+    return new ApiClientError(action, response.status, errorCode, errorMessage, errorDetails);
   } catch {
     return new ApiClientError(action, response.status, `HTTP_${response.status}`, fallbackMessage);
   }

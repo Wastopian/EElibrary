@@ -30,7 +30,7 @@ import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
-import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -95,6 +95,7 @@ import type {
   PartSubstitutionCreateInput,
   ProjectCreateInput,
   ProjectFileUploadInput,
+  ProjectFromCsvInput,
   ProjectRevisionApprovalGateRequest,
   VendorCreateInput,
   VendorFileUploadInput,
@@ -229,6 +230,13 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   try {
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
     await handleProviderLookupCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/projects/from-csv") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFromCsvCreate(request, response, session.sub);
     return;
   }
 
@@ -1083,6 +1091,67 @@ async function handleProviderAcquisitionJobRead(response: ServerResponse, jobId:
     }
 
     sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles the day-zero onboarding flow: drop one CSV, get a project + draft revision +
+ * imported BOM + deterministic matching all chained together so a brand-new operator
+ * lands on the diagnostics view in one click. Each failure path is reported
+ * explicitly so the caller can render targeted recovery copy instead of a generic 500.
+ */
+async function handleProjectFromCsvCreate(request: IncomingMessage, response: ServerResponse, actorId: string): Promise<void> {
+  const body = await readJsonBody<ProjectFromCsvInput>(request);
+
+  if (!body || typeof body.rawContent !== "string" || typeof body.sourceFilename !== "string" || (body.sourceFormat !== "csv" && body.sourceFormat !== "xlsx")) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FROM_CSV_REQUEST",
+        message: "Project-from-CSV requires rawContent, sourceFilename, and sourceFormat ('csv' or 'xlsx')."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-from-csv-create",
+      () => createProjectFromCsvInDatabase(body, actorId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "invalid_csv") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+    if (result.status === "missing_mpn_mapping") {
+      sendJson(response, 422, {
+        error: {
+          code: "BOM_MPN_MAPPING_REQUIRED",
+          message: "Could not auto-detect an MPN column in the supplied CSV/XLSX. Open the project's BOM Import panel to map columns manually.",
+          headers: result.headers,
+          suggestedMapping: result.suggestedMapping
+        }
+      });
+      return;
+    }
+    if (result.status === "project_conflict") {
+      sendJson(response, 409, { error: { code: "PROJECT_KEY_CONFLICT", message: result.message } });
+      return;
+    }
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -4873,6 +4942,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && /^\/projects\/[^/]+\/approval-batch$/u.test(pathname)) return "api-approval-batch-apply";
   if (method === "GET" && pathname === "/projects") return "api-project-list";
   if (method === "GET" && pathname === "/projects/health-summary") return "api-project-fleet-risk";
+  if (method === "POST" && pathname === "/projects/from-csv") return "api-project-from-csv-create";
   if (method === "POST" && pathname === "/projects") return "api-project-create";
   if (method === "PATCH" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-update";
   if (method === "GET" && /^\/projects\/[^/]+\/revisions$/u.test(pathname)) return "api-project-revisions";
