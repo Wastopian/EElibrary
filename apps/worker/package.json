@@ -8,7 +8,8 @@
     "./provider-acquisition-jobs": "./src/provider-acquisition-jobs.ts",
     "./provider-enrichment-jobs": "./src/provider-enrichment-jobs.ts",
     "./provider-part-import": "./src/provider-part-import.ts",
-    "./provider-part-lookup": "./src/provider-part-lookup.ts"
+    "./provider-part-lookup": "./src/provider-part-lookup.ts",
+    "./supply-offer-refresh": "./src/supply-offer-refresh.ts"
   },
   "scripts": {
     "acquisition-jobs": "tsx src/index.ts acquisition-jobs",
@@ -26,6 +27,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "operations": "tsx src/index.ts operations",
     "recompute:readiness": "tsx src/index.ts recompute-readiness",
+    "refresh-supply-offers": "tsx src/index.ts refresh-supply-offers",
     "status": "tsx src/index.ts status",
     "test": "node ../../scripts/run-tests.mjs src",
     "typecheck": "tsc -p tsconfig.json --noEmit"

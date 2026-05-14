@@ -972,7 +972,8 @@ function buildSupplyOffering({
       priceBreaks,
       providerId: OCTOPART_PROVIDER_ID,
       providerPartKey,
-      providerSku: sku ? `${sellerName} SKU ${sku}` : sellerName,
+      providerSku: sku,
+      supplierName: sellerName,
       sourceRecordId,
       updatedAt: capturedAt
     }

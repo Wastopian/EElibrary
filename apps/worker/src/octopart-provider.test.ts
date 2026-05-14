@@ -43,7 +43,8 @@ test("octopart provider normalizes Nexar part metadata and seller offers", () =>
   );
   assert.equal(normalized.supplyOfferings.length, 2);
   assert.equal(normalized.supplyOfferings[0]?.providerId, "octopart");
-  assert.equal(normalized.supplyOfferings[0]?.providerSku, "Digi-Key SKU 296-6501-1-ND");
+  assert.equal(normalized.supplyOfferings[0]?.supplierName, "Digi-Key");
+  assert.equal(normalized.supplyOfferings[0]?.providerSku, "296-6501-1-ND");
   assert.equal(normalized.supplyOfferings[0]?.inventoryStatus, "in_stock");
   assert.equal(normalized.supplyOfferings[0]?.inventoryQuantity, 423);
   assert.deepEqual(
@@ -54,6 +55,7 @@ test("octopart provider normalizes Nexar part metadata and seller offers", () =>
     ]
   );
   assert.equal(normalized.supplyOfferings[1]?.inventoryStatus, "backorder");
+  assert.equal(normalized.supplyOfferings[1]?.supplierName, "Mouser");
   assert.equal(normalized.supplyOfferings[1]?.leadTimeDays, 28);
 });
 

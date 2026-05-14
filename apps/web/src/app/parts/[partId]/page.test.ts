@@ -132,7 +132,12 @@ test("part detail renders confirmed where-used project usage", async () => {
     assert.match(html, /U1/u);
     assert.match(html, />1</u);
     assert.match(html, /Main rail regulator/u);
-    assert.match(html, /Project usage does not approve this part or make exports available/u);
+    assert.match(html, /Project usage and circuit-block dependency do not approve this part or make exports available/u);
+    assert.match(html, /Circuit blocks/u);
+    assert.match(html, /Alpha power rail/u);
+    assert.match(html, /ALPHA-POWER/u);
+    assert.match(html, /Ready to reuse/u);
+    assert.match(html, /Main LDO/u);
     assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
     assert.match(html, /Export lane/u);
   } finally {
@@ -574,6 +579,7 @@ function readSupplyOffersPartId(url: URL): string {
  */
 function buildEmptyWhereUsedResponse(partId: string): PartWhereUsedResponse {
   return {
+    circuitBlockDependencies: [],
     partId,
     state: "empty",
     usages: []
@@ -617,6 +623,50 @@ function buildEmptySupplyOffersResponse(partId: string): PartSupplyOffersRespons
  */
 function buildWhereUsedResponse(partId: string): PartWhereUsedResponse {
   return {
+    circuitBlockDependencies: [
+      {
+        blockParts: [
+          {
+            circuitBlockId: "cblock-alpha-power",
+            createdAt: "2026-05-01T12:10:00.000Z",
+            id: "cbpart-alpha-power-ldo",
+            isRequired: true,
+            notes: "Reuse with reviewed output capacitor.",
+            partId,
+            quantity: 1,
+            role: "Main LDO",
+            substitutionPolicy: "exact_required",
+            updatedAt: "2026-05-01T12:10:00.000Z"
+          }
+        ],
+        summary: {
+          approvedPartCount: 1,
+          circuitBlock: {
+            blockKey: "ALPHA-POWER",
+            blockType: "power",
+            constraints: {},
+            createdAt: "2026-05-01T12:00:00.000Z",
+            description: "Reusable LDO rail.",
+            id: "cblock-alpha-power",
+            name: "Alpha power rail",
+            owner: "Hardware",
+            reuseScope: "Memory test rails",
+            status: "approved",
+            updatedAt: "2026-05-01T13:00:00.000Z"
+          },
+          activeBlockingRiskCount: 0,
+          activeKnownRiskCount: 0,
+          evidenceAttachmentCount: 0,
+          lifecycleRiskCount: 0,
+          optionalPartCount: 0,
+          projectUsageCount: 1,
+          readinessGapCount: 0,
+          requiredPartCount: 1,
+          strictSubstitutionCount: 1,
+          totalPartCount: 1
+        }
+      }
+    ],
     partId,
     state: "available",
     usages: [

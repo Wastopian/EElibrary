@@ -12,6 +12,7 @@ import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { getWorkerStorageClient } from "./file-storage";
 import { runProviderPartImport } from "./provider-part-import";
+import { refreshStaleSupplyOfferSnapshots } from "./supply-offer-refresh";
 import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
 import type { ProviderPartRequest } from "./provider-adapters";
 import type { ProviderImportDiagnostic, SourceImportStatus } from "@ee-library/shared/types";
@@ -196,6 +197,7 @@ function buildUsageLines(): string[] {
     "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
     "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
     "npm run assemble-bundles -w @ee-library/worker -- [limit]",
+    "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
     "npm run generate:drafts -w @ee-library/worker -- [limit]",
@@ -355,6 +357,30 @@ async function assembleExportBundles(limitValue?: string): Promise<void> {
 }
 
 /**
+ * Refreshes stale active supply-offer snapshots by re-running exact provider imports.
+ */
+async function refreshSupplyOffers(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const summary = await timeWorkerOperation(
+      "worker.refresh_supply_offers",
+      () => refreshStaleSupplyOfferSnapshots({ limit: Number.isFinite(limit) ? limit : 20 }),
+      timings,
+      (value) => `${value.refreshedCount} refreshed, ${value.failedCount} failed, ${value.skippedCount} skipped`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.refresh_supply_offers", error, timings);
+    throw error;
+  }
+}
+
+/**
  * Prints recent imports, generation, review, validation, and promotion diagnostics.
  */
 async function printWorkerOperationalDiagnostics(limitValue?: string): Promise<void> {
@@ -482,6 +508,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "refresh-supply-offers") {
+    await refreshSupplyOffers(process.argv[3]);
+    return;
+  }
+
   if (command === "generate-drafts") {
     await generateDraftAssets(process.argv[3]);
     return;
@@ -535,15 +566,27 @@ const DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS = 30_000;
 const DEFAULT_BUNDLE_ASSEMBLY_BATCH_LIMIT = 5;
 
 /**
- * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, and on a
- * slower cadence drains pending export-bundle asset-byte assemblies so engineers do not need to
- * invoke `npm run assemble-bundles` after generating a bundle.
+ * DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS controls how often the daemon asks providers to
+ * refresh stale active commercial snapshots. The cadence is deliberately slower than bundle
+ * assembly because provider refresh may perform network calls.
+ */
+const DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * DEFAULT_SUPPLY_OFFER_REFRESH_BATCH_LIMIT caps provider refreshes per daemon tick so one stale
+ * commercial backlog cannot starve heartbeats or bundle assembly.
+ */
+const DEFAULT_SUPPLY_OFFER_REFRESH_BATCH_LIMIT = 5;
+
+/**
+ * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, drains
+ * pending export-bundle asset-byte assemblies, and refreshes stale active supply-offer snapshots.
  *
  * Used by the local-dev `npm run dev:worker` script and the GET /system/health liveness check.
  */
 async function runDaemon(): Promise<void> {
   console.log(
-    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms).`
+    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms, supplyOfferRefresh=${DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS}ms).`
   );
 
   await safeEmitHeartbeat({ command: "daemon" });
@@ -556,14 +599,20 @@ async function runDaemon(): Promise<void> {
     void safeProcessPendingExportBundleAssembly();
   }, DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS);
 
+  const supplyOfferRefreshInterval = setInterval(() => {
+    void safeRefreshStaleSupplyOffers();
+  }, DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS);
+
   // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
   // not have to wait a full interval before the worker picks it up.
   void safeProcessPendingExportBundleAssembly();
+  void safeRefreshStaleSupplyOffers();
 
   await new Promise<void>((resolve) => {
     const stop = () => {
       clearInterval(heartbeatInterval);
       clearInterval(bundleAssemblyInterval);
+      clearInterval(supplyOfferRefreshInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -596,6 +645,28 @@ async function safeProcessPendingExportBundleAssembly(): Promise<void> {
     );
   } catch (error) {
     console.error("Bundle assembly tick failed.", error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Refreshes stale supply-offer snapshots without crashing the daemon on provider or DB failures.
+ * Logs only when the tick selected work so idle systems stay quiet.
+ */
+async function safeRefreshStaleSupplyOffers(): Promise<void> {
+  try {
+    const summary = await refreshStaleSupplyOfferSnapshots({ limit: DEFAULT_SUPPLY_OFFER_REFRESH_BATCH_LIMIT });
+
+    if (summary.checkedCount === 0) {
+      return;
+    }
+
+    console.log(
+      `Worker daemon: refreshed ${summary.refreshedCount} stale supply source${summary.refreshedCount === 1 ? "" : "s"}` +
+        (summary.failedCount > 0 ? `, ${summary.failedCount} failed` : "") +
+        (summary.skippedCount > 0 ? `, ${summary.skippedCount} skipped` : "")
+    );
+  } catch (error) {
+    console.error("Supply-offer refresh tick failed.", error instanceof Error ? error.message : error);
   }
 }
 

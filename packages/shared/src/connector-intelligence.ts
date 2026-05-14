@@ -11,10 +11,21 @@ import type {
   ConnectorConfidenceBreakdown,
   ConnectorEvidenceKind,
   ConnectorFamilyConflict,
+  ConnectorSetBuildabilityState,
+  ConnectorSetIntentCandidate,
+  ConnectorSetIntentInput,
+  ConnectorSetIntentResolution,
+  ConnectorSetResolvedPartSummary,
+  ConnectorSetResolvedRelation,
   ConnectorRelationCompatibilityStatus,
   ConnectorWarning,
+  PartSearchRecord,
   MateRelation
 } from "./types";
+
+/** Connector intent resolver boundary copy shown by API and UI callers. */
+export const CONNECTOR_SET_INTENT_RESOLVER_BOUNDARY =
+  "Connector intent resolution ranks stored connector relationships only. Confidence, warnings, and pending accessory coverage must stay visible until engineering review confirms the physical build.";
 
 /**
  * Builds a deterministic buildable mating set from typed connector relationship rows.
@@ -60,6 +71,371 @@ export function buildBuildableMatingSet(
     warningDetails,
     warnings
   };
+}
+
+/**
+ * Resolves free-text or structured connector intent against already-normalized catalog records.
+ */
+export function resolveConnectorSetIntent(
+  intent: ConnectorSetIntentInput,
+  records: PartSearchRecord[]
+): ConnectorSetIntentResolution {
+  const normalizedIntent = normalizeConnectorSetIntent(intent);
+  const partById = new Map(records.map((record) => [record.part.id, record]));
+  const candidates = records
+    .filter((record) => record.readinessSummary.connectorClass === "connector")
+    .map((record) => buildConnectorIntentCandidate(record, partById, normalizedIntent))
+    .filter((candidate): candidate is ConnectorSetIntentCandidate => candidate !== null)
+    .sort((left, right) => right.confidenceScore - left.confidenceScore || left.connector.mpn.localeCompare(right.connector.mpn))
+    .slice(0, 8);
+
+  return {
+    boundary: CONNECTOR_SET_INTENT_RESOLVER_BOUNDARY,
+    candidates,
+    intent: normalizedIntent,
+    state: candidates.length > 0 ? "available" : "empty"
+  };
+}
+
+/**
+ * Parses one engineer-entered connector intent phrase into structured resolver fields.
+ */
+export function parseConnectorSetIntentText(text: string): ConnectorSetIntentInput | null {
+  const normalizedText = text.trim();
+
+  if (normalizedText.length === 0) {
+    return null;
+  }
+
+  const cableGauge = readFirstIntegerMatch(normalizedText, /\b(\d{1,2})\s*(?:awg|ga|gauge)\b/iu);
+  const pinCount =
+    readFirstIntegerMatch(normalizedText, /\b(\d{1,3})\s*(?:pin|pins|pos|position|positions|ckt|circuit|circuits)\b/iu) ??
+    readFirstIntegerMatch(normalizedText, /\b(\d{1,3})p\b/iu);
+  const sealing = parseSealingIntent(normalizedText);
+  const connectorClass = removeParsedIntentTerms(normalizedText);
+
+  return {
+    cableGauge,
+    class: connectorClass.length > 0 ? connectorClass : normalizedText,
+    pinCount,
+    query: normalizedText,
+    sealing
+  };
+}
+
+/**
+ * Normalizes optional resolver fields without inventing missing intent.
+ */
+function normalizeConnectorSetIntent(intent: ConnectorSetIntentInput): ConnectorSetIntentInput {
+  const rawClass = intent.class.trim();
+  const rawQuery = intent.query?.trim() ?? "";
+  const parsedIntent = parseConnectorSetIntentText(rawQuery || rawClass);
+  const explicitClass = rawQuery.length > 0 && rawClass === rawQuery && parsedIntent ? parsedIntent.class : rawClass;
+
+  return {
+    cableGauge: normalizeOptionalInteger(intent.cableGauge) ?? parsedIntent?.cableGauge ?? null,
+    class: explicitClass.length > 0 ? explicitClass : parsedIntent?.class ?? rawClass,
+    pinCount: normalizeOptionalInteger(intent.pinCount) ?? parsedIntent?.pinCount ?? null,
+    query: rawQuery || parsedIntent?.query || null,
+    sealing: intent.sealing?.trim() || parsedIntent?.sealing || null
+  };
+}
+
+/**
+ * Reads the first positive integer captured by a regular expression.
+ */
+function readFirstIntegerMatch(text: string, pattern: RegExp): number | null {
+  const match = pattern.exec(text);
+  const value = match?.[1] ? Number(match[1]) : Number.NaN;
+
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * Extracts sealing intent while preserving uncertainty as plain text.
+ */
+function parseSealingIntent(text: string): string | null {
+  const normalizedText = text.toLowerCase();
+
+  if (/\b(?:unsealed|nonsealed|non-sealed)\b/u.test(normalizedText)) {
+    return "unsealed";
+  }
+
+  const ipMatch = /\bip6[5789]k?\b/iu.exec(text);
+
+  if (ipMatch) {
+    return ipMatch[0].toUpperCase();
+  }
+
+  if (/\b(?:sealed|waterproof|weatherproof|environmental)\b/u.test(normalizedText)) {
+    return "sealed";
+  }
+
+  return null;
+}
+
+/**
+ * Removes constraint words from free text so matching focuses on the connector family or series.
+ */
+function removeParsedIntentTerms(text: string): string {
+  return text
+    .replace(/\b\d{1,2}\s*(?:awg|ga|gauge)\b/giu, " ")
+    .replace(/\b\d{1,3}\s*(?:pin|pins|pos|position|positions|ckt|circuit|circuits)\b/giu, " ")
+    .replace(/\b\d{1,3}p\b/giu, " ")
+    .replace(/\b(?:sealed|unsealed|nonsealed|non-sealed|waterproof|weatherproof|environmental|ip6[5789]k?)\b/giu, " ")
+    .replace(/\b(?:connector|connectors|housing|header|receptacle|mate|mating|set|buildable|cable|wire|wires|for|with|and)\b/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+/**
+ * Builds one resolver candidate when the connector satisfies enough requested intent.
+ */
+function buildConnectorIntentCandidate(
+  record: PartSearchRecord,
+  partById: Map<string, PartSearchRecord>,
+  intent: ConnectorSetIntentInput
+): ConnectorSetIntentCandidate | null {
+  const matchScore = scoreConnectorIntentMatch(record, intent);
+
+  if (matchScore <= 0) {
+    return null;
+  }
+
+  const buildableMatingSet = record.buildableMatingSet;
+  const mate = buildableMatingSet.bestMate ? summarizeMateRelation(buildableMatingSet.bestMate, partById) : null;
+  const requiredAccessories = buildableMatingSet.requiredAccessories.flatMap((relation) => summarizeAccessoryRelation(relation, partById));
+  const optionalAccessories = buildableMatingSet.optionalAccessories.flatMap((relation) => summarizeAccessoryRelation(relation, partById));
+  const tooling = buildableMatingSet.toolingRequirements.flatMap((relation) => summarizeAccessoryRelation(relation, partById));
+  const cableOption = selectCableOption(buildableMatingSet.cableOptions, intent.cableGauge, partById);
+  const familyConfusionWarnings = buildableMatingSet.warningDetails.filter((warning) => warning.code === "family_confusion" || warning.code === "near_match_alternates");
+  const buildabilityState = resolveBuildabilityState({
+    cableGauge: intent.cableGauge,
+    cableOption,
+    mate,
+    requiredAccessoryCount: requiredAccessories.length,
+    storedRequiredAccessoryCount: buildableMatingSet.requiredAccessories.length
+  });
+  const confidenceScore = combineIntentAndBuildabilityConfidence(matchScore, buildableMatingSet.confidenceScore, buildabilityState);
+
+  return {
+    buildabilityState,
+    cableOption,
+    confidenceScore,
+    connector: summarizePartRecord(record),
+    familyConfusionWarnings,
+    mate,
+    optionalAccessories,
+    requiredAccessories,
+    tooling,
+    warnings: buildableMatingSet.warningDetails
+  };
+}
+
+/**
+ * Scores one connector against family, free-text, pin-count, sealing, and cable intent.
+ */
+function scoreConnectorIntentMatch(record: PartSearchRecord, intent: ConnectorSetIntentInput): number {
+  const haystack = normalizeSearchText([
+    record.part.mpn,
+    record.part.description,
+    record.manufacturer.name,
+    record.package.packageName,
+    record.connectorFamily?.name,
+    record.connectorFamily?.series,
+    record.connectorFamily?.description
+  ]);
+  const classScore = scoreTextNeedle(haystack, intent.class);
+  const queryScore = intent.query ? scoreTextNeedle(haystack, intent.query) : 0;
+  const pinScore = intent.pinCount === null || intent.pinCount === undefined
+    ? 0
+    : record.package.pinCount === intent.pinCount
+      ? 0.22
+      : -0.35;
+  const sealingScore = intent.sealing ? scoreTextNeedle(haystack, intent.sealing) * 0.7 : 0;
+  const cableScore = intent.cableGauge === null || intent.cableGauge === undefined
+    ? 0
+    : record.buildableMatingSet.cableOptions.some((option) => cableGaugeMatches(option, intent.cableGauge ?? null))
+      ? 0.12
+      : -0.08;
+  const score = classScore + queryScore * 0.7 + pinScore + sealingScore + cableScore;
+
+  return Math.max(0, Math.min(1, score));
+}
+
+/**
+ * Creates searchable lowercase text from nullable identity fields.
+ */
+function normalizeSearchText(values: Array<string | null | undefined>): string {
+  return values.filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
+}
+
+/**
+ * Scores all terms in one user-provided phrase against a pre-normalized search string.
+ */
+function scoreTextNeedle(haystack: string, needle: string): number {
+  const terms = needle.toLowerCase().split(/[^a-z0-9.]+/u).filter(Boolean);
+
+  if (terms.length === 0) {
+    return 0;
+  }
+
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+
+  return matched === 0 ? 0 : 0.18 + (matched / terms.length) * 0.42;
+}
+
+/**
+ * Selects the best cable option that matches the requested AWG when provided.
+ */
+function selectCableOption(
+  cableOptions: CableCompatibility[],
+  cableGauge: number | null | undefined,
+  partById: Map<string, PartSearchRecord>
+): ConnectorSetResolvedRelation | null {
+  const candidates = cableGauge === null || cableGauge === undefined
+    ? cableOptions
+    : cableOptions.filter((option) => cableGaugeMatches(option, cableGauge));
+  const selected = sortRelationsByConfidence(candidates)[0];
+
+  return selected ? summarizeCableRelation(selected, partById) : null;
+}
+
+/**
+ * Checks whether a cable compatibility row can satisfy a requested AWG.
+ */
+function cableGaugeMatches(option: CableCompatibility, cableGauge: number | null): boolean {
+  if (cableGauge === null) {
+    return true;
+  }
+
+  const aboveMin = option.wireGaugeMin === null || cableGauge >= option.wireGaugeMin;
+  const belowMax = option.wireGaugeMax === null || cableGauge <= option.wireGaugeMax;
+
+  return aboveMin && belowMax && option.compatibilityStatus !== "rejected";
+}
+
+/**
+ * Resolves candidate state while keeping missing accessory coverage visible as pending.
+ */
+function resolveBuildabilityState(input: {
+  cableGauge: number | null | undefined;
+  cableOption: ConnectorSetResolvedRelation | null;
+  mate: ConnectorSetResolvedRelation | null;
+  requiredAccessoryCount: number;
+  storedRequiredAccessoryCount: number;
+}): ConnectorSetBuildabilityState {
+  if (!input.mate) {
+    return "not_buildable";
+  }
+
+  if (input.storedRequiredAccessoryCount === 0 || input.requiredAccessoryCount !== input.storedRequiredAccessoryCount) {
+    return "pending";
+  }
+
+  if (input.cableGauge !== null && input.cableGauge !== undefined && !input.cableOption) {
+    return "pending";
+  }
+
+  return "buildable";
+}
+
+/**
+ * Blends intent match and stored relationship confidence without letting missing coverage look complete.
+ */
+function combineIntentAndBuildabilityConfidence(
+  matchScore: number,
+  buildableConfidence: number | null,
+  buildabilityState: ConnectorSetBuildabilityState
+): number {
+  const base = matchScore * 0.45 + (buildableConfidence ?? 0.35) * 0.55;
+  const stateWeight = buildabilityState === "buildable" ? 1 : buildabilityState === "pending" ? 0.78 : 0.45;
+
+  return Number(Math.max(0, Math.min(1, base * stateWeight)).toFixed(3));
+}
+
+/**
+ * Summarizes one catalog record for resolver output.
+ */
+function summarizePartRecord(record: PartSearchRecord): ConnectorSetResolvedPartSummary {
+  return {
+    connectorClass: record.readinessSummary.connectorClass,
+    connectorFamilyName: record.connectorFamily?.name ?? null,
+    lifecycleStatus: record.part.lifecycleStatus,
+    manufacturerName: record.manufacturer.name,
+    mpn: record.part.mpn,
+    packagePinCount: record.package.pinCount,
+    partId: record.part.id
+  };
+}
+
+/**
+ * Summarizes a mate relation when the target part is present in the resolver source set.
+ */
+function summarizeMateRelation(
+  relation: MateRelation,
+  partById: Map<string, PartSearchRecord>
+): ConnectorSetResolvedRelation | null {
+  const part = partById.get(relation.matePartId);
+
+  return part
+    ? {
+        compatibilityStatus: relation.compatibilityStatus,
+        confidenceScore: getConnectorRelationEffectiveConfidence(relation),
+        evidenceKind: relation.evidenceKind,
+        notes: relation.notes,
+        part: summarizePartRecord(part)
+      }
+    : null;
+}
+
+/**
+ * Summarizes an accessory or tooling relation when the target part is present.
+ */
+function summarizeAccessoryRelation(
+  relation: AccessoryRequirement,
+  partById: Map<string, PartSearchRecord>
+): ConnectorSetResolvedRelation[] {
+  const part = partById.get(relation.accessoryPartId);
+
+  return part
+    ? [
+        {
+          compatibilityStatus: relation.compatibilityStatus,
+          confidenceScore: getConnectorRelationEffectiveConfidence(relation),
+          evidenceKind: relation.evidenceKind,
+          notes: relation.notes,
+          part: summarizePartRecord(part)
+        }
+      ]
+    : [];
+}
+
+/**
+ * Summarizes a cable compatibility relation when the target cable part is present.
+ */
+function summarizeCableRelation(
+  relation: CableCompatibility,
+  partById: Map<string, PartSearchRecord>
+): ConnectorSetResolvedRelation | null {
+  const part = partById.get(relation.cablePartId);
+
+  return part
+    ? {
+        compatibilityStatus: relation.compatibilityStatus,
+        confidenceScore: relation.confidenceScore,
+        evidenceKind: "cable_compatibility",
+        notes: relation.notes,
+        part: summarizePartRecord(part)
+      }
+    : null;
+}
+
+/**
+ * Normalizes optional numeric intent while dropping unsafe values.
+ */
+function normalizeOptionalInteger(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
 }
 
 /**

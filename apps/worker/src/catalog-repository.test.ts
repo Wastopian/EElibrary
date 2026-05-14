@@ -164,6 +164,16 @@ test("persistNormalizedPartRows persists supply offerings and replaces stale pri
       { minQuantity: 1, unitPrice: 0.12 },
       { minQuantity: 100, unitPrice: 0.08 }
     ]);
+    const originalOffering = firstImport.supplyOfferings[0];
+
+    assert.ok(originalOffering);
+    firstImport.supplyOfferings.push({
+      ...originalOffering,
+      id: "supply-repeat-c1-retired",
+      inventoryQuantity: 10,
+      priceBreaks: [],
+      providerSku: "C1-OLD"
+    });
     const refreshedImport = buildSupplyImportPart("2026-04-12T03:00:00.000Z", 800, [
       { minQuantity: 1, unitPrice: 0.11 }
     ]);
@@ -174,6 +184,9 @@ test("persistNormalizedPartRows persists supply offerings and replaces stale pri
     const offeringRows = await client.query<{ inventory_quantity: number; last_seen_at: Date | string; source_record_id: string }>(
       "SELECT inventory_quantity, last_seen_at, source_record_id FROM supply_offerings WHERE id = 'supply-repeat-c1'"
     );
+    const retiredRows = await client.query<{ id: string; retired_at: Date | string | null; retirement_reason: string | null }>(
+      "SELECT id, retired_at, retirement_reason FROM supply_offerings ORDER BY id ASC"
+    );
     const priceRows = await client.query<{ min_quantity: number; unit_price: string }>(
       "SELECT min_quantity, unit_price FROM price_breaks WHERE supply_offering_id = 'supply-repeat-c1' ORDER BY min_quantity ASC"
     );
@@ -182,6 +195,9 @@ test("persistNormalizedPartRows persists supply offerings and replaces stale pri
     assert.equal(offeringRows.rows[0]?.inventory_quantity, 800);
     assert.equal(offeringRows.rows[0]?.source_record_id, "source-repeat-provider-c1");
     assert.equal(new Date(offeringRows.rows[0]?.last_seen_at ?? 0).toISOString(), "2026-04-12T03:00:00.000Z");
+    assert.equal(retiredRows.rows.find((row) => row.id === "supply-repeat-c1")?.retired_at, null);
+    assert.ok(retiredRows.rows.find((row) => row.id === "supply-repeat-c1-retired")?.retired_at, "missing offer should be retired");
+    assert.equal(retiredRows.rows.find((row) => row.id === "supply-repeat-c1-retired")?.retirement_reason, "missing_from_latest_provider_snapshot");
     assert.deepEqual(priceRows.rows.map((row) => [row.min_quantity, Number(row.unit_price)]), [[1, 0.11]]);
   } finally {
     client.release();
@@ -604,6 +620,7 @@ function buildNormalizedConnectorPart(): NormalizedProviderPart {
         providerId: "test-provider",
         providerPartKey: "TEST",
         providerSku: "TEST-SKU",
+        supplierName: "Test Supplier",
         sourceRecordId: "source-test",
         updatedAt: "2026-04-12T00:00:00.000Z"
       }
@@ -730,6 +747,7 @@ function buildSupplyImportPart(
         providerId: "repeat-provider",
         providerPartKey: "C1",
         providerSku: "C1",
+        supplierName: "Repeat Supplier",
         sourceRecordId: "source-repeat-provider-c1",
         updatedAt: lastUpdatedAt
       }
@@ -1033,7 +1051,7 @@ function createMinimalImportPool(): TestPool {
     CREATE TABLE connector_families (id TEXT PRIMARY KEY, name TEXT, series TEXT, description TEXT);
     CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE supply_offerings (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, provider_part_key TEXT, provider_sku TEXT, inventory_status TEXT, inventory_quantity INTEGER, moq INTEGER, lead_time_days INTEGER, packaging TEXT, currency_code TEXT, preferred_rank INTEGER, last_seen_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
+    CREATE TABLE supply_offerings (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, provider_part_key TEXT, supplier_name TEXT, provider_sku TEXT, inventory_status TEXT, inventory_quantity INTEGER, moq INTEGER, lead_time_days INTEGER, packaging TEXT, currency_code TEXT, preferred_rank INTEGER, last_seen_at TIMESTAMPTZ, retired_at TIMESTAMPTZ, retirement_reason TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
     CREATE TABLE price_breaks (id TEXT PRIMARY KEY, supply_offering_id TEXT, min_quantity INTEGER, unit_price NUMERIC, currency_code TEXT, captured_at TIMESTAMPTZ);
     CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);

@@ -24,6 +24,10 @@ import type {
   CircuitBlockDetailResponse,
   CircuitBlockInstantiationCreateInput,
   CircuitBlockInstantiationCreateResponse,
+  CircuitBlockKnownRiskCreateInput,
+  CircuitBlockKnownRiskMutationResponse,
+  CircuitBlockKnownRiskResolveInput,
+  CircuitBlockListFilters,
   CircuitBlockListResponse,
   CircuitBlockProjectDependency,
   CircuitBlockPartCreateInput,
@@ -33,6 +37,8 @@ import type {
   CircuitBlockUpdateInput,
   CircuitBlockUpdateResponse,
   ConnectorClass,
+  ConnectorSetIntentInput,
+  ConnectorSetIntentResolution,
   ConnectorSetListResponse,
   DocumentRedlineCreateInput,
   DocumentRedlineCreateResponse,
@@ -813,9 +819,23 @@ export async function updateFollowUp(followUpId: string, input: FollowUpUpdateIn
 
 /**
  * Fetches the reusable circuit block library from project-memory persistence.
+ *
+ * Filters are forwarded as URL query parameters so the server can narrow the result set
+ * directly. The server echoes the applied filters on the response so the UI can reflect
+ * the actual filter state without keeping a separate client-side mirror.
  */
-export async function fetchCircuitBlocks(): Promise<CircuitBlockListResponse> {
-  const envelope = await fetchApi<ApiEnvelope<CircuitBlockListResponse>>("/circuit-blocks");
+export async function fetchCircuitBlocks(
+  filters: Partial<CircuitBlockListFilters> = {}
+): Promise<CircuitBlockListResponse> {
+  const query = new URLSearchParams();
+  if (filters.query) query.set("q", filters.query);
+  if (filters.blockType) query.set("type", filters.blockType);
+  if (filters.status) query.set("status", filters.status);
+  if (filters.owner) query.set("owner", filters.owner);
+  if (filters.reuseReadiness) query.set("readiness", filters.reuseReadiness);
+
+  const path = query.toString().length > 0 ? `/circuit-blocks?${query.toString()}` : "/circuit-blocks";
+  const envelope = await fetchApi<ApiEnvelope<CircuitBlockListResponse>>(path);
 
   return envelope.data;
 }
@@ -917,6 +937,58 @@ export async function updateCircuitBlockPart(circuitBlockId: string, circuitBloc
   }
 
   const envelope = (await response.json()) as ApiEnvelope<CircuitBlockPartUpdateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Records one engineering-memory observation against a reusable circuit block. Recording a
+ * known risk preserves design memory; it never approves any linked part or unlocks export.
+ */
+export async function createCircuitBlockKnownRisk(
+  circuitBlockId: string,
+  input: CircuitBlockKnownRiskCreateInput
+): Promise<CircuitBlockKnownRiskMutationResponse> {
+  const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/known-risks`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block known risk create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockKnownRiskMutationResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Marks one known-risk row as resolved. The row is preserved (never deleted) so audits of
+ * past reuses of this block remain consistent with the state at the time.
+ */
+export async function resolveCircuitBlockKnownRisk(
+  circuitBlockId: string,
+  knownRiskId: string,
+  input: CircuitBlockKnownRiskResolveInput = {}
+): Promise<CircuitBlockKnownRiskMutationResponse> {
+  const response = await fetch(
+    buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/known-risks/${encodeURIComponent(knownRiskId)}/resolve`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Circuit block known risk resolve");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CircuitBlockKnownRiskMutationResponse>;
 
   return envelope.data;
 }
@@ -1577,6 +1649,25 @@ export async function fetchConnectorSetCatalog(filters: { connectorClass?: Conne
   if (filters.query && filters.query.trim().length > 0) params.set("q", filters.query.trim());
   const path = params.size > 0 ? `/connector-sets?${params.toString()}` : "/connector-sets";
   const envelope = await fetchApi<ApiEnvelope<ConnectorSetListResponse>>(path);
+  return envelope.data;
+}
+
+/**
+ * Resolves connector-set intent through the API without hiding incomplete buildability evidence.
+ */
+export async function resolveConnectorSetIntent(input: ConnectorSetIntentInput): Promise<ConnectorSetIntentResolution> {
+  const response = await fetch(buildApiUrl("/connector-sets/resolve"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Connector intent resolve");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ConnectorSetIntentResolution>;
   return envelope.data;
 }
 

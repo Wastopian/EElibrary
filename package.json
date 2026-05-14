@@ -24,6 +24,7 @@
     "ingest:octopart": "node scripts/with-local-env.mjs npm run ingest:octopart -w @ee-library/worker",
     "imports:providers": "node scripts/with-local-env.mjs npm run imports -w @ee-library/worker",
     "operations:worker": "node scripts/with-local-env.mjs npm run operations -w @ee-library/worker",
+    "refresh:supply-offers": "node scripts/with-local-env.mjs npm run refresh-supply-offers -w @ee-library/worker",
     "lint": "npm run lint --workspaces",
     "seed:admin": "node scripts/with-local-env.mjs node scripts/seed-admin.mjs",
     "setup:dev": "node scripts/setup-dev.mjs",

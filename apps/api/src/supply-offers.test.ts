@@ -41,10 +41,12 @@ test("readPartSupplyOffersFromDatabase returns source-linked commercial snapshot
       minQuantity: 100,
       offeringId: "offer-alpha-future",
       providerId: "octopart",
+      supplierName: "Digi-Key",
       unitPrice: 0.39
     });
     assert.equal(result.response.offers[0]?.sourceRecordId, "source-alpha-future");
     assert.equal(result.response.offers[0]?.sourceUrl, "https://example.test/future");
+    assert.equal(result.response.offers[0]?.supplierName, "Digi-Key");
     assert.equal(result.response.offers[0]?.priceBreaks.length, 2);
   } finally {
     setSupplyOfferPoolForTests(null);
@@ -115,6 +117,7 @@ async function seedSupplyOffers(pool: Pool): Promise<void> {
       provider_id,
       source_record_id,
       provider_part_key,
+      supplier_name,
       provider_sku,
       inventory_status,
       inventory_quantity,
@@ -124,12 +127,15 @@ async function seedSupplyOffers(pool: Pool): Promise<void> {
       currency_code,
       preferred_rank,
       last_seen_at,
+      retired_at,
+      retirement_reason,
       created_at,
       updated_at
     )
     VALUES
-      ('offer-alpha-future', 'part-alpha', 'octopart', 'source-alpha-future', 'ABC-123', 'SKU-123', 'in_stock', 1250, 1, 3, 'Tape and reel', 'USD', 1, '2099-01-02T00:00:00.000Z', '2099-01-02T00:00:00.000Z', '2099-01-02T00:00:00.000Z'),
-      ('offer-alpha-stale', 'part-alpha', 'local-catalog', 'source-alpha-stale', 'ABC-LOCAL', NULL, 'unknown', NULL, NULL, NULL, NULL, 'USD', 2, '2020-01-02T00:00:00.000Z', '2020-01-02T00:00:00.000Z', '2020-01-02T00:00:00.000Z');
+      ('offer-alpha-future', 'part-alpha', 'octopart', 'source-alpha-future', 'ABC-123', 'Digi-Key', 'SKU-123', 'in_stock', 1250, 1, 3, 'Tape and reel', 'USD', 1, '2099-01-02T00:00:00.000Z', NULL, NULL, '2099-01-02T00:00:00.000Z', '2099-01-02T00:00:00.000Z'),
+      ('offer-alpha-stale', 'part-alpha', 'local-catalog', 'source-alpha-stale', 'ABC-LOCAL', NULL, NULL, 'unknown', NULL, NULL, NULL, NULL, 'USD', 2, '2020-01-02T00:00:00.000Z', NULL, NULL, '2020-01-02T00:00:00.000Z', '2020-01-02T00:00:00.000Z'),
+      ('offer-alpha-retired', 'part-alpha', 'octopart', 'source-alpha-future', 'ABC-123', 'Old Seller', 'OLD-SKU', 'in_stock', 9999, 1, 1, 'Tube', 'USD', 3, '2099-01-02T00:00:00.000Z', '2099-01-03T00:00:00.000Z', 'missing_from_latest_provider_snapshot', '2099-01-02T00:00:00.000Z', '2099-01-03T00:00:00.000Z');
 
     INSERT INTO price_breaks (id, supply_offering_id, min_quantity, unit_price, currency_code, captured_at)
     VALUES
@@ -178,6 +184,7 @@ function createSupplyOfferPool(): TestPool {
       provider_id TEXT NOT NULL,
       source_record_id TEXT NOT NULL REFERENCES source_records(id),
       provider_part_key TEXT NOT NULL,
+      supplier_name TEXT,
       provider_sku TEXT,
       inventory_status TEXT NOT NULL DEFAULT 'unknown',
       inventory_quantity INTEGER,
@@ -187,6 +194,8 @@ function createSupplyOfferPool(): TestPool {
       currency_code TEXT NOT NULL DEFAULT 'USD',
       preferred_rank INTEGER,
       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      retired_at TIMESTAMPTZ,
+      retirement_reason TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );

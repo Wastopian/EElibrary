@@ -5,6 +5,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { BomCsvParseError, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
+import {
+  getCircuitBlockReuseHeadlineVerdict,
+  matchesCircuitBlockReuseReadinessFilter
+} from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
 import type {
@@ -55,6 +59,13 @@ import type {
   CircuitBlockInstantiation,
   CircuitBlockInstantiationCreateInput,
   CircuitBlockInstantiationCreateResponse,
+  CircuitBlockInstantiationHistoryRecord,
+  CircuitBlockKnownRisk,
+  CircuitBlockKnownRiskCreateInput,
+  CircuitBlockKnownRiskMutationResponse,
+  CircuitBlockKnownRiskResolveInput,
+  CircuitBlockKnownRiskSeverity,
+  CircuitBlockListFilters,
   CircuitBlockListResponse,
   CircuitBlockPart,
   CircuitBlockPartCatalogSummary,
@@ -113,6 +124,7 @@ import type {
   PartSubstitutionScope,
   PartSubstitutionStatus,
   PartSubstitutionSummary,
+  PartCircuitBlockDependencyRecord,
   PartWhereUsedRecord,
   PartWhereUsedResponse,
   ProjectBomHealthResponse,
@@ -302,6 +314,20 @@ export type CircuitBlockPartCreateResult =
 /** CircuitBlockPartUpdateResult reports editable role metadata outcomes. */
 export type CircuitBlockPartUpdateResult =
   | { status: "updated"; response: CircuitBlockPartUpdateResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** CircuitBlockKnownRiskCreateResult reports persistence of one new known-risk row. */
+export type CircuitBlockKnownRiskCreateResult =
+  | { status: "created"; response: CircuitBlockKnownRiskMutationResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** CircuitBlockKnownRiskResolveResult reports the lifecycle transition of one known-risk row. */
+export type CircuitBlockKnownRiskResolveResult =
+  | { status: "resolved"; response: CircuitBlockKnownRiskMutationResponse }
   | { status: "invalid"; code: string; message: string }
   | { status: "not_configured" }
   | { status: "not_found"; code: string; message: string };
@@ -707,6 +733,25 @@ interface DatabaseCircuitBlockSummaryRow extends DatabaseCircuitBlockRow {
   strict_substitution_count: string | number;
   evidence_attachment_count: string | number;
   project_usage_count: string | number;
+  active_known_risk_count: string | number;
+  active_blocking_risk_count: string | number;
+}
+
+/** DatabaseCircuitBlockKnownRiskRow models one persisted known-risk row. */
+interface DatabaseCircuitBlockKnownRiskRow {
+  id: string;
+  circuit_block_id: string;
+  title: string;
+  detail: string;
+  severity: string;
+  recorded_by: string | null;
+  recorded_at: Date | string;
+  resolved_at: Date | string | null;
+  resolved_by: string | null;
+  resolution_notes: string | null;
+  evidence_url: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
 }
 
 /** DatabaseCircuitBlockProjectDependencyRow is one project that has confirmed usages of block parts. */
@@ -1719,6 +1764,14 @@ export async function readProjectPartUsagesFromDatabase(projectId: string): Prom
 
 /**
  * Reads confirmed where-used history for one internal part id.
+ *
+ * The response now bundles two distinct engineering-memory signals:
+ *   - `usages`: confirmed project-part usage rows (the existing contract).
+ *   - `circuitBlockDependencies`: circuit blocks whose persisted part roles link to this part.
+ *
+ * Both surfaces are *reference context only*. Neither row implies the part is approved,
+ * validated, or export-ready; the boundary is preserved at the UI layer with explicit copy
+ * and at the contract layer by keeping these rows in distinct collections.
  */
 export async function readPartWhereUsedFromDatabase(partId: string): Promise<PartWhereUsedReadResult> {
   const databasePool = getProjectMemoryDatabasePool();
@@ -1732,12 +1785,16 @@ export async function readPartWhereUsedFromDatabase(partId: string): Promise<Par
       return { status: "not_found" };
     }
 
-    const usages = await readPartWhereUsed(databasePool, partId);
+    const [usages, circuitBlockDependencies] = await Promise.all([
+      readPartWhereUsed(databasePool, partId),
+      readPartCircuitBlockDependencies(databasePool, partId)
+    ]);
 
     return {
       response: {
+        circuitBlockDependencies,
         partId,
-        state: usages.length > 0 ? "available" : "empty",
+        state: usages.length > 0 || circuitBlockDependencies.length > 0 ? "available" : "empty",
         usages
       },
       status: "available"
@@ -1745,6 +1802,47 @@ export async function readPartWhereUsedFromDatabase(partId: string): Promise<Par
   } catch (error) {
     throw toProjectMemoryStoreError(error);
   }
+}
+
+/**
+ * Reads circuit blocks that depend on one internal part, grouped per block.
+ *
+ * Multiple role rows of the same block that point at the inspected part are collapsed into
+ * one `PartCircuitBlockDependencyRecord` so the UI can render a per-block row with the
+ * full list of roles (eg `Main LDO`, `Reference LDO`) under the same reuse-readiness verdict.
+ */
+async function readPartCircuitBlockDependencies(
+  databasePool: Pool,
+  partId: string
+): Promise<PartCircuitBlockDependencyRecord[]> {
+  const rawDependencies = await readWhereUsedCircuitBlockDependenciesForPartIds(databasePool, [partId]);
+
+  if (rawDependencies.length === 0) {
+    return [];
+  }
+
+  const groupedRoles = new Map<string, { circuitBlockId: string; blockParts: CircuitBlockPart[] }>();
+  for (const dependency of rawDependencies) {
+    const existing = groupedRoles.get(dependency.circuitBlock.id);
+    if (existing) {
+      existing.blockParts.push(dependency.blockPart);
+    } else {
+      groupedRoles.set(dependency.circuitBlock.id, {
+        blockParts: [dependency.blockPart],
+        circuitBlockId: dependency.circuitBlock.id
+      });
+    }
+  }
+
+  const records: PartCircuitBlockDependencyRecord[] = [];
+  for (const { circuitBlockId, blockParts } of groupedRoles.values()) {
+    const summary = await readCircuitBlockSummary(databasePool, circuitBlockId);
+    if (!summary) continue;
+    records.push({ blockParts, summary });
+  }
+
+  records.sort((a, b) => a.summary.circuitBlock.blockKey.localeCompare(b.summary.circuitBlock.blockKey));
+  return records;
 }
 
 /**
@@ -2274,8 +2372,14 @@ export async function updateFollowUpInDatabase(followUpId: string, input: Follow
 
 /**
  * Reads the reusable circuit block library without converting block state into part readiness.
+ *
+ * The `filters` parameter narrows the library so the UI never has to hide rows after the
+ * fact. q/type/status/owner are applied in SQL; reuseReadiness is applied after summary
+ * aggregation because it is derived from the same aggregated readiness counts.
  */
-export async function readCircuitBlocksFromDatabase(): Promise<CircuitBlockListReadResult> {
+export async function readCircuitBlocksFromDatabase(
+  filters: CircuitBlockListFilters = NO_CIRCUIT_BLOCK_LIST_FILTERS
+): Promise<CircuitBlockListReadResult> {
   const databasePool = getProjectMemoryDatabasePool();
 
   if (!databasePool) {
@@ -2283,11 +2387,26 @@ export async function readCircuitBlocksFromDatabase(): Promise<CircuitBlockListR
   }
 
   try {
-    const circuitBlocks = await readCircuitBlockSummaries(databasePool);
+    const fetched = await readCircuitBlockSummaries(databasePool, {
+      blockType: filters.blockType,
+      owner: filters.owner,
+      query: filters.query,
+      status: filters.status
+    });
+
+    const circuitBlocks = filters.reuseReadiness
+      ? fetched.filter((summary) =>
+          matchesCircuitBlockReuseReadinessFilter(
+            getCircuitBlockReuseHeadlineVerdict(summary),
+            filters.reuseReadiness
+          )
+        )
+      : fetched;
 
     return {
       response: {
         circuitBlocks,
+        filters,
         state: circuitBlocks.length > 0 ? "available" : "empty"
       },
       status: "available"
@@ -2296,6 +2415,15 @@ export async function readCircuitBlocksFromDatabase(): Promise<CircuitBlockListR
     throw toProjectMemoryStoreError(error);
   }
 }
+
+/** NO_CIRCUIT_BLOCK_LIST_FILTERS represents the unfiltered library (all blocks returned). */
+const NO_CIRCUIT_BLOCK_LIST_FILTERS: CircuitBlockListFilters = {
+  blockType: null,
+  owner: null,
+  query: null,
+  reuseReadiness: null,
+  status: null
+};
 
 /**
  * Reads one reusable circuit block with linked parts and evidence metadata.
@@ -2638,6 +2766,235 @@ export async function updateCircuitBlockPartInDatabase(circuitBlockId: string, c
   } catch (error) {
     throw toProjectMemoryStoreError(error);
   }
+}
+
+/**
+ * Records one known-risk observation against a reusable circuit block.
+ *
+ * Honesty contract:
+ *   * The `title` is required and trimmed; an empty title is a 400 (engineering memory must
+ *     be discoverable when scanning a list).
+ *   * `severity` defaults to `caution` if the caller does not specify one.
+ *   * Persisting a known risk does NOT change any linked part's approval, validation, or
+ *     export status. It changes only the reusable-stage verdict of this block, and only
+ *     when severity is `blocking` AND the risk is unresolved.
+ *
+ * The response carries both the persisted risk and a freshly-built detail payload so the
+ * UI can refresh the strip, counts, and history without a follow-up read.
+ */
+export async function createCircuitBlockKnownRiskInDatabase(
+  circuitBlockId: string,
+  input: CircuitBlockKnownRiskCreateInput
+): Promise<CircuitBlockKnownRiskCreateResult> {
+  const normalized = normalizeCircuitBlockKnownRiskCreateInput(input);
+
+  if (!normalized.ok) {
+    return {
+      code: normalized.code,
+      message: normalized.message,
+      status: "invalid"
+    };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await circuitBlockExists(databasePool, circuitBlockId))) {
+      return {
+        code: "CIRCUIT_BLOCK_NOT_FOUND",
+        message: "Circuit block not found.",
+        status: "not_found"
+      };
+    }
+
+    const now = new Date();
+    const riskId = `cbrisk-${slugify(circuitBlockId)}-${now.getTime().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const result = await databasePool.query<DatabaseCircuitBlockKnownRiskRow>(
+      `
+        INSERT INTO circuit_block_known_risks (
+          id, circuit_block_id, title, detail, severity, recorded_by, recorded_at, evidence_url, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $7)
+        RETURNING id, circuit_block_id, title, detail, severity, recorded_by, recorded_at,
+                  resolved_at, resolved_by, resolution_notes, evidence_url, created_at, updated_at
+      `,
+      [
+        riskId,
+        circuitBlockId,
+        normalized.input.title,
+        normalized.input.detail,
+        normalized.input.severity,
+        normalized.input.recordedBy,
+        now,
+        normalized.input.evidenceUrl
+      ]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      throw new CatalogStoreError("query_failed", "Known-risk creation returned no persisted row.", new Error("missing_known_risk_create_row"));
+    }
+
+    await databasePool.query("UPDATE circuit_blocks SET updated_at = $2 WHERE id = $1", [circuitBlockId, now]);
+
+    const detail = await buildCircuitBlockDetail(databasePool, circuitBlockId);
+
+    if (!detail) {
+      throw new CatalogStoreError(
+        "query_failed",
+        "Circuit block detail was missing immediately after recording a known risk.",
+        new Error("missing_circuit_block_detail_after_known_risk_create")
+      );
+    }
+
+    return {
+      response: {
+        boundary: "Recording a known risk preserves engineering memory; it does not approve linked parts, validate assets, or unlock export.",
+        detail,
+        knownRisk: mapCircuitBlockKnownRiskRow(row)
+      },
+      status: "created"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Marks one known-risk row as resolved. The row is never deleted; resolution preserves the
+ * original observation and adds resolution provenance so audits remain consistent.
+ *
+ * Resolving a `blocking` risk lifts the reusable-stage block (assuming no other unresolved
+ * blocking risks exist). Lower severities do not gate reuse, so resolving them is purely a
+ * housekeeping action — but still recorded.
+ */
+export async function resolveCircuitBlockKnownRiskInDatabase(
+  circuitBlockId: string,
+  knownRiskId: string,
+  input: CircuitBlockKnownRiskResolveInput
+): Promise<CircuitBlockKnownRiskResolveResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const resolvedBy = normalizeOptionalText(input.resolvedBy ?? null);
+  const resolutionNotes = normalizeOptionalText(input.resolutionNotes ?? null);
+
+  try {
+    const now = new Date();
+    const result = await databasePool.query<DatabaseCircuitBlockKnownRiskRow>(
+      `
+        UPDATE circuit_block_known_risks
+        SET resolved_at = $3,
+            resolved_by = $4,
+            resolution_notes = $5,
+            updated_at = $3
+        WHERE id = $2 AND circuit_block_id = $1 AND resolved_at IS NULL
+        RETURNING id, circuit_block_id, title, detail, severity, recorded_by, recorded_at,
+                  resolved_at, resolved_by, resolution_notes, evidence_url, created_at, updated_at
+      `,
+      [circuitBlockId, knownRiskId, now, resolvedBy, resolutionNotes]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return {
+        code: "CIRCUIT_BLOCK_KNOWN_RISK_NOT_FOUND",
+        message: "Known risk not found or already resolved.",
+        status: "not_found"
+      };
+    }
+
+    await databasePool.query("UPDATE circuit_blocks SET updated_at = $2 WHERE id = $1", [circuitBlockId, now]);
+
+    const detail = await buildCircuitBlockDetail(databasePool, circuitBlockId);
+
+    if (!detail) {
+      throw new CatalogStoreError(
+        "query_failed",
+        "Circuit block detail was missing immediately after resolving a known risk.",
+        new Error("missing_circuit_block_detail_after_known_risk_resolve")
+      );
+    }
+
+    return {
+      response: {
+        boundary: "Resolving a known risk records that the underlying issue was addressed; it does not approve linked parts, validate assets, or unlock export.",
+        detail,
+        knownRisk: mapCircuitBlockKnownRiskRow(row)
+      },
+      status: "resolved"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/** NormalizedCircuitBlockKnownRiskCreateInput is the validated shape applied by the create path. */
+type NormalizedCircuitBlockKnownRiskCreateInput = {
+  title: string;
+  detail: string;
+  severity: CircuitBlockKnownRiskSeverity;
+  recordedBy: string | null;
+  evidenceUrl: string | null;
+};
+
+/** Allowed known-risk severities. Kept in sync with the SQL CHECK constraint. */
+const ALLOWED_CIRCUIT_BLOCK_KNOWN_RISK_SEVERITIES: ReadonlySet<CircuitBlockKnownRiskSeverity> = new Set<CircuitBlockKnownRiskSeverity>([
+  "info",
+  "limitation",
+  "caution",
+  "blocking"
+]);
+
+/**
+ * Validates and trims a known-risk create payload into a persistence-ready shape.
+ *
+ * Validation owns three guarantees:
+ *   * a non-empty, trimmed `title` (the most-scanned field in the UI),
+ *   * a severity matching the SQL CHECK constraint (defaulting to `caution`),
+ *   * provenance fields that round-trip as null when blank so the DB does not store " ".
+ */
+function normalizeCircuitBlockKnownRiskCreateInput(
+  input: CircuitBlockKnownRiskCreateInput | null | undefined
+): { ok: true; input: NormalizedCircuitBlockKnownRiskCreateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return { code: "INVALID_CIRCUIT_BLOCK_KNOWN_RISK", message: "Known risk creation requires a JSON body with at least a title.", ok: false };
+  }
+
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  if (title.length === 0) {
+    return { code: "INVALID_CIRCUIT_BLOCK_KNOWN_RISK_TITLE", message: "Known risk title is required.", ok: false };
+  }
+
+  const severityRaw = (input.severity ?? "caution") as CircuitBlockKnownRiskSeverity;
+  if (!ALLOWED_CIRCUIT_BLOCK_KNOWN_RISK_SEVERITIES.has(severityRaw)) {
+    return {
+      code: "INVALID_CIRCUIT_BLOCK_KNOWN_RISK_SEVERITY",
+      message: "Severity must be one of info, limitation, caution, or blocking.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      detail: typeof input.detail === "string" ? input.detail.trim() : "",
+      evidenceUrl: normalizeOptionalText(input.evidenceUrl ?? null),
+      recordedBy: normalizeOptionalText(input.recordedBy ?? null),
+      severity: severityRaw,
+      title
+    },
+    ok: true
+  };
 }
 
 /**
@@ -3340,16 +3697,61 @@ async function upsertFollowUpSeeds(client: PoolClient, seeds: FollowUpSeedRecord
 
 /**
  * Reads circuit block summaries in stable library order.
+ *
+ * Filters narrow the result set in SQL (q/type/status/owner) so the API does not return rows
+ * the UI then has to hide. The readiness filter is applied by the caller after summary
+ * aggregation because the readiness verdict is derived from the same aggregated counts.
  */
-async function readCircuitBlockSummaries(databasePool: Pool): Promise<CircuitBlockSummary[]> {
+async function readCircuitBlockSummaries(
+  databasePool: Pool,
+  filters: CircuitBlockSummarySqlFilters
+): Promise<CircuitBlockSummary[]> {
+  const whereClauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.query) {
+    params.push(`%${filters.query.toLowerCase()}%`);
+    const placeholder = `$${params.length}`;
+    whereClauses.push(
+      `(LOWER(cb.block_key) LIKE ${placeholder} OR LOWER(cb.name) LIKE ${placeholder} OR LOWER(cb.description) LIKE ${placeholder} OR LOWER(COALESCE(cb.owner, '')) LIKE ${placeholder} OR LOWER(cb.reuse_scope) LIKE ${placeholder})`
+    );
+  }
+
+  if (filters.blockType) {
+    params.push(filters.blockType);
+    whereClauses.push(`cb.block_type = $${params.length}`);
+  }
+
+  if (filters.status) {
+    params.push(filters.status);
+    whereClauses.push(`cb.status = $${params.length}`);
+  }
+
+  if (filters.owner) {
+    params.push(filters.owner.toLowerCase());
+    whereClauses.push(`LOWER(COALESCE(cb.owner, '')) = $${params.length}`);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
   const result = await databasePool.query<DatabaseCircuitBlockSummaryRow>(
     `
       ${CIRCUIT_BLOCK_SUMMARIES_SQL}
+      ${whereSql}
       ORDER BY cb.updated_at DESC, cb.block_key ASC, cb.id ASC
-    `
+    `,
+    params
   );
 
   return result.rows.map(mapCircuitBlockSummaryRow);
+}
+
+/** CircuitBlockSummarySqlFilters carries the subset of library filters resolved in SQL. */
+interface CircuitBlockSummarySqlFilters {
+  query: string | null;
+  blockType: CircuitBlockType | null;
+  status: CircuitBlockStatus | null;
+  owner: string | null;
 }
 
 /**
@@ -3424,7 +3826,153 @@ async function readCircuitBlockEvidenceAttachments(databasePool: Pool | PoolClie
 }
 
 /**
- * Builds one full circuit block detail response from summary, parts, and evidence.
+ * Reads the instantiation history for one circuit block, joined with project, revision, and BOM import context.
+ *
+ * Returns events in newest-first order. Each row reports the count of BOM lines that still record
+ * `instantiated_from_circuit_block_id = $1`, so engineers can see how many BOM rows the reuse event
+ * actually placed (without making that count a trust signal — instantiation is engineering memory,
+ * not part approval).
+ */
+async function readCircuitBlockInstantiationHistory(
+  databasePool: Pool | PoolClient,
+  circuitBlockId: string
+): Promise<CircuitBlockInstantiationHistoryRecord[]> {
+  const result = await databasePool.query<DatabaseCircuitBlockInstantiationHistoryRow>(
+    `
+      SELECT
+        cbi.id AS inst_id,
+        cbi.circuit_block_id AS inst_circuit_block_id,
+        cbi.project_id AS inst_project_id,
+        cbi.project_revision_id AS inst_project_revision_id,
+        cbi.bom_import_id AS inst_bom_import_id,
+        cbi.include_optional AS inst_include_optional,
+        cbi.designator_prefix AS inst_designator_prefix,
+        cbi.notes AS inst_notes,
+        cbi.created_by AS inst_created_by,
+        cbi.created_at AS inst_created_at,
+        p.id AS project_id,
+        p.project_key AS project_key,
+        p.name AS project_name,
+        p.description AS project_description,
+        p.owner AS project_owner,
+        p.status AS project_status,
+        p.created_at AS project_created_at,
+        p.updated_at AS project_updated_at,
+        pr.id AS revision_id,
+        pr.project_id AS revision_project_id,
+        pr.revision_label AS revision_label,
+        pr.revision_status AS revision_status,
+        pr.source_reference AS revision_source_reference,
+        pr.released_at AS revision_released_at,
+        pr.created_at AS revision_created_at,
+        pr.updated_at AS revision_updated_at,
+        bi.id AS bom_import_id,
+        bi.project_id AS bom_import_project_id,
+        bi.project_revision_id AS bom_import_project_revision_id,
+        bi.source_filename AS bom_import_source_filename,
+        bi.source_format AS bom_import_source_format,
+        bi.storage_key AS bom_import_storage_key,
+        bi.import_status AS bom_import_status,
+        bi.column_mapping AS bom_import_column_mapping,
+        bi.import_summary AS bom_import_summary,
+        bi.imported_by AS bom_import_imported_by,
+        bi.created_at AS bom_import_created_at,
+        bi.updated_at AS bom_import_updated_at,
+        COALESCE(line_summary.bom_line_count, '0') AS bom_line_count
+      FROM circuit_block_instantiations cbi
+      JOIN projects p ON p.id = cbi.project_id
+      JOIN project_revisions pr ON pr.id = cbi.project_revision_id
+      LEFT JOIN bom_imports bi ON bi.id = cbi.bom_import_id
+      LEFT JOIN (
+        SELECT
+          bl.bom_import_id AS bom_import_id,
+          bl.instantiated_from_circuit_block_id AS block_id,
+          COUNT(*)::text AS bom_line_count
+        FROM bom_lines bl
+        WHERE bl.instantiated_from_circuit_block_id IS NOT NULL
+        GROUP BY bl.bom_import_id, bl.instantiated_from_circuit_block_id
+      ) line_summary
+        ON line_summary.bom_import_id = cbi.bom_import_id
+       AND line_summary.block_id = cbi.circuit_block_id
+      WHERE cbi.circuit_block_id = $1
+      ORDER BY cbi.created_at DESC, cbi.id ASC
+    `,
+    [circuitBlockId]
+  );
+
+  return result.rows.map(mapCircuitBlockInstantiationHistoryRow);
+}
+
+/**
+ * Maps one joined instantiation row into the shared history record.
+ */
+function mapCircuitBlockInstantiationHistoryRow(
+  row: DatabaseCircuitBlockInstantiationHistoryRow
+): CircuitBlockInstantiationHistoryRecord {
+  const project: Project = {
+    createdAt: toIsoTimestamp(row.project_created_at),
+    description: row.project_description,
+    id: row.project_id,
+    name: row.project_name,
+    owner: row.project_owner,
+    projectKey: row.project_key,
+    status: row.project_status,
+    updatedAt: toIsoTimestamp(row.project_updated_at)
+  };
+
+  const revision: ProjectRevision = {
+    createdAt: toIsoTimestamp(row.revision_created_at),
+    id: row.revision_id,
+    projectId: row.revision_project_id,
+    releasedAt: row.revision_released_at ? toIsoTimestamp(row.revision_released_at) : null,
+    revisionLabel: row.revision_label,
+    revisionStatus: row.revision_status,
+    sourceReference: row.revision_source_reference,
+    updatedAt: toIsoTimestamp(row.revision_updated_at)
+  };
+
+  const bomImport: BomImport | null = row.bom_import_id
+    ? {
+        columnMapping: toRecord(row.bom_import_column_mapping),
+        createdAt: toIsoTimestamp(row.bom_import_created_at as Date | string),
+        id: row.bom_import_id,
+        importStatus: row.bom_import_status as BomImport["importStatus"],
+        importSummary: toRecord(row.bom_import_summary),
+        importedBy: row.bom_import_imported_by,
+        projectId: row.bom_import_project_id as string,
+        projectRevisionId: row.bom_import_project_revision_id as string,
+        sourceFilename: row.bom_import_source_filename as string,
+        sourceFormat: row.bom_import_source_format as BomImport["sourceFormat"],
+        storageKey: row.bom_import_storage_key,
+        updatedAt: toIsoTimestamp(row.bom_import_updated_at as Date | string)
+      }
+    : null;
+
+  const instantiation: CircuitBlockInstantiation = {
+    bomImportId: row.inst_bom_import_id,
+    circuitBlockId: row.inst_circuit_block_id,
+    createdAt: toIsoTimestamp(row.inst_created_at),
+    createdBy: row.inst_created_by,
+    designatorPrefix: row.inst_designator_prefix,
+    id: row.inst_id,
+    includeOptional: row.inst_include_optional,
+    notes: row.inst_notes,
+    projectId: row.inst_project_id,
+    projectRevisionId: row.inst_project_revision_id
+  };
+
+  return {
+    bomImport,
+    instantiatedBomLineCount: toNumber(row.bom_line_count),
+    instantiation,
+    project,
+    revision
+  };
+}
+
+/**
+ * Builds one full circuit block detail response from summary, parts, evidence, dependencies,
+ * instantiation history, and known engineering-memory risks.
  */
 async function buildCircuitBlockDetail(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<CircuitBlockDetailResponse | null> {
   const summary = await readCircuitBlockSummary(databasePool, circuitBlockId);
@@ -3433,10 +3981,12 @@ async function buildCircuitBlockDetail(databasePool: Pool | PoolClient, circuitB
     return null;
   }
 
-  const [parts, evidence, projectDependenciesResult] = await Promise.all([
+  const [parts, evidence, projectDependenciesResult, instantiations, knownRisks] = await Promise.all([
     readCircuitBlockPartRecords(databasePool, circuitBlockId),
     readCircuitBlockEvidenceAttachments(databasePool, circuitBlockId),
-    readCircuitBlockProjectDependenciesFromDatabase(circuitBlockId)
+    readCircuitBlockProjectDependenciesFromDatabase(circuitBlockId),
+    readCircuitBlockInstantiationHistory(databasePool, circuitBlockId),
+    readCircuitBlockKnownRisks(databasePool, circuitBlockId)
   ]);
 
   const projectDependencies = projectDependenciesResult.status === "available" ? projectDependenciesResult.dependencies : [];
@@ -3445,10 +3995,60 @@ async function buildCircuitBlockDetail(databasePool: Pool | PoolClient, circuitB
     boundary: "Circuit blocks preserve reusable design knowledge; linked part approval, readiness, validation, and export status remain independent.",
     circuitBlock: summary.circuitBlock,
     evidence,
+    instantiations,
+    knownRisks,
     parts,
     projectDependencies,
     state: "available",
     summary
+  };
+}
+
+/**
+ * Reads every known-risk row recorded for one circuit block, including resolved ones.
+ *
+ * Newest-first by `recorded_at`. Resolved rows are preserved so the UI can render a
+ * "history" view (or filter to active only) and so an audit can prove a block was in a
+ * particular known-risk state when a project reused it.
+ */
+async function readCircuitBlockKnownRisks(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<CircuitBlockKnownRisk[]> {
+  const result = await databasePool.query<DatabaseCircuitBlockKnownRiskRow>(
+    `
+      SELECT id, circuit_block_id, title, detail, severity, recorded_by, recorded_at,
+             resolved_at, resolved_by, resolution_notes, evidence_url, created_at, updated_at
+      FROM circuit_block_known_risks
+      WHERE circuit_block_id = $1
+      ORDER BY recorded_at DESC, id ASC
+    `,
+    [circuitBlockId]
+  );
+
+  return result.rows.map(mapCircuitBlockKnownRiskRow);
+}
+
+/**
+ * Maps one persisted known-risk row into the shared structured-memory type.
+ *
+ * `severity` is narrowed back to `CircuitBlockKnownRiskSeverity`; the CHECK constraint on
+ * the column guarantees the value is one of the four documented severities, so an unknown
+ * value would mean schema drift that should fail loudly.
+ */
+function mapCircuitBlockKnownRiskRow(row: DatabaseCircuitBlockKnownRiskRow): CircuitBlockKnownRisk {
+  const severity = row.severity as CircuitBlockKnownRiskSeverity;
+  return {
+    circuitBlockId: row.circuit_block_id,
+    createdAt: toIsoTimestamp(row.created_at),
+    detail: row.detail,
+    evidenceUrl: row.evidence_url,
+    id: row.id,
+    recordedAt: toIsoTimestamp(row.recorded_at),
+    recordedBy: row.recorded_by,
+    resolutionNotes: row.resolution_notes,
+    resolvedAt: row.resolved_at ? toIsoTimestamp(row.resolved_at) : null,
+    resolvedBy: row.resolved_by,
+    severity,
+    title: row.title,
+    updatedAt: toIsoTimestamp(row.updated_at)
   };
 }
 
@@ -4276,8 +4876,12 @@ const CIRCUIT_BLOCK_SUMMARIES_SQL = `
     COALESCE(part_summary.optional_part_count, '0') AS optional_part_count,
     COALESCE(part_summary.approved_part_count, '0') AS approved_part_count,
     COALESCE(part_summary.readiness_gap_count, '0') AS readiness_gap_count,
+    COALESCE(part_summary.lifecycle_risk_count, '0') AS lifecycle_risk_count,
+    COALESCE(part_summary.strict_substitution_count, '0') AS strict_substitution_count,
     COALESCE(evidence_summary.evidence_attachment_count, '0') AS evidence_attachment_count,
-    COALESCE(usage_summary.project_usage_count, '0') AS project_usage_count
+    COALESCE(usage_summary.project_usage_count, '0') AS project_usage_count,
+    COALESCE(known_risk_summary.active_known_risk_count, '0') AS active_known_risk_count,
+    COALESCE(known_risk_summary.active_blocking_risk_count, '0') AS active_blocking_risk_count
   FROM circuit_blocks cb
   LEFT JOIN (
     SELECT
@@ -4311,6 +4915,15 @@ const CIRCUIT_BLOCK_SUMMARIES_SQL = `
     JOIN project_part_usages u ON u.part_id = cbp.part_id
     GROUP BY cbp.circuit_block_id
   ) usage_summary ON usage_summary.circuit_block_id = cb.id
+  LEFT JOIN (
+    SELECT
+      circuit_block_id,
+      COUNT(*)::text AS active_known_risk_count,
+      SUM(CASE WHEN severity = 'blocking' THEN 1 ELSE 0 END)::text AS active_blocking_risk_count
+    FROM circuit_block_known_risks
+    WHERE resolved_at IS NULL
+    GROUP BY circuit_block_id
+  ) known_risk_summary ON known_risk_summary.circuit_block_id = cb.id
 `;
 
 /** WHERE_USED_CIRCUIT_BLOCK_DEPENDENCIES_SQL reads block roles with block and part context. */
@@ -4656,6 +5269,8 @@ function mapCircuitBlockRow(row: DatabaseCircuitBlockRow): CircuitBlock {
  */
 function mapCircuitBlockSummaryRow(row: DatabaseCircuitBlockSummaryRow): CircuitBlockSummary {
   return {
+    activeBlockingRiskCount: toNumber(row.active_blocking_risk_count),
+    activeKnownRiskCount: toNumber(row.active_known_risk_count),
     approvedPartCount: toNumber(row.approved_part_count),
     circuitBlock: mapCircuitBlockRow(row),
     evidenceAttachmentCount: toNumber(row.evidence_attachment_count),
@@ -7693,6 +8308,49 @@ interface DatabaseCircuitBlockInstantiationRow {
   notes: string | null;
   created_by: string | null;
   created_at: Date | string;
+}
+
+/** DatabaseCircuitBlockInstantiationHistoryRow joins an instantiation event with its project, revision, BOM import, and BOM line count. */
+interface DatabaseCircuitBlockInstantiationHistoryRow {
+  inst_id: string;
+  inst_circuit_block_id: string;
+  inst_project_id: string;
+  inst_project_revision_id: string;
+  inst_bom_import_id: string;
+  inst_include_optional: boolean;
+  inst_designator_prefix: string | null;
+  inst_notes: string | null;
+  inst_created_by: string | null;
+  inst_created_at: Date | string;
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  project_description: string;
+  project_owner: string | null;
+  project_status: Project["status"];
+  project_created_at: Date | string;
+  project_updated_at: Date | string;
+  revision_id: string;
+  revision_project_id: string;
+  revision_label: string;
+  revision_status: ProjectRevision["revisionStatus"];
+  revision_source_reference: string | null;
+  revision_released_at: Date | string | null;
+  revision_created_at: Date | string;
+  revision_updated_at: Date | string;
+  bom_import_id: string | null;
+  bom_import_project_id: string | null;
+  bom_import_project_revision_id: string | null;
+  bom_import_source_filename: string | null;
+  bom_import_source_format: string | null;
+  bom_import_storage_key: string | null;
+  bom_import_status: string | null;
+  bom_import_column_mapping: unknown;
+  bom_import_summary: unknown;
+  bom_import_imported_by: string | null;
+  bom_import_created_at: Date | string | null;
+  bom_import_updated_at: Date | string | null;
+  bom_line_count: string | number;
 }
 
 /** DatabaseCircuitBlockPartLookupRow is the part-role row used to build instantiated BOM lines. */

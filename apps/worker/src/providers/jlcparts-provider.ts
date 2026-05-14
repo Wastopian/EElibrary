@@ -807,6 +807,7 @@ function buildSupplyOfferings(component: JlcPartsComponent, partId: string, sour
       providerId: JLC_PARTS_PROVIDER_ID,
       providerPartKey: component.lcsc,
       providerSku: component.lcsc,
+      supplierName: "LCSC",
       sourceRecordId,
       updatedAt: lastSeenAt
     }

@@ -47,9 +47,11 @@ import {
   shouldRenderGenerationOptions,
   shouldRenderReviewActions
 } from "../../../lib/detail-view-model";
+import { getCircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
+import type { CircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -1331,7 +1333,7 @@ function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
         <div>
           <span>Lowest price tier</span>
           <strong>{summary.lowestUnitPrice ? formatSupplyPrice(summary.lowestUnitPrice.unitPrice, summary.lowestUnitPrice.currencyCode) : "No price tiers"}</strong>
-          <p>{summary.lowestUnitPrice ? `${summary.lowestUnitPrice.providerId} at ${summary.lowestUnitPrice.minQuantity}+ units.` : "No provider price breaks are attached yet."}</p>
+          <p>{summary.lowestUnitPrice ? `${formatSupplySourceLabel(summary.lowestUnitPrice)} at ${summary.lowestUnitPrice.minQuantity}+ units.` : "No provider price breaks are attached yet."}</p>
         </div>
         <div>
           <span>Freshness</span>
@@ -1344,7 +1346,7 @@ function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
         <table className="ui-table supply-offers-table">
           <thead>
             <tr>
-              <th scope="col">Distributor</th>
+              <th scope="col">Supplier</th>
               <th scope="col">Availability</th>
               <th scope="col">Terms</th>
               <th scope="col">Price break</th>
@@ -1367,11 +1369,13 @@ function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
  */
 function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; staleAfterDays: number }) {
   const bestBreak = getBestPriceBreak(offer.priceBreaks);
+  const supplierLabel = formatSupplySourceLabel(offer);
 
   return (
     <tr>
       <td>
-        <strong>{offer.providerId}</strong>
+        <strong>{supplierLabel}</strong>
+        <p>{offer.supplierName ? `via ${offer.providerId}` : `Provider ${offer.providerId}`}</p>
         <p>{offer.providerSku ? `SKU ${offer.providerSku}` : `Provider key ${offer.providerPartKey}`}</p>
         {offer.sourceUrl ? <a href={offer.sourceUrl}>Source record</a> : <span className="muted-copy">No source URL</span>}
       </td>
@@ -1396,7 +1400,14 @@ function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; stal
 }
 
 /**
- * Renders confirmed project usage history without feeding it into approval or export labels.
+ * Renders confirmed project usage history and circuit-block dependencies without feeding
+ * either signal into approval or export labels.
+ *
+ * The panel keeps both signals visibly distinct: project usages are concrete BOM history,
+ * circuit-block dependencies are reusable-design memory. A part can have one and not the
+ * other (a part appearing in three reusable blocks but never instantiated yet, or a part
+ * confirmed in two projects but not yet promoted into a reusable block). Neither row count
+ * implies the part is approved, validated, or export-ready — the panel boundary repeats that.
  */
 function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   if (state.status === "unavailable") {
@@ -1417,10 +1428,12 @@ function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
     );
   }
 
-  if (state.response.usages.length === 0) {
+  const { usages, circuitBlockDependencies } = state.response;
+
+  if (usages.length === 0 && circuitBlockDependencies.length === 0) {
     return (
       <EmptyState
-        body="No confirmed project usage records exist for this part. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
+        body="No confirmed project usage records and no circuit block dependencies exist for this part. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
         title="No confirmed project usage"
       />
     );
@@ -1429,49 +1442,177 @@ function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   return (
     <div className="where-used-panel">
       <p className="where-used-panel__boundary">
-        <strong>Usage evidence only.</strong> Project usage does not approve this part or make exports available.
+        <strong>Usage evidence only.</strong> Project usage and circuit-block dependency do not approve this part or make exports available.
       </p>
-      <div className="where-used-table-wrap">
-        <table className="where-used-table">
-          <thead>
-            <tr>
-              <th>Project</th>
-              <th>Revision</th>
-              <th>Usage status</th>
-              <th>Designators</th>
-              <th>Qty</th>
-              <th>Context</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.response.usages.map(({ bomLine, project, projectRevision, usage }) => (
-              <tr key={usage.id}>
-                <td>
-                  <Link href={`/projects/${project.id}`}>{project.name}</Link>
-                  <p className="ui-mono">{project.projectKey}</p>
-                </td>
-                <td>
-                  <span>{formatRevisionLabel(projectRevision.revisionLabel)}</span>
-                  <p>{projectRevision.revisionStatus}</p>
-                </td>
-                <td>
-                  <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
-                </td>
-                <td className="ui-mono">{formatDesignators(usage.designators)}</td>
-                <td>{formatQuantity(usage.quantity)}</td>
-                <td>
-                  <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage context recorded"}</span>
-                  {bomLine ? <p className="ui-mono">BOM row {bomLine.rowNumber}</p> : <p>No BOM row linked</p>}
-                </td>
-                <td>{formatDateTime(usage.updatedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+
+      <section aria-labelledby="part-where-used-projects-heading" className="where-used-panel__section">
+        <header className="where-used-panel__section-heading">
+          <h3 id="part-where-used-projects-heading">Projects</h3>
+          <p className="muted-copy">
+            {usages.length > 0
+              ? `Confirmed in ${usages.length} ${usages.length === 1 ? "project usage row" : "project usage rows"}.`
+              : "No confirmed project usage rows. Weak, ambiguous, and unmatched BOM rows are excluded."}
+          </p>
+        </header>
+        {usages.length === 0
+          ? <EmptyState title="No confirmed project usage" body="Once a matching BOM row promotes to a confirmed usage record, it will appear here." />
+          : (
+            <div className="where-used-table-wrap">
+              <table className="where-used-table">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Revision</th>
+                    <th>Usage status</th>
+                    <th>Designators</th>
+                    <th>Qty</th>
+                    <th>Context</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usages.map(({ bomLine, project, projectRevision, usage }) => (
+                    <tr key={usage.id}>
+                      <td>
+                        <Link href={`/projects/${project.id}`}>{project.name}</Link>
+                        <p className="ui-mono">{project.projectKey}</p>
+                      </td>
+                      <td>
+                        <span>{formatRevisionLabel(projectRevision.revisionLabel)}</span>
+                        <p>{projectRevision.revisionStatus}</p>
+                      </td>
+                      <td>
+                        <StatusBadge label={formatUsageStatus(usage.usageStatus)} tone={usageStatusTone(usage.usageStatus)} />
+                      </td>
+                      <td className="ui-mono">{formatDesignators(usage.designators)}</td>
+                      <td>{formatQuantity(usage.quantity)}</td>
+                      <td>
+                        <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage context recorded"}</span>
+                        {bomLine ? <p className="ui-mono">BOM row {bomLine.rowNumber}</p> : <p>No BOM row linked</p>}
+                      </td>
+                      <td>{formatDateTime(usage.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </section>
+
+      <section aria-labelledby="part-where-used-blocks-heading" className="where-used-panel__section">
+        <header className="where-used-panel__section-heading">
+          <h3 id="part-where-used-blocks-heading">Circuit blocks</h3>
+          <p className="muted-copy">
+            {circuitBlockDependencies.length > 0
+              ? `Linked to ${circuitBlockDependencies.length} reusable ${circuitBlockDependencies.length === 1 ? "block" : "blocks"}. Reuse readiness here mirrors the block detail strip and does not approve this part.`
+              : "No reusable block references this part yet. Promoting a working circuit into a reusable block is how engineering memory grows."}
+          </p>
+        </header>
+        {circuitBlockDependencies.length === 0
+          ? <EmptyState title="No circuit block dependencies" body="When this part is added to a role in a reusable circuit block, that block will appear here with its reuse-readiness verdict." />
+          : <PartCircuitBlockDependencyTable dependencies={circuitBlockDependencies} />}
+      </section>
     </div>
   );
+}
+
+/**
+ * Renders the per-block dependency rows showing which roles this part fills inside each
+ * reusable circuit block, alongside the block's reuse-readiness headline.
+ *
+ * The headline is derived locally from the persisted `CircuitBlockSummary` using the same
+ * shared helper as the library and detail strip, so a part page can never claim a block is
+ * "ready to reuse" when the detail strip would say it is blocked.
+ */
+function PartCircuitBlockDependencyTable({ dependencies }: { dependencies: PartCircuitBlockDependencyRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Block</th>
+            <th>Status</th>
+            <th>Reuse</th>
+            <th>Roles for this part</th>
+            <th>Required roles</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dependencies.map(({ summary, blockParts }) => {
+            const headline: CircuitBlockReuseHeadline = getCircuitBlockReuseHeadline(summary);
+            return (
+              <tr key={summary.circuitBlock.id}>
+                <td>
+                  <Link href={`/circuit-blocks/${encodeURIComponent(summary.circuitBlock.id)}`}>
+                    {summary.circuitBlock.name}
+                  </Link>
+                  <p className="ui-mono">{summary.circuitBlock.blockKey}</p>
+                  <p className="muted-copy">{summary.circuitBlock.reuseScope || summary.circuitBlock.description}</p>
+                </td>
+                <td>
+                  <StatusBadge
+                    label={formatCircuitBlockStatusLabel(summary.circuitBlock.status)}
+                    tone={circuitBlockStatusToneForWhereUsed(summary.circuitBlock.status)}
+                  />
+                </td>
+                <td>
+                  <StatusBadge label={headline.label} tone={headlineToneToBadgeForWhereUsed(headline.tone)} />
+                  <p className="muted-copy">{headline.detail}</p>
+                </td>
+                <td>
+                  <ul className="where-used-role-list">
+                    {blockParts.map((blockPart) => (
+                      <li key={blockPart.id}>
+                        <span className="ui-mono">{blockPart.role}</span>
+                        {" "}
+                        <StatusBadge label={blockPart.isRequired ? "Required" : "Optional"} tone={blockPart.isRequired ? "review" : "neutral"} />
+                      </li>
+                    ))}
+                  </ul>
+                </td>
+                <td>{summary.requiredPartCount}</td>
+                <td>{formatDateTime(summary.circuitBlock.updatedAt)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Formats `CircuitBlockStatus` enum values for the part-detail circuit-block dependency table.
+ */
+function formatCircuitBlockStatusLabel(status: PartCircuitBlockDependencyRecord["summary"]["circuitBlock"]["status"]): string {
+  return {
+    approved: "Approved",
+    deprecated: "Deprecated",
+    draft: "Draft",
+    in_review: "In review",
+    restricted: "Restricted"
+  }[status];
+}
+
+/**
+ * Maps `CircuitBlockStatus` to a badge tone for the part-detail where-used table.
+ *
+ * Block status is intentionally surfaced as reference context, never as part approval.
+ */
+function circuitBlockStatusToneForWhereUsed(status: PartCircuitBlockDependencyRecord["summary"]["circuitBlock"]["status"]): BadgeTone {
+  if (status === "approved") return "verified";
+  if (status === "in_review" || status === "restricted") return "review";
+  if (status === "deprecated") return "neutral";
+  return "info";
+}
+
+/**
+ * Maps the reuse-headline `ViewTone` onto a `BadgeTone` accepted by StatusBadge.
+ */
+function headlineToneToBadgeForWhereUsed(tone: CircuitBlockReuseHeadline["tone"]): BadgeTone {
+  if (tone === "generated") return "info";
+  return tone;
 }
 
 /**
@@ -2874,6 +3015,13 @@ function inventoryStatusTone(status: InventoryStatus): BadgeTone {
   };
 
   return tones[status];
+}
+
+/**
+ * Formats supplier identity while falling back to provider provenance when the seller is not captured.
+ */
+function formatSupplySourceLabel(source: { providerId: string; supplierName: string | null }): string {
+  return source.supplierName ?? source.providerId;
 }
 
 /**

@@ -122,6 +122,7 @@ export const supplyOfferings = pgTable(
       .notNull()
       .references(() => sourceRecords.id),
     providerPartKey: text("provider_part_key").notNull(),
+    supplierName: text("supplier_name"),
     providerSku: text("provider_sku"),
     inventoryStatus: text("inventory_status").notNull().default("unknown"),
     inventoryQuantity: integer("inventory_quantity"),
@@ -131,12 +132,16 @@ export const supplyOfferings = pgTable(
     currencyCode: text("currency_code").notNull().default("USD"),
     preferredRank: integer("preferred_rank"),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    retirementReason: text("retirement_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("uq_supply_offerings_provider_sku").on(t.partId, t.providerId, t.providerPartKey, t.providerSku),
+    uniqueIndex("uq_supply_offerings_provider_supplier_sku").on(t.partId, t.providerId, t.providerPartKey, t.supplierName, t.providerSku),
     index("idx_supply_offerings_part").on(t.partId, t.inventoryStatus, t.lastSeenAt),
+    index("idx_supply_offerings_active_part").on(t.partId, t.inventoryStatus, t.lastSeenAt).where(sql`${t.retiredAt} IS NULL`),
+    index("idx_supply_offerings_active_stale").on(t.lastSeenAt, t.providerId, t.providerPartKey).where(sql`${t.retiredAt} IS NULL`),
     index("idx_supply_offerings_source_record").on(t.sourceRecordId),
     index("idx_supply_offerings_provider_part").on(t.providerId, t.providerPartKey, t.lastSeenAt),
     check(

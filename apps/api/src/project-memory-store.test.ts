@@ -12,7 +12,9 @@ import {
   resolveExportBundleFileAvailability,
   createBomImportInDatabase,
   createCircuitBlockInDatabase,
+  createCircuitBlockKnownRiskInDatabase,
   createCircuitBlockPartInDatabase,
+  resolveCircuitBlockKnownRiskInDatabase,
   createEvidenceAttachmentInDatabase,
   createProjectInDatabase,
   matchBomImportRowsInDatabase,
@@ -133,6 +135,7 @@ test("project memory store exposes where-used context for confirmed part usage",
     const result = await readPartWhereUsedFromDatabase("part-memory-ldo");
 
     assert.equal(result.status, "available");
+    if (result.status !== "available") throw new Error("result unavailable");
     assert.equal(result.response.state, "available");
     assert.equal(result.response.usages.length, 1);
     assert.equal(result.response.usages[0]?.project.projectKey, "ALPHA");
@@ -140,6 +143,16 @@ test("project memory store exposes where-used context for confirmed part usage",
     assert.deepEqual(result.response.usages[0]?.usage.designators, ["U1"]);
     assert.equal(result.response.usages[0]?.usage.quantity, 1);
     assert.equal(result.response.usages[0]?.bomLine?.rowNumber, 1);
+
+    assert.equal(
+      result.response.circuitBlockDependencies.length,
+      1,
+      "part-memory-ldo fills the Main LDO role of cblock-alpha-power"
+    );
+    assert.equal(result.response.circuitBlockDependencies[0]?.summary.circuitBlock.blockKey, "ALPHA-POWER");
+    assert.equal(result.response.circuitBlockDependencies[0]?.blockParts.length, 1);
+    assert.equal(result.response.circuitBlockDependencies[0]?.blockParts[0]?.role, "Main LDO");
+    assert.equal(result.response.circuitBlockDependencies[0]?.blockParts[0]?.isRequired, true);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -157,8 +170,10 @@ test("project memory store returns empty where-used state for unused parts", asy
     const result = await readPartWhereUsedFromDatabase("part-memory-resistor");
 
     assert.equal(result.status, "available");
+    if (result.status !== "available") throw new Error("result unavailable");
     assert.equal(result.response.state, "empty");
     assert.deepEqual(result.response.usages, []);
+    assert.deepEqual(result.response.circuitBlockDependencies, []);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -508,6 +523,119 @@ test("project memory store exposes global where-used search for parts and circui
 });
 
 /**
+ * Verifies the circuit block library narrows on text/type/status/readiness filters and
+ * echoes the applied filters back, so the UI can scan a large library without hiding rows.
+ */
+test("project memory store narrows circuit block library by q/type/status/readiness filters", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const usbProtect = await createCircuitBlockInDatabase({
+      blockKey: "USB-PROTECT",
+      blockType: "protection",
+      constraints: {},
+      name: "USB input protection",
+      owner: "hardware",
+      reuseScope: "USB device ports",
+      status: "draft"
+    });
+
+    assert.equal(usbProtect.status, "created");
+
+    const unfiltered = await readCircuitBlocksFromDatabase();
+    assert.equal(unfiltered.status, "available");
+    assert.equal(unfiltered.response.circuitBlocks.length, 2);
+    assert.equal(unfiltered.response.filters.query, null);
+    assert.equal(unfiltered.response.filters.reuseReadiness, null);
+
+    const byQuery = await readCircuitBlocksFromDatabase({
+      blockType: null,
+      owner: null,
+      query: "usb",
+      reuseReadiness: null,
+      status: null
+    });
+    assert.equal(byQuery.status, "available");
+    if (byQuery.status !== "available") throw new Error("byQuery unavailable");
+    assert.equal(byQuery.response.circuitBlocks.length, 1);
+    assert.equal(byQuery.response.circuitBlocks[0]?.circuitBlock.blockKey, "USB-PROTECT");
+    assert.equal(byQuery.response.filters.query, "usb");
+
+    const byType = await readCircuitBlocksFromDatabase({
+      blockType: "power",
+      owner: null,
+      query: null,
+      reuseReadiness: null,
+      status: null
+    });
+    assert.equal(byType.status, "available");
+    if (byType.status !== "available") throw new Error("byType unavailable");
+    assert.equal(byType.response.circuitBlocks.length, 1);
+    assert.equal(byType.response.circuitBlocks[0]?.circuitBlock.blockKey, "ALPHA-POWER");
+    assert.equal(byType.response.filters.blockType, "power");
+
+    const byStatus = await readCircuitBlocksFromDatabase({
+      blockType: null,
+      owner: null,
+      query: null,
+      reuseReadiness: null,
+      status: "draft"
+    });
+    assert.equal(byStatus.status, "available");
+    if (byStatus.status !== "available") throw new Error("byStatus unavailable");
+    assert.equal(byStatus.response.circuitBlocks.length, 1);
+    assert.equal(byStatus.response.circuitBlocks[0]?.circuitBlock.blockKey, "USB-PROTECT");
+
+    const blocked = await readCircuitBlocksFromDatabase({
+      blockType: null,
+      owner: null,
+      query: null,
+      reuseReadiness: "blocked",
+      status: null
+    });
+    assert.equal(blocked.status, "available");
+    if (blocked.status !== "available") throw new Error("blocked unavailable");
+    assert.equal(
+      blocked.response.circuitBlocks.length,
+      1,
+      "ALPHA-POWER has a readiness gap on its required role, so its headline is blocked"
+    );
+    assert.equal(blocked.response.circuitBlocks[0]?.circuitBlock.blockKey, "ALPHA-POWER");
+
+    const reusable = await readCircuitBlocksFromDatabase({
+      blockType: null,
+      owner: null,
+      query: null,
+      reuseReadiness: "reusable",
+      status: null
+    });
+    assert.equal(reusable.status, "available");
+    if (reusable.status !== "available") throw new Error("reusable unavailable");
+    assert.equal(
+      reusable.response.circuitBlocks.length,
+      0,
+      "no seeded block satisfies every reuse stage today"
+    );
+    assert.equal(reusable.response.state, "empty");
+
+    const byOwner = await readCircuitBlocksFromDatabase({
+      blockType: null,
+      owner: "Hardware",
+      query: null,
+      reuseReadiness: null,
+      status: null
+    });
+    assert.equal(byOwner.status, "available");
+    if (byOwner.status !== "available") throw new Error("byOwner unavailable");
+    assert.equal(byOwner.response.circuitBlocks.length, 2);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies circuit block writes and evidence attachments preserve reusable circuit context.
  */
 test("project memory store creates circuit blocks, part roles, and block evidence", async () => {
@@ -558,8 +686,95 @@ test("project memory store creates circuit blocks, part roles, and block evidenc
     assert.equal(evidence.status, "created");
     assert.equal(evidence.response.attachment.targetType, "circuit_block");
     assert.equal(detail.status, "available");
-    assert.equal(detail.response.evidence.length, 1);
-    assert.equal(detail.response.summary.evidenceAttachmentCount, 1);
+    if (detail.status === "available") {
+      assert.equal(detail.response.evidence.length, 1);
+      assert.equal(detail.response.summary.evidenceAttachmentCount, 1);
+    }
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies known-risk recording preserves engineering memory and only blocks reuse readiness
+ * when the recorded severity is `blocking` AND the row is unresolved.
+ *
+ * The test walks the full lifecycle:
+ *   1. Create a non-blocking risk → recorded, but reuse-readiness is not gated.
+ *   2. Create a blocking risk → reuse-readiness becomes blocked at the reusable stage.
+ *   3. Resolve the blocking risk → reuse-readiness un-blocks (the row is preserved, not deleted).
+ *
+ * Honesty assertions are explicit: linked-part approval/lifecycle counts are NOT touched by
+ * any of the known-risk mutations.
+ */
+test("project memory store records, gates on, and resolves circuit block known risks", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const baseline = await readCircuitBlockDetailFromDatabase("cblock-alpha-power");
+    assert.equal(baseline.status, "available");
+    if (baseline.status !== "available") throw new Error("baseline unavailable");
+    assert.equal(baseline.response.summary.activeKnownRiskCount, 0);
+    assert.equal(baseline.response.summary.activeBlockingRiskCount, 0);
+    assert.deepEqual(baseline.response.knownRisks, []);
+
+    const cautionResult = await createCircuitBlockKnownRiskInDatabase("cblock-alpha-power", {
+      detail: "Output cap > 22uF caused VIN dip on Bravo Rev B. Recommend slow-start resistor.",
+      recordedBy: "gerry@hardware",
+      severity: "caution",
+      title: "Inrush spike on cold start"
+    });
+
+    assert.equal(cautionResult.status, "created");
+    if (cautionResult.status !== "created") throw new Error("caution risk create failed");
+    assert.equal(cautionResult.response.knownRisk.severity, "caution");
+    assert.equal(cautionResult.response.detail.summary.activeKnownRiskCount, 1);
+    assert.equal(cautionResult.response.detail.summary.activeBlockingRiskCount, 0);
+    // Linked-part approval and lifecycle counts must not move when a risk is recorded.
+    assert.equal(cautionResult.response.detail.summary.approvedPartCount, baseline.response.summary.approvedPartCount);
+    assert.equal(cautionResult.response.detail.summary.lifecycleRiskCount, baseline.response.summary.lifecycleRiskCount);
+
+    const blockingResult = await createCircuitBlockKnownRiskInDatabase("cblock-alpha-power", {
+      severity: "blocking",
+      title: "Silicon RevG erratum"
+    });
+
+    assert.equal(blockingResult.status, "created");
+    if (blockingResult.status !== "created") throw new Error("blocking risk create failed");
+    assert.equal(blockingResult.response.detail.summary.activeKnownRiskCount, 2);
+    assert.equal(blockingResult.response.detail.summary.activeBlockingRiskCount, 1);
+
+    const blockingRiskId = blockingResult.response.knownRisk.id;
+
+    const resolved = await resolveCircuitBlockKnownRiskInDatabase("cblock-alpha-power", blockingRiskId, {
+      resolutionNotes: "Replaced with RevH parts in current rev.",
+      resolvedBy: "gerry@hardware"
+    });
+
+    assert.equal(resolved.status, "resolved");
+    if (resolved.status !== "resolved") throw new Error("resolve failed");
+    assert.equal(resolved.response.knownRisk.resolvedBy, "gerry@hardware");
+    assert.notEqual(resolved.response.knownRisk.resolvedAt, null);
+    // After resolving, active blocking count drops to 0 and total knownRisks rows are still 2 (row preserved).
+    assert.equal(resolved.response.detail.summary.activeKnownRiskCount, 1, "non-blocking caution remains active");
+    assert.equal(resolved.response.detail.summary.activeBlockingRiskCount, 0);
+    assert.equal(resolved.response.detail.knownRisks.length, 2, "resolved rows must be preserved in detail");
+
+    // Re-resolving the same id should fail honestly: already resolved.
+    const reResolve = await resolveCircuitBlockKnownRiskInDatabase("cblock-alpha-power", blockingRiskId, {});
+    assert.equal(reResolve.status, "not_found");
+
+    // An empty title is rejected explicitly.
+    const invalid = await createCircuitBlockKnownRiskInDatabase("cblock-alpha-power", {
+      severity: "info",
+      title: "   "
+    });
+    assert.equal(invalid.status, "invalid");
+    if (invalid.status === "invalid") {
+      assert.equal(invalid.code, "INVALID_CIRCUIT_BLOCK_KNOWN_RISK_TITLE");
+    }
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -823,10 +1038,21 @@ test("project memory routes return project, BOM line, and usage read contracts",
     assert.equal(circuitBlocks.statusCode, 200);
     assert.equal(circuitBlocks.headers["X-EE-Operation"], "api-circuit-block-list");
     assert.equal(circuitBlocks.body.data.circuitBlocks[0]?.circuitBlock.blockKey, "ALPHA-POWER");
+    assert.equal(circuitBlocks.body.data.filters.query, null);
+    assert.equal(circuitBlocks.body.data.filters.reuseReadiness, null);
+
+    const circuitBlocksFiltered = await invokeApiGet("/circuit-blocks?q=alpha&type=power&status=approved", handleRequest);
+    assert.equal(circuitBlocksFiltered.statusCode, 200);
+    assert.equal(circuitBlocksFiltered.body.data.filters.query, "alpha");
+    assert.equal(circuitBlocksFiltered.body.data.filters.blockType, "power");
+    assert.equal(circuitBlocksFiltered.body.data.filters.status, "approved");
+    assert.equal(circuitBlocksFiltered.body.data.circuitBlocks.length, 1);
+    assert.equal(circuitBlocksFiltered.body.data.circuitBlocks[0]?.circuitBlock.blockKey, "ALPHA-POWER");
 
     assert.equal(circuitBlockDetail.statusCode, 200);
     assert.equal(circuitBlockDetail.headers["X-EE-Operation"], "api-circuit-block-detail");
     assert.equal(circuitBlockDetail.body.data.parts[0]?.part.readinessStatus, "needs_attention");
+    assert.deepEqual(circuitBlockDetail.body.data.instantiations, []);
 
     assert.equal(circuitFollowUps.statusCode, 200);
     assert.equal(circuitFollowUps.headers["X-EE-Operation"], "api-circuit-block-follow-ups");
@@ -1612,6 +1838,18 @@ test("instantiateCircuitBlockIntoProjectBomInDatabase creates a synthetic BOM im
       usageRows.rows.some((row) => row.part_id === "part-memory-ldo" && row.bom_line_id === line.id),
       "expected a confirmed usage row pointing at the instantiated BOM line"
     );
+
+    const detailAfter = await readCircuitBlockDetailFromDatabase("cblock-alpha-power");
+    assert.equal(detailAfter.status, "available");
+    if (detailAfter.status !== "available") return;
+
+    assert.equal(detailAfter.response.instantiations.length, 1);
+    const history = detailAfter.response.instantiations[0]!;
+    assert.equal(history.instantiation.id, response.instantiation.id);
+    assert.equal(history.project.projectKey, "ALPHA");
+    assert.equal(history.revision.revisionLabel, "A");
+    assert.equal(history.bomImport?.id, response.bomImport.id);
+    assert.equal(history.instantiatedBomLineCount, 1);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -2324,6 +2562,22 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (circuit_block_id, part_id, role)
+    );
+
+    CREATE TABLE circuit_block_known_risks (
+      id TEXT PRIMARY KEY,
+      circuit_block_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      severity TEXT NOT NULL DEFAULT 'caution',
+      recorded_by TEXT,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolved_by TEXT,
+      resolution_notes TEXT,
+      evidence_url TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE mate_relations (

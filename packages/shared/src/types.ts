@@ -341,6 +341,7 @@ export interface SupplyOffering {
   providerId: string;
   sourceRecordId: string;
   providerPartKey: string;
+  supplierName: string | null;
   providerSku: string | null;
   inventoryStatus: InventoryStatus;
   inventoryQuantity: number | null;
@@ -360,6 +361,7 @@ export interface SupplyOffering {
 export interface LowestSupplyPriceSummary {
   offeringId: string;
   providerId: string;
+  supplierName: string | null;
   minQuantity: number;
   unitPrice: number;
   currencyCode: string;
@@ -957,6 +959,28 @@ export interface PartWhereUsedResponse {
   state: ProjectMemoryReadState;
   partId: string;
   usages: PartWhereUsedRecord[];
+  /**
+   * Circuit blocks that depend on this part through one or more part-role rows. Each entry
+   * collects every role in that block that links to the inspected part (a single block may
+   * use the same part as `Main LDO` and `Reference LDO`, for example), and carries the full
+   * `CircuitBlockSummary` so the UI can derive the reuse-readiness verdict from the same
+   * shared helper used by the library and detail strip — without doing a per-row detail fetch.
+   *
+   * Circuit-block dependency is engineering memory, never an approval signal. A part being
+   * linked to a block role does not approve the part, validate its assets, or unlock export.
+   */
+  circuitBlockDependencies: PartCircuitBlockDependencyRecord[];
+}
+
+/**
+ * PartCircuitBlockDependencyRecord reports one circuit block that depends on the inspected
+ * part through one or more role rows. The `summary` carries the aggregated counts the UI
+ * needs to derive the same reuse-readiness verdict shown on the circuit-block detail strip.
+ */
+export interface PartCircuitBlockDependencyRecord {
+  summary: CircuitBlockSummary;
+  /** Role rows inside this block that point at the inspected part. */
+  blockParts: CircuitBlockPart[];
 }
 
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
@@ -1281,6 +1305,71 @@ export interface CircuitBlockSummary {
   strictSubstitutionCount: number;
   evidenceAttachmentCount: number;
   projectUsageCount: number;
+  /** Count of unresolved known-risk rows on this block, across all severities. */
+  activeKnownRiskCount: number;
+  /** Count of unresolved known-risk rows on this block whose severity is `blocking`. */
+  activeBlockingRiskCount: number;
+}
+
+/**
+ * CircuitBlockKnownRiskSeverity classifies one engineering-memory observation by how the recording
+ * engineer wants reuse to handle it. Lower severities are surfaced; only unresolved `blocking` rows
+ * change reuse-readiness.
+ *   - `info`        — neutral context (eg "Tested only with X-brand output capacitor").
+ *   - `limitation`  — design constraint (eg "Max sustained 1.2A load").
+ *   - `caution`     — review before reuse (eg "Inrush spike on cold start exceeded LDO ICC").
+ *   - `blocking`    — do not reuse until resolved (eg "Silicon erratum makes this unsafe").
+ */
+export type CircuitBlockKnownRiskSeverity = "info" | "limitation" | "caution" | "blocking";
+
+/**
+ * CircuitBlockKnownRisk records one engineering-memory observation about a reusable circuit block.
+ *
+ * Provenance is first-class. `recordedBy` and `recordedAt` document who saw what, when; `resolvedAt`
+ * preserves the original observation even after the team fixes the underlying issue. Resolving a risk
+ * never deletes the row — projects that reused the block while the risk was open must still be auditable.
+ */
+export interface CircuitBlockKnownRisk {
+  id: string;
+  circuitBlockId: string;
+  title: string;
+  detail: string;
+  severity: CircuitBlockKnownRiskSeverity;
+  recordedBy: string | null;
+  recordedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNotes: string | null;
+  evidenceUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** CircuitBlockKnownRiskCreateInput defines the body of a known-risk create request. */
+export interface CircuitBlockKnownRiskCreateInput {
+  title: string;
+  detail?: string | null;
+  severity?: CircuitBlockKnownRiskSeverity;
+  recordedBy?: string | null;
+  evidenceUrl?: string | null;
+}
+
+/** CircuitBlockKnownRiskResolveInput defines the body of a known-risk resolve request. */
+export interface CircuitBlockKnownRiskResolveInput {
+  resolvedBy?: string | null;
+  resolutionNotes?: string | null;
+}
+
+/**
+ * CircuitBlockKnownRiskMutationResponse returns both the affected risk row and the rebuilt
+ * circuit-block detail (so the UI can refresh the strip and any derived counts in one round-trip).
+ * The boundary copy repeats the honesty contract that recording or resolving a risk does not
+ * approve linked parts, validate assets, or unlock export.
+ */
+export interface CircuitBlockKnownRiskMutationResponse {
+  knownRisk: CircuitBlockKnownRisk;
+  detail: CircuitBlockDetailResponse;
+  boundary: string;
 }
 
 /** CircuitBlockProjectDependency records a project whose confirmed usages overlap with a circuit block's part roles. */
@@ -1294,6 +1383,25 @@ export interface CircuitBlockProjectDependency {
 export interface CircuitBlockListResponse {
   state: ProjectMemoryReadState;
   circuitBlocks: CircuitBlockSummary[];
+  /** Filters that were applied to produce this response (echoed so the UI can reflect server-side state). */
+  filters: CircuitBlockListFilters;
+}
+
+/** CircuitBlockReuseReadinessFilter narrows the library to blocks that match a derived reuse-readiness verdict. */
+export type CircuitBlockReuseReadinessFilter = "reusable" | "pending" | "blocked";
+
+/** CircuitBlockListFilters describes optional library filters. None of these change linked-part trust. */
+export interface CircuitBlockListFilters {
+  /** Free-text search across block key, name, description, owner, and reuse scope. */
+  query: string | null;
+  /** Optional block type filter. */
+  blockType: CircuitBlockType | null;
+  /** Optional block status filter. */
+  status: CircuitBlockStatus | null;
+  /** Optional owner filter (exact, case-insensitive match). */
+  owner: string | null;
+  /** Optional reuse-readiness verdict filter applied after summary aggregation. */
+  reuseReadiness: CircuitBlockReuseReadinessFilter | null;
 }
 
 /** CircuitBlockDetailResponse returns one circuit block with parts, evidence, project dependencies, and trust boundaries. */
@@ -1304,7 +1412,25 @@ export interface CircuitBlockDetailResponse {
   parts: CircuitBlockPartRecord[];
   evidence: EvidenceAttachment[];
   projectDependencies: CircuitBlockProjectDependency[];
+  instantiations: CircuitBlockInstantiationHistoryRecord[];
+  /**
+   * Known risks and limitations recorded against this block. Rows are newest-first by `recordedAt`,
+   * with unresolved rows always returned (engineering memory never disappears). Resolved rows are
+   * included so the UI can render historical context and so audits can prove a block was in a
+   * particular state when a project reused it.
+   */
+  knownRisks: CircuitBlockKnownRisk[];
   boundary: string;
+}
+
+/** CircuitBlockInstantiationHistoryRecord pairs one instantiation event with its project, revision, and BOM import context. */
+export interface CircuitBlockInstantiationHistoryRecord {
+  instantiation: CircuitBlockInstantiation;
+  project: Project;
+  revision: ProjectRevision;
+  bomImport: BomImport | null;
+  /** Count of BOM lines that were generated from this instantiation. Recorded as engineering memory, not a trust signal. */
+  instantiatedBomLineCount: number;
 }
 
 /** CircuitBlockInstantiation records one event of generating BOM lines from a reusable circuit block. */
@@ -1897,6 +2023,65 @@ export interface BuildableMatingSet {
   warnings: string[];
   /** Structured warning details power richer connector review surfaces without UI-only heuristics. */
   warningDetails: ConnectorWarning[];
+}
+
+/** ConnectorSetIntentInput is the structured and free-text resolver request. */
+export interface ConnectorSetIntentInput {
+  /** Family, series, or application class requested by the engineer, such as "JST PH". */
+  class: string;
+  /** Optional free-text query from the connector-set workspace search box. */
+  query?: string | null;
+  /** Optional requested circuit count or contact count. */
+  pinCount?: number | null;
+  /** Optional environmental sealing intent, such as sealed, unsealed, or IP67. */
+  sealing?: string | null;
+  /** Optional cable gauge intent in AWG. */
+  cableGauge?: number | null;
+}
+
+/** ConnectorSetBuildabilityState keeps missing evidence visible instead of hiding incomplete sets. */
+export type ConnectorSetBuildabilityState = "buildable" | "pending" | "not_buildable";
+
+/** ConnectorSetResolvedPartSummary is the compact identity used inside resolver candidates. */
+export interface ConnectorSetResolvedPartSummary {
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  connectorClass: ConnectorClass;
+  lifecycleStatus: LifecycleStatus;
+  packagePinCount: number | null;
+  connectorFamilyName: string | null;
+}
+
+/** ConnectorSetResolvedRelation keeps related-part provenance and confidence together. */
+export interface ConnectorSetResolvedRelation {
+  part: ConnectorSetResolvedPartSummary;
+  confidenceScore: number;
+  compatibilityStatus: ConnectorRelationCompatibilityStatus | CableCompatibilityStatus;
+  evidenceKind: ConnectorEvidenceKind | "cable_compatibility";
+  notes: string | null;
+}
+
+/** ConnectorSetIntentCandidate is one possible connector plus mate/accessory/cable/tooling set. */
+export interface ConnectorSetIntentCandidate {
+  connector: ConnectorSetResolvedPartSummary;
+  mate: ConnectorSetResolvedRelation | null;
+  requiredAccessories: ConnectorSetResolvedRelation[];
+  optionalAccessories: ConnectorSetResolvedRelation[];
+  cableOption: ConnectorSetResolvedRelation | null;
+  tooling: ConnectorSetResolvedRelation[];
+  buildabilityState: ConnectorSetBuildabilityState;
+  confidenceScore: number;
+  familyConfusionWarnings: ConnectorWarning[];
+  warnings: ConnectorWarning[];
+}
+
+/** ConnectorSetIntentResolution returns candidates without treating warnings as buildability proof. */
+export interface ConnectorSetIntentResolution {
+  state: ProjectMemoryReadState;
+  intent: ConnectorSetIntentInput;
+  candidates: ConnectorSetIntentCandidate[];
+  boundary: string;
 }
 
 /** CAD availability filters let search distinguish exportable records from unavailable ones. */

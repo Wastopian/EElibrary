@@ -89,6 +89,8 @@ export interface NormalizedSupplyOffering {
   sourceRecordId: string;
   /** Provider-specific part key, such as an LCSC code. */
   providerPartKey: string;
+  /** Supplier or seller name when the provider exposes the commercial counterparty. */
+  supplierName: string | null;
   /** Provider SKU when it differs from the provider part key. */
   providerSku: string | null;
   /** Availability snapshot status; it must not be treated as live stock truth. */

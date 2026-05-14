@@ -4,6 +4,7 @@
 
 import { Pool } from "pg";
 import { CatalogStoreError } from "./catalog-store";
+import { SUPPLY_OFFER_STALE_AFTER_DAYS } from "@ee-library/shared/supply-offers";
 import type {
   InventoryStatus,
   LowestSupplyPriceSummary,
@@ -11,9 +12,6 @@ import type {
   PriceBreak,
   SupplyOffering
 } from "@ee-library/shared/types";
-
-/** SUPPLY_OFFER_STALE_AFTER_DAYS marks commercial snapshots as stale without hiding them. */
-export const SUPPLY_OFFER_STALE_AFTER_DAYS = 14;
 
 /** SUPPLY_OFFER_BOUNDARY_COPY explains that these rows are not live distributor authority. */
 export const SUPPLY_OFFER_BOUNDARY_COPY =
@@ -32,6 +30,7 @@ interface DatabaseSupplyOfferingRow {
   provider_id: string;
   source_record_id: string;
   provider_part_key: string;
+  supplier_name: string | null;
   provider_sku: string | null;
   inventory_status: InventoryStatus;
   inventory_quantity: number | string | null;
@@ -143,6 +142,7 @@ async function readSupplyOfferRows(databasePool: Pool, partId: string): Promise<
         so.provider_id,
         so.source_record_id,
         so.provider_part_key,
+        so.supplier_name,
         so.provider_sku,
         so.inventory_status,
         so.inventory_quantity,
@@ -158,6 +158,7 @@ async function readSupplyOfferRows(databasePool: Pool, partId: string): Promise<
       FROM supply_offerings so
       JOIN source_records sr ON sr.id = so.source_record_id
       WHERE so.part_id = $1
+        AND so.retired_at IS NULL
       ORDER BY
         CASE so.inventory_status
           WHEN 'in_stock' THEN 1
@@ -224,6 +225,7 @@ function mapSupplyOffering(row: DatabaseSupplyOfferingRow, priceRows: DatabasePr
     providerSku: row.provider_sku,
     sourceRecordId: row.source_record_id,
     sourceUrl: row.source_url,
+    supplierName: row.supplier_name,
     updatedAt: toIsoTimestamp(row.updated_at)
   };
 }
@@ -265,6 +267,7 @@ function getLowestUnitPrice(offers: SupplyOffering[]): LowestSupplyPriceSummary 
       minQuantity: priceBreak.minQuantity,
       offeringId: offer.id,
       providerId: offer.providerId,
+      supplierName: offer.supplierName,
       unitPrice: priceBreak.unitPrice
     }))
   );

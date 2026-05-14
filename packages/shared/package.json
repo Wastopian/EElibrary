@@ -22,6 +22,10 @@
       "types": "./src/catalog-runtime.ts",
       "default": "./src/catalog-runtime.ts"
     },
+    "./circuit-block-readiness": {
+      "types": "./src/circuit-block-readiness.ts",
+      "default": "./src/circuit-block-readiness.ts"
+    },
     "./connector-intelligence": {
       "types": "./src/connector-intelligence.ts",
       "default": "./src/connector-intelligence.ts"
@@ -53,6 +57,10 @@
     "./system-health-types": {
       "types": "./src/system-health-types.ts",
       "default": "./src/system-health-types.ts"
+    },
+    "./supply-offers": {
+      "types": "./src/supply-offers.ts",
+      "default": "./src/supply-offers.ts"
     }
   },
   "scripts": {

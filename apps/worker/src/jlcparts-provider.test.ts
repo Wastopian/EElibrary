@@ -50,6 +50,7 @@ test("jlcparts provider normalizes structured metadata without implying CAD avai
     ]
   );
   assert.equal(normalized.supplyOfferings.length, 1);
+  assert.equal(normalized.supplyOfferings[0]?.supplierName, "LCSC");
   assert.equal(normalized.supplyOfferings[0]?.inventoryStatus, "in_stock");
   assert.equal(normalized.supplyOfferings[0]?.inventoryQuantity, 1);
   assert.deepEqual(

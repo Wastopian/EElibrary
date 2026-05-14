@@ -82,9 +82,9 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 **Catalog and parts**
 
 - `/` and `/catalog` open into the dense catalog workbench (filters: readiness, approval, CAD, lifecycle, connector class, sort, etc.).
-- Exact no-match MPN searches expose a direct **Import exact MPN** path for configured providers (`local-catalog`, `jlcparts`).
+- Exact no-match MPN searches expose a direct **Import exact MPN** path for configured providers (`local-catalog`, `jlcparts`, `octopart` when Nexar credentials are configured).
 - Part detail is answer-first: use decision, datasheet and CAD/export state, connector buildable set, provenance, approved substitutes, next actions.
-- Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with freshness warnings and no live-stock claim.
+- Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, freshness warnings, stale refresh scheduling, retired-row handling, and no live-stock claim.
 - Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
 
 **Project and BOM memory**
@@ -190,6 +190,7 @@ npm run ingest:jlcparts
 npm run ingest:octopart
 npm run imports:providers
 npm run operations:worker
+npm run refresh:supply-offers
 ```
 
 The web app defaults to `http://127.0.0.1:3000`; the API defaults to `http://127.0.0.1:4000`. DB-backed search and import flows require `DATABASE_URL` to point at a reachable Postgres database. If the database is unavailable, the UI stays honest and does not invent catalog records.
