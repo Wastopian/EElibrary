@@ -638,6 +638,68 @@ export interface BomImportMatchResponse {
   usagesPreview: ProjectPartUsage[];
 }
 
+/**
+ * ProjectFromCsvInput drives the one-click day-zero onboarding flow.
+ *
+ * The CSV / XLSX is parsed and column-mapped server-side using the same heuristic
+ * the BOM import panel uses; missing required mappings (specifically MPN) cause an
+ * explicit `missing_mpn_mapping` failure so the caller can fall back to manual
+ * mapping rather than silently inventing identity. The project name is auto-derived
+ * from the supplied filename when `projectName` is omitted.
+ */
+export interface ProjectFromCsvInput {
+  /** Raw CSV text or base64-encoded XLSX bytes, matching BomImportPreviewInput. */
+  rawContent: string;
+  /** Source filename used to derive the project name and persisted on the BOM import. */
+  sourceFilename: string;
+  /** Either "csv" or "xlsx"; mirrors BomImportPreviewInput. */
+  sourceFormat: "csv" | "xlsx";
+  /** Optional explicit project name. Auto-derived from sourceFilename when omitted. */
+  projectName?: string | null;
+  /** Optional unique project key. Auto-derived from the project name when omitted. */
+  projectKey?: string | null;
+  /** Optional description recorded on the project metadata. */
+  description?: string | null;
+  /** Optional initial revision label; defaults to "Working" when omitted. */
+  initialRevisionLabel?: string | null;
+}
+
+/**
+ * ProjectFromCsvSummary rolls up the three persistence stages of the onboarding flow
+ * so the caller can render a single-screen "what happened" panel without having to
+ * walk back through the import + match envelopes.
+ *
+ * Honesty discipline: the summary distinguishes between rows that were *saved* and
+ * rows that were *matched to existing internal parts*. Saved rows count as
+ * remembered work even when no internal identity matches; matched rows count as
+ * confirmed project_part_usages.
+ */
+export interface ProjectFromCsvSummary {
+  parsedRowCount: number;
+  skippedBlankRowCount: number;
+  savedLineCount: number;
+  matchedLineCount: number;
+  unmatchedLineCount: number;
+  ambiguousLineCount: number;
+  weakMatchLineCount: number;
+  warnings: string[];
+}
+
+/** ProjectFromCsvResponse returns the chained outcome so the caller can land on diagnostics. */
+export interface ProjectFromCsvResponse {
+  project: Project;
+  initialRevision: ProjectRevision;
+  bomImport: BomImport;
+  summary: ProjectFromCsvSummary;
+  /**
+   * The deterministic `column_mapping` actually persisted on the BOM import. Echoes
+   * the suggested mapping so the caller can re-display it without re-parsing.
+   */
+  columnMapping: BomColumnMapping;
+  /** Trust-boundary copy reminding the operator that saving and matching are not approval. */
+  boundary: string;
+}
+
 /** ProjectMemoryReadState distinguishes populated reads from configured-but-empty project memory. */
 export type ProjectMemoryReadState = "available" | "empty";
 

@@ -4,7 +4,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
-import { BomCsvParseError, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
+import { BomCsvParseError, buildBomImportPreview, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
 import {
   getCircuitBlockReuseHeadlineVerdict,
   matchesCircuitBlockReuseReadinessFilter
@@ -20,6 +20,7 @@ import type {
   ApprovalBatchResponse,
   AssetProvenance,
   AssetType,
+  BomColumnMapping,
   BomImport,
   BomImportCreateInput,
   BomImportCreateResponse,
@@ -133,6 +134,9 @@ import type {
   ProjectBomRiskFindingCode,
   ProjectCreateInput,
   ProjectCreateResponse,
+  ProjectFromCsvInput,
+  ProjectFromCsvResponse,
+  ProjectFromCsvSummary,
   Project,
   ProjectBomImportsResponse,
   ProjectDetailResponse,
@@ -1051,6 +1055,188 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
 
     throw toProjectMemoryStoreError(error);
   }
+}
+
+/** PROJECT_FROM_CSV_BOUNDARY_COPY reinforces the trust contract for the chained onboarding flow. */
+export const PROJECT_FROM_CSV_BOUNDARY_COPY =
+  "Saving and matching BOM rows is not approval. Matched lines are confirmed project usage; unmatched and weak rows are remembered explicitly and stay separate from approved part records.";
+
+/** ProjectFromCsvResult reports each failure path so callers can render targeted recovery copy. */
+export type ProjectFromCsvResult =
+  | { status: "created"; response: ProjectFromCsvResponse }
+  | { status: "not_configured" }
+  | { status: "invalid_csv"; code: string; message: string }
+  | { status: "missing_mpn_mapping"; headers: string[]; suggestedMapping: BomColumnMapping }
+  | { status: "project_conflict"; message: string }
+  | { status: "invalid"; code: string; message: string };
+
+/**
+ * Composes project creation, BOM import, and deterministic matching into one
+ * server action so a brand-new operator can land on the diagnostics view by
+ * dropping a single CSV. Each underlying helper still manages its own transaction;
+ * we chain them deliberately so a partial failure leaves work behind that the
+ * operator can recover from (e.g. project created, BOM import failed -> retry
+ * upload from the project page) rather than rolling back to nothing.
+ *
+ * The chained helper does NOT invent catalog identity. The MPN column must be
+ * recognizable in the CSV's headers; otherwise the caller is told to fall back
+ * to the manual mapping panel. Matched vs unmatched-but-saved is preserved on
+ * the response so the UI can be honest about what was confirmed.
+ */
+export async function createProjectFromCsvInDatabase(
+  input: ProjectFromCsvInput,
+  actor: string
+): Promise<ProjectFromCsvResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  // Parse + auto-mapping happen entirely in shared helpers; we surface the same
+  // BomCsvParseError shape the manual mapping panel already produces so the
+  // recovery copy can stay consistent across both entry points.
+  let preview;
+  try {
+    preview = buildBomImportPreview({
+      rawContent: input.rawContent,
+      sourceFilename: input.sourceFilename,
+      sourceFormat: input.sourceFormat
+    });
+  } catch (error) {
+    if (error instanceof BomCsvParseError) {
+      return { status: "invalid_csv", code: error.code, message: error.message };
+    }
+    throw error;
+  }
+
+  if (!hasMappedHeader(preview.headers, preview.suggestedMapping.mpn)) {
+    return {
+      status: "missing_mpn_mapping",
+      headers: preview.headers,
+      suggestedMapping: preview.suggestedMapping
+    };
+  }
+
+  const projectName = deriveProjectName(input.projectName, input.sourceFilename);
+  const projectKey = deriveProjectKey(input.projectKey, projectName);
+
+  const projectResult = await createProjectInDatabase({
+    description: input.description ?? null,
+    initialRevisionLabel: input.initialRevisionLabel ?? null,
+    name: projectName,
+    projectKey
+  });
+
+  if (projectResult.status === "not_configured") {
+    return { status: "not_configured" };
+  }
+  if (projectResult.status === "conflict") {
+    return { status: "project_conflict", message: projectResult.message };
+  }
+
+  const importResult = await createBomImportInDatabase(
+    projectResult.response.project.id,
+    {
+      columnMapping: preview.suggestedMapping,
+      projectRevisionId: projectResult.response.initialRevision.id,
+      rawContent: input.rawContent,
+      sourceFilename: input.sourceFilename,
+      sourceFormat: input.sourceFormat
+    },
+    actor
+  );
+
+  if (importResult.status === "not_configured") {
+    return { status: "not_configured" };
+  }
+  if (importResult.status === "not_found") {
+    // Should not happen because we just created the project; treat as invalid for honest reporting.
+    return {
+      status: "invalid",
+      code: "PROJECT_DISAPPEARED",
+      message: "The new project record was not found when persisting the BOM import."
+    };
+  }
+  if (importResult.status === "invalid") {
+    return { status: "invalid", code: importResult.code, message: importResult.message };
+  }
+
+  const matchResult = await matchBomImportRowsInDatabase(importResult.response.bomImport.id);
+
+  if (matchResult.status === "not_configured") {
+    return { status: "not_configured" };
+  }
+  if (matchResult.status === "not_found") {
+    return {
+      status: "invalid",
+      code: "BOM_IMPORT_DISAPPEARED",
+      message: "The new BOM import record was not found when running deterministic row matching."
+    };
+  }
+
+  const summary: ProjectFromCsvSummary = {
+    ambiguousLineCount: matchResult.response.summary.ambiguousLineCount,
+    matchedLineCount: matchResult.response.summary.matchedLineCount,
+    parsedRowCount: preview.rowCount,
+    savedLineCount: importResult.response.lineCount,
+    skippedBlankRowCount: preview.skippedBlankRowCount,
+    unmatchedLineCount: matchResult.response.summary.unmatchedLineCount,
+    warnings: preview.warnings,
+    weakMatchLineCount: matchResult.response.summary.weakMatchLineCount
+  };
+
+  return {
+    status: "created",
+    response: {
+      boundary: PROJECT_FROM_CSV_BOUNDARY_COPY,
+      bomImport: matchResult.response.bomImport,
+      columnMapping: preview.suggestedMapping,
+      initialRevision: projectResult.response.initialRevision,
+      project: projectResult.response.project,
+      summary
+    }
+  };
+}
+
+/**
+ * Produces a sensible project name when the caller did not supply one. Strips
+ * the file extension and any trailing version suffixes so an upload like
+ * "MotorController_BOM_v3.csv" yields "MotorController BOM".
+ */
+function deriveProjectName(suppliedName: string | null | undefined, sourceFilename: string): string {
+  const explicit = suppliedName?.trim();
+  if (explicit) return explicit;
+
+  const stem = sourceFilename
+    .replace(/\.[^/.]+$/u, "")
+    .replace(/[_-]+/gu, " ")
+    .replace(/\s*v?\d+(\.\d+)*\s*$/iu, "")
+    .replace(/\s+bom$/iu, " BOM")
+    .trim();
+
+  return stem.length > 0 ? stem : "Imported BOM";
+}
+
+/**
+ * Produces a deterministic project key when the caller did not supply one.
+ * Strips whitespace and non-ASCII-alphanumeric characters and upper-cases the
+ * result so the key satisfies the existing unique-index constraint without the
+ * caller having to do the normalization manually.
+ */
+function deriveProjectKey(suppliedKey: string | null | undefined, projectName: string): string {
+  const explicit = suppliedKey?.trim();
+  if (explicit) return explicit;
+
+  const slug = projectName
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 32);
+
+  if (slug.length > 0) return slug;
+
+  return `IMPORT-${new Date().toISOString().slice(0, 10).replace(/-/gu, "")}`;
 }
 
 /**

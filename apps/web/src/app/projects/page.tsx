@@ -56,7 +56,8 @@ export default async function ProjectsPage() {
             Pick a project to see its parts. Use Search by part to find where a part is used.
           </p>
           <div className="empty-recovery-actions" aria-label="Project quick actions">
-            <a className="button-link" href="#project-create-heading">Create project</a>
+            <Link className="button-link" href="/projects/new">Drop a BOM, see your project</Link>
+            <a className="button-link button-link--quiet" href="#project-create-heading">Create empty project</a>
             <Link className="button-link button-link--quiet" href="/where-used">Search by part</Link>
           </div>
         </div>
