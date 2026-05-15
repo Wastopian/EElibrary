@@ -163,7 +163,7 @@ test("buildCatalogTrustLineageBadges emits four abbreviated gates in canonical o
     badges.map((badge) => badge.stageKey),
     ["imported", "reviewed", "approved", "verified_for_export"]
   );
-  assert.deepEqual(badges.map((badge) => badge.abbrev), ["Imp", "Rev", "Apr", "Exp"]);
+  assert.deepEqual(badges.map((badge) => badge.abbrev), ["Import", "Review", "Approval", "Export"]);
 });
 
 /**

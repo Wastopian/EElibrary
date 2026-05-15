@@ -53,12 +53,12 @@ export default async function ProjectsPage() {
           <p className="app-kicker">Projects</p>
           <h1>Your projects</h1>
           <p className="projects-hero__lede">
-            Pick a project to see its parts. Use Search by part to find where a part is used.
+            Pick a project to see its parts. Use where-used to find which projects already use a part.
           </p>
           <div className="empty-recovery-actions" aria-label="Project quick actions">
             <Link className="button-link" href="/projects/new">Drop a BOM, see your project</Link>
             <a className="button-link button-link--quiet" href="#project-create-heading">Create empty project</a>
-            <Link className="button-link button-link--quiet" href="/where-used">Search by part</Link>
+            <Link className="button-link button-link--quiet" href="/where-used">Search where a part is used</Link>
           </div>
         </div>
       </section>

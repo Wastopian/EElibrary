@@ -269,6 +269,46 @@ select {
   outline-offset: 1px;
 }
 
+.app-sidebar__search-hint {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.72rem;
+  margin: 2px 0 0;
+}
+
+.copyable-value {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.copyable-value__text {
+  /* The mono text keeps its own typographic intent; this just lets the button sit next to it. */
+}
+
+.copyable-value__button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 1px 4px;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+
+.copyable-value__button:hover {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.copyable-value__button:focus-visible {
+  border-color: var(--color-accent-border);
+  outline: 2px solid var(--color-accent-border);
+  outline-offset: 1px;
+}
+
 .app-sidebar__brand .app-kicker {
   color: var(--color-sidebar-active);
   margin-bottom: 2px;
@@ -3023,6 +3063,64 @@ details[open] .trust-breakdown__toggle::before {
   margin-top: 0;
 }
 
+.project-overlap-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.project-overlap-panel__inline-copy {
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 82ch;
+}
+
+.project-overlap-panel__recover-hint {
+  font-size: 0.82rem;
+  margin-top: 10px;
+}
+
+.project-overlap-panel__stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.project-overlap-panel__table th[scope="row"] p {
+  margin: 4px 0 0;
+}
+
+.project-overlap-panel__shared-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.82rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-overlap-panel__shared-list li {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.project-overlap-panel__mpn-link {
+  font-weight: 600;
+}
+
+.project-overlap-panel__part-id {
+  font-size: 0.72rem;
+}
+
+.project-overlap-panel__truncated-note {
+  font-size: 0.78rem;
+  margin-top: 6px;
+}
+
 .projects-table-wrap {
   overflow-x: auto;
 }
@@ -4753,9 +4851,23 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .bom-import-panel__upload-row {
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(240px, 1.2fr) repeat(2, minmax(180px, 0.7fr));
+  outline: none;
+  padding: 4px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.bom-import-panel__upload-row:focus-visible {
+  border-color: var(--color-accent-border);
+}
+
+.bom-import-panel__upload-row--drag {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
 }
 
 .bom-import-panel__summary {
@@ -6275,6 +6387,7 @@ details[open] .trust-breakdown__toggle::before {
   gap: 10px;
   margin-bottom: 0;
   padding-bottom: 8px;
+  scroll-margin-top: 5.5rem;
 }
 
 .ui-section-heading__index {
@@ -8944,4 +9057,23 @@ details[open] .trust-breakdown__toggle::before {
   .recent-activity-strip__result {
     justify-self: start;
   }
+}
+
+.bundle-provenance-cell {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.bundle-provenance-cell__hash,
+.bundle-provenance-cell__fingerprint {
+  font-size: 0.78rem;
+}
+
+.bundle-provenance-cell__reason {
+  font-size: 0.78rem;
+  line-height: 1.3;
+  max-width: 320px;
 }

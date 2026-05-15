@@ -6,6 +6,7 @@ import React from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { AppNavigation } from "../components/AppNavigation";
+import { SidebarPartSearch } from "../components/SidebarPartSearch";
 
 /** RootLayoutShellProps carries page content and optional font class names from the Next layout. */
 export interface RootLayoutShellProps {
@@ -34,20 +35,7 @@ export function RootLayoutShell({ children, fontClassName = "" }: RootLayoutShel
                 <p className="app-sidebar__subtitle">Find parts. Open projects. Ship verified files.</p>
               </div>
             </Link>
-            <form action="/catalog" className="app-sidebar__search" method="get" role="search">
-              <label className="app-sidebar__search-label" htmlFor="sidebar-search">
-                Search a part number
-              </label>
-              <input
-                aria-label="Search the catalog by part number"
-                autoComplete="off"
-                className="app-sidebar__search-input"
-                id="sidebar-search"
-                name="q"
-                placeholder="MPN or keyword"
-                type="search"
-              />
-            </form>
+            <SidebarPartSearch />
             <AppNavigation />
             <section aria-label="Release reminder" className="app-sidebar__note">
               <span>Before release</span>

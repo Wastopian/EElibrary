@@ -6,6 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { AutoSubmitOnChange } from "../../components/AutoSubmitOnChange";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { OperatorChecklist } from "../../components/OperatorChecklist";
@@ -267,6 +268,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       <div className="search-workspace">
         <aside className="filter-rail filter-rail--bar" aria-label="Search filters" id="catalog-filters">
           <form action="/catalog" method="get">
+            <AutoSubmitOnChange />
             <div className="filter-rail__intro">
               <p className="app-kicker">Filters</p>
               <strong>Refine results</strong>
@@ -308,7 +310,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 ))}
               </select>
             </label>
-            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, readinessStatus, sort })}>
+            <details className="filter-rail__more" open>
               <summary>More filters</summary>
               <div className="filter-rail__more-fields">
                 <label>
@@ -386,6 +388,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             </details>
             <div className="filter-rail__actions">
               <button type="submit">Apply filters</button>
+              <small className="muted-copy">Filters apply automatically when you change a select.</small>
               {activeFilterPills.length > 0 ? (
                 <Link className="filter-rail__clear" href="/catalog">
                   Clear all
@@ -1513,31 +1516,6 @@ function buildCatalogNextAction(record: PartSearchRecord): { detail: string; lab
     detail: "Open the detail page to inspect provenance, datasheet, and asset evidence.",
     label: "Open detail"
   };
-}
-
-/**
- * Returns true when any advanced filter or sort/page-size override is active.
- *
- * Used to keep the "More filters" disclosure open by default whenever the user
- * already has an advanced filter applied so it stays visible on reload.
- */
-function hasAdvancedFilters(input: {
-  approvalStatus: PartApprovalStatus | undefined;
-  cadAvailability: CadAvailabilityFilter;
-  connectorClass: ConnectorClass | undefined;
-  lifecycleStatus: LifecycleStatus | undefined;
-  pageSize: number | undefined;
-  readinessStatus: PartReadinessStatus | undefined;
-  sort: PartSearchSort;
-}): boolean {
-  if (input.approvalStatus !== undefined) return true;
-  if (input.cadAvailability !== "any") return true;
-  if (input.connectorClass !== undefined) return true;
-  if (input.lifecycleStatus !== undefined) return true;
-  if (input.readinessStatus !== undefined) return true;
-  if (input.sort !== "mpn_asc") return true;
-  if (input.pageSize !== undefined && input.pageSize !== 20) return true;
-  return false;
 }
 
 /**

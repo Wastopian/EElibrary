@@ -2,27 +2,37 @@
  * In-browser preview for file-backed assets when the catalog marks preview as ready.
  *
  * Honesty rules:
- * - Only stored PDFs are embedded inline. STEP/KiCad/DXF assets stay download-only and we
- *   render an explicit "no inline preview" note so an engineer never wonders whether the
- *   missing iframe is a bug.
+ * - Only stored PDFs and stored images are embedded inline directly from the source bytes.
+ *   For 3D models we render the *derived* preview artifact (glTF/glb), never the source
+ *   STEP, and only when the worker has actually written that artifact and recorded an
+ *   embeddable format alongside `previewStatus = ready`.
+ * - STEP/KiCad/DXF assets without a derived preview stay download-only and we render an
+ *   explicit "no inline preview" note so an engineer never wonders whether the missing
+ *   slot is a bug.
  * - When `previewStatus` is `pending`, we say so. When it is `not_available`, we render
  *   nothing (the surrounding AssetCard already shows a "No preview" badge — no need to
  *   double up).
+ * - Preview readiness never promotes the underlying asset: this component never mutates
+ *   review/validation/export state.
  */
 
 import React from "react";
-import { buildAssetDownloadUrl } from "../lib/api-client";
-import type { Asset, AssetAvailabilityStatus } from "@ee-library/shared/types";
+import { buildAssetDownloadUrl, buildAssetPreviewArtifactDownloadUrl } from "../lib/api-client";
+import type { Asset, AssetAvailabilityStatus, AssetPreviewArtifactFormat, FileFormat } from "@ee-library/shared/types";
+import { ThreeDInlinePreview } from "./ThreeDInlinePreview";
 
 /**
  * AssetPreviewState is the explicit, scannable outcome the inline preview component
- * renders for one asset. Each variant maps 1:1 to a piece of UI copy or an iframe.
+ * renders for one asset. Each variant maps 1:1 to a piece of UI copy, an iframe, an
+ * image tag, or the derived 3D viewer mount.
  */
 export type AssetPreviewState =
   | { kind: "stored_pdf_inline" }
   | { kind: "stored_image_inline" }
+  | { kind: "stored_three_d_inline"; previewArtifactFormat: AssetPreviewArtifactFormat }
   | { kind: "pdf_reference_only" }
   | { kind: "image_reference_only" }
+  | { kind: "three_d_preview_pending_artifact" }
   | { kind: "ready_unsupported_format" }
   | { kind: "preview_pending" }
   | { kind: "preview_not_available" };
@@ -49,6 +59,18 @@ export function getAssetPreviewState(asset: Asset): AssetPreviewState {
     return { kind: "stored_pdf_inline" };
   }
 
+  if (isThreeDSourceFormat(asset.fileFormat)) {
+    if (
+      isEmbeddableThreeDPreviewArtifactFormat(asset.previewArtifactFormat) &&
+      typeof asset.previewArtifactStorageKey === "string" &&
+      asset.previewArtifactStorageKey.length > 0
+    ) {
+      return { kind: "stored_three_d_inline", previewArtifactFormat: asset.previewArtifactFormat };
+    }
+
+    return { kind: "three_d_preview_pending_artifact" };
+  }
+
   if (asset.fileFormat === "pdf") {
     return { kind: "pdf_reference_only" };
   }
@@ -61,11 +83,15 @@ export function getAssetPreviewState(asset: Asset): AssetPreviewState {
 }
 
 /**
- * Returns true when an iframe preview is appropriate for this asset row.
+ * Returns true when an inline embedded preview is appropriate for this asset row.
+ *
+ * "Embed" here means we render bytes (or a derived viewer artifact) directly inside
+ * the page rather than linking out — i.e. PDFs, images, and 3D models with a stored
+ * derived artifact.
  */
 export function canEmbedAssetPreview(asset: Asset): boolean {
   const kind = getAssetPreviewState(asset).kind;
-  return kind === "stored_pdf_inline" || kind === "stored_image_inline";
+  return kind === "stored_pdf_inline" || kind === "stored_image_inline" || kind === "stored_three_d_inline";
 }
 
 /**
@@ -80,6 +106,28 @@ function isStoredFileAvailability(status: AssetAvailabilityStatus): boolean {
  */
 function isStoredImageFormat(format: Asset["fileFormat"]): boolean {
   return format === "png" || format === "jpg" || format === "jpeg" || format === "webp";
+}
+
+/**
+ * Returns true for 3D source formats that need a derived viewer artifact to render inline.
+ *
+ * STEP is the canonical case; the worker converts it to glb/gltf and records the artifact
+ * pointer separately so the source bytes' availability/trust contract is never confused
+ * with the derived viewer artifact.
+ */
+function isThreeDSourceFormat(format: FileFormat): boolean {
+  return format === "step" || format === "glb" || format === "gltf";
+}
+
+/**
+ * Returns true when the preview artifact format is something a browser viewer can render
+ * inline (currently glb and gltf). Defends against drift between the DB CHECK constraint
+ * and the UI: only known-renderable formats produce the inline 3D state.
+ */
+function isEmbeddableThreeDPreviewArtifactFormat(
+  format: Asset["previewArtifactFormat"]
+): format is AssetPreviewArtifactFormat {
+  return format === "glb" || format === "gltf";
 }
 
 type AssetInlinePreviewProps = {
@@ -102,9 +150,12 @@ export function AssetInlinePreview({ asset, partId }: AssetInlinePreviewProps) {
         <div className="asset-inline-preview">
           <p className="asset-inline-preview__caption">Inline preview (stored PDF)</p>
           <iframe className="asset-inline-preview__frame" src={src} title={`PDF preview for ${asset.assetType}`} />
-          <p className="asset-inline-preview__fallback muted-copy">
-            If this frame stays blank, your browser or storage host may block embedding. Use <strong>Download</strong> instead—the file availability is unchanged.
-          </p>
+          <details className="asset-inline-preview__fallback-details">
+            <summary>Frame blank?</summary>
+            <p className="muted-copy">
+              If this frame stays blank, your browser or storage host may block embedding. Use <strong>Download</strong> instead—the file availability is unchanged.
+            </p>
+          </details>
         </div>
       );
     }
@@ -116,12 +167,35 @@ export function AssetInlinePreview({ asset, partId }: AssetInlinePreviewProps) {
         <div className="asset-inline-preview">
           <p className="asset-inline-preview__caption">Inline preview (stored image)</p>
           <img alt={`${asset.assetType} preview`} className="asset-inline-preview__image" src={src} />
-          <p className="asset-inline-preview__fallback muted-copy">
-            If this image does not render, use <strong>Download</strong> to inspect the exact stored file.
-          </p>
+          <details className="asset-inline-preview__fallback-details">
+            <summary>Image not rendering?</summary>
+            <p className="muted-copy">
+              If this image does not render, use <strong>Download</strong> to inspect the exact stored file.
+            </p>
+          </details>
         </div>
       );
     }
+
+    case "stored_three_d_inline": {
+      const artifactUrl = buildAssetPreviewArtifactDownloadUrl(partId, asset.id);
+
+      return (
+        <ThreeDInlinePreview
+          altText={`3D preview for ${asset.assetType}`}
+          artifactUrl={artifactUrl}
+        />
+      );
+    }
+
+    case "three_d_preview_pending_artifact":
+      return (
+        <div className="asset-inline-preview asset-inline-preview--note" role="status">
+          <p className="muted-copy">
+            Preview is marked ready, but no derived viewer artifact (glTF/glb) has been written yet. Use <strong>Download</strong> to inspect the source 3D file in your CAD tool.
+          </p>
+        </div>
+      );
 
     case "pdf_reference_only":
       return (

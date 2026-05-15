@@ -11,8 +11,10 @@ import { fetchPartDetail, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { CompareSelectionTray } from "../../components/CompareSelectionTray";
 import { CompareMissingPartsRecovery, CompareNoPartsRecovery } from "../../components/CompareRecoveryStates";
+import { CompareAssetPreviewBand } from "../../components/CompareAssetPreviewBand";
 import {
   buildCompareAssetClassRows,
+  buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
   collectCompareMetricKeys,
@@ -59,6 +61,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
   const records = detailsToRecords(details);
   const metricKeys = collectCompareMetricKeys(records);
   const assetClassRows = buildCompareAssetClassRows(records);
+  const assetPreviewRows = buildCompareAssetPreviewRows(records);
   const assetTrustRows = buildCompareAssetTrustRows(records);
   const showConnectorRows = shouldRenderConnectorCompareRows(records);
   const connectorRows = showConnectorRows ? buildCompareConnectorRows(records) : [];
@@ -78,7 +81,12 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
         </Link>
       </header>
 
-      {compareState.status === "ready" ? <CompareSelectionTray initialPartIds={partIds} /> : null}
+      {compareState.status === "ready" ? (
+        <CompareSelectionTray
+          initialPartIds={partIds}
+          initialPartLabels={Object.fromEntries(details.map((detail) => [detail.record.part.id, detail.record.part.mpn]))}
+        />
+      ) : null}
 
       {compareState.status === "setup_required" ? (
         <CompareSetupState state={compareState} />
@@ -205,7 +213,11 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetClassRows} />
           </SectionPanel>
 
-          <SectionPanel description="Trust-stage diff per asset class (generated draft, approved draft, verified-for-export). Stages remain explicit and never collapse into one approval label." title="Per-asset trust-stage diff">
+          <SectionPanel description="Symbol, footprint, and 3D model rendered side by side from the same per-asset preview pipeline the detail page uses. STEP files render only when a derived viewer artifact has been written—source bytes are never silently re-rendered. Inline preview readiness never implies the underlying asset is approved or verified for export; see the trust-stage diff directly below." title="CAD preview diff">
+            <CompareAssetPreviewBand rows={assetPreviewRows} />
+          </SectionPanel>
+
+          <SectionPanel description="Trust-stage diff per asset class (generated draft, approved draft, verified-for-export). Stages remain explicit and never collapse into one approval label. Read this row alongside the CAD preview diff above to keep 'previews render' separate from 'asset is trusted'." title="Per-asset trust-stage diff">
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetTrustRows} />
           </SectionPanel>
 
