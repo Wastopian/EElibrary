@@ -111,6 +111,8 @@ test("admin workspace renders review, promotion, import, validation, and audit s
     assert.match(html, /Promotion queue/u);
     assert.match(html, /Recent imports/u);
     assert.match(html, /Validation evidence summary/u);
+    assert.match(html, /CAD trust checks needing attention/u);
+    assert.match(html, /Open the part files area and finish engineering review/u);
     assert.match(html, /Promotion audit history/u);
     assert.match(html, /User action audit trail/u);
     assert.match(html, /project.update/u);

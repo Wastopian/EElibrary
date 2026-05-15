@@ -370,6 +370,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           assetGroups={assetGroups}
           partId={record.part.id}
           source={source}
+          validationSummaries={assetValidationSummaries}
         />
 
         <WorkspaceActionPanel
@@ -1675,7 +1676,15 @@ type PartFilesRow = {
   format: string | null | undefined;
   label: string;
   status: { label: string; tone: BadgeTone };
+  trustCheck: AssetTrustCheckSummary;
   unavailableLabel: string;
+};
+
+/** AssetTrustCheckSummary is the operator-facing result of the latest durable asset check. */
+type AssetTrustCheckSummary = {
+  detail: string;
+  label: string;
+  tone: BadgeTone;
 };
 
 /**
@@ -1688,11 +1697,13 @@ type PartFilesRow = {
 function PartFilesPanel({
   assetGroups,
   partId,
-  source
+  source,
+  validationSummaries
 }: {
   assetGroups: AssetClassSummary[];
   partId: string;
   source: CatalogDataSource | undefined;
+  validationSummaries: AssetValidationSummary[];
 }) {
   const assetRows: PartFilesRow[] = assetGroups.map((group) => {
     const best = group.bestAsset;
@@ -1702,15 +1713,19 @@ function PartFilesPanel({
         format: undefined,
         label: assetTypeLabel(group.assetType),
         status: { label: "Not yet generated", tone: "neutral" },
+        trustCheck: buildMissingAssetTrustCheckSummary(),
         unavailableLabel: "No file yet"
       };
     }
+
+    const validationSummary = findAssetValidationSummary(validationSummaries, best);
 
     return {
       action: buildPartFileAction(best, partId, source),
       format: best.fileFormat,
       label: assetTypeLabel(group.assetType),
       status: { label: formatAssetClassReadinessLabel(group.readiness), tone: assetClassReadinessTone(group.readiness) },
+      trustCheck: buildAssetTrustCheckSummary(best, validationSummary),
       unavailableLabel: formatPartFileUnavailableLabel(best, source)
     };
   });
@@ -1728,6 +1743,9 @@ function PartFilesPanel({
               {row.format ? <span className="ui-mono part-files-list__format">{row.format}</span> : null}
             </div>
             <StatusBadge label={row.status.label} tone={row.status.tone} />
+            <span className="part-files-list__trust-check" title={row.trustCheck.detail}>
+              <StatusBadge label={row.trustCheck.label} tone={row.trustCheck.tone} />
+            </span>
             {row.action ? (
               <a className="button-link button-link--quiet part-files-list__action" href={row.action.href} rel="noopener noreferrer" target="_blank">
                 {row.action.label}
@@ -2547,6 +2565,7 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
   const validationSummary = findAssetValidationSummary(validationSummaries, bestAsset);
   const promotionSummary = findAssetPromotionSummary(promotionSummaries, bestAsset);
   const workflowSummary = buildAssetWorkflowSurfaceSummary(bestAsset, promotionSummary, reviewStatus);
+  const trustCheckSummary = buildAssetTrustCheckSummary(bestAsset, validationSummary);
   const accessAction = buildAssetAccessAction(bestAsset, source, gatedRevision);
 
   return (
@@ -2577,9 +2596,17 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
           <strong>{workflowSummary.title}</strong>
           <p>{workflowSummary.detail}</p>
         </div>
+        <div>
+          <span>Trust check</span>
+          <div className="asset-review-card__snapshot-heading">
+            <strong>{trustCheckSummary.label}</strong>
+            <StatusBadge label={trustCheckSummary.label} tone={trustCheckSummary.tone} />
+          </div>
+          <p>{trustCheckSummary.detail}</p>
+        </div>
       </div>
       <details className="audit-disclosure audit-disclosure--asset">
-        <summary>Validation evidence and promotion history</summary>
+        <summary>Detailed validation evidence and promotion history</summary>
         <div className="asset-review-card__evidence">
           <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
           <p>Promotion audit: {formatAssetPromotionHistory(promotionSummary)}</p>
@@ -2742,6 +2769,118 @@ function findAssetPromotionSummary(summaries: AssetPromotionSummary[], asset: As
       promotionHistory: []
     }
   );
+}
+
+/**
+ * Builds the top files-panel trust check copy when no asset row exists yet.
+ */
+function buildMissingAssetTrustCheckSummary(): AssetTrustCheckSummary {
+  return {
+    detail: "No file exists for this class yet, so there is nothing for an engineer or validator to check.",
+    label: "No file to check",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Converts validation evidence into a plain asset trust check result for engineers.
+ */
+function buildAssetTrustCheckSummary(asset: Asset, summary: AssetValidationSummary): AssetTrustCheckSummary {
+  const latestValidation = summary.latestValidation;
+
+  if (latestValidation) {
+    const checkType = formatAssetValidationType(latestValidation.validationType);
+    const note = latestValidation.validationNotes ? ` ${latestValidation.validationNotes}` : "";
+    const detail = `${checkType} by ${latestValidation.validator} on ${formatDateTime(latestValidation.validatedAt)}.${note}`;
+
+    if (latestValidation.validationStatus === "verified") {
+      return {
+        detail,
+        label: "Check passed",
+        tone: "verified"
+      };
+    }
+
+    if (latestValidation.validationStatus === "failed") {
+      return {
+        detail: `${detail} Do not rely on this file until the failure is reviewed or replaced.`,
+        label: "Check failed",
+        tone: "danger"
+      };
+    }
+
+    if (latestValidation.validationStatus === "needs_review") {
+      return {
+        detail: `${detail} Engineering review is still required before this file can support export promotion.`,
+        label: "Needs review",
+        tone: "review"
+      };
+    }
+
+    return {
+      detail: `${detail} This check has not produced usable validation evidence yet.`,
+      label: "Not checked",
+      tone: "neutral"
+    };
+  }
+
+  if (!isAutomatedTrustCheckAsset(asset)) {
+    return {
+      detail: "No automated CAD check is defined for this file class yet. Use manual review and attached evidence before relying on it.",
+      label: "Manual review",
+      tone: "neutral"
+    };
+  }
+
+  if (asset.validationStatus === "failed") {
+    return {
+      detail: "The asset is marked as failed, but no durable validation record is attached. Review or replace the file before using it.",
+      label: "Check failed",
+      tone: "danger"
+    };
+  }
+
+  if (asset.validationStatus === "needs_review") {
+    return {
+      detail: "The file exists, but no durable check result is attached yet. Run or review CAD checks before promotion.",
+      label: "Needs review",
+      tone: "review"
+    };
+  }
+
+  if (asset.validationStatus === "verified") {
+    return {
+      detail: "The asset is marked verified, but no durable validation record is attached in this response. Confirm evidence before promotion.",
+      label: "Verify evidence",
+      tone: "review"
+    };
+  }
+
+  return {
+    detail: "No CAD check evidence is recorded yet. The file can be inspected, but it should not be treated as trusted for export.",
+    label: "Not checked",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Returns true for file classes covered by automated CAD validation jobs.
+ */
+function isAutomatedTrustCheckAsset(asset: Asset): boolean {
+  return asset.assetType === "footprint" || asset.assetType === "symbol" || asset.assetType === "three_d_model";
+}
+
+/**
+ * Formats validation evidence types without leaking validator implementation names.
+ */
+function formatAssetValidationType(type: NonNullable<AssetValidationSummary["latestValidation"]>["validationType"]): string {
+  return {
+    file_integrity: "File integrity check",
+    footprint_geometry: "Footprint geometry check",
+    manual_engineering_review: "Manual engineering review",
+    symbol_pin_mapping: "Symbol pin-count check",
+    three_d_geometry: "3D model geometry check"
+  }[type];
 }
 
 /**

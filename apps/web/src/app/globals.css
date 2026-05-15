@@ -7034,7 +7034,7 @@ details[open] .trust-breakdown__toggle::before {
 .asset-review-card__snapshot {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .asset-review-card__snapshot > div {
@@ -7058,6 +7058,13 @@ details[open] .trust-breakdown__toggle::before {
   color: var(--color-text);
   font-size: 0.96rem;
   line-height: 1.35;
+}
+
+.asset-review-card__snapshot-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .asset-review-card__snapshot p {
@@ -7485,7 +7492,7 @@ details[open] .trust-breakdown__toggle::before {
   border-radius: var(--radius-md);
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   padding: 10px 14px;
 }
 
@@ -7506,6 +7513,12 @@ details[open] .trust-breakdown__toggle::before {
 
 .part-files-list__action {
   white-space: nowrap;
+}
+
+.part-files-list__trust-check {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 116px;
 }
 
 .part-substitution-panel__form {
@@ -8152,6 +8165,7 @@ details[open] .trust-breakdown__toggle::before {
   }
 
   .asset-review-card__snapshot,
+  .part-files-list__row,
   .ui-asset-card__status-grid,
   .detail-export-summary__grid,
   .document-control-form,

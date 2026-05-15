@@ -93,14 +93,32 @@ interface ImportRow {
 }
 
 interface ValidationRow {
+  assetType: Asset["assetType"] | null;
   id: string;
+  manufacturerName: string;
   partId: string;
   mpn: string;
   assetId: string;
+  validationNotes: string | null;
   validationStatus: AssetValidationRecord["validationStatus"];
   validationType: AssetValidationRecord["validationType"];
   validatedAt: string;
   validator: string;
+}
+
+interface ValidationAttentionRow {
+  assetId: string;
+  assetType: Asset["assetType"];
+  detail: string;
+  id: string;
+  manufacturerName: string;
+  mpn: string;
+  nextAction: string;
+  partId: string;
+  stateLabel: string;
+  stateTone: BadgeTone;
+  updatedAt: string;
+  validationTypeLabel: string;
 }
 
 interface PromotionAuditRow {
@@ -172,13 +190,15 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
   const recentImportRows = importRows.slice(0, 12);
   const validationRows = buildValidationRows(records);
   const recentValidationRows = validationRows.slice(0, 12);
+  const validationAttentionRows = buildValidationAttentionRows(records);
+  const recentValidationAttentionRows = validationAttentionRows.slice(0, 12);
   const promotionAudits = buildPromotionAuditRows(records).slice(0, 14);
   const validationSummary = summarizeValidation(validationRows);
   const issueQueueRows = buildIssueQueueRows(records);
   const issueWorkflowRows = buildIssueWorkflowRows(records);
-  const overviewStats = buildAdminOverviewStats(reviewQueue, promotionQueue, failedImportRows.length, validationSummary, issueQueueRows);
-  const overviewGroups = buildAdminOverviewGroups(reviewQueue, promotionQueue, failedImportRows.length, validationSummary, issueQueueRows);
-  const overviewTableRows = buildAdminOverviewTableRows(reviewQueue, promotionQueue, failedImportRows, validationRows, issueQueueRows);
+  const overviewStats = buildAdminOverviewStats(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows);
+  const overviewGroups = buildAdminOverviewGroups(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows);
+  const overviewTableRows = buildAdminOverviewTableRows(reviewQueue, promotionQueue, failedImportRows, validationAttentionRows, issueQueueRows);
 
   /**
    * Writes one review action without collapsing review and export truth boundaries.
@@ -635,7 +655,10 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
                           <span className="ui-mono">{row.mpn}</span>
                         </Link>
                       </td>
-                      <td className="ui-mono">{row.assetId}</td>
+                      <td>
+                        {row.assetType ? formatAssetType(row.assetType) : "Asset"}
+                        <div className="ui-mono muted-copy">{row.assetId}</div>
+                      </td>
                       <td>
                         <StatusBadge label={formatValidationStatus(row.validationStatus)} tone={validationStatusTone(row.validationStatus)} />
                       </td>
@@ -649,6 +672,51 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
             </div>
           ) : (
             <EmptyState title="No validation records" body="No validation evidence is attached to the current catalog window." />
+          )}
+        </SectionPanel>
+        <SectionPanel title="CAD trust checks needing attention" description="Failed or review-required checks, plus CAD assets marked for validation review without durable evidence yet.">
+          {recentValidationAttentionRows.length > 0 ? (
+            <div className="admin-table-wrap">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Part</th>
+                    <th>Asset</th>
+                    <th>Check</th>
+                    <th>State</th>
+                    <th>What to do</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentValidationAttentionRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <Link href={`/parts/${row.partId}#files-heading`}>
+                          <span className="ui-mono">{row.mpn}</span>
+                        </Link>
+                        <div className="muted-copy">{row.manufacturerName}</div>
+                      </td>
+                      <td>
+                        {formatAssetType(row.assetType)}
+                        <div className="ui-mono muted-copy">{row.assetId}</div>
+                      </td>
+                      <td>{row.validationTypeLabel}</td>
+                      <td>
+                        <StatusBadge label={row.stateLabel} tone={row.stateTone} />
+                      </td>
+                      <td>
+                        {row.nextAction}
+                        <div className="muted-copy">{row.detail}</div>
+                      </td>
+                      <td>{formatDateTime(row.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState title="No CAD trust checks need attention" body="Failed and review-required CAD checks are clear in the current catalog window." />
           )}
         </SectionPanel>
       </section>
@@ -924,12 +992,11 @@ function buildAdminOverviewStats(
   reviewQueue: ReviewQueueItem[],
   promotionQueue: PromotionQueueItem[],
   failedImportCount: number,
-  validationSummary: ReturnType<typeof summarizeValidation>,
+  validationIssueCount: number,
   issueQueueRows: OverviewQueueRow[]
 ): AdminQueueOverviewStat[] {
   const eligiblePromotionCount = promotionQueue.filter((item) => item.canPromote).length;
   const blockedPromotionCount = promotionQueue.length - eligiblePromotionCount;
-  const validationIssueCount = validationSummary.needsReview + validationSummary.failed + validationSummary.notValidated;
   const validationIssueTone: BadgeTone = validationIssueCount > 0 ? "review" : "verified";
   const pendingApprovalCount = countQueueRows(issueQueueRows, "approval");
   const identityFollowUpCount = countQueueRows(issueQueueRows, "identity");
@@ -959,10 +1026,9 @@ function buildAdminOverviewGroups(
   reviewQueue: ReviewQueueItem[],
   promotionQueue: PromotionQueueItem[],
   failedImportCount: number,
-  validationSummary: ReturnType<typeof summarizeValidation>,
+  validationIssueCount: number,
   issueQueueRows: OverviewQueueRow[]
 ): AdminQueueOverviewGroup[] {
-  const validationIssueCount = validationSummary.needsReview + validationSummary.failed + validationSummary.notValidated;
   const groups: AdminQueueOverviewGroup[] = [];
 
   pushAdminOverviewGroup(groups, reviewQueue.length, {
@@ -1042,7 +1108,7 @@ function buildAdminOverviewTableRows(
   reviewQueue: ReviewQueueItem[],
   promotionQueue: PromotionQueueItem[],
   failedImportRows: ImportRow[],
-  validationRows: ValidationRow[],
+  validationAttentionRows: ValidationAttentionRow[],
   issueQueueRows: OverviewQueueRow[]
 ): AdminQueueTableRow[] {
   const rows: OverviewQueueRow[] = [
@@ -1086,20 +1152,19 @@ function buildAdminOverviewTableRows(
       updatedAtRaw: row.sourceLastImportedAt ?? "1970-01-01T00:00:00.000Z",
       updatedLabel: row.sourceLastImportedAt ? formatDateTime(row.sourceLastImportedAt) : "No successful import"
     })),
-    ...validationRows
-      .filter((row) => row.validationStatus !== "verified")
+    ...validationAttentionRows
       .map((row) => ({
-        detail: `${formatValidationType(row.validationType)} - ${row.validator}`,
-        href: `/parts/${row.partId}`,
+        detail: `${row.validationTypeLabel} - ${row.detail}`,
+        href: `/parts/${row.partId}#files-heading`,
         id: `validation-${row.id}`,
-        manufacturerName: row.validator,
+        manufacturerName: row.manufacturerName,
         mpn: row.mpn,
         queueId: "validation",
         queueLabel: "Validation issues",
-        stateLabel: formatValidationStatus(row.validationStatus),
-        stateTone: validationStatusTone(row.validationStatus),
-        updatedAtRaw: row.validatedAt,
-        updatedLabel: formatDateTime(row.validatedAt)
+        stateLabel: row.stateLabel,
+        stateTone: row.stateTone,
+        updatedAtRaw: row.updatedAt,
+        updatedLabel: formatDateTime(row.updatedAt)
       }))
   ];
 
@@ -1713,12 +1778,17 @@ function buildValidationRows(records: PartSearchRecord[]): ValidationRow[] {
 
   for (const record of records) {
     for (const validation of record.validationRecords) {
+      const asset = record.assets.find((candidate) => candidate.id === validation.assetId) ?? null;
+
       rows.push({
+        assetType: asset?.assetType ?? null,
         assetId: validation.assetId,
         id: validation.id,
+        manufacturerName: record.manufacturer.name,
         mpn: record.part.mpn,
         partId: record.part.id,
         validatedAt: validation.validatedAt,
+        validationNotes: validation.validationNotes,
         validationStatus: validation.validationStatus,
         validationType: validation.validationType,
         validator: validation.validator
@@ -1727,6 +1797,119 @@ function buildValidationRows(records: PartSearchRecord[]): ValidationRow[] {
   }
 
   return rows.sort((left, right) => Date.parse(right.validatedAt) - Date.parse(left.validatedAt) || right.id.localeCompare(left.id));
+}
+
+/**
+ * Builds a user-actionable list of CAD trust checks that need engineering attention.
+ */
+function buildValidationAttentionRows(records: PartSearchRecord[]): ValidationAttentionRow[] {
+  const rows: ValidationAttentionRow[] = [];
+
+  for (const record of records) {
+    const latestValidationByAsset = buildLatestValidationByAssetId(record.validationRecords);
+
+    for (const asset of record.assets) {
+      if (!isValidationCheckAsset(asset)) {
+        continue;
+      }
+
+      const latestValidation = latestValidationByAsset.get(asset.id) ?? null;
+      if (latestValidation && latestValidation.validationStatus !== "verified") {
+        rows.push(buildValidationAttentionRow(record, asset, latestValidation));
+        continue;
+      }
+
+      if (!latestValidation && (asset.validationStatus === "failed" || asset.validationStatus === "needs_review")) {
+        rows.push(buildValidationAttentionRow(record, asset, null));
+      }
+    }
+  }
+
+  return rows.sort((left, right) => validationAttentionRank(left) - validationAttentionRank(right) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.mpn.localeCompare(right.mpn));
+}
+
+/**
+ * Creates one row of validation worklist copy from either evidence or asset state.
+ */
+function buildValidationAttentionRow(record: PartSearchRecord, asset: Asset, validation: AssetValidationRecord | null): ValidationAttentionRow {
+  const status = validation?.validationStatus ?? asset.validationStatus;
+  const validationTypeLabel = validation ? formatValidationType(validation.validationType) : defaultValidationTypeLabel(asset);
+  const detail = validation?.validationNotes ?? (validation ? "No validation notes were recorded." : "No durable validation evidence is attached to this asset yet.");
+
+  return {
+    assetId: asset.id,
+    assetType: asset.assetType,
+    detail,
+    id: validation?.id ?? `asset-state-${asset.id}`,
+    manufacturerName: record.manufacturer.name,
+    mpn: record.part.mpn,
+    nextAction: nextValidationAction(status),
+    partId: record.part.id,
+    stateLabel: formatValidationStatus(status),
+    stateTone: validationStatusTone(status),
+    updatedAt: validation?.validatedAt ?? asset.lastUpdatedAt,
+    validationTypeLabel
+  };
+}
+
+/**
+ * Builds a latest-record lookup without requiring API consumers to pre-group evidence.
+ */
+function buildLatestValidationByAssetId(validationRecords: AssetValidationRecord[]): Map<string, AssetValidationRecord> {
+  const latestByAssetId = new Map<string, AssetValidationRecord>();
+
+  for (const validation of validationRecords) {
+    const current = latestByAssetId.get(validation.assetId);
+    if (!current || Date.parse(validation.validatedAt) > Date.parse(current.validatedAt) || (validation.validatedAt === current.validatedAt && validation.id.localeCompare(current.id) > 0)) {
+      latestByAssetId.set(validation.assetId, validation);
+    }
+  }
+
+  return latestByAssetId;
+}
+
+/**
+ * Limits the validation worklist to CAD classes engineers can act on in the file area.
+ */
+function isValidationCheckAsset(asset: Asset): boolean {
+  return asset.assetType === "footprint" || asset.assetType === "symbol" || asset.assetType === "three_d_model";
+}
+
+/**
+ * Sorts failed checks first, then review-required checks, then informational gaps.
+ */
+function validationAttentionRank(row: ValidationAttentionRow): number {
+  if (row.stateLabel === "Failed") return 0;
+  if (row.stateLabel === "Needs review") return 1;
+  return 2;
+}
+
+/**
+ * Gives assets without validation evidence a readable expected check label.
+ */
+function defaultValidationTypeLabel(asset: Asset): string {
+  if (asset.assetType === "footprint") return "Footprint geometry";
+  if (asset.assetType === "symbol") return "Symbol pin mapping";
+  return "3D geometry";
+}
+
+/**
+ * Converts a validation state into a direct operator next action.
+ */
+function nextValidationAction(status: AssetValidationRecord["validationStatus"]): string {
+  if (status === "failed") {
+    return "Review or replace this file before relying on it.";
+  }
+
+  if (status === "needs_review") {
+    return "Open the part files area and finish engineering review.";
+  }
+
+  if (status === "not_validated") {
+    return "Run the relevant CAD check before promotion.";
+  }
+
+  return "No action needed.";
 }
 
 function buildPromotionAuditRows(records: PartSearchRecord[]): PromotionAuditRow[] {

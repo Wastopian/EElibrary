@@ -63,6 +63,7 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Files and models/u);
     assert.match(html, /Class state/u);
     assert.match(html, /Review lane/u);
+    assert.match(html, /Trust check/u);
     assert.match(html, /Ready bundles/u);
     assert.match(html, /Blocked bundles/u);
     assert.match(html, /Export lane/u);

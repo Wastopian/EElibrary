@@ -86,7 +86,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - Part detail is answer-first: use decision, datasheet and CAD/export state, connector buildable set, provenance, approved substitutes, next actions.
 - Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, freshness warnings, stale refresh scheduling, retired-row handling, and no live-stock claim.
 - Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
-- **File-grounded asset validators** (worker jobs): footprint geometry sanity (pad count vs pin count, body bounding box) and symbol pin-count cross-check against high-confidence datasheet extraction. Results write `asset_validation_records` with `provenance = 'generated'`; validators never auto-promote `validation_status`, `review_status`, or `export_status`.
+- **File-grounded asset validators** (worker jobs): footprint geometry sanity (pad count vs pin count, body bounding box) and symbol pin-count cross-check against high-confidence datasheet extraction. Results write `asset_validation_records` with `provenance = 'generated'`; validators never auto-promote `validation_status`, `review_status`, or `export_status`. Part detail surfaces plain trust-check badges in the files area, and `/admin` has a CAD trust-check worklist for failed or review-required checks.
 
 **Project and BOM memory**
 
@@ -115,7 +115,7 @@ These remain product direction; they are **not** in the implementation-status ma
 - **Tools / EE calculators** page.
 - **Subcategory** search facets until backed by persisted catalog data.
 - **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation (deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission) beyond current worker foundations.
-- **More file-grounded validators** (STEP integrity, footprint pad pitch vs package geometry) and an `/admin` queue surface that triages `needs_review` / `failed` validation rows.
+- **More file-grounded validators** (STEP integrity, footprint pad pitch vs package geometry) and richer validation cross-reference on the part record.
 
 ## Near-Term Product Priority
 
