@@ -13,6 +13,8 @@ import { DetailSectionNav } from "./DetailSectionNav";
 import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
+import { CompareAddLink } from "../../../components/CompareAddLink";
+import { CopyableValue } from "../../../components/CopyableValue";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDocumentRevisions, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
@@ -286,9 +288,9 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <Link className="back-link" href="/catalog">
           &larr; Back to catalog
         </Link>
-        <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
+        <CompareAddLink className="detail-nav-links__compare" partId={record.part.id}>
           Compare with another part
-        </Link>
+        </CompareAddLink>
       </div>
 
       <section className="detail-section" aria-labelledby="overview-heading">
@@ -302,7 +304,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <section className="detail-hero">
           <div>
             <p className="app-kicker">{record.manufacturer.name}</p>
-            <h1 className="ui-mono">{record.part.mpn}</h1>
+            <h1 className="detail-hero__mpn">
+              <CopyableValue copyValue={record.part.mpn} label={`Copy MPN ${record.part.mpn}`}>
+                {record.part.mpn}
+              </CopyableValue>
+            </h1>
             <div className="detail-hero__meta-strip" aria-label="Part identity summary">
               <span>{record.part.category}</span>
               <span className="ui-mono">{record.package.packageName}</span>

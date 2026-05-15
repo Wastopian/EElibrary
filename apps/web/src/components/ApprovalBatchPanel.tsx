@@ -4,6 +4,7 @@
 
 "use client";
 
+import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { applyApprovalBatch, fetchApprovalBatchCandidates, isApiClientError } from "../lib/api-client";
@@ -26,13 +27,14 @@ type ApprovalBatchPanelState =
 type ApprovalBatchSubmitState =
   | { kind: "idle" }
   | { kind: "submitting" }
-  | { kind: "success"; response: ApprovalBatchResponse }
+  | { kind: "success"; mpnByPartId: Record<string, string>; response: ApprovalBatchResponse }
   | { kind: "failed"; message: string };
 
 /**
  * Renders an approval-gap queue for one project with bulk approve / flag-for-review actions.
  */
 export function ApprovalBatchPanel({ projectId }: ApprovalBatchPanelProps): React.ReactElement {
+  const router = useRouter();
   const [state, setState] = useState<ApprovalBatchPanelState>({ kind: "idle" });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [action, setAction] = useState<ApprovalBatchAction>("approve");
@@ -41,13 +43,16 @@ export function ApprovalBatchPanel({ projectId }: ApprovalBatchPanelProps): Reac
 
   /**
    * Loads the current candidate queue from the project API.
+   *
+   * Selection starts empty so a stray click on the bulk-action button cannot approve every visible
+   * row by accident. Operators use Select all / per-row checkboxes to opt in.
    */
   const loadCandidates = useCallback(async () => {
     setState({ kind: "loading" });
     try {
       const response = await fetchApprovalBatchCandidates(projectId);
       setState({ kind: "ready", response });
-      setSelected(new Set(response.candidates.map((candidate) => candidate.partId)));
+      setSelected(new Set());
     } catch (error) {
       setState({ kind: "failed", message: resolveBatchFailure(error, "load") });
     }
@@ -97,17 +102,23 @@ export function ApprovalBatchPanel({ projectId }: ApprovalBatchPanelProps): Reac
     setSubmit({ kind: "submitting" });
     try {
       const partIds = Array.from(selected);
+      // Snapshot the MPN map before refreshing -- once approved, those candidates leave the queue
+      // and the post-submit summary would otherwise have nothing but raw UUIDs to render.
+      const mpnByPartId = Object.fromEntries(
+        state.response.candidates.map((candidate) => [candidate.partId, candidate.mpn])
+      );
       const response = await applyApprovalBatch(projectId, {
         action,
         notes: notes.trim().length > 0 ? notes.trim() : null,
         partIds
       });
-      setSubmit({ kind: "success", response });
+      setSubmit({ kind: "success", mpnByPartId, response });
       await loadCandidates();
+      router.refresh();
     } catch (error) {
       setSubmit({ kind: "failed", message: resolveBatchFailure(error, "submit") });
     }
-  }, [projectId, action, notes, selected, state, loadCandidates]);
+  }, [projectId, action, notes, selected, state, loadCandidates, router]);
 
   return (
     <div className="approval-batch-panel">
@@ -148,7 +159,7 @@ export function ApprovalBatchPanel({ projectId }: ApprovalBatchPanelProps): Reac
           </div>
 
           {submit.kind === "success" ? (
-            <ApprovalBatchSubmitSummary response={submit.response} />
+            <ApprovalBatchSubmitSummary mpnByPartId={submit.mpnByPartId} response={submit.response} />
           ) : null}
           {submit.kind === "failed" ? <p className="form-feedback form-feedback--failed">{submit.message}</p> : null}
 
@@ -211,8 +222,18 @@ function ApprovalBatchRow({ candidate, onToggle, selected }: { candidate: Approv
 
 /**
  * Renders the summary of a successful batch submission.
+ *
+ * `mpnByPartId` is the pre-submit snapshot of the queue. The approved/flagged candidates have
+ * already left the live queue by the time this renders, so the snapshot is the only way to label
+ * outcomes with an MPN an engineer would recognize.
  */
-function ApprovalBatchSubmitSummary({ response }: { response: ApprovalBatchResponse }): React.ReactElement {
+function ApprovalBatchSubmitSummary({
+  mpnByPartId,
+  response
+}: {
+  mpnByPartId: Record<string, string>;
+  response: ApprovalBatchResponse;
+}): React.ReactElement {
   return (
     <div className="form-feedback form-feedback--success" role="status">
       <strong>Action: {response.action.replace(/_/gu, " ")}.</strong>
@@ -220,12 +241,16 @@ function ApprovalBatchSubmitSummary({ response }: { response: ApprovalBatchRespo
       <details>
         <summary>Per-part outcomes</summary>
         <ul>
-          {response.outcomes.map((outcome) => (
-            <li key={outcome.partId}>
-              <code>{outcome.partId}</code>: {outcome.status.replace(/_/gu, " ")} — {outcome.message}
-              {outcome.previousApprovalStatus ? ` (was ${outcome.previousApprovalStatus})` : ""}
-            </li>
-          ))}
+          {response.outcomes.map((outcome) => {
+            const mpn = mpnByPartId[outcome.partId];
+            return (
+              <li key={outcome.partId}>
+                {mpn ? <strong className="ui-mono">{mpn}</strong> : <code className="ui-mono">{outcome.partId}</code>}
+                : {outcome.status.replace(/_/gu, " ")} — {outcome.message}
+                {outcome.previousApprovalStatus ? ` (was ${outcome.previousApprovalStatus})` : ""}
+              </li>
+            );
+          })}
         </ul>
       </details>
     </div>

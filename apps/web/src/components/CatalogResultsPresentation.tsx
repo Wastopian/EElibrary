@@ -124,10 +124,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                       <StatusBadge label={row.cadExportLabel} tone={row.cadExportTone} />
                     </td>
                     <td>
-                      <details className="catalog-trust-gates-cell">
-                        <summary>stages</summary>
-                        <CatalogTrustGatesRow badges={row.trustLineageBadges} />
-                      </details>
+                      <CatalogTrustGatesRow badges={row.trustLineageBadges} />
                     </td>
                     <td>
                       <strong>{row.readinessHeadline}</strong>
@@ -183,8 +180,10 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
 
       <div className="result-row__sidebar">
         <div className="result-row__next">
-          <span>{row.riskLabel}</span>
-          <p>{row.topBlocker}</p>
+          <span>Next action</span>
+          <strong>{row.nextActionLabel}</strong>
+          <p>{row.nextActionDetail}</p>
+          <small className="muted-copy">{row.riskLabel} · {row.topBlocker}</small>
         </div>
         <div className="result-row__actions">
           <a className="button-link button-link--quiet" href={row.href}>
@@ -247,7 +246,7 @@ function CatalogTrustGatesRow({ badges }: { badges: CatalogTrustLineageBadge[] }
     <div className="catalog-trust-gates">
       {badges.map((badge) => (
         <span key={badge.stageKey} className="catalog-trust-gates__item" title={badge.title}>
-          <StatusBadge label={`${badge.abbrev}·${badge.stateMark}`} tone={badge.badgeTone} />
+          <StatusBadge label={`${badge.abbrev} ${badge.stateMark}`} tone={badge.badgeTone} />
         </span>
       ))}
     </div>

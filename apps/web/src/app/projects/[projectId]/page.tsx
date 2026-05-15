@@ -15,13 +15,15 @@ import { EvidenceAttachmentPanel } from "../../../components/EvidenceAttachmentP
 import { ExportBundlePanel } from "../../../components/ExportBundlePanel";
 import { FollowUpPanel } from "../../../components/FollowUpPanel";
 import { OperatorChecklist } from "../../../components/OperatorChecklist";
+import { ProjectAdvancedToolsDetails } from "../../../components/ProjectAdvancedToolsDetails";
 import { ProjectEditPanel } from "../../../components/ProjectEditPanel";
 import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
+import { ProjectOverlapPanel } from "../../../components/ProjectOverlapPanel";
 import { ProjectRevisionApprovalGatePanel } from "../../../components/ProjectRevisionApprovalGatePanel";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, fetchProjectOverlapPanel, isApiClientError } from "../../../lib/api-client";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { ApiHealth } from "../../../lib/api-client";
 import type { AuditEvent } from "@ee-library/shared/types";
@@ -44,6 +46,7 @@ import type {
   ProjectFilesResponse,
   ProjectMemoryCapability,
   ProjectMemoryCapabilityState,
+  ProjectOverlapPanelResponse,
   ProjectRevision,
   ProjectRevisionStatus,
   ProjectStatus
@@ -67,6 +70,7 @@ type ProjectDetailState =
       files: ProjectFilesResponse | null;
       followUps: FollowUpListResponse;
       health: ApiHealth | null;
+      overlap: ProjectOverlapPanelResponse | null;
       response: ProjectDetailResponse;
       status: "ready";
     }
@@ -95,11 +99,58 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
     return <ProjectDetailSetupState detailState={detailState} />;
   }
 
-  const { bomHealth, evidence, exportBundles, files, followUps, health, response } = detailState;
+  const { bomHealth, evidence, exportBundles, files, followUps, health, overlap, response } = detailState;
   const { bomImports, capabilities, project, revisions, summary, usages } = response;
   const recentActivity = await loadRecentActivityForProject(project.id);
   const foundationCapabilities = capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = capabilities.filter((capability) => capability.state === "planned");
+
+  // When a project has no confirmed usage yet, the upload-parts-list panel is what the operator
+  // came here for. Promoting it above the (mostly empty) usage and overlap sections cuts the
+  // scroll required for a first-run interaction.
+  const showUploadFirst = summary.usageCount === 0 && bomImports.length === 0;
+
+  const usageSection = (
+    <section className="detail-section" aria-labelledby="project-usage-heading">
+      <SectionHeading id="project-usage-heading" subtitle="The parts confirmed in this project. Type to search." title="Parts in this project" />
+      <SectionPanel
+        description="Only confirmed matches appear here. Unclear rows wait in diagnostics until they are reviewed."
+        title={usages.length > 0 ? `${usages.length} part${usages.length === 1 ? "" : "s"} in this project` : "No confirmed parts yet"}
+      >
+        {usages.length > 0 ? (
+          <ProjectUsageBrowser usages={usages} />
+        ) : (
+          <EmptyState
+            title="No confirmed part usage yet"
+            body="Upload a parts list below, then confirm matches to populate this list. No parts are confirmed for this project yet."
+          />
+        )}
+      </SectionPanel>
+    </section>
+  );
+
+  const overlapSection = (
+    <section className="detail-section" aria-labelledby="project-overlap-heading">
+      <SectionHeading
+        id="project-overlap-heading"
+        subtitle="Prior projects ranked by shared confirmed parts. A reuse signal, never an approval signal."
+        title="Prior project overlap"
+      />
+      <ProjectOverlapPanel overlap={overlap} />
+    </section>
+  );
+
+  const uploadSection = (
+    <section className="detail-section" aria-labelledby="project-bom-upload-heading">
+      <SectionHeading id="project-bom-upload-heading" subtitle="Upload a CSV or XLSX file. Map columns. Save rows." title="Upload parts list" />
+      <SectionPanel
+        description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
+        title="Upload mapped BOM"
+      >
+        <BomImportPanel projectId={project.id} revisions={revisions} />
+      </SectionPanel>
+    </section>
+  );
 
   return (
     <main className="projects-layout">
@@ -128,32 +179,19 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </div>
       </section>
 
-      <section className="detail-section" aria-labelledby="project-usage-heading">
-        <SectionHeading id="project-usage-heading" subtitle="The parts confirmed in this project. Type to search." title="Parts in this project" />
-        <SectionPanel
-          description="Only confirmed matches appear here. Unclear rows wait in diagnostics until they are reviewed."
-          title={usages.length > 0 ? `${usages.length} part${usages.length === 1 ? "" : "s"} in this project` : "No confirmed parts yet"}
-        >
-          {usages.length > 0 ? (
-            <ProjectUsageBrowser usages={usages} />
-          ) : (
-            <EmptyState
-              title="No confirmed part usage yet"
-              body="Upload a parts list below, then confirm matches to populate this list. No parts are confirmed for this project yet."
-            />
-          )}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-bom-upload-heading">
-        <SectionHeading id="project-bom-upload-heading" subtitle="Upload a CSV or XLSX file. Map columns. Save rows." title="Upload parts list" />
-        <SectionPanel
-          description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
-          title="Upload mapped BOM"
-        >
-          <BomImportPanel projectId={project.id} revisions={revisions} />
-        </SectionPanel>
-      </section>
+      {showUploadFirst ? (
+        <>
+          {uploadSection}
+          {usageSection}
+          {overlapSection}
+        </>
+      ) : (
+        <>
+          {usageSection}
+          {overlapSection}
+          {uploadSection}
+        </>
+      )}
 
       <section className="detail-section" aria-labelledby="project-files-heading">
         <SectionHeading
@@ -169,7 +207,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </SectionPanel>
       </section>
 
-      <details className="projects-advanced" id="advanced-project-tools">
+      <ProjectAdvancedToolsDetails>
         <summary>Advanced project tools</summary>
         <p className="projects-advanced__lede muted-copy">
           Diagnostics, approvals, exports, follow-ups, evidence, and capabilities. Open these when you need them.
@@ -315,6 +353,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           >
             <ExportBundlePanel
               bundles={exportBundles ?? { bundles: [], projectId: project.id }}
+              disabledReason={resolveExportBundleDisabledReason({ bomHealth, summary })}
               projectId={project.id}
               revisions={revisions}
             />
@@ -346,7 +385,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             </SectionPanel>
           </div>
         </section>
-      </details>
+      </ProjectAdvancedToolsDetails>
     </main>
   );
 }
@@ -368,7 +407,7 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
   const healthPromise = fetchApiHealth();
 
   try {
-    const [health, response, bomHealth, evidence, followUps, exportBundles, files] = await Promise.all([
+    const [health, response, bomHealth, evidence, followUps, exportBundles, files, overlap] = await Promise.all([
       healthPromise,
       fetchProjectDetail(projectId),
       fetchProjectBomHealth(projectId),
@@ -378,7 +417,11 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
       // The file mirror is not critical to rendering the project workspace, so a failure
       // here must never break the page. Catch and downgrade to null so the panel renders
       // its own honest unavailable state without setup-blocking the rest of the route.
-      fetchProjectFiles(projectId).catch(() => null)
+      fetchProjectFiles(projectId).catch(() => null),
+      // The overlap panel is a reuse signal layered on top of confirmed usage. Its read
+      // path is informational only, so a failure must never break the project workspace:
+      // catch and downgrade to null so the panel renders its own honest unavailable state.
+      fetchProjectOverlapPanel(projectId).catch(() => null)
     ]);
 
     if (!response || !bomHealth || !evidence || !followUps) {
@@ -392,6 +435,7 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
       files,
       followUps,
       health,
+      overlap,
       response,
       status: "ready"
     };
@@ -470,6 +514,16 @@ function buildProjectWorkspaceActions(response: ProjectDetailResponse): Workspac
       label: "Compare used parts",
       signal: usagePartIds.length > 0 ? `${usagePartIds.length} selected` : "Pick parts"
     },
+    ...(response.usages.length > 0
+      ? [
+          {
+            body: "Prior projects ranked by how many confirmed parts they share with this BOM. Reuse signal only — not approval or export readiness.",
+            href: "#project-overlap-heading",
+            label: "Prior project overlap",
+            signal: "Reuse hint"
+          } satisfies WorkspaceAction
+        ]
+      : []),
     {
       body: firstUsagePartId
         ? "Open where-used for the first confirmed part from this project."
@@ -596,6 +650,29 @@ function buildProjectNextStepActions({
           signal: "No bundles"
         }
   ];
+}
+
+/**
+ * Resolves the reason an export bundle cannot be generated yet, or null when generation is
+ * worth attempting. Conservative on purpose: the manifest honestly lists omissions when only
+ * *some* assets lack verified-for-export promotion, so we only gate the button when the bundle
+ * is guaranteed to be empty (no confirmed parts in the project at all).
+ *
+ * The brief requires disabled export actions to name exactly what verified file-backed assets
+ * are missing rather than letting an operator click into a silent empty bundle.
+ */
+function resolveExportBundleDisabledReason({
+  bomHealth,
+  summary
+}: {
+  bomHealth: ProjectBomHealthResponse;
+  summary: ProjectDetailResponse["summary"];
+}): string | null {
+  if (summary.usageCount === 0 && bomHealth.summary.matchedLineCount === 0) {
+    return "No confirmed parts in this project yet. Upload a BOM and match rows before generating a bundle.";
+  }
+
+  return null;
 }
 
 /**

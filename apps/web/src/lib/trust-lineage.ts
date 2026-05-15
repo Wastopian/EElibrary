@@ -63,10 +63,10 @@ const CATALOG_FALLBACK_BUNDLE_READINESS: BundleReadinessSummary = {
 };
 
 const STAGE_ABBREV: Record<TrustLineageStage, string> = {
-  approved: "Apr",
-  imported: "Imp",
-  reviewed: "Rev",
-  verified_for_export: "Exp"
+  approved: "Approval",
+  imported: "Import",
+  reviewed: "Review",
+  verified_for_export: "Export"
 };
 
 /** Compact gate row for catalog tables: four abbreviations stay visually distinct from approval/export badges alone. */
@@ -112,11 +112,11 @@ export function buildCatalogTrustLineageBadges(record: PartSearchRecord): Catalo
 function formatCatalogTrustStateMark(state: TrustLineageStageState): string {
   switch (state) {
     case "blocked":
-      return "!";
+      return "✗";
     case "not_applicable":
-      return "n/a";
+      return "—";
     case "passed":
-      return "OK";
+      return "✓";
     case "pending":
       return "…";
     default:

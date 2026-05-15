@@ -6,6 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { AutoSubmitOnChange } from "../../components/AutoSubmitOnChange";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { OperatorChecklist } from "../../components/OperatorChecklist";
@@ -146,26 +147,12 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
   return (
     <main>
-      <section aria-label="What EE Library is" className="site-intro">
+      <section aria-label="What EE Library is" className="site-intro site-intro--compact">
         <p className="app-kicker">EE Library</p>
         <h1>Find a part. Get its files. Trust what you ship.</h1>
         <p className="site-intro__lede">
-          Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
+          Engineering memory for parts, datasheets, footprints, and 3D models. Search below, or jump to <Link href="/projects">projects</Link>, <Link href="/vendors">vendors</Link>, or <Link href="/circuit-blocks">circuit blocks</Link>.
         </p>
-        <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
-          <Link className="site-intro__path" href="#quick-check">
-            <strong>Search a part</strong>
-            <span>Type an MPN to see specs, files, and what is missing.</span>
-          </Link>
-          <Link className="site-intro__path" href="/projects">
-            <strong>Open a project</strong>
-            <span>See the parts in a build, plus uploads and BOMs.</span>
-          </Link>
-          <Link className="site-intro__path" href="/vendors">
-            <strong>Browse vendors</strong>
-            <span>PCB shops, sheet metal, and the people you trust.</span>
-          </Link>
-        </div>
       </section>
 
       <section aria-label="Catalog workbench search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
@@ -267,6 +254,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       <div className="search-workspace">
         <aside className="filter-rail filter-rail--bar" aria-label="Search filters" id="catalog-filters">
           <form action="/catalog" method="get">
+            <AutoSubmitOnChange />
             <div className="filter-rail__intro">
               <p className="app-kicker">Filters</p>
               <strong>Refine results</strong>
@@ -308,7 +296,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 ))}
               </select>
             </label>
-            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, readinessStatus, sort })}>
+            <details className="filter-rail__more" open>
               <summary>More filters</summary>
               <div className="filter-rail__more-fields">
                 <label>
@@ -386,6 +374,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             </details>
             <div className="filter-rail__actions">
               <button type="submit">Apply filters</button>
+              <small className="muted-copy">Filters apply automatically when you change a select.</small>
               {activeFilterPills.length > 0 ? (
                 <Link className="filter-rail__clear" href="/catalog">
                   Clear all
@@ -1513,31 +1502,6 @@ function buildCatalogNextAction(record: PartSearchRecord): { detail: string; lab
     detail: "Open the detail page to inspect provenance, datasheet, and asset evidence.",
     label: "Open detail"
   };
-}
-
-/**
- * Returns true when any advanced filter or sort/page-size override is active.
- *
- * Used to keep the "More filters" disclosure open by default whenever the user
- * already has an advanced filter applied so it stays visible on reload.
- */
-function hasAdvancedFilters(input: {
-  approvalStatus: PartApprovalStatus | undefined;
-  cadAvailability: CadAvailabilityFilter;
-  connectorClass: ConnectorClass | undefined;
-  lifecycleStatus: LifecycleStatus | undefined;
-  pageSize: number | undefined;
-  readinessStatus: PartReadinessStatus | undefined;
-  sort: PartSearchSort;
-}): boolean {
-  if (input.approvalStatus !== undefined) return true;
-  if (input.cadAvailability !== "any") return true;
-  if (input.connectorClass !== undefined) return true;
-  if (input.lifecycleStatus !== undefined) return true;
-  if (input.readinessStatus !== undefined) return true;
-  if (input.sort !== "mpn_asc") return true;
-  if (input.pageSize !== undefined && input.pageSize !== 20) return true;
-  return false;
 }
 
 /**

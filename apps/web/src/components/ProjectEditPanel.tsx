@@ -4,6 +4,7 @@
 
 "use client";
 
+import { useRouter } from "next/navigation";
 import React, { useCallback, useMemo, useState } from "react";
 import { isApiClientError, updateProject, updateProjectRevision } from "../lib/api-client";
 import type { Project, ProjectRevision, ProjectRevisionStatus, ProjectStatus } from "@ee-library/shared/types";
@@ -14,10 +15,11 @@ export interface ProjectEditPanelProps {
   revisions: ProjectRevision[];
 }
 
-/** ProjectEditStatus tracks operator feedback from either edit form. */
+/** ProjectEditStatus tracks operator feedback for one edit form. Each form keeps its own state
+ * so a save on one does not erase the confirmation banner on the other. */
 type ProjectEditStatus =
   | { kind: "idle" }
-  | { kind: "saving"; target: "project" | "revision" }
+  | { kind: "saving" }
   | { kind: "success"; message: string }
   | { kind: "failed"; message: string };
 
@@ -25,6 +27,7 @@ type ProjectEditStatus =
  * Renders project metadata and current revision edit forms without touching trust state.
  */
 export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps): React.ReactElement {
+  const router = useRouter();
   const activeRevision = useMemo(() => chooseActiveRevision(revisions), [revisions]);
   const [name, setName] = useState(project.name);
   const [owner, setOwner] = useState(project.owner ?? "");
@@ -33,7 +36,8 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
   const [revisionStatus, setRevisionStatus] = useState<ProjectRevisionStatus>(activeRevision?.revisionStatus ?? "draft");
   const [sourceReference, setSourceReference] = useState(activeRevision?.sourceReference ?? "");
   const [releasedAt, setReleasedAt] = useState(toDateTimeLocalValue(activeRevision?.releasedAt ?? null));
-  const [status, setStatus] = useState<ProjectEditStatus>({ kind: "idle" });
+  const [projectFormStatus, setProjectFormStatus] = useState<ProjectEditStatus>({ kind: "idle" });
+  const [revisionFormStatus, setRevisionFormStatus] = useState<ProjectEditStatus>({ kind: "idle" });
 
   /**
    * Persists project-level metadata only.
@@ -43,11 +47,11 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
       event.preventDefault();
 
       if (!name.trim()) {
-        setStatus({ kind: "failed", message: "Project name is required." });
+        setProjectFormStatus({ kind: "failed", message: "Project name is required." });
         return;
       }
 
-      setStatus({ kind: "saving", target: "project" });
+      setProjectFormStatus({ kind: "saving" });
 
       try {
         const response = await updateProject(project.id, {
@@ -57,13 +61,13 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
           status: projectStatus
         });
 
-        setStatus({ kind: "success", message: response.boundary });
-        refreshProjectDetail();
+        setProjectFormStatus({ kind: "success", message: response.boundary });
+        router.refresh();
       } catch (error) {
-        setStatus({ kind: "failed", message: resolveProjectEditFailure(error, "Project update") });
+        setProjectFormStatus({ kind: "failed", message: resolveProjectEditFailure(error, "Project update") });
       }
     },
-    [description, name, owner, project.id, projectStatus]
+    [description, name, owner, project.id, projectStatus, router]
   );
 
   /**
@@ -74,11 +78,11 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
       event.preventDefault();
 
       if (!activeRevision) {
-        setStatus({ kind: "failed", message: "Create a project revision before editing revision metadata." });
+        setRevisionFormStatus({ kind: "failed", message: "Create a project revision before editing revision metadata." });
         return;
       }
 
-      setStatus({ kind: "saving", target: "revision" });
+      setRevisionFormStatus({ kind: "saving" });
 
       try {
         const response = await updateProjectRevision(project.id, activeRevision.id, {
@@ -87,13 +91,13 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
           sourceReference: sourceReference.trim() || null
         });
 
-        setStatus({ kind: "success", message: response.boundary });
-        refreshProjectDetail();
+        setRevisionFormStatus({ kind: "success", message: response.boundary });
+        router.refresh();
       } catch (error) {
-        setStatus({ kind: "failed", message: resolveProjectEditFailure(error, "Project revision update") });
+        setRevisionFormStatus({ kind: "failed", message: resolveProjectEditFailure(error, "Project revision update") });
       }
     },
-    [activeRevision, project.id, releasedAt, revisionStatus, sourceReference]
+    [activeRevision, project.id, releasedAt, revisionStatus, router, sourceReference]
   );
 
   return (
@@ -122,11 +126,12 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
           <textarea onChange={(event) => setDescription(event.target.value)} placeholder="Project context, constraints, or maintenance notes" value={description} />
         </label>
         <div className="project-edit-panel__actions">
-          <button disabled={status.kind === "saving"} type="submit">
-            {status.kind === "saving" && status.target === "project" ? "Saving..." : "Save project"}
+          <button disabled={projectFormStatus.kind === "saving"} type="submit">
+            {projectFormStatus.kind === "saving" ? "Saving..." : "Save project"}
           </button>
           <span>Edits project metadata only.</span>
         </div>
+        <ProjectEditStatusMessage scope="project" status={projectFormStatus} />
       </form>
 
       <form className="project-edit-panel__form" onSubmit={onRevisionSubmit}>
@@ -153,13 +158,13 @@ export function ProjectEditPanel({ project, revisions }: ProjectEditPanelProps):
           <input disabled={!activeRevision} onChange={(event) => setSourceReference(event.target.value)} placeholder="Git tag, ECO, release note, or board file reference" value={sourceReference} />
         </label>
         <div className="project-edit-panel__actions">
-          <button disabled={!activeRevision || status.kind === "saving"} type="submit">
-            {status.kind === "saving" && status.target === "revision" ? "Saving..." : "Save revision"}
+          <button disabled={!activeRevision || revisionFormStatus.kind === "saving"} type="submit">
+            {revisionFormStatus.kind === "saving" ? "Saving..." : "Save revision"}
           </button>
           <span>Revision edits do not remap BOM rows.</span>
         </div>
+        <ProjectEditStatusMessage scope="revision" status={revisionFormStatus} />
       </form>
-      <ProjectEditStatusMessage status={status} />
     </div>
   );
 }
@@ -189,15 +194,16 @@ function toDateTimeLocalValue(value: string | null): string {
 }
 
 /**
- * Renders edit feedback without implying trust-state changes.
+ * Renders edit feedback without implying trust-state changes. Each form mounts its own copy
+ * anchored beneath its submit button so a save on one form does not erase the other's banner.
  */
-function ProjectEditStatusMessage({ status }: { status: ProjectEditStatus }): React.ReactElement | null {
+function ProjectEditStatusMessage({ scope, status }: { scope: "project" | "revision"; status: ProjectEditStatus }): React.ReactElement | null {
   if (status.kind === "idle") {
     return null;
   }
 
   if (status.kind === "saving") {
-    return <p className="project-edit-panel__status project-edit-panel__status--pending">Saving {status.target} metadata...</p>;
+    return <p className="project-edit-panel__status project-edit-panel__status--pending">Saving {scope} metadata...</p>;
   }
 
   if (status.kind === "success") {
@@ -224,13 +230,4 @@ function resolveProjectEditFailure(error: unknown, action: string): string {
   }
 
   return error.message.replace(new RegExp(`^${action} failed \\([^)]+\\):\\s*`, "u"), "");
-}
-
-/**
- * Refreshes the project detail route after metadata is saved.
- */
-function refreshProjectDetail(): void {
-  if (typeof window !== "undefined") {
-    window.location.reload();
-  }
 }
