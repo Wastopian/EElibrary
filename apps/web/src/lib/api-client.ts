@@ -1025,9 +1025,9 @@ export async function resolveCircuitBlockKnownRisk(
 }
 
 /**
- * Fetches one component detail record from the API boundary.
+ * Fetches one component detail envelope from the API boundary.
  */
-export async function fetchPartDetail(partId: string): Promise<PartDetailResponse | null> {
+export async function fetchPartDetailEnvelope(partId: string): Promise<ApiEnvelope<PartDetailResponse> | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}`), {
     cache: "no-store"
   });
@@ -1042,7 +1042,16 @@ export async function fetchPartDetail(partId: string): Promise<PartDetailRespons
 
   const envelope = (await response.json()) as ApiEnvelope<PartDetailResponse>;
 
-  return envelope.data;
+  return envelope;
+}
+
+/**
+ * Fetches one component detail record from the API boundary.
+ */
+export async function fetchPartDetail(partId: string): Promise<PartDetailResponse | null> {
+  const envelope = await fetchPartDetailEnvelope(partId);
+
+  return envelope?.data ?? null;
 }
 
 /**

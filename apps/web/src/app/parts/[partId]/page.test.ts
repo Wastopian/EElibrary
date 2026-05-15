@@ -73,6 +73,66 @@ test("part detail renders readiness record summary from detail response", async 
 });
 
 /**
+ * Verifies the top files panel does not label reference-only URLs as downloads
+ * and does not duplicate the datasheet row.
+ */
+test("part detail files panel separates stored downloads from source references", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-te-215079-8");
+
+  assert.ok(record, "expected connector seed part detail record");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const filesPanelHtml = extractPanelHtml(html, "Files and downloads");
+
+    assert.match(filesPanelHtml, /Download file/u);
+    assert.match(filesPanelHtml, /View source/u);
+    assert.doesNotMatch(filesPanelHtml, />Download</u);
+    assert.equal(countPanelLabel(filesPanelHtml, "Datasheet"), 1);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies seed fallback pages do not offer database-backed storage downloads that
+ * cannot work without the real catalog store.
+ */
+test("part detail files panel disables sample storage downloads in seed fallback", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-te-215079-8");
+
+  assert.ok(record, "expected connector seed part detail record");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "seed_fallback"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const filesPanelHtml = extractPanelHtml(html, "Files and downloads");
+
+    assert.match(filesPanelHtml, /Sample file not available/u);
+    assert.match(filesPanelHtml, /View source/u);
+    assert.doesNotMatch(filesPanelHtml, /Download file/u);
+    assert.doesNotMatch(html, /class="asset-download-link"[^>]*>Download file</u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies catalog setup failures render guidance instead of route-fatal detail errors.
  */
 test("part detail renders setup guidance when catalog detail is unavailable", async () => {
@@ -616,6 +676,25 @@ function buildEmptySupplyOffersResponse(partId: string): PartSupplyOffersRespons
       staleOfferCount: 0
     }
   };
+}
+
+/**
+ * Extracts one SectionPanel by its heading so tests can make scoped assertions.
+ */
+function extractPanelHtml(html: string, title: string): string {
+  const heading = `<h2>${title}</h2>`;
+  const start = html.indexOf(heading);
+  assert.notEqual(start, -1, `expected panel heading ${title}`);
+  const end = html.indexOf("</section>", start);
+  assert.notEqual(end, -1, `expected panel closing tag after ${title}`);
+  return html.slice(start, end);
+}
+
+/**
+ * Counts the strong row labels inside a scoped panel without matching later sections.
+ */
+function countPanelLabel(panelHtml: string, label: string): number {
+  return panelHtml.split(`<strong>${label}</strong>`).length - 1;
 }
 
 /**

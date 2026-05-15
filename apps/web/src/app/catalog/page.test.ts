@@ -57,6 +57,31 @@ test("catalog page renders compact filter bar and explanation-first list results
     assert.match(html, /Rows per page/u);
     assert.match(html, /First time here\?/u);
     assert.match(html, /Catalog first-run checklist/u);
+    assert.doesNotMatch(html, /<details class="catalog-getting-started" open="">/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("catalog page collapses first-run guidance when active search context exists", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed TPS7A02DBVR part");
+
+  const restoreFetch = mockFetch(buildReadyFetchHandler([record], { totalRecords: 1 }));
+
+  try {
+    const html = renderToStaticMarkup(
+      await SearchPage({ searchParams: Promise.resolve({ q: record.part.mpn }) })
+    );
+
+    assert.match(html, /Catalog workbench/u);
+    assert.match(html, /Current filters/u);
+    assert.match(html, /Query: TPS7A02DBVR/u);
+    assert.doesNotMatch(html, /Your engineering memory for parts/u);
+    assert.doesNotMatch(html, /site-intro__path/u);
+    assert.doesNotMatch(html, /<details class="catalog-getting-started" open="">/u);
   } finally {
     restoreFetch();
   }

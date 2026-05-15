@@ -143,30 +143,40 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     readinessStatus,
     sort
   });
+  // Active context trims first-run framing so returning users can stay focused on search work.
+  const hasActiveCatalogContext = activeFilterPills.length > 0 || typeof page === "number";
 
   return (
     <main>
-      <section aria-label="What EE Library is" className="site-intro">
-        <p className="app-kicker">EE Library</p>
-        <h1>Find a part. Get its files. Trust what you ship.</h1>
-        <p className="site-intro__lede">
-          Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
-        </p>
-        <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
-          <Link className="site-intro__path" href="#quick-check">
-            <strong>Search a part</strong>
-            <span>Type an MPN to see specs, files, and what is missing.</span>
-          </Link>
-          <Link className="site-intro__path" href="/projects">
-            <strong>Open a project</strong>
-            <span>See the parts in a build, plus uploads and BOMs.</span>
-          </Link>
-          <Link className="site-intro__path" href="/vendors">
-            <strong>Browse vendors</strong>
-            <span>PCB shops, sheet metal, and the people you trust.</span>
-          </Link>
-        </div>
-      </section>
+      {hasActiveCatalogContext ? (
+        <section aria-label="Catalog context" className="site-intro site-intro--compact">
+          <p className="app-kicker">EE Library</p>
+          <h1>Catalog workbench</h1>
+          <p className="site-intro__lede">Active search context is ready below. Adjust filters, inspect readiness, or open the part record that best matches the current engineering task.</p>
+        </section>
+      ) : (
+        <section aria-label="What EE Library is" className="site-intro">
+          <p className="app-kicker">EE Library</p>
+          <h1>Find a part. Get its files. Trust what you ship.</h1>
+          <p className="site-intro__lede">
+            Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
+          </p>
+          <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
+            <Link className="site-intro__path" href="#quick-check">
+              <strong>Search a part</strong>
+              <span>Type an MPN to see specs, files, and what is missing.</span>
+            </Link>
+            <Link className="site-intro__path" href="/projects">
+              <strong>Open a project</strong>
+              <span>See the parts in a build, plus uploads and BOMs.</span>
+            </Link>
+            <Link className="site-intro__path" href="/vendors">
+              <strong>Browse vendors</strong>
+              <span>PCB shops, sheet metal, and the people you trust.</span>
+            </Link>
+          </div>
+        </section>
+      )}
 
       <section aria-label="Catalog workbench search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
         <div className="quick-check-workspace__layout">
@@ -240,7 +250,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </section>
 
-      <details className="catalog-getting-started" open>
+      <details className="catalog-getting-started">
         <summary>First time here? See 3 quick steps</summary>
         <OperatorChecklist
           primaryActionHref={primaryAction.href}

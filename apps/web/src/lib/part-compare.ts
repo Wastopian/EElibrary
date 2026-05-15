@@ -7,7 +7,10 @@ import { resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution"
 import { getAssetReviewStatus } from "@ee-library/shared/review-workflow";
 import { formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { assetTrustStageTone, formatAssetTrustStageLabel } from "./detail-view-model";
+import { getAssetPreviewState } from "../components/AssetInlinePreview";
+import type { AssetPreviewState } from "../components/AssetInlinePreview";
 import type {
+  Asset,
   AssetClassReadiness,
   AssetType,
   PartDetailResponse,
@@ -189,6 +192,101 @@ export function buildCompareAssetTrustRows(records: PartSearchRecord[]): Compare
         partId: record.part.id,
         text: formatAssetTrustStageLabel(bestAsset, reviewState),
         tone: tone === "verified" || tone === "danger" || tone === "info" || tone === "review" ? tone : "review"
+      };
+    })
+  }));
+}
+
+/**
+ * COMPARE_PREVIEW_ASSET_TYPES is the explicit, ordered list of CAD asset classes the
+ * compare preview band renders side-by-side: symbol, footprint, and 3D model.
+ *
+ * Datasheets and mechanical drawings are intentionally excluded — the preview band is
+ * about CAD diff at a glance, and datasheets already get their own inline preview on the
+ * detail page where reading them at length is a deliberate task. Adding datasheets here
+ * would crowd the side-by-side and dilute the CAD-diff payoff.
+ */
+export const COMPARE_PREVIEW_ASSET_TYPES: ReadonlyArray<Extract<AssetType, "symbol" | "footprint" | "three_d_model">> = [
+  "symbol",
+  "footprint",
+  "three_d_model"
+];
+
+/** ComparePreviewAssetType narrows AssetType to the classes the preview band renders. */
+export type ComparePreviewAssetType = (typeof COMPARE_PREVIEW_ASSET_TYPES)[number];
+
+/**
+ * ComparePreviewCell describes one part's slot in the side-by-side preview band for one
+ * asset class. The shape is intentionally serialization-friendly so a server component
+ * can hand it directly to a small client renderer that mounts <iframe>/<img>/<model-viewer>
+ * exactly when the state is one of the embeddable kinds.
+ *
+ * Honesty rules baked in:
+ *  - `bestAsset` is null when the part has no asset of this class — the renderer must
+ *    show "Missing" rather than an empty card so the engineer can see the gap.
+ *  - `previewState` is computed from the same `getAssetPreviewState` the detail page
+ *    uses, so a STEP without a derived viewer artifact stays "three_d_preview_pending_artifact"
+ *    here just as it would on the detail page. We never fabricate "ready" for the side-by-side.
+ *  - `partId` and `assetId` are exposed so the renderer can build the artifact URL with
+ *    `buildAssetDownloadUrl` / `buildAssetPreviewArtifactDownloadUrl` without the helper
+ *    needing to know about the API base URL or downloads.
+ */
+export interface ComparePreviewCell {
+  partId: string;
+  partMpn: string;
+  assetType: ComparePreviewAssetType;
+  bestAsset: Asset | null;
+  previewState: AssetPreviewState | null;
+}
+
+/** ComparePreviewRow is one CAD asset class compared side-by-side across selected parts. */
+export interface ComparePreviewRow {
+  rowKey: string;
+  label: string;
+  assetType: ComparePreviewAssetType;
+  cells: ComparePreviewCell[];
+}
+
+const COMPARE_PREVIEW_LABELS: Record<ComparePreviewAssetType, string> = {
+  symbol: "Symbol",
+  footprint: "Footprint",
+  three_d_model: "3D model"
+};
+
+/**
+ * Builds side-by-side CAD preview rows for the compare workspace, one row per CAD asset
+ * class (symbol, footprint, 3D model) with one cell per compared part.
+ *
+ * The plan calls this out as the payoff of the 3D/STEP preview pipeline: an engineer
+ * should be able to land on /compare and see the CAD diff at a glance without opening
+ * each detail page. Honesty discipline is preserved by reusing `getAssetPreviewState`
+ * verbatim, so every cell stays on the same five-state matrix the detail page uses
+ * (stored inline / pending artifact / reference only / unsupported / pending / not
+ * available). The caller is expected to render the per-asset trust-stage diff row from
+ * `buildCompareAssetTrustRows` directly adjacent so engineers never confuse "preview
+ * renders" with "asset is approved or verified for export".
+ */
+export function buildCompareAssetPreviewRows(records: PartSearchRecord[]): ComparePreviewRow[] {
+  const summariesByPart = new Map(
+    records.map((record) => [record.part.id, resolveAssetClassSummaries(record.assets)])
+  );
+
+  return COMPARE_PREVIEW_ASSET_TYPES.map<ComparePreviewRow>((assetType) => ({
+    assetType,
+    label: COMPARE_PREVIEW_LABELS[assetType],
+    rowKey: `asset_preview:${assetType}`,
+    cells: records.map<ComparePreviewCell>((record) => {
+      const summary = (summariesByPart.get(record.part.id) ?? []).find(
+        (candidate) => candidate.assetType === assetType
+      );
+      const bestAsset = summary?.bestAsset ?? null;
+
+      return {
+        assetType,
+        bestAsset,
+        partId: record.part.id,
+        partMpn: record.part.mpn,
+        previewState: bestAsset ? getAssetPreviewState(bestAsset) : null
       };
     })
   }));

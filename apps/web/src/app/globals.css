@@ -674,6 +674,15 @@ main > .workspace-jump-nav {
   max-width: 65ch;
 }
 
+.site-intro--compact {
+  gap: 8px;
+  padding: 16px 20px;
+}
+
+.site-intro--compact h1 {
+  font-size: 1.28rem;
+}
+
 .site-intro__paths {
   display: grid;
   gap: 12px;
@@ -8738,6 +8747,25 @@ details[open] .trust-breakdown__toggle::before {
 .compare-table--metrics th:first-child,
 .compare-table--metrics td:first-child {
   min-width: 10rem;
+}
+
+.compare-table--preview th:not(:first-child),
+.compare-table--preview td:not(:first-child) {
+  min-width: 260px;
+  width: 32%;
+}
+
+.compare-preview-cell {
+  min-width: 260px;
+}
+
+.compare-preview-cell .asset-inline-preview__frame,
+.compare-preview-cell .asset-inline-preview__image {
+  max-height: 320px;
+}
+
+.compare-preview-cell__missing {
+  margin: 0;
 }
 
 /* System health workspace */
