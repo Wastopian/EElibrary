@@ -235,6 +235,10 @@ interface DatabaseAssetRow {
   generation_source_asset_id: string | null;
   validation_status: Asset["validationStatus"];
   preview_status: Asset["previewStatus"];
+  preview_artifact_storage_key: string | null;
+  preview_artifact_format: Asset["previewArtifactFormat"];
+  preview_artifact_generated_at: Date | string | null;
+  preview_artifact_source: Asset["previewArtifactSource"];
   asset_state: Asset["assetState"];
   source_url: string | null;
   source_record_id: string | null;
@@ -831,6 +835,25 @@ export type AssetDownloadTargetResult =
   | { status: "redirect"; url: string; assetType: Asset["assetType"]; fileFormat: Asset["fileFormat"] }
   | { status: "file_only"; storageKey: string; assetType: Asset["assetType"]; fileFormat: Asset["fileFormat"] };
 
+/**
+ * AssetPreviewArtifactDownloadTargetResult describes what the preview-artifact download
+ * route should do for one asset. The preview artifact is a derived browser-renderable
+ * file (e.g. glb/gltf converted from a STEP) and is intentionally separate from the
+ * source asset download path so the source bytes' availability/trust contract is never
+ * confused with the preview artifact's existence.
+ */
+export type AssetPreviewArtifactDownloadTargetResult =
+  | { status: "not_configured" }
+  | { status: "not_found" }
+  | { status: "not_available"; reason: string }
+  | {
+      status: "file_only";
+      storageKey: string;
+      assetType: Asset["assetType"];
+      fileFormat: Asset["fileFormat"];
+      previewArtifactFormat: NonNullable<Asset["previewArtifactFormat"]>;
+    };
+
 /** DatabaseAssetDownloadRow is the minimal shape needed to resolve one asset download target. */
 interface DatabaseAssetDownloadRow {
   id: string;
@@ -840,6 +863,17 @@ interface DatabaseAssetDownloadRow {
   availability_status: Asset["availabilityStatus"];
   source_url: string | null;
   storage_key: string | null;
+}
+
+/** DatabaseAssetPreviewArtifactDownloadRow is the minimal shape needed to resolve one preview-artifact download target. */
+interface DatabaseAssetPreviewArtifactDownloadRow {
+  id: string;
+  part_id: string;
+  asset_type: Asset["assetType"];
+  file_format: Asset["fileFormat"];
+  preview_status: Asset["previewStatus"];
+  preview_artifact_storage_key: string | null;
+  preview_artifact_format: Asset["previewArtifactFormat"];
 }
 
 /**
@@ -886,6 +920,79 @@ export async function readAssetDownloadTargetFromDatabase(partId: string, assetI
     }
 
     return { status: "not_accessible", reason: "This asset has no accessible URL or stored file." };
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads the minimum asset preview-artifact fields needed to resolve a derived-preview file path.
+ *
+ * Honesty rules enforced here:
+ *  - Returns `not_found` only when the asset row itself does not exist.
+ *  - Returns `not_available` for every other "no derived preview to serve" case (status not
+ *    ready, missing storage key, or missing format) with a human-readable reason. This keeps
+ *    the API contract honest: a 404 means the asset is unknown, while 409 means the asset is
+ *    real but no derived preview artifact has been written yet.
+ *  - Never reads `source_url` or the source `storage_key`: the preview-artifact download
+ *    must never accidentally serve unconverted source bytes.
+ */
+export async function readAssetPreviewArtifactDownloadTargetFromDatabase(
+  partId: string,
+  assetId: string
+): Promise<AssetPreviewArtifactDownloadTargetResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const result = await databasePool.query<DatabaseAssetPreviewArtifactDownloadRow>(
+      `
+        SELECT id, part_id, asset_type, file_format, preview_status,
+               preview_artifact_storage_key, preview_artifact_format
+        FROM assets
+        WHERE id = $1 AND part_id = $2
+        LIMIT 1
+      `,
+      [assetId, partId]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    if (row.preview_status !== "ready") {
+      return {
+        status: "not_available",
+        reason: "No derived preview artifact has been generated for this asset yet."
+      };
+    }
+
+    if (!row.preview_artifact_storage_key) {
+      return {
+        status: "not_available",
+        reason: "Preview status is ready but no derived preview artifact storage key is recorded."
+      };
+    }
+
+    if (!row.preview_artifact_format) {
+      return {
+        status: "not_available",
+        reason: "Preview status is ready but no derived preview artifact format is recorded."
+      };
+    }
+
+    return {
+      status: "file_only",
+      storageKey: row.preview_artifact_storage_key,
+      assetType: row.asset_type,
+      fileFormat: row.file_format,
+      previewArtifactFormat: row.preview_artifact_format
+    };
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -2936,6 +3043,10 @@ function mapAssetRow(row: DatabaseAssetRow): Asset {
     lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
     licenseMode: row.license_mode,
     partId: row.part_id,
+    previewArtifactFormat: row.preview_artifact_format,
+    previewArtifactGeneratedAt: row.preview_artifact_generated_at ? toIsoTimestamp(row.preview_artifact_generated_at) : null,
+    previewArtifactSource: row.preview_artifact_source,
+    previewArtifactStorageKey: row.preview_artifact_storage_key,
     previewStatus: row.preview_status,
     providerId: row.provider_id,
     provenance: row.provenance,
@@ -3989,6 +4100,10 @@ const ASSET_ROWS_SQL = `
     generation_source_asset_id,
     validation_status,
     preview_status,
+    preview_artifact_storage_key,
+    preview_artifact_format,
+    preview_artifact_generated_at,
+    preview_artifact_source,
     asset_state,
     source_url,
     source_record_id,

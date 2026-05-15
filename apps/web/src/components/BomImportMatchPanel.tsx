@@ -40,6 +40,9 @@ export function BomImportMatchPanel({ bomImportId, projectId }: BomImportMatchPa
     try {
       const response = await matchBomImportRows(bomImportId);
       setStatus({ kind: "success", response });
+      if (response.summary.usageCreatedOrUpdatedCount > 0) {
+        refreshProjectDetail();
+      }
     } catch (error) {
       setStatus({ kind: "failed", message: resolveBomMatchFailure(error) });
     }
@@ -82,7 +85,21 @@ function BomMatchStatusMessage({ projectId, status }: { projectId: string; statu
         <StatusBadge label={`${summary.unmatchedLineCount} unmatched`} tone={summary.unmatchedLineCount > 0 ? "danger" : "neutral"} />
       </div>
       <p className="bom-match-panel__status">
-        {summary.usageCreatedOrUpdatedCount} usage rows refreshed. <Link href={`/projects/${encodeURIComponent(projectId)}`}>Refresh project detail</Link> to see the confirmed usage table update.
+        {summary.usageCreatedOrUpdatedCount > 0 ? (
+          <>
+            {summary.usageCreatedOrUpdatedCount} usage row{summary.usageCreatedOrUpdatedCount === 1 ? "" : "s"} updated — confirmed usage and overlap refresh automatically.
+            {" "}
+            <Link href={`/projects/${encodeURIComponent(projectId)}#project-overlap-heading`}>Jump to overlap</Link>
+            {" · "}
+            <Link href={`/projects/${encodeURIComponent(projectId)}#project-usage-heading`}>Confirmed parts</Link>
+          </>
+        ) : (
+          <>
+            No new confirmed usage from this pass — weak or ambiguous rows stay unmatched until you fix source data or import missing parts.
+            {" "}
+            <Link href={`/projects/${encodeURIComponent(projectId)}`}>Reload project</Link>
+          </>
+        )}
       </p>
       {importCandidates.length > 0 ? <BomImportCandidateList candidates={importCandidates} /> : null}
     </div>
@@ -135,4 +152,13 @@ function resolveBomMatchFailure(error: unknown): string {
   }
 
   return error.message.replace(/^BOM import match failed \([^)]+?\):\s*/u, "");
+}
+
+/**
+ * Refreshes the current project workspace after a client-only matching action updates usage rows.
+ */
+function refreshProjectDetail(): void {
+  if (typeof window !== "undefined") {
+    window.location.reload();
+  }
 }

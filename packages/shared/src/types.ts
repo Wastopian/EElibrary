@@ -15,7 +15,22 @@ export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model" |
 export type EngineeringAssetClass = AssetType;
 
 /** File formats describe storage content without implying availability. */
-export type FileFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
+export type FileFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "step" | "glb" | "gltf" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
+
+/**
+ * AssetPreviewArtifactFormat names the formats the inline previewer knows how to render in a
+ * browser. Kept narrower than FileFormat so the preview channel cannot silently smuggle a
+ * non-embeddable format past the conversion gate.
+ */
+export type AssetPreviewArtifactFormat = "glb" | "gltf" | "png" | "jpg" | "jpeg" | "webp" | "pdf";
+
+/**
+ * AssetPreviewArtifactSource records where the rendering bytes came from. `source_native`
+ * mirrors `storage_key` for assets whose source format is already embeddable (PDF, PNG/JPG/etc).
+ * `converter_step_to_gltf` marks bytes produced by a worker conversion job. `manual_upload`
+ * leaves room for a future operator-uploaded preview without conflating it with the source.
+ */
+export type AssetPreviewArtifactSource = "source_native" | "converter_step_to_gltf" | "manual_upload";
 
 /** License modes prevent the UI from promising redistribution when it is not known. */
 export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown";
@@ -1045,6 +1060,57 @@ export interface PartCircuitBlockDependencyRecord {
   blockParts: CircuitBlockPart[];
 }
 
+export interface ProjectOverlapSharedPartPreview {
+  partId: string;
+  /** Catalog MPN when the part row exists; falls back to `partId` if missing. */
+  mpn: string;
+}
+
+/**
+ * ProjectOverlapPriorProject ranks one prior project against the current one by shared
+ * confirmed-usage parts. The `sharedPartIds` array is bounded so the UI can render a
+ * scannable list; the underlying count `sharedPartCount` is always the full overlap so a
+ * "+N more" affordance can describe what was truncated honestly.
+ *
+ * Reuse honesty: shared MPN count is a *signal*, never a guarantee. Two projects sharing
+ * 12 confirmed parts does not mean either project's assets are approved or verified for
+ * export, and no copy in the UI should pretend otherwise.
+ */
+export interface ProjectOverlapPriorProject {
+  project: Project;
+  sharedPartCount: number;
+  sharedPartIds: string[];
+  /** Parallel to `sharedPartIds`: readable MPN labels for the same preview slice. */
+  sharedPartsPreview: ProjectOverlapSharedPartPreview[];
+}
+
+/**
+ * ProjectOverlapPanelResponse is the read-only payload that drives the day-zero overlap
+ * panel on a project's detail page. The panel surfaces three things, each derived from
+ * existing project-memory tables (no new schema):
+ *  - the top prior projects ranked by shared confirmed-usage parts,
+ *  - the count of connector-class parts present in this project's confirmed usage that
+ *    also appear in prior project usages (the "this BOM uses a connector someone has
+ *    wired before" hint),
+ *  - the count of circuit-block roles that point at parts confirmed in this project
+ *    (the "this BOM uses a part already proven in a reusable block" hint).
+ *
+ * Empty values are explicit so the UI can render an honest empty state rather than
+ * hiding the panel and giving the impression that the data was never computed.
+ */
+export interface ProjectOverlapPanelResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  /** Number of distinct confirmed-usage part ids that drove the overlap search. */
+  scannedPartCount: number;
+  /** Top prior projects ranked by shared confirmed-usage parts, descending. */
+  priorProjects: ProjectOverlapPriorProject[];
+  /** Distinct connector-class parts confirmed in this project (informational only). */
+  connectorWhereUsedHitCount: number;
+  /** Distinct circuit-block roles depending on parts confirmed in this project. */
+  circuitBlockWhereUsedHitCount: number;
+}
+
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
 export type WhereUsedTargetType = "part" | "circuit_block" | "connector_set" | "asset";
 
@@ -1636,6 +1702,21 @@ export interface Asset {
   generationSourceAssetId: string | null;
   validationStatus: ValidationStatus;
   previewStatus: PreviewStatus;
+  /**
+   * Storage key for the derived bytes the inline previewer should render. Null when the
+   * preview channel has no rendering target -- either because the source format is non-
+   * embeddable and no converter has produced an artifact yet, or because the asset has no
+   * preview at all. A null artifact key combined with a `previewStatus` of `ready` is only
+   * valid when the source `fileFormat` is itself directly embeddable (pdf / png / jpg / jpeg /
+   * webp / glb / gltf); the worker normalization helper enforces this discipline at write time.
+   */
+  previewArtifactStorageKey: string | null;
+  /** Format of the bytes at `previewArtifactStorageKey`; null mirrors a null artifact key. */
+  previewArtifactFormat: AssetPreviewArtifactFormat | null;
+  /** ISO timestamp when the preview artifact was generated; null when no artifact exists. */
+  previewArtifactGeneratedAt: string | null;
+  /** Where the preview artifact bytes came from; null when no artifact exists. */
+  previewArtifactSource: AssetPreviewArtifactSource | null;
   sourceUrl: string | null;
   sourceRecordId: string | null;
   lastUpdatedAt: string;
@@ -2857,8 +2938,93 @@ export interface ExportBundle {
   assemblyCompletedAt: string | null;
   /** Number of assembly attempts the worker has executed for this bundle. */
   assemblyAttemptCount: number;
+  /**
+   * Hex SHA-256 of the assembled `.tar.gz` archive bytes, computed by the worker after the
+   * deterministic gzip step so identical inputs produce identical recorded hashes. Null until
+   * the archive has been assembled successfully (or for legacy bundles persisted before
+   * migration 039).
+   */
+  archiveSha256: string | null;
+  /**
+   * Hex SHA-256 of the embedded `manifest.json` body inside the assembled archive. Distinct
+   * from `archiveSha256` because the manifest is also persisted as the standalone audit-readable
+   * record; surfacing both lets an auditor confirm the manifest content matches the archive
+   * even when only one of the two files is downloaded.
+   */
+  manifestSha256: string | null;
+  /**
+   * Honest signature state for the assembled archive.
+   * - `unsigned` — no signing key configured at assembly time, or assembly predates migration 039.
+   * - `signed` — a configured Ed25519 key signed the archive's SHA-256 hex string at assembly.
+   * - `verification_failed` — a previously-signed bundle's signature could not be re-verified at
+   *   read time (key rotated out of the trust set, signature file missing, archive hash mismatch).
+   */
+  signatureStatus: ExportBundleSignatureStatus;
+  /** Signature algorithm identifier (e.g. `ed25519`); null when the bundle is unsigned. */
+  signatureAlgorithm: string | null;
+  /**
+   * Hex SHA-256 of the public-verification key. Recorded at signing time so the UI can identify
+   * which signer produced the bundle without exposing or trusting the public key itself.
+   */
+  signaturePublicKeyFingerprint: string | null;
+  /** Storage key for the detached `.sig` payload; null when the bundle is unsigned. */
+  signatureStorageKey: string | null;
+  /** ISO timestamp the bundle was signed at; null when the bundle is unsigned. */
+  signatureSignedAt: string | null;
   createdBy: string | null;
   createdAt: string;
+}
+
+/**
+ * ExportBundleSignatureStatus distinguishes the three honest states a bundle's cryptographic
+ * provenance can be in. A bundle without a configured signing key is `unsigned`, not
+ * `verified`. A signature that fails verification becomes `verification_failed` instead of
+ * being silently suppressed.
+ */
+export type ExportBundleSignatureStatus = "unsigned" | "signed" | "verification_failed";
+
+/**
+ * ExportBundleVerificationReason names the structured cause behind a `verification_failed`
+ * outcome so the UI can render targeted recovery copy instead of a single opaque red badge.
+ *
+ * - `archive_missing`                      — the archive file could not be read from storage.
+ * - `archive_hash_mismatch`                — the recomputed SHA-256 differs from the recorded one.
+ * - `signature_missing`                    — the bundle was signed but the .sig file is gone.
+ * - `signature_unreadable`                 — the .sig payload could not be parsed (corrupted).
+ * - `signature_algorithm_unsupported`      — the recorded algorithm is not one we can verify.
+ * - `verification_key_unavailable`         — no verification key is configured on this deployment.
+ * - `verification_key_fingerprint_mismatch`— the configured key does not match the recorded fingerprint.
+ * - `signature_mismatch`                   — Ed25519 verify returned false against the archive hash.
+ */
+export type ExportBundleVerificationReason =
+  | "archive_missing"
+  | "archive_hash_mismatch"
+  | "signature_missing"
+  | "signature_unreadable"
+  | "signature_algorithm_unsupported"
+  | "verification_key_unavailable"
+  | "verification_key_fingerprint_mismatch"
+  | "signature_mismatch";
+
+/**
+ * ExportBundleVerifyResponse is the envelope returned by the on-demand verify endpoint. It
+ * carries the freshly-mapped bundle row (with the new `signatureStatus` already persisted),
+ * plus the structured outcome so the UI can render "verified at <when>" or
+ * "<reason>: <recommended fix>" without having to re-derive intent from the row alone.
+ */
+export interface ExportBundleVerifyResponse {
+  bundle: ExportBundle;
+  outcome: {
+    status: ExportBundleSignatureStatus;
+    reason: ExportBundleVerificationReason | null;
+    recomputedArchiveSha256: string | null;
+    verifiedAt: string | null;
+  };
+  /**
+   * Human-readable boundary copy to render alongside the outcome. Verification is an evidence
+   * check on the archive; it is never a substitute for review/approval/export-readiness gates.
+   */
+  boundary: string;
 }
 
 /** ExportBundleCreateInput specifies the format and optional revision scope for a new bundle. */

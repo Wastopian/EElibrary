@@ -4,6 +4,7 @@
 
 "use client";
 
+import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { fetchCircuitBlocks, instantiateCircuitBlockIntoBom, isApiClientError } from "../lib/api-client";
@@ -111,6 +112,7 @@ export function CircuitBlockInstantiationPanel({
         projectRevisionId: selectedRevisionId
       });
       setSubmitState({ kind: "success", data });
+      refreshProjectDetail();
     } catch (error) {
       const message = isApiClientError(error)
         ? error.message.replace(/^.*failed \([^)]+\):\s*/u, "")
@@ -293,7 +295,11 @@ export function CircuitBlockInstantiationPanel({
           </p>
           <p className="form-hint">{submitState.data.boundary}</p>
           <p>
-            <StatusBadge label="Refresh project detail" tone="info" /> to see the new BOM import, lines, and confirmed usage rows.
+            Workspace refreshed — check{" "}
+            <Link href={`/projects/${encodeURIComponent(projectId)}#project-bom-imports-heading`}>BOM imports</Link>
+            {" "}and{" "}
+            <Link href={`/projects/${encodeURIComponent(projectId)}#project-usage-heading`}>confirmed usage</Link>
+            {" "}for the new rows.
           </p>
         </div>
       )}
@@ -325,4 +331,13 @@ function formatReuseStateLabel(state: CircuitBlockReuseHeadline["state"]): strin
 function headlineToneToBadge(tone: CircuitBlockReuseHeadline["tone"]): BadgeTone {
   if (tone === "generated") return "info";
   return tone;
+}
+
+/**
+ * Refreshes the project workspace after the client-only instantiation action creates BOM rows.
+ */
+function refreshProjectDetail(): void {
+  if (typeof window !== "undefined") {
+    window.location.reload();
+  }
 }

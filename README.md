@@ -86,17 +86,19 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - Part detail is answer-first: use decision, datasheet and CAD/export state, connector buildable set, provenance, approved substitutes, next actions.
 - Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, freshness warnings, stale refresh scheduling, retired-row handling, and no live-stock claim.
 - Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
+- **File-grounded asset validators** (worker jobs): footprint geometry sanity (pad count vs pin count, body bounding box) and symbol pin-count cross-check against high-confidence datasheet extraction. Results write `asset_validation_records` with `provenance = 'generated'`; validators never auto-promote `validation_status`, `review_status`, or `export_status`.
 
 **Project and BOM memory**
 
 - `/projects`: create projects and revisions, CSV and **XLSX** BOM preview, column mapping, persisted raw/mapped BOM rows.
 - **Row matching** creates confirmed `project_part_usages` only when deterministic internal identity matches; weak/unmatched rows stay distinct.
+- **Day-zero overlap panel** on project detail ranks prior projects by shared *confirmed-usage* parts and reports connector / circuit-block where-used hits inside this BOM. Overlap is a reuse signal, never an approval signal.
 - BOM **health/diagnostics**, **fleet risk** on the dashboard, **revision compare**, **follow-ups**, **lifecycle regression** findings, **substitution** hints, **approval batch** from project context, and **export bundle** history with downloads when file-backed keys exist.
 
 **Engineering workspaces**
 
-- **`/compare`** — up to four parts from Catalog/detail actions or the in-page selection tray: key metrics, lifecycle, trust, readiness, approval, asset-class readiness, trust-stage diff, connector context, and export bundle gate in one table.
-- **Asset PDF/image preview** on part detail — when a stored PDF or supported image is `previewStatus: ready`, an inline preview appears (reference-only files stay download / open in new tab only).
+- **`/compare`** — up to four parts from Catalog/detail actions or the in-page selection tray: key metrics, lifecycle, trust, readiness, approval, asset-class readiness, trust-stage diff, **side-by-side CAD preview band** (Symbol / Footprint / 3D model using the shared honesty matrix), connector context, and export bundle gate in one table.
+- **Asset PDF/image/3D preview** on part detail — when a stored PDF or supported image is `previewStatus: ready`, an inline preview appears; when a stored STEP (or other source 3D format) has a worker-generated viewer-only glTF/glb artifact, an inline lazy-loaded `<model-viewer>` is shown. The derived 3D preview never promotes the source asset's validation, approval, or export state. Reference-only files stay download / open in new tab only.
 - `/where-used` across parts, circuit blocks, connector sets (mates), and assets (bundle manifests).
 - `/evidence` vault with filters, review, and storage-backed attachments tied to projects, BOM lines, parts, findings, and blocks.
 - `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
@@ -109,10 +111,11 @@ Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTAT
 
 These remain product direction; they are **not** in the implementation-status matrix as shipped features (or are only **partial** there).
 
-- **Deeper compare** (connector/CAD-first matrix beyond key metrics and bundle gate).
+- **Deeper compare** (richer datasheet-revision diff; CAD preview band is now shipped).
 - **Tools / EE calculators** page.
 - **Subcategory** search facets until backed by persisted catalog data.
-- **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation beyond current worker foundations.
+- **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation (deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission) beyond current worker foundations.
+- **More file-grounded validators** (STEP integrity, footprint pad pitch vs package geometry) and an `/admin` queue surface that triages `needs_review` / `failed` validation rows.
 
 ## Near-Term Product Priority
 

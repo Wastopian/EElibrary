@@ -57,6 +57,7 @@ import type {
   ExportBundleCreateInput,
   ExportBundleCreateResponse,
   ExportBundleListResponse,
+  ExportBundleVerifyResponse,
   FollowUpListResponse,
   FollowUpSyncResponse,
   FollowUpUpdateInput,
@@ -86,6 +87,7 @@ import type {
   ProjectFolderCategory,
   ProjectFromCsvInput,
   ProjectFromCsvResponse,
+  ProjectOverlapPanelResponse,
   ProjectListResponse,
   VendorCreateInput,
   VendorCreateResponse,
@@ -742,6 +744,33 @@ export async function fetchProjectFollowUps(projectId: string): Promise<FollowUp
   }
 
   const envelope = (await response.json()) as ApiEnvelope<FollowUpListResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Reads the day-zero overlap panel payload for one project. Returns null when the
+ * project is unknown so the panel can render its own empty/missing state without
+ * blocking the rest of the page.
+ *
+ * Honesty: overlap data is a reuse *signal*, not an approval or trust signal; callers
+ * must not interpret the response as anything beyond "these prior projects have
+ * confirmed usage of N of the same parts."
+ */
+export async function fetchProjectOverlapPanel(projectId: string): Promise<ProjectOverlapPanelResponse | null> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/overlap`), {
+    cache: "no-store"
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project overlap request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectOverlapPanelResponse>;
 
   return envelope.data;
 }
@@ -1608,6 +1637,29 @@ export async function fetchProjectExportBundles(projectId: string): Promise<Expo
 }
 
 /**
+ * Re-verifies one assembled bundle's archive hash and Ed25519 signature on demand. Returns the
+ * structured outcome plus the freshly mapped bundle row (which carries the new
+ * `signatureStatus` already persisted server-side).
+ *
+ * Honesty contract: a `verification_failed` outcome is the only honest answer when the recorded
+ * hash no longer matches the bytes on disk. The UI must not silently fall back to `unsigned`.
+ */
+export async function verifyExportBundle(bundleId: string): Promise<ExportBundleVerifyResponse> {
+  const response = await fetch(buildApiUrl(`/export-bundles/${encodeURIComponent(bundleId)}/verify`), {
+    cache: "no-store",
+    headers: await getAuthHeaders(),
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Export bundle verify");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ExportBundleVerifyResponse>;
+  return envelope.data;
+}
+
+/**
  * Fetches match-status diagnostics for one BOM import.
  */
 export async function fetchBomImportDiagnostics(importId: string): Promise<BomImportDiagnosticsResponse> {
@@ -1751,6 +1803,15 @@ export async function applyApprovalBatch(projectId: string, input: ApprovalBatch
  */
 export function buildAssetDownloadUrl(partId: string, assetId: string): string {
   return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+}
+
+/**
+ * Builds the URL for the derived preview artifact (e.g. glb/gltf converted from a STEP).
+ * This is intentionally distinct from `buildAssetDownloadUrl`: the source asset bytes and
+ * the derived viewer artifact have separate availability and trust contracts.
+ */
+export function buildAssetPreviewArtifactDownloadUrl(partId: string, assetId: string): string {
+  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`;
 }
 
 const MAX_COMPARE_PARTS = 4;

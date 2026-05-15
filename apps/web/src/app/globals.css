@@ -7551,6 +7551,18 @@ details[open] .trust-breakdown__toggle::before {
   min-height: 148px;
 }
 
+.bundle-signature-cell {
+  align-items: flex-start;
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.bundle-signature-cell .ui-mono {
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
 .document-control-panel {
   display: grid;
   gap: 16px;

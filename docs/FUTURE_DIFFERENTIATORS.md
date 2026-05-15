@@ -157,7 +157,7 @@ explicitly distinguishing matched (confirmed usage) from weak/ambiguous (saved b
 
 ---
 
-## 6. Cryptographic / verifiable provenance on export bundles
+## 6. Cryptographic / verifiable provenance on export bundles ✅ shipped (2026-05-13)
 
 **Why it matters.** Reproducible export bundles (`bundle.tar.gz` with POSIX ustar + zero-mtime
 gzip) already mean "what shipped in revision A is bit-for-bit recoverable." Adding a SHA-256
@@ -165,27 +165,38 @@ manifest + an optional detached signature converts the bundle into something a s
 aerospace, or defense shop can present to a customer or auditor. This is not a feature
 DigiKey, Mouser, SnapEDA, or Altium 365 will ever ship.
 
-**Existing foundations.**
+**Shipped.**
 
-- `apps/worker/src/tar-archive.ts` (deterministic tar+gzip writer; no third-party dep).
-- `apps/worker/src/export-bundle-assembly.ts` (asset-byte assembly with structured failure
-  telemetry).
-- `infra/postgres/031_export_bundle_assembly.sql` and `infra/postgres/032_export_bundle_archive_key.sql`
-  (assembly status, archive storage key, attempt count, error JSONB).
-- API admin auth on `/storage/:key`.
-
-**Concrete first slice.**
-
-- Add a deterministic `manifest.sha256.txt` and `archive.sha256.txt` to the bundle prefix at
-  assembly time, both committed to `export_bundles.assembly_manifest` JSONB and exposed in
-  the bundle row's `manifestAvailability` / `archiveAvailability` fields.
-- Add an optional detached signature step (Ed25519, key configured per-deployment, default
-  off) and persist the public-key fingerprint on the bundle row.
-- Surface "Archive SHA-256 ⏎ matches" / "Signature verified" / "Signature missing" in
-  `ExportBundlePanel` with the same honesty discipline as `fileAvailability`.
+- ✅ `infra/postgres/039_export_bundle_cryptographic_provenance.sql` adds `archive_sha256`,
+  `manifest_sha256`, `signature_status` (CHECK-pinned to `unsigned`/`signed`/`verification_failed`),
+  `signature_algorithm`, `signature_public_key_fingerprint`, `signature_storage_key`,
+  `signature_signed_at`. The signature_status default is `'unsigned'` and the migration is
+  idempotent across replays.
+- ✅ `apps/worker/src/export-bundle-assembly.ts` computes archive + manifest SHA-256 after the
+  deterministic gzip step (so identical inputs yield identical hashes), writes a
+  `bundle.tar.gz.sha256` sidecar, and embeds a `manifest.json.sha256` entry inside the archive.
+  When `EE_LIBRARY_BUNDLE_SIGNING_KEY` (Ed25519 PEM) is configured the worker also signs the
+  lowercase-hex archive hash and writes a detached `bundle.tar.gz.sig` plus the public-key
+  SHA-256 fingerprint.
+- ✅ `apps/worker/src/export-bundle-verification.ts` exports `verifyAssembledExportBundle` —
+  the inverse of assembly. It re-reads the archive, recomputes the hash, validates the Ed25519
+  signature against `EE_LIBRARY_BUNDLE_VERIFICATION_KEY`, and returns one of `unsigned` /
+  `signed` / `verification_failed` with a structured `reason` (`archive_hash_mismatch`,
+  `signature_missing`, `verification_key_unavailable`, `verification_key_fingerprint_mismatch`,
+  `signature_mismatch`, etc).
+- ✅ Admin-gated `POST /export-bundles/:id/verify` route + `verifyExportBundleInDatabase`
+  store helper persist the new signature_status (so list reads see the failure) and return
+  `ExportBundleVerifyResponse` with the recorded vs recomputed hashes side-by-side. The
+  recorded `archive_sha256` is intentionally never overwritten — it is the audit anchor.
+- ✅ `ExportBundlePanel` per-row **Provenance** column (`BundleProvenanceCell`) renders the
+  signature badge, truncated SHA-256 with full hash on hover, recorded signer fingerprint, an
+  admin **Re-verify** action, and inline recovery copy keyed off the structured failure reason.
 
 **Honesty rules.** A bundle without a signature is `unsigned`, not `verified`. A signature
-mismatch is `blocked`, never silently suppressed.
+mismatch is `verification_failed` with a structured reason, never silently suppressed. A
+deployment without a verification key configured surfaces `verification_key_unavailable`
+rather than pretending the bundle is unsigned. Resolving a verification failure preserves the
+recorded hash so a project that downloaded the bundle while it was healthy remains auditable.
 
 ---
 

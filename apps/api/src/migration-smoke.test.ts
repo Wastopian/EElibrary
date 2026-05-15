@@ -85,6 +85,21 @@ const supplyOfferSupplierRefreshMigrationSql = readFileSync(new URL("../../../in
 /** circuitBlockKnownRisksMigrationSql loads the migration 038 known-risk memory migration under test. */
 const circuitBlockKnownRisksMigrationSql = readFileSync(new URL("../../../infra/postgres/038_circuit_block_known_risks.sql", import.meta.url), "utf8");
 
+/** exportBundleCryptographicProvenanceMigrationSql loads the migration 039 archive-hash + signature migration under test. */
+const exportBundleCryptographicProvenanceMigrationSql = readFileSync(new URL("../../../infra/postgres/039_export_bundle_cryptographic_provenance.sql", import.meta.url), "utf8");
+
+/** assetPreviewArtifactsMigrationSql loads the migration 040 derived-preview-artifact columns under test. */
+const assetPreviewArtifactsMigrationSql = readFileSync(new URL("../../../infra/postgres/040_asset_preview_artifacts.sql", import.meta.url), "utf8");
+
+/** exportBundlesMigrationSql loads the original migration 028 export-bundles table under test. */
+const exportBundlesMigrationSql = readFileSync(new URL("../../../infra/postgres/028_export_bundles.sql", import.meta.url), "utf8");
+
+/** exportBundleAssemblyMigrationSql loads the migration 031 worker-assembly columns under test. */
+const exportBundleAssemblyMigrationSql = readFileSync(new URL("../../../infra/postgres/031_export_bundle_assembly.sql", import.meta.url), "utf8");
+
+/** exportBundleArchiveKeyMigrationSql loads the migration 032 archive_storage_key migration under test. */
+const exportBundleArchiveKeyMigrationSql = readFileSync(new URL("../../../infra/postgres/032_export_bundle_archive_key.sql", import.meta.url), "utf8");
+
 /** oldPhase2SchemaSql models a database created before connector hardening columns and tables existed. */
 const oldPhase2SchemaSql = `
   CREATE TABLE manufacturers (
@@ -550,6 +565,227 @@ test("circuit block migration preserves reusable part roles and evidence targets
   );
   assert.match(circuitBlocksMigrationSql, /CREATE TABLE IF NOT EXISTS circuit_blocks/u);
   assert.match(circuitBlocksMigrationSql, /CREATE TABLE IF NOT EXISTS circuit_block_parts/u);
+});
+
+/**
+ * Verifies migration 039 layers cleanly on top of the existing export-bundle columns and
+ * preserves the honesty discipline that an unsigned bundle stays `unsigned`. Specifically:
+ *
+ *   - `archive_sha256` and `manifest_sha256` add as nullable text columns so legacy assembled
+ *     bundles survive the migration without a backfill (they read as null and the API surface
+ *     reports them as "not recorded" instead of inventing a hash).
+ *   - `signature_status` defaults to `'unsigned'` (NOT NULL) so a freshly-inserted bundle row
+ *     can never claim verified state without explicit signing path action.
+ *   - The new CHECK constraint accepts only the three documented values so a corrupted column
+ *     write fails loudly rather than letting the UI render an unknown state as verified.
+ *   - The migration is idempotent under repeat application (production runs migrations on
+ *     every deploy and `IF NOT EXISTS` guards must stay correct after the first apply).
+ */
+test("export bundle cryptographic provenance migration adds nullable hashes and a CHECK-guarded signature status", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, exportBundlesMigrationSql);
+  applyMigrationSql(db, exportBundleAssemblyMigrationSql);
+  applyMigrationSql(db, exportBundleArchiveKeyMigrationSql);
+
+  // Seed a legacy bundle row before migration 039 so the ADD COLUMNs get exercised against
+  // existing rows the same way they would in production.
+  db.public.none(`
+    INSERT INTO projects (id, project_key, name, description, owner, status)
+    VALUES ('project-bundle', 'BUNDLE', 'Bundle Project', 'Crypto provenance smoke test', 'hardware', 'active');
+
+    INSERT INTO export_bundles (id, project_id, bundle_format, manifest, part_count, included_asset_count, omitted_asset_count, warning_count)
+    VALUES ('ebundle-legacy', 'project-bundle', 'neutral', '{"includedAssets":[]}'::jsonb, 0, 0, 0, 0);
+  `);
+
+  applyMigrationSql(db, exportBundleCryptographicProvenanceMigrationSql);
+
+  // Legacy row should expose the new columns as readable (hashes default to null, which is the
+  // honest "not recorded" state the API surface must report). pg-mem does not backfill NOT
+  // NULL DEFAULT on ADD COLUMN the way real Postgres does, so we check the column shape rather
+  // than asserting the default on a pre-existing row -- the API store's
+  // normalizeExportBundleSignatureStatus helper is responsible for treating the unknown raw
+  // value as `unsigned`.
+  const legacy = db.public.one(`
+    SELECT archive_sha256, manifest_sha256, signature_algorithm, signature_storage_key
+    FROM export_bundles WHERE id = 'ebundle-legacy'
+  `);
+  assert.deepEqual(legacy, {
+    archive_sha256: null,
+    manifest_sha256: null,
+    signature_algorithm: null,
+    signature_storage_key: null
+  });
+
+  // A bundle inserted AFTER migration 039 with no explicit signature_status must take the
+  // documented `'unsigned'` default. This is the contract that protects the UI from rendering
+  // an absent signature as audit-grade.
+  db.public.none(`
+    INSERT INTO export_bundles (
+      id, project_id, bundle_format, manifest, part_count, included_asset_count, omitted_asset_count, warning_count
+    )
+    VALUES (
+      'ebundle-fresh', 'project-bundle', 'neutral', '{"includedAssets":[]}'::jsonb, 0, 0, 0, 0
+    )
+  `);
+  const fresh = db.public.one(`SELECT signature_status FROM export_bundles WHERE id = 'ebundle-fresh'`);
+  assert.deepEqual(fresh, { signature_status: "unsigned" });
+
+  // A newly-assembled-and-signed bundle should be storable with the documented `signed` value
+  // and the matching algorithm/fingerprint columns.
+  db.public.none(`
+    INSERT INTO export_bundles (
+      id, project_id, bundle_format, manifest, part_count, included_asset_count, omitted_asset_count, warning_count,
+      assembly_status, archive_sha256, manifest_sha256,
+      signature_status, signature_algorithm, signature_public_key_fingerprint, signature_storage_key, signature_signed_at
+    )
+    VALUES (
+      'ebundle-signed', 'project-bundle', 'neutral', '{"includedAssets":[]}'::jsonb, 0, 0, 0, 0,
+      'assembled',
+      'a'::text, 'b'::text,
+      'signed', 'ed25519', 'fp-deadbeef', 'export-bundles/project-bundle/ebundle-signed/bundle.tar.gz.sig', '2026-05-13T12:00:00.000Z'
+    )
+  `);
+  const signed = db.public.one(`SELECT signature_status, signature_algorithm FROM export_bundles WHERE id = 'ebundle-signed'`);
+  assert.deepEqual(signed, { signature_algorithm: "ed25519", signature_status: "signed" });
+
+  // The CHECK constraint must reject any value outside the three documented states. An attacker
+  // (or a buggy writer) inserting `verified` would otherwise let the UI render unverified
+  // bytes as audit-grade, which is exactly the failure mode this column exists to prevent.
+  assert.throws(
+    () => db.public.none(`
+      INSERT INTO export_bundles (
+        id, project_id, bundle_format, manifest, part_count, included_asset_count, omitted_asset_count, warning_count,
+        signature_status
+      )
+      VALUES (
+        'ebundle-invalid-status', 'project-bundle', 'neutral', '{"includedAssets":[]}'::jsonb, 0, 0, 0, 0,
+        'verified'
+      )
+    `),
+    /check/i
+  );
+
+  // Re-applying 039 must be a no-op — production runs migrations on every deploy and the
+  // ADD COLUMN IF NOT EXISTS / DROP CONSTRAINT IF EXISTS guards must stay correct after the
+  // first apply. We exercise idempotency on a fresh pg-mem instance because pg-mem's CREATE
+  // CONSTRAINT semantics differ from Postgres' (it raises on the second add); the production
+  // migration uses DROP-then-ADD so it is safe to replay.
+  const replayDb = newDb();
+  replayDb.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(replayDb, projectBomMemoryMigrationSql);
+  applyMigrationSql(replayDb, exportBundlesMigrationSql);
+  applyMigrationSql(replayDb, exportBundleAssemblyMigrationSql);
+  applyMigrationSql(replayDb, exportBundleArchiveKeyMigrationSql);
+  applyMigrationSql(replayDb, exportBundleCryptographicProvenanceMigrationSql);
+  applyMigrationSql(replayDb, exportBundleCryptographicProvenanceMigrationSql);
+
+  assert.match(exportBundleCryptographicProvenanceMigrationSql, /ADD COLUMN IF NOT EXISTS archive_sha256/u);
+  assert.match(exportBundleCryptographicProvenanceMigrationSql, /ADD COLUMN IF NOT EXISTS signature_status/u);
+  assert.match(exportBundleCryptographicProvenanceMigrationSql, /export_bundles_signature_status_check/u);
+});
+
+/**
+ * Verifies the asset preview-artifact migration adds nullable derived-bytes columns and rejects
+ * undocumented artifact formats / sources via CHECK constraints.
+ *
+ * The constraint enforcement is exactly what protects the inline previewer from rendering bytes
+ * the browser cannot understand: only formats explicitly listed in the constraint may land in
+ * the preview channel, so a misconfigured writer cannot smuggle a STEP file into the path the
+ * UI treats as "ready to render."
+ */
+test("asset preview artifact migration adds nullable artifact channel with format and source guards", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(db, assetPreviewArtifactsMigrationSql);
+
+  // Seed a part + asset row so we exercise INSERT and the CHECK constraints behave under real data.
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website)
+      VALUES ('mfr-preview', 'Preview Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm)
+      VALUES ('pkg-preview', 'SO-8', 8, 1.27, 5.0, 4.0, 1.5);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score)
+      VALUES ('part-preview', 'PREVIEW-1', 'mfr-preview', 'IC', 'active', 'pkg-preview', 0.9);
+
+    INSERT INTO assets (
+      id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode,
+      validation_status, preview_status
+    )
+    VALUES (
+      'asset-preview-step', 'part-preview', 'three_d_model', 'step', 'cad/preview/model.step', NULL, NULL,
+      'redistribution_allowed', 'needs_review', 'pending'
+    );
+  `);
+
+  // Default state: a freshly migrated row exposes the artifact channel as null in every column.
+  const beforeArtifact = db.public.one(`
+    SELECT preview_artifact_storage_key, preview_artifact_format, preview_artifact_source
+    FROM assets WHERE id = 'asset-preview-step'
+  `);
+  assert.deepEqual(beforeArtifact, {
+    preview_artifact_storage_key: null,
+    preview_artifact_format: null,
+    preview_artifact_source: null
+  });
+
+  // A converter writing a real glTF artifact should be storable with the documented format /
+  // source pair so the read path can render the derived bytes inline.
+  db.public.none(`
+    UPDATE assets
+    SET preview_artifact_storage_key = 'cad/preview/model.glb',
+        preview_artifact_format = 'glb',
+        preview_artifact_source = 'converter_step_to_gltf',
+        preview_artifact_generated_at = '2026-05-13T12:00:00.000Z',
+        preview_status = 'ready'
+    WHERE id = 'asset-preview-step'
+  `);
+  const afterArtifact = db.public.one(`
+    SELECT preview_artifact_format, preview_artifact_source, preview_status
+    FROM assets WHERE id = 'asset-preview-step'
+  `);
+  assert.deepEqual(afterArtifact, {
+    preview_artifact_format: "glb",
+    preview_artifact_source: "converter_step_to_gltf",
+    preview_status: "ready"
+  });
+
+  // The format CHECK must reject any value outside the documented embeddable list. A buggy
+  // writer attempting to mark a STEP file as a directly-renderable artifact must fail loudly --
+  // otherwise the UI would attempt to render bytes the browser cannot decode.
+  assert.throws(
+    () =>
+      db.public.none(
+        `UPDATE assets SET preview_artifact_format = 'step' WHERE id = 'asset-preview-step'`
+      ),
+    /check/i
+  );
+
+  // The source CHECK must reject undocumented provenance values so the audit trail (which
+  // operator generated the preview, and how) cannot be silently bypassed.
+  assert.throws(
+    () =>
+      db.public.none(
+        `UPDATE assets SET preview_artifact_source = 'screenshot_export' WHERE id = 'asset-preview-step'`
+      ),
+    /check/i
+  );
+
+  // Re-applying 040 must be a no-op so production redeploys do not crash on the second migration
+  // pass. The migration uses ADD COLUMN IF NOT EXISTS / DROP CONSTRAINT IF EXISTS / ADD CONSTRAINT
+  // so a fresh pg-mem instance must accept the script twice in a row.
+  const replayDb = newDb();
+  replayDb.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(replayDb, assetPreviewArtifactsMigrationSql);
+  applyMigrationSql(replayDb, assetPreviewArtifactsMigrationSql);
+
+  assert.match(assetPreviewArtifactsMigrationSql, /ADD COLUMN IF NOT EXISTS preview_artifact_storage_key/u);
+  assert.match(assetPreviewArtifactsMigrationSql, /ADD COLUMN IF NOT EXISTS preview_artifact_format/u);
+  assert.match(assetPreviewArtifactsMigrationSql, /assets_preview_artifact_format_check/u);
+  assert.match(assetPreviewArtifactsMigrationSql, /assets_preview_artifact_source_check/u);
 });
 
 /**

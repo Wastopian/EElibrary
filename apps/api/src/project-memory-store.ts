@@ -107,6 +107,9 @@ import type {
   ExportBundleListResponse,
   ExportBundleManifest,
   ExportBundleOmission,
+  ExportBundleSignatureStatus,
+  ExportBundleVerificationReason,
+  ExportBundleVerifyResponse,
   FileFormat,
   FollowUpListResponse,
   FollowUpRecord,
@@ -145,6 +148,8 @@ import type {
   ProjectFleetRiskRow,
   ProjectListResponse,
   ProjectMemoryCapability,
+  ProjectOverlapPanelResponse,
+  ProjectOverlapPriorProject,
   ProjectPartUsage,
   ProjectPartUsagesResponse,
   ProjectRevision,
@@ -232,6 +237,12 @@ export type PartWhereUsedReadResult =
 export type WhereUsedSearchReadResult =
   | { status: "available"; response: WhereUsedSearchResponse }
   | { status: "not_configured" };
+
+/** ProjectOverlapPanelReadResult reports overlap panel availability for one project. */
+export type ProjectOverlapPanelReadResult =
+  | { status: "available"; response: ProjectOverlapPanelResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
 
 /** ProjectBomHealthReadResult reports computed BOM health availability for one project. */
 export type ProjectBomHealthReadResult =
@@ -1988,6 +1999,278 @@ export async function readPartWhereUsedFromDatabase(partId: string): Promise<Par
   } catch (error) {
     throw toProjectMemoryStoreError(error);
   }
+}
+
+/**
+ * Reads the day-zero overlap panel data for one project. Returns the top prior projects
+ * ranked by shared confirmed-usage parts plus informational counts of connector-class
+ * and circuit-block where-used hits in this project's confirmed usage.
+ *
+ * Honesty rules baked in:
+ *  - Overlap is computed against *confirmed* `project_part_usages` only. BOM rows that
+ *    were uploaded but never matched do not inflate the overlap.
+ *  - Prior projects are returned with the full Project row so the UI can render the
+ *    project name without a second fetch; no readiness/approval flags are joined in
+ *    because overlap is a reuse signal, not a trust signal.
+ *  - `sharedPartCount` is the *actual* overlap (never truncated). `sharedPartIds` is
+ *    capped so the UI can render a scannable list, and the caller is expected to phrase
+ *    any "and N more" affordance using the (count - displayed) difference.
+ *  - Returns `state: "empty"` when this project has no confirmed usage yet so the panel
+ *    can render a clear "upload a BOM and match rows first" empty state. Returns
+ *    `state: "available"` when the project has confirmed usage even if no prior project
+ *    shares anything — that's also an honest signal.
+ */
+export async function readProjectOverlapPanelFromDatabase(
+  projectId: string,
+  topProjectsLimit = 5,
+  sharedPartIdsPerProjectLimit = 8
+): Promise<ProjectOverlapPanelReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await projectExists(databasePool, projectId))) {
+      return { status: "not_found" };
+    }
+
+    const scannedParts = await readDistinctConfirmedPartIdsForProject(databasePool, projectId);
+
+    if (scannedParts.length === 0) {
+      return {
+        response: {
+          circuitBlockWhereUsedHitCount: 0,
+          connectorWhereUsedHitCount: 0,
+          priorProjects: [],
+          projectId,
+          scannedPartCount: 0,
+          state: "empty"
+        },
+        status: "available"
+      };
+    }
+
+    const [priorProjects, connectorWhereUsedHitCount, circuitBlockWhereUsedHitCount] = await Promise.all([
+      readPriorProjectOverlap(databasePool, projectId, scannedParts, topProjectsLimit, sharedPartIdsPerProjectLimit),
+      readConnectorWhereUsedHitCount(databasePool, projectId, scannedParts),
+      readCircuitBlockWhereUsedHitCount(databasePool, scannedParts)
+    ]);
+
+    return {
+      response: {
+        circuitBlockWhereUsedHitCount,
+        connectorWhereUsedHitCount,
+        priorProjects,
+        projectId,
+        scannedPartCount: scannedParts.length,
+        state: priorProjects.length > 0 || connectorWhereUsedHitCount > 0 || circuitBlockWhereUsedHitCount > 0
+          ? "available"
+          : "empty"
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads the distinct set of internal part ids that appear in this project's confirmed
+ * usage. Unmatched and ambiguous BOM rows are excluded so the overlap signal stays honest.
+ */
+async function readDistinctConfirmedPartIdsForProject(
+  databasePool: Pool,
+  projectId: string
+): Promise<string[]> {
+  const result = await databasePool.query<{ part_id: string }>(
+    `
+      SELECT DISTINCT part_id
+      FROM project_part_usages
+      WHERE project_id = $1
+        AND part_id IS NOT NULL
+    `,
+    [projectId]
+  );
+
+  return result.rows.map((row) => row.part_id);
+}
+
+/**
+ * Reads the top prior projects ranked by shared confirmed-usage parts with the current
+ * project. The current project is excluded so the panel never shows the project ranking
+ * itself first. `sharedPartIds` is capped per project so the UI list stays scannable.
+ */
+async function readPriorProjectOverlap(
+  databasePool: Pool,
+  currentProjectId: string,
+  scannedPartIds: string[],
+  topProjectsLimit: number,
+  sharedPartIdsPerProjectLimit: number
+): Promise<ProjectOverlapPriorProject[]> {
+  if (scannedPartIds.length === 0) {
+    return [];
+  }
+
+  const result = await databasePool.query<{
+    project_id: string;
+    shared_part_count: string;
+    shared_part_ids: string[];
+  }>(
+    `
+      SELECT
+        ppu.project_id AS project_id,
+        COUNT(DISTINCT ppu.part_id)::text AS shared_part_count,
+        ARRAY_AGG(DISTINCT ppu.part_id) AS shared_part_ids
+      FROM project_part_usages ppu
+      WHERE ppu.project_id <> $1
+        AND ppu.part_id = ANY ($2::text[])
+      GROUP BY ppu.project_id
+      ORDER BY COUNT(DISTINCT ppu.part_id) DESC, ppu.project_id ASC
+      LIMIT $3
+    `,
+    [currentProjectId, scannedPartIds, topProjectsLimit]
+  );
+
+  if (result.rows.length === 0) {
+    return [];
+  }
+
+  const projectIds = result.rows.map((row) => row.project_id);
+  // Dynamic placeholder IN-list keeps this query compatible with both Postgres and
+  // pg-mem (pg-mem's planner currently mis-handles `WHERE pk = ANY ($1::text[])` against
+  // primary-key columns and returns zero rows). Since `topProjectsLimit` is small (5 by
+  // default), expanding to `IN ($1, $2, ...)` is both safe and inexpensive.
+  const placeholders = projectIds.map((_, index) => `$${index + 1}`).join(", ");
+  const projectsResult = await databasePool.query<DatabaseProjectRow>(
+    `
+      SELECT id, project_key, name, description, owner, status, created_at, updated_at
+      FROM projects
+      WHERE id IN (${placeholders})
+    `,
+    projectIds
+  );
+  const projectsById = new Map(projectsResult.rows.map((row) => [row.id, mapProjectRow(row)] as const));
+
+  const candidates = result.rows
+    .map((row) => {
+      const project = projectsById.get(row.project_id);
+      if (!project) {
+        return null;
+      }
+      const sharedPartIds = (row.shared_part_ids ?? []).slice(0, sharedPartIdsPerProjectLimit);
+      return {
+        project,
+        sharedPartCount: Number.parseInt(row.shared_part_count, 10) || 0,
+        sharedPartIds
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+
+  const previewIdSet = new Set<string>();
+  for (const row of candidates) {
+    for (const id of row.sharedPartIds) {
+      previewIdSet.add(id);
+    }
+  }
+  const previewPartIds = [...previewIdSet];
+  const mpnByPartId = new Map<string, string>();
+  if (previewPartIds.length > 0) {
+    const partPlaceholders = previewPartIds.map((_, index) => `$${index + 1}`).join(", ");
+    const mpnsResult = await databasePool.query<{ id: string; mpn: string }>(
+      `
+        SELECT id, mpn
+        FROM parts
+        WHERE id IN (${partPlaceholders})
+      `,
+      previewPartIds
+    );
+    for (const mpnRow of mpnsResult.rows) {
+      mpnByPartId.set(mpnRow.id, mpnRow.mpn);
+    }
+  }
+
+  return candidates.map((row) => ({
+    project: row.project,
+    sharedPartCount: row.sharedPartCount,
+    sharedPartIds: row.sharedPartIds,
+    sharedPartsPreview: row.sharedPartIds.map((partId) => ({
+      partId,
+      mpn: mpnByPartId.get(partId) ?? partId
+    }))
+  }));
+}
+
+/**
+ * Counts how many distinct connector-class catalog parts from this project's confirmed
+ * usage have at least one *other* project's confirmed usage (i.e. at least one prior
+ * reuse). This is an informational signal: "your BOM uses N connectors someone else has
+ * already wired into a confirmed project."
+ *
+ * Connector-class is determined by `parts.category = 'Connector'` to match the seed
+ * data convention; we deliberately do not join the buildable-mating-set tables since
+ * absence of mating data is not the same as absence of connector identity.
+ */
+async function readConnectorWhereUsedHitCount(
+  databasePool: Pool,
+  currentProjectId: string,
+  scannedPartIds: string[]
+): Promise<number> {
+  if (scannedPartIds.length === 0) {
+    return 0;
+  }
+
+  // The query avoids two pg-mem compatibility traps:
+  //  1) correlated EXISTS subqueries against `parts.id` (pg-mem fails to resolve the
+  //     outer alias in some planner paths),
+  //  2) `WHERE pk_col = ANY ($::text[])` against the primary-key column (pg-mem's
+  //     planner returns zero rows for parameter arrays against PK indexes).
+  // Both are avoided by expanding the part-id list into a dynamic `IN ($1, $2, ...)`
+  // placeholder list. This is identical to `= ANY` in Postgres' planner.
+  const partIdPlaceholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
+  const currentProjectIdPlaceholder = `$${scannedPartIds.length + 1}`;
+  const result = await databasePool.query<{ count: string }>(
+    `
+      SELECT COUNT(DISTINCT p.id)::text AS count
+      FROM parts p
+      WHERE p.id IN (${partIdPlaceholders})
+        AND lower(p.category) LIKE '%connector%'
+        AND p.id IN (
+          SELECT other_usage.part_id
+          FROM project_part_usages other_usage
+          WHERE other_usage.project_id <> ${currentProjectIdPlaceholder}
+            AND other_usage.part_id IN (${partIdPlaceholders})
+        )
+    `,
+    [...scannedPartIds, currentProjectId]
+  );
+
+  return Number.parseInt(result.rows[0]?.count ?? "0", 10) || 0;
+}
+
+/**
+ * Counts how many distinct circuit-block role rows point at parts confirmed in this
+ * project. "This BOM uses parts already proven in N reusable block roles."
+ */
+async function readCircuitBlockWhereUsedHitCount(
+  databasePool: Pool,
+  scannedPartIds: string[]
+): Promise<number> {
+  if (scannedPartIds.length === 0) {
+    return 0;
+  }
+
+  const result = await databasePool.query<{ count: string }>(
+    `
+      SELECT COUNT(DISTINCT cbp.id)::text AS count
+      FROM circuit_block_parts cbp
+      WHERE cbp.part_id = ANY ($1::text[])
+    `,
+    [scannedPartIds]
+  );
+
+  return Number.parseInt(result.rows[0]?.count ?? "0", 10) || 0;
 }
 
 /**
@@ -6345,6 +6628,13 @@ interface DatabaseExportBundleRow {
   assembly_error: unknown;
   assembly_completed_at: Date | string | null;
   assembly_attempt_count: number | string | null;
+  archive_sha256: string | null;
+  manifest_sha256: string | null;
+  signature_status: string | null;
+  signature_algorithm: string | null;
+  signature_public_key_fingerprint: string | null;
+  signature_storage_key: string | null;
+  signature_signed_at: Date | string | null;
   created_by: string | null;
   created_at: Date | string;
 }
@@ -6562,6 +6852,7 @@ export async function createExportBundleInDatabase(
 
     const bundle: ExportBundle = {
       archiveAvailability: "manifest_only",
+      archiveSha256: null,
       archiveStorageKey: null,
       assemblyAttemptCount: 0,
       assemblyCompletedAt: null,
@@ -6574,10 +6865,16 @@ export async function createExportBundleInDatabase(
       id: bundleId,
       includedAssetCount: includedAssets.length,
       manifest,
+      manifestSha256: null,
       omittedAssetCount: omissions.length,
       partCount: partIds.length,
       projectId,
       revisionLabel: input.revisionLabel ?? null,
+      signatureAlgorithm: null,
+      signaturePublicKeyFingerprint: null,
+      signatureSignedAt: null,
+      signatureStatus: "unsigned",
+      signatureStorageKey: null,
       storageKey,
       warningCount: warnings.length
     };
@@ -6775,6 +7072,8 @@ export async function readExportBundlesFromDatabase(
       `SELECT id, project_id, revision_label, bundle_format, storage_key, archive_storage_key, manifest,
               part_count, included_asset_count, omitted_asset_count, warning_count,
               assembly_status, assembly_error, assembly_completed_at, assembly_attempt_count,
+              archive_sha256, manifest_sha256, signature_status, signature_algorithm,
+              signature_public_key_fingerprint, signature_storage_key, signature_signed_at,
               created_by, created_at
          FROM export_bundles
          WHERE project_id = $1
@@ -6839,6 +7138,7 @@ function mapExportBundleRow(
 ): ExportBundle {
   return {
     archiveAvailability,
+    archiveSha256: row.archive_sha256,
     archiveStorageKey: row.archive_storage_key,
     assemblyAttemptCount: toNumber(row.assembly_attempt_count ?? 0),
     assemblyCompletedAt: row.assembly_completed_at ? toIsoTimestamp(row.assembly_completed_at) : null,
@@ -6851,13 +7151,160 @@ function mapExportBundleRow(
     id: row.id,
     includedAssetCount: toNumber(row.included_asset_count),
     manifest: normalizeManifestForRead(row.manifest as ExportBundleManifest),
+    manifestSha256: row.manifest_sha256,
     omittedAssetCount: toNumber(row.omitted_asset_count),
     partCount: toNumber(row.part_count),
     projectId: row.project_id,
     revisionLabel: row.revision_label,
+    signatureAlgorithm: row.signature_algorithm,
+    signaturePublicKeyFingerprint: row.signature_public_key_fingerprint,
+    signatureSignedAt: row.signature_signed_at ? toIsoTimestamp(row.signature_signed_at) : null,
+    signatureStatus: normalizeExportBundleSignatureStatus(row.signature_status),
+    signatureStorageKey: row.signature_storage_key,
     storageKey: row.storage_key,
     warningCount: toNumber(row.warning_count)
   };
+}
+
+/**
+ * Normalizes a raw DB string into the typed signature status, defaulting to `unsigned` for
+ * legacy rows persisted before migration 039. Honesty discipline: an unrecognized value falls
+ * back to `unsigned` rather than being treated as `signed`, so a corrupted column never causes
+ * the UI to claim verification that has not happened.
+ */
+function normalizeExportBundleSignatureStatus(raw: string | null): ExportBundleSignatureStatus {
+  if (raw === "signed" || raw === "verification_failed" || raw === "unsigned") {
+    return raw;
+  }
+
+  return "unsigned";
+}
+
+/**
+ * ExportBundleVerifyReadResult is the read-side envelope for the on-demand verification
+ * endpoint. Mirrors the rest of the project-memory store's three-state read pattern
+ * (`available` / `not_found` / `not_configured`) so the HTTP handler can map outcomes to
+ * status codes without duplicating the dispatch table.
+ */
+export type ExportBundleVerifyReadResult =
+  | { status: "available"; response: ExportBundleVerifyResponse }
+  | { status: "not_found" }
+  | { status: "not_configured" };
+
+/**
+ * Re-verifies one assembled bundle against its persisted hashes and signature, then writes the
+ * (possibly updated) signature_status back to the database. The verify helper itself lives in
+ * `@ee-library/worker/export-bundle-verification` so the worker batch process and the API
+ * route share identical algorithm semantics -- one bug-fix, two consumers.
+ *
+ * Honesty discipline:
+ *   - A bundle that was previously `signed` but whose archive bytes changed transitions to
+ *     `verification_failed` (with a structured reason). It does NOT silently fall back to
+ *     `unsigned` -- silently downgrading would let a tampered bundle stop reporting as failed.
+ *   - A bundle that was never signed stays `unsigned`. The verifier never invents a verification
+ *     it did not perform.
+ *   - The recomputed archive hash is returned even when verification fails so the UI can show
+ *     the recorded vs recomputed hashes side-by-side for forensics.
+ */
+export async function verifyExportBundleInDatabase(
+  bundleId: string,
+  storage: FileStorageClient
+): Promise<ExportBundleVerifyReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  let workerVerifier: typeof import("@ee-library/worker/export-bundle-verification");
+  try {
+    workerVerifier = await import("@ee-library/worker/export-bundle-verification");
+  } catch (error) {
+    throw new CatalogStoreError("query_failed", "Bundle verification helper failed to load.", error);
+  }
+
+  try {
+    const rows = await databasePool.query<DatabaseExportBundleRow>(
+      `SELECT id, project_id, revision_label, bundle_format, storage_key, archive_storage_key, manifest,
+              part_count, included_asset_count, omitted_asset_count, warning_count,
+              assembly_status, assembly_error, assembly_completed_at, assembly_attempt_count,
+              archive_sha256, manifest_sha256, signature_status, signature_algorithm,
+              signature_public_key_fingerprint, signature_storage_key, signature_signed_at,
+              created_by, created_at
+         FROM export_bundles
+         WHERE id = $1`,
+      [bundleId]
+    );
+
+    const row = rows.rows[0];
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    let verificationKey: import("@ee-library/worker/export-bundle-verification").VerificationKeyMaterial | null = null;
+    try {
+      verificationKey = workerVerifier.readBundleVerificationKeyMaterial();
+    } catch (error) {
+      // A misconfigured key is reported as the dedicated `verification_key_unavailable` failure
+      // rather than a 500 -- the operator gets a structured, actionable response.
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new CatalogStoreError("query_failed", `Bundle verification key parse failed: ${detail}`, error);
+    }
+
+    const outcome = await workerVerifier.verifyAssembledExportBundle(
+      storage,
+      {
+        archiveSha256: row.archive_sha256,
+        archiveStorageKey: row.archive_storage_key,
+        id: row.id,
+        signatureAlgorithm: row.signature_algorithm,
+        signaturePublicKeyFingerprint: row.signature_public_key_fingerprint,
+        signatureStatus: normalizeExportBundleSignatureStatus(row.signature_status),
+        signatureStorageKey: row.signature_storage_key
+      },
+      { verificationKey }
+    );
+
+    // Persist the new status. The recomputed hash is intentionally NOT written back over the
+    // recorded one -- the recorded value is the audit anchor. If the recomputed hash differs
+    // we want the row to keep showing the original recorded hash so an auditor can see the
+    // discrepancy; the new hash is returned in the response for forensics only.
+    const persistedStatus: ExportBundleSignatureStatus = outcome.status;
+    await databasePool.query(
+      `UPDATE export_bundles SET signature_status = $1 WHERE id = $2`,
+      [persistedStatus, bundleId]
+    );
+
+    const updatedRow = { ...row, signature_status: persistedStatus };
+    const [fileAvailability, archiveAvailability] = await Promise.all([
+      resolveExportBundleFileAvailability(updatedRow.storage_key, storage),
+      resolveExportBundleFileAvailability(updatedRow.archive_storage_key, storage)
+    ]);
+    const bundle = mapExportBundleRow(updatedRow, fileAvailability, archiveAvailability);
+
+    const reason: ExportBundleVerificationReason | null =
+      outcome.status === "verification_failed" ? outcome.reason : null;
+
+    return {
+      response: {
+        boundary:
+          "Cryptographic verification confirms the archive matches its recorded hash and signature. It is never a substitute for review, approval, or export-readiness gates.",
+        bundle,
+        outcome: {
+          reason,
+          recomputedArchiveSha256: outcome.recomputedArchiveSha256,
+          status: outcome.status,
+          verifiedAt: outcome.status === "signed" ? outcome.verifiedAt : null
+        }
+      },
+      status: "available"
+    };
+  } catch (error) {
+    if (error instanceof CatalogStoreError) {
+      throw error;
+    }
+    throw new CatalogStoreError("query_failed", "Export bundle verification failed.", error);
+  }
 }
 
 /**

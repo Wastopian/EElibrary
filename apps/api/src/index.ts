@@ -12,7 +12,7 @@ import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
@@ -30,7 +30,7 @@ import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
-import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -191,6 +191,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
   const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(url.pathname);
+  const assetPreviewArtifactDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/preview-artifact\/download$/u.exec(url.pathname);
   const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(url.pathname);
   const projectRevisionCompareMatch = /^\/projects\/([^/]+)\/revisions\/compare$/u.exec(url.pathname);
   const projectRevisionApprovalGatesMatch = /^\/projects\/([^/]+)\/revision-approval-gates$/u.exec(url.pathname);
@@ -200,6 +201,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectBomHealthMatch = /^\/projects\/([^/]+)\/bom-health$/u.exec(url.pathname);
   const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(url.pathname);
   const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(url.pathname);
+  const projectOverlapMatch = /^\/projects\/([^/]+)\/overlap$/u.exec(url.pathname);
   const projectFilesMatch = /^\/projects\/([^/]+)\/files$/u.exec(url.pathname);
   const projectFileUploadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
   const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
@@ -220,6 +222,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(url.pathname);
   const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
   const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
+  const exportBundleVerifyMatch = /^\/export-bundles\/([^/]+)\/verify$/u.exec(url.pathname);
   const projectCircuitBlockInstantiationsMatch = /^\/projects\/([^/]+)\/circuit-block-instantiations$/u.exec(url.pathname);
   const projectApprovalBatchMatch = /^\/projects\/([^/]+)\/approval-batch$/u.exec(url.pathname);
   const projectApprovalCandidatesMatch = /^\/projects\/([^/]+)\/approval-candidates$/u.exec(url.pathname);
@@ -486,6 +489,13 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && exportBundleVerifyMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleExportBundleVerify(response, decodeURIComponent(exportBundleVerifyMatch[1]));
+    return;
+  }
+
   if (request.method === "POST" && projectCircuitBlockInstantiationsMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -652,6 +662,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (projectOverlapMatch?.[1]) {
+    await handleProjectOverlapRead(response, decodeURIComponent(projectOverlapMatch[1]));
+    return;
+  }
+
   if (projectFilesMatch?.[1]) {
     await handleProjectFilesRead(response, decodeURIComponent(projectFilesMatch[1]));
     return;
@@ -763,6 +778,15 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (assetDownloadMatch?.[1] && assetDownloadMatch[2]) {
     await handleAssetDownload(request, response, decodeURIComponent(assetDownloadMatch[1]), decodeURIComponent(assetDownloadMatch[2]), url);
+    return;
+  }
+
+  if (assetPreviewArtifactDownloadMatch?.[1] && assetPreviewArtifactDownloadMatch[2]) {
+    await handleAssetPreviewArtifactDownload(
+      response,
+      decodeURIComponent(assetPreviewArtifactDownloadMatch[1]),
+      decodeURIComponent(assetPreviewArtifactDownloadMatch[2])
+    );
     return;
   }
 
@@ -2855,6 +2879,35 @@ async function handleProjectFollowUpsRead(response: ServerResponse, projectId: s
 }
 
 /**
+ * Handles read-only day-zero overlap panel reads for one project. The payload is an
+ * informational reuse signal -- no approval/trust/export state is altered or read.
+ */
+async function handleProjectOverlapRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-overlap-read",
+      () => readProjectOverlapPanelFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only circuit block follow-up queue requests.
  */
 async function handleCircuitBlockFollowUpsRead(response: ServerResponse, circuitBlockId: string): Promise<void> {
@@ -3504,6 +3557,8 @@ async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: s
 function inferStorageContentType(ext: string): string {
   const types: Record<string, string> = {
     ".dxf": "application/octet-stream",
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
     ".kicad_mod": "application/octet-stream",
@@ -3616,6 +3671,76 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
         error: {
           code: "STORAGE_BACKEND_NOT_CONFIGURED",
           message: "This file has a local storage key but the storage backend could not produce a download URL."
+        }
+      });
+      return;
+    }
+
+    sendRedirect(response, fileUrl);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Serves the derived preview artifact (e.g. glb/gltf) for an asset whose source format
+ * (e.g. STEP) is not directly browser-renderable. Honesty discipline:
+ *  - Never serves the source bytes by accident; the route reads only `preview_artifact_*`
+ *    columns and refuses with 409 when no derived artifact is recorded.
+ *  - Never promotes the source asset's trust state — this is purely a viewer fetch path.
+ *  - 503 when the storage backend is misconfigured so the UI can render an explicit
+ *    setup_required state instead of a silent broken viewer.
+ */
+async function handleAssetPreviewArtifactDownload(
+  response: ServerResponse,
+  partId: string,
+  assetId: string
+): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "asset-preview-artifact-download-read",
+      () => readAssetPreviewArtifactDownloadTargetFromDatabase(partId, assetId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Preview artifact download requires a configured database."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "ASSET_NOT_FOUND",
+          message: "The requested asset does not exist for this part."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_available") {
+      sendJson(response, 409, {
+        error: {
+          code: "PREVIEW_ARTIFACT_NOT_AVAILABLE",
+          message: result.reason
+        }
+      });
+      return;
+    }
+
+    const fileUrl = await getStorageClient().getDownloadUrl(result.storageKey);
+
+    if (!fileUrl) {
+      sendJson(response, 503, {
+        error: {
+          code: "STORAGE_BACKEND_NOT_CONFIGURED",
+          message: "Preview artifact has a local storage key but the storage backend could not produce a download URL."
         }
       });
       return;
@@ -4981,6 +5106,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "PATCH" && /^\/circuit-blocks\/[^/]+\/parts\/[^/]+$/u.test(pathname)) return "api-circuit-block-part-update";
   if (method === "POST" && /^\/circuit-blocks\/[^/]+\/known-risks$/u.test(pathname)) return "api-circuit-block-known-risk-create";
   if (method === "POST" && /^\/circuit-blocks\/[^/]+\/known-risks\/[^/]+\/resolve$/u.test(pathname)) return "api-circuit-block-known-risk-resolve";
+  if (method === "POST" && /^\/export-bundles\/[^/]+\/verify$/u.test(pathname)) return "api-export-bundle-verify";
   if (method === "POST" && /^\/projects\/[^/]+\/circuit-block-instantiations$/u.test(pathname)) return "api-circuit-block-instantiation-create";
   if (method === "GET" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitutions-read";
   if (method === "POST" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitution-create";
@@ -4988,6 +5114,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "PATCH" && /^\/follow-ups\/[^/]+$/u.test(pathname)) return "api-follow-up-update";
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
+  if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/preview-artifact\/download$/u.test(pathname)) return "api-asset-preview-artifact-download";
+  if (method === "GET" && /^\/projects\/[^/]+\/overlap$/u.test(pathname)) return "api-project-overlap";
   if (method === "GET" && /^\/parts\/[^/]+\/usages$/u.test(pathname)) return "api-part-where-used";
   if (method === "GET" && /^\/parts\/[^/]+\/supply-offers$/u.test(pathname)) return "api-part-supply-offers";
   if (method === "GET" && /^\/parts\/[^/]+\/document-revisions$/u.test(pathname)) return "api-document-revisions-read";
@@ -5354,6 +5482,42 @@ async function handleExportBundlesRead(response: ServerResponse, projectId: stri
 
     if (result.status === "not_found") {
       sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Re-verifies one assembled export bundle's archive hash and Ed25519 signature, persists the
+ * resulting `signature_status`, and returns the updated bundle row plus a structured outcome.
+ *
+ * This is intentionally a separate route from `/projects/:id/export-bundles` because:
+ *   - Verification is a focused single-bundle action, not a list refresh.
+ *   - It writes (`signature_status` is updated when verification fails) and we only want admins
+ *     to make that transition.
+ *   - The structured outcome (`reason`, `recomputedArchiveSha256`) is per-bundle context that
+ *     the list endpoint does not need to compute on every read.
+ */
+async function handleExportBundleVerify(response: ServerResponse, bundleId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "export-bundle-verify",
+      () => verifyExportBundleInDatabase(bundleId, getStorageClient()),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "EXPORT_BUNDLE_NOT_FOUND", "Export bundle not found.");
       return;
     }
 
