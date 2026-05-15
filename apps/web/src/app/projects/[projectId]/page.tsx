@@ -105,6 +105,53 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const foundationCapabilities = capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = capabilities.filter((capability) => capability.state === "planned");
 
+  // When a project has no confirmed usage yet, the upload-parts-list panel is what the operator
+  // came here for. Promoting it above the (mostly empty) usage and overlap sections cuts the
+  // scroll required for a first-run interaction.
+  const showUploadFirst = summary.usageCount === 0 && bomImports.length === 0;
+
+  const usageSection = (
+    <section className="detail-section" aria-labelledby="project-usage-heading">
+      <SectionHeading id="project-usage-heading" subtitle="The parts confirmed in this project. Type to search." title="Parts in this project" />
+      <SectionPanel
+        description="Only confirmed matches appear here. Unclear rows wait in diagnostics until they are reviewed."
+        title={usages.length > 0 ? `${usages.length} part${usages.length === 1 ? "" : "s"} in this project` : "No confirmed parts yet"}
+      >
+        {usages.length > 0 ? (
+          <ProjectUsageBrowser usages={usages} />
+        ) : (
+          <EmptyState
+            title="No confirmed part usage yet"
+            body="Upload a parts list below, then confirm matches to populate this list. No parts are confirmed for this project yet."
+          />
+        )}
+      </SectionPanel>
+    </section>
+  );
+
+  const overlapSection = (
+    <section className="detail-section" aria-labelledby="project-overlap-heading">
+      <SectionHeading
+        id="project-overlap-heading"
+        subtitle="Prior projects ranked by shared confirmed parts. A reuse signal, never an approval signal."
+        title="Prior project overlap"
+      />
+      <ProjectOverlapPanel overlap={overlap} />
+    </section>
+  );
+
+  const uploadSection = (
+    <section className="detail-section" aria-labelledby="project-bom-upload-heading">
+      <SectionHeading id="project-bom-upload-heading" subtitle="Upload a CSV or XLSX file. Map columns. Save rows." title="Upload parts list" />
+      <SectionPanel
+        description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
+        title="Upload mapped BOM"
+      >
+        <BomImportPanel projectId={project.id} revisions={revisions} />
+      </SectionPanel>
+    </section>
+  );
+
   return (
     <main className="projects-layout">
       <Link className="back-link" href="/projects">
@@ -132,41 +179,19 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </div>
       </section>
 
-      <section className="detail-section" aria-labelledby="project-usage-heading">
-        <SectionHeading id="project-usage-heading" subtitle="The parts confirmed in this project. Type to search." title="Parts in this project" />
-        <SectionPanel
-          description="Only confirmed matches appear here. Unclear rows wait in diagnostics until they are reviewed."
-          title={usages.length > 0 ? `${usages.length} part${usages.length === 1 ? "" : "s"} in this project` : "No confirmed parts yet"}
-        >
-          {usages.length > 0 ? (
-            <ProjectUsageBrowser usages={usages} />
-          ) : (
-            <EmptyState
-              title="No confirmed part usage yet"
-              body="Upload a parts list below, then confirm matches to populate this list. No parts are confirmed for this project yet."
-            />
-          )}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-overlap-heading">
-        <SectionHeading
-          id="project-overlap-heading"
-          subtitle="Prior projects ranked by shared confirmed parts. A reuse signal, never an approval signal."
-          title="Prior project overlap"
-        />
-        <ProjectOverlapPanel overlap={overlap} />
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-bom-upload-heading">
-        <SectionHeading id="project-bom-upload-heading" subtitle="Upload a CSV or XLSX file. Map columns. Save rows." title="Upload parts list" />
-        <SectionPanel
-          description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
-          title="Upload mapped BOM"
-        >
-          <BomImportPanel projectId={project.id} revisions={revisions} />
-        </SectionPanel>
-      </section>
+      {showUploadFirst ? (
+        <>
+          {uploadSection}
+          {usageSection}
+          {overlapSection}
+        </>
+      ) : (
+        <>
+          {usageSection}
+          {overlapSection}
+          {uploadSection}
+        </>
+      )}
 
       <section className="detail-section" aria-labelledby="project-files-heading">
         <SectionHeading

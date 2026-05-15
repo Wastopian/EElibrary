@@ -211,8 +211,11 @@ function isProjectMemoryConnected(health: ApiHealth): boolean {
  * Renders the search controls as a simple GET form so the result URL is shareable.
  */
 function WhereUsedSearchForm({ query, targetType }: { query: string; targetType: WhereUsedTargetType }) {
+  const isIdle = query.trim().length === 0;
+
   return (
     <div className="where-used-search-panel">
+      {isIdle ? <WhereUsedQueryGuidancePanel targetType={targetType} /> : null}
       <form className="where-used-search-form" method="get">
         <label>
           <span>Target</span>
@@ -229,7 +232,7 @@ function WhereUsedSearchForm({ query, targetType }: { query: string; targetType:
         </label>
         <button className="button-primary" type="submit">Search</button>
       </form>
-      <WhereUsedQueryGuidancePanel targetType={targetType} />
+      {isIdle ? null : <WhereUsedQueryGuidancePanel targetType={targetType} />}
     </div>
   );
 }

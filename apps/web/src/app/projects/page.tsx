@@ -384,10 +384,12 @@ function fleetTotalTone(total: number): BadgeTone {
  */
 function ProjectsEmptyState() {
   return (
-    <EmptyState
-      title="No project records yet"
-      body="The database is reachable, but no projects have been created yet. Create a project first, then upload a CSV BOM from the project page."
-    />
+    <div>
+      <EmptyState
+        title="No project records yet"
+        body="Two ways to start, both shown in the header above. Drop a BOM to create a project from your parts list in one step, or Create empty project below if you just need a metadata-only shell first."
+      />
+    </div>
   );
 }
 
