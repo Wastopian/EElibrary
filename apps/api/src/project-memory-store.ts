@@ -148,8 +148,10 @@ import type {
   ProjectFleetRiskRow,
   ProjectListResponse,
   ProjectMemoryCapability,
+  ProjectOverlapCircuitBlockRolePreview,
   ProjectOverlapPanelResponse,
   ProjectOverlapPriorProject,
+  ProjectOverlapSharedPartPreview,
   ProjectPartUsage,
   ProjectPartUsagesResponse,
   ProjectRevision,
@@ -2023,7 +2025,8 @@ export async function readPartWhereUsedFromDatabase(partId: string): Promise<Par
 export async function readProjectOverlapPanelFromDatabase(
   projectId: string,
   topProjectsLimit = 5,
-  sharedPartIdsPerProjectLimit = 8
+  sharedPartIdsPerProjectLimit = 8,
+  circuitBlockRolePreviewLimit = 6
 ): Promise<ProjectOverlapPanelReadResult> {
   const databasePool = getProjectMemoryDatabasePool();
 
@@ -2041,6 +2044,7 @@ export async function readProjectOverlapPanelFromDatabase(
     if (scannedParts.length === 0) {
       return {
         response: {
+          circuitBlockRoleHitsPreview: [],
           circuitBlockWhereUsedHitCount: 0,
           connectorWhereUsedHitCount: 0,
           priorProjects: [],
@@ -2052,14 +2056,21 @@ export async function readProjectOverlapPanelFromDatabase(
       };
     }
 
-    const [priorProjects, connectorWhereUsedHitCount, circuitBlockWhereUsedHitCount] = await Promise.all([
+    const [
+      priorProjects,
+      connectorWhereUsedHitCount,
+      circuitBlockWhereUsedHitCount,
+      circuitBlockRoleHitsPreview
+    ] = await Promise.all([
       readPriorProjectOverlap(databasePool, projectId, scannedParts, topProjectsLimit, sharedPartIdsPerProjectLimit),
       readConnectorWhereUsedHitCount(databasePool, projectId, scannedParts),
-      readCircuitBlockWhereUsedHitCount(databasePool, scannedParts)
+      readCircuitBlockWhereUsedHitCount(databasePool, scannedParts),
+      readCircuitBlockWhereUsedPreview(databasePool, scannedParts, circuitBlockRolePreviewLimit)
     ]);
 
     return {
       response: {
+        circuitBlockRoleHitsPreview,
         circuitBlockWhereUsedHitCount,
         connectorWhereUsedHitCount,
         priorProjects,
@@ -2168,38 +2179,117 @@ async function readPriorProjectOverlap(
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
 
-  const previewIdSet = new Set<string>();
-  for (const row of candidates) {
-    for (const id of row.sharedPartIds) {
-      previewIdSet.add(id);
-    }
-  }
-  const previewPartIds = [...previewIdSet];
-  const mpnByPartId = new Map<string, string>();
-  if (previewPartIds.length > 0) {
-    const partPlaceholders = previewPartIds.map((_, index) => `$${index + 1}`).join(", ");
-    const mpnsResult = await databasePool.query<{ id: string; mpn: string }>(
-      `
-        SELECT id, mpn
-        FROM parts
-        WHERE id IN (${partPlaceholders})
-      `,
-      previewPartIds
-    );
-    for (const mpnRow of mpnsResult.rows) {
-      mpnByPartId.set(mpnRow.id, mpnRow.mpn);
-    }
-  }
+  const usagePreviewsByProjectPart = await readSharedPartUsagePreviews(databasePool, candidates);
 
   return candidates.map((row) => ({
     project: row.project,
     sharedPartCount: row.sharedPartCount,
     sharedPartIds: row.sharedPartIds,
-    sharedPartsPreview: row.sharedPartIds.map((partId) => ({
-      partId,
-      mpn: mpnByPartId.get(partId) ?? partId
-    }))
+    sharedPartsPreview: row.sharedPartIds.map((partId) => (
+      usagePreviewsByProjectPart.get(makeProjectPartPreviewKey(row.project.id, partId)) ?? {
+        designatorsPreview: [],
+        mpn: partId,
+        partId,
+        projectRevisionLabel: null,
+        quantityTotal: null,
+        usageCount: 0,
+        usageStatus: null
+      }
+    ))
   }));
+}
+
+/**
+ * Reads a bounded set of prior-project usage clues for each shared part preview.
+ *
+ * The overlap table remains count-first, but these usage clues let the UI show engineers
+ * which designator/revision/quantity made the overlap meaningful without claiming reuse
+ * approval. Aggregation stays in TypeScript so Postgres and pg-mem behave identically.
+ */
+async function readSharedPartUsagePreviews(
+  databasePool: Pool,
+  candidates: Array<{ project: Project; sharedPartIds: string[] }>
+): Promise<Map<string, ProjectOverlapSharedPartPreview>> {
+  const projectIds = [...new Set(candidates.map((row) => row.project.id))];
+  const partIds = [...new Set(candidates.flatMap((row) => row.sharedPartIds))];
+
+  if (projectIds.length === 0 || partIds.length === 0) {
+    return new Map();
+  }
+
+  const projectPlaceholders = projectIds.map((_, index) => `$${index + 1}`).join(", ");
+  const partPlaceholders = partIds.map((_, index) => `$${projectIds.length + index + 1}`).join(", ");
+  const result = await databasePool.query<{
+    project_id: string;
+    part_id: string;
+    mpn: string | null;
+    designators: unknown;
+    quantity: string | number | null;
+    usage_status: ProjectPartUsage["usageStatus"];
+    revision_label: string | null;
+  }>(
+    `
+      SELECT
+        ppu.project_id,
+        ppu.part_id,
+        p.mpn,
+        ppu.designators,
+        ppu.quantity,
+        ppu.usage_status,
+        pr.revision_label
+      FROM project_part_usages ppu
+      LEFT JOIN parts p ON p.id = ppu.part_id
+      LEFT JOIN project_revisions pr ON pr.id = ppu.project_revision_id
+      WHERE ppu.project_id IN (${projectPlaceholders})
+        AND ppu.part_id IN (${partPlaceholders})
+      ORDER BY ppu.project_id ASC, ppu.part_id ASC, ppu.updated_at DESC, ppu.id ASC
+    `,
+    [...projectIds, ...partIds]
+  );
+
+  const previewsByKey = new Map<string, ProjectOverlapSharedPartPreview>();
+  for (const row of result.rows) {
+    const key = makeProjectPartPreviewKey(row.project_id, row.part_id);
+    const quantity = toNullableNumber(row.quantity);
+    const designators = toStringArray(row.designators);
+    const existing = previewsByKey.get(key);
+
+    if (!existing) {
+      previewsByKey.set(key, {
+        designatorsPreview: designators.slice(0, 4),
+        mpn: row.mpn ?? row.part_id,
+        partId: row.part_id,
+        projectRevisionLabel: row.revision_label,
+        quantityTotal: quantity,
+        usageCount: 1,
+        usageStatus: row.usage_status
+      });
+      continue;
+    }
+
+    existing.usageCount += 1;
+    existing.quantityTotal = mergeOptionalQuantityTotals(existing.quantityTotal, quantity);
+    for (const designator of designators) {
+      if (existing.designatorsPreview.length >= 4) break;
+      if (!existing.designatorsPreview.includes(designator)) {
+        existing.designatorsPreview.push(designator);
+      }
+    }
+  }
+
+  return previewsByKey;
+}
+
+/** Builds the composite key used for per-project, per-part overlap previews. */
+function makeProjectPartPreviewKey(projectId: string, partId: string): string {
+  return `${projectId}\u0000${partId}`;
+}
+
+/** Adds two nullable usage quantities without treating "unknown" as zero. */
+function mergeOptionalQuantityTotals(current: number | null, next: number | null): number | null {
+  if (current === null) return next;
+  if (next === null) return current;
+  return current + next;
 }
 
 /**
@@ -2261,16 +2351,84 @@ async function readCircuitBlockWhereUsedHitCount(
     return 0;
   }
 
+  const partIdPlaceholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
   const result = await databasePool.query<{ count: string }>(
     `
       SELECT COUNT(DISTINCT cbp.id)::text AS count
       FROM circuit_block_parts cbp
-      WHERE cbp.part_id = ANY ($1::text[])
+      WHERE cbp.part_id IN (${partIdPlaceholders})
     `,
-    [scannedPartIds]
+    scannedPartIds
   );
 
   return Number.parseInt(result.rows[0]?.count ?? "0", 10) || 0;
+}
+
+/**
+ * Reads a bounded preview of circuit-block role rows that depend on the current
+ * project's confirmed parts. This keeps the overlap panel useful at a glance while the
+ * count above remains the full, untruncated role count.
+ */
+async function readCircuitBlockWhereUsedPreview(
+  databasePool: Pool,
+  scannedPartIds: string[],
+  limit: number
+): Promise<ProjectOverlapCircuitBlockRolePreview[]> {
+  if (scannedPartIds.length === 0 || limit <= 0) {
+    return [];
+  }
+
+  const partIdPlaceholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
+  const limitPlaceholder = `$${scannedPartIds.length + 1}`;
+  const result = await databasePool.query<{
+    block_part_id: string;
+    circuit_block_id: string;
+    block_key: string;
+    block_name: string;
+    block_status: CircuitBlockStatus;
+    part_id: string;
+    mpn: string | null;
+    role: string;
+    quantity: string | number | null;
+    is_required: boolean;
+    substitution_policy: CircuitBlockPartSubstitutionPolicy;
+  }>(
+    `
+      SELECT
+        cbp.id AS block_part_id,
+        cbp.circuit_block_id,
+        cb.block_key,
+        cb.name AS block_name,
+        cb.status AS block_status,
+        cbp.part_id,
+        p.mpn,
+        cbp.role,
+        cbp.quantity,
+        cbp.is_required,
+        cbp.substitution_policy
+      FROM circuit_block_parts cbp
+      JOIN circuit_blocks cb ON cb.id = cbp.circuit_block_id
+      LEFT JOIN parts p ON p.id = cbp.part_id
+      WHERE cbp.part_id IN (${partIdPlaceholders})
+      ORDER BY cb.block_key ASC, cbp.is_required DESC, cbp.role ASC, cbp.id ASC
+      LIMIT ${limitPlaceholder}
+    `,
+    [...scannedPartIds, limit]
+  );
+
+  return result.rows.map((row) => ({
+    blockKey: row.block_key,
+    blockName: row.block_name,
+    blockPartId: row.block_part_id,
+    blockStatus: row.block_status,
+    circuitBlockId: row.circuit_block_id,
+    isRequired: row.is_required,
+    mpn: row.mpn ?? row.part_id,
+    partId: row.part_id,
+    quantity: toNullableNumber(row.quantity),
+    role: row.role,
+    substitutionPolicy: row.substitution_policy
+  }));
 }
 
 /**

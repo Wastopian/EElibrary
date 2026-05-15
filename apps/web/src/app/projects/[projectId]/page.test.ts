@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import ProjectDetailPage from "./page";
-import type { FollowUpListResponse, ProjectBomHealthResponse, ProjectDetailResponse, ProjectEvidenceAttachmentsResponse, ProjectMemoryCapability, ProjectSummary } from "@ee-library/shared/types";
+import type { FollowUpListResponse, ProjectBomHealthResponse, ProjectDetailResponse, ProjectEvidenceAttachmentsResponse, ProjectMemoryCapability, ProjectOverlapPanelResponse, ProjectSummary } from "@ee-library/shared/types";
 
 /**
  * Verifies persisted project detail data renders revisions, BOM imports, and confirmed usage.
@@ -46,6 +46,13 @@ test("project detail renders persisted project memory sections", async () => {
       });
     }
 
+    if (url.pathname === "/projects/project-alpha/overlap") {
+      return jsonResponse({
+        data: buildProjectOverlapResponse("project-alpha"),
+        source: "database"
+      });
+    }
+
     throw new Error(`unexpected request: ${url.pathname}`);
   });
 
@@ -53,6 +60,9 @@ test("project detail renders persisted project memory sections", async () => {
     const html = await renderProjectDetailPage("project-alpha");
 
     assert.match(html, /Motor controller alpha/u);
+    assert.match(html, /Prior project overlap/u);
+    assert.match(html, /Beta Build/u);
+    assert.match(html, /Main LDO/u);
     assert.match(html, /Parts in this project/u);
     assert.match(html, /Upload parts list/u);
     assert.match(html, /Advanced project tools/u);
@@ -453,6 +463,61 @@ function buildEmptyProjectFollowUpsResponse(projectId: string): FollowUpListResp
     },
     targetId: projectId,
     targetType: "project"
+  };
+}
+
+/**
+ * Builds a project overlap response with inspectable prior usage and block-role clues.
+ */
+function buildProjectOverlapResponse(projectId: string): ProjectOverlapPanelResponse {
+  return {
+    circuitBlockRoleHitsPreview: [
+      {
+        blockKey: "ALPHA-POWER",
+        blockName: "Alpha power rail",
+        blockPartId: "cbpart-alpha-power-ldo",
+        blockStatus: "approved",
+        circuitBlockId: "cblock-alpha-power",
+        isRequired: true,
+        mpn: "TPS7A02DBVR",
+        partId: "part-tps7a02dbvr",
+        quantity: 1,
+        role: "Main LDO",
+        substitutionPolicy: "exact_required"
+      }
+    ],
+    circuitBlockWhereUsedHitCount: 1,
+    connectorWhereUsedHitCount: 0,
+    priorProjects: [
+      {
+        project: {
+          createdAt: "2026-04-15T10:00:00.000Z",
+          description: "Prior motor-controller build.",
+          id: "project-beta",
+          name: "Beta Build",
+          owner: "Hardware",
+          projectKey: "BETA",
+          status: "active",
+          updatedAt: "2026-04-15T12:00:00.000Z"
+        },
+        sharedPartCount: 1,
+        sharedPartIds: ["part-tps7a02dbvr"],
+        sharedPartsPreview: [
+          {
+            designatorsPreview: ["U1"],
+            mpn: "TPS7A02DBVR",
+            partId: "part-tps7a02dbvr",
+            projectRevisionLabel: "A",
+            quantityTotal: 1,
+            usageCount: 1,
+            usageStatus: "used"
+          }
+        ]
+      }
+    ],
+    projectId,
+    scannedPartCount: 1,
+    state: "available"
   };
 }
 

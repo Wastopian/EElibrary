@@ -92,7 +92,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 
 - `/projects`: create projects and revisions, CSV and **XLSX** BOM preview, column mapping, persisted raw/mapped BOM rows.
 - **Row matching** creates confirmed `project_part_usages` only when deterministic internal identity matches; weak/unmatched rows stay distinct.
-- **Day-zero overlap panel** on project detail ranks prior projects by shared *confirmed-usage* parts and reports connector / circuit-block where-used hits inside this BOM. Overlap is a reuse signal, never an approval signal.
+- **Day-zero overlap panel** on project detail ranks prior projects by shared *confirmed-usage* parts, shows prior usage clues (revision, designators, quantity, status), and previews reusable circuit-block roles hit by this BOM. Overlap is a reuse signal, never an approval signal.
 - BOM **health/diagnostics**, **fleet risk** on the dashboard, **revision compare**, **follow-ups**, **lifecycle regression** findings, **substitution** hints, **approval batch** from project context, and **export bundle** history with downloads when file-backed keys exist.
 
 **Engineering workspaces**

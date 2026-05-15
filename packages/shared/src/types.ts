@@ -1064,6 +1064,32 @@ export interface ProjectOverlapSharedPartPreview {
   partId: string;
   /** Catalog MPN when the part row exists; falls back to `partId` if missing. */
   mpn: string;
+  /** Number of confirmed usage rows in the prior project that point at this shared part. */
+  usageCount: number;
+  /** Sum of known quantities across the matching usage rows; null means no usage row carried quantity. */
+  quantityTotal: number | null;
+  /** First few designators from the matching prior-project usage rows. */
+  designatorsPreview: string[];
+  /** Usage status from the newest matching usage row in the prior project. */
+  usageStatus: ProjectPartUsageStatus | null;
+  /** Revision label from the newest matching usage row, if that revision still exists. */
+  projectRevisionLabel: string | null;
+}
+
+/** ProjectOverlapCircuitBlockRolePreview shows which reusable block role matched this BOM. */
+export interface ProjectOverlapCircuitBlockRolePreview {
+  circuitBlockId: string;
+  blockPartId: string;
+  blockKey: string;
+  blockName: string;
+  blockStatus: CircuitBlockStatus;
+  partId: string;
+  /** Catalog MPN when the part row exists; falls back to `partId` if missing. */
+  mpn: string;
+  role: string;
+  quantity: number | null;
+  isRequired: boolean;
+  substitutionPolicy: CircuitBlockPartSubstitutionPolicy;
 }
 
 /**
@@ -1109,6 +1135,8 @@ export interface ProjectOverlapPanelResponse {
   connectorWhereUsedHitCount: number;
   /** Distinct circuit-block roles depending on parts confirmed in this project. */
   circuitBlockWhereUsedHitCount: number;
+  /** Bounded preview of the circuit-block roles that depend on this project's confirmed parts. */
+  circuitBlockRoleHitsPreview: ProjectOverlapCircuitBlockRolePreview[];
 }
 
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */

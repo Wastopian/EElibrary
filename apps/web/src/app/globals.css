@@ -3072,6 +3072,89 @@ details[open] .trust-breakdown__toggle::before {
   margin-top: 4px;
 }
 
+/*
+ * ProjectOverlapPanel adds compact usage clues inside a project table. The nested
+ * rows stay dense for desktop scanning while preserving links to the exact part,
+ * prior project usage section, and reusable circuit block.
+ */
+.project-overlap-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.project-overlap-panel__stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.project-overlap-panel__shared-list,
+.project-overlap-panel__role-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-overlap-panel__shared-list li,
+.project-overlap-panel__role-list li {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.project-overlap-panel__shared-part-main,
+.project-overlap-panel__role-main,
+.project-overlap-panel__role-meta {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.project-overlap-panel__usage-clue,
+.project-overlap-panel__part-id,
+.project-overlap-panel__usage-link,
+.project-overlap-panel__role-part,
+.project-overlap-panel__truncated-note {
+  margin: 0;
+}
+
+.project-overlap-panel__role-preview {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.project-overlap-panel__role-preview-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.project-overlap-panel__role-preview-heading p {
+  margin: 0;
+}
+
+.project-overlap-panel__role-meta span {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 3px 6px;
+}
+
+@media (max-width: 760px) {
+  .project-overlap-panel__stats {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Slim hero variant: shorter, no large stats grid; used on cleaned project pages. */
 .projects-hero--slim {
   padding-block: 18px 14px;

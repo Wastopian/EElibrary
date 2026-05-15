@@ -186,6 +186,7 @@ test("readProjectOverlapPanelFromDatabase returns scanned_count=0 and no prior p
     assert.deepEqual(result.response.priorProjects, []);
     assert.equal(result.response.connectorWhereUsedHitCount, 0);
     assert.equal(result.response.circuitBlockWhereUsedHitCount, 0);
+    assert.deepEqual(result.response.circuitBlockRoleHitsPreview, []);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -314,6 +315,13 @@ test("readProjectOverlapPanelFromDatabase ranks prior projects by shared confirm
       betaRow.sharedPartsPreview.some((entry) => entry.partId === "part-memory-ldo" && entry.mpn === "TPS7A02DBVR"),
       "overlap preview carries readable MPN for the shared LDO"
     );
+    const betaLdoPreview = betaRow.sharedPartsPreview.find((entry) => entry.partId === "part-memory-ldo");
+    assert.ok(betaLdoPreview, "overlap preview carries prior-project usage clues for the shared LDO");
+    assert.equal(betaLdoPreview.projectRevisionLabel, "A");
+    assert.deepEqual(betaLdoPreview.designatorsPreview, ["U1"]);
+    assert.equal(betaLdoPreview.quantityTotal, 1);
+    assert.equal(betaLdoPreview.usageCount, 1);
+    assert.equal(betaLdoPreview.usageStatus, "proposed");
     assert.ok(
       betaRow.sharedPartsPreview.some((entry) => entry.partId === "part-connector-jst" && entry.mpn === "BM02B-SRSS"),
       "overlap preview carries readable MPN for the shared connector"
@@ -329,6 +337,13 @@ test("readProjectOverlapPanelFromDatabase ranks prior projects by shared confirm
 
     // Circuit-block hits: the LDO is in the current project and fills the Main LDO role of cblock-alpha-power -> 1.
     assert.equal(result.response.circuitBlockWhereUsedHitCount, 1);
+    assert.equal(result.response.circuitBlockRoleHitsPreview.length, 1);
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.circuitBlockId, "cblock-alpha-power");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.blockKey, "ALPHA-POWER");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.role, "Main LDO");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.partId, "part-memory-ldo");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.mpn, "TPS7A02DBVR");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.isRequired, true);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
