@@ -75,7 +75,7 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
         <div>
           <p className="app-kicker">Admin</p>
           <h2 id="admin-queue-overview-heading">Operations queues</h2>
-          <p>Grouped by real review, promotion, approval, issue, import, and validation state. Queues only appear when the backend records them.</p>
+          <p>Grouped by assistant triage prep, real review, promotion, approval, issue, import, and validation state. Queues only appear when the backend records them.</p>
         </div>
         <div className="admin-queue-overview__controls">
           <div className="admin-queue-overview__mode" aria-label="Queue presentation mode">

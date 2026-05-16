@@ -95,10 +95,14 @@ test("admin workspace renders review, promotion, import, validation, and audit s
     assert.match(html, /Approval does not unlock export/u);
     assert.match(html, /Queues only appear when records exist/u);
     assert.match(html, /Operations queues/u);
-    assert.match(html, /Grouped by real review, promotion, approval, issue, import, and validation state/u);
+    assert.match(html, /Grouped by assistant triage prep, real review, promotion, approval, issue, import, and validation state/u);
     assert.match(html, /Grouped/u);
     assert.match(html, /Table/u);
     assert.match(html, /Navigate/u);
+    assert.match(html, /Assistant triage prep/u);
+    assert.match(html, /No assistant output is trusted automatically/u);
+    assert.match(html, /Source evidence needs reconciliation after import failure/u);
+    assert.match(html, /Human review required; assistant notes cannot approve, normalize, or promote records/u);
     assert.match(html, /Imports and validation/u);
     assert.match(html, /Promotion audit history/u);
     assert.match(html, /Pending approval/u);

@@ -121,6 +121,20 @@ interface ValidationAttentionRow {
   validationTypeLabel: string;
 }
 
+/** AssistantTriageRow is a review-prep packet assembled from existing evidence only. */
+interface AssistantTriageRow {
+  attentionReason: string;
+  evidenceSummary: string;
+  guardrail: string;
+  manufacturerName: string;
+  mpn: string;
+  nextAction: string;
+  partId: string;
+  stateLabel: string;
+  stateTone: BadgeTone;
+  updatedAt: string;
+}
+
 interface PromotionAuditRow {
   id: string;
   partId: string;
@@ -133,6 +147,11 @@ interface PromotionAuditRow {
 }
 
 type IssueQueueId = "approval" | "cad_gaps" | "connector" | "duplicates" | "identity" | "lifecycle" | "source_conflicts";
+
+/** Confidence below this threshold is useful assistant-prep context but not trusted truth. */
+const ASSISTANT_TRIAGE_CONFIDENCE_THRESHOLD = 0.75;
+/** Guardrail copy repeated per packet so assistant prep cannot be mistaken for approval. */
+const ASSISTANT_TRIAGE_GUARDRAIL = "Human review required; assistant notes cannot approve, normalize, or promote records.";
 
 interface OverviewQueueRow extends AdminQueueTableRow {
   updatedAtRaw: string;
@@ -196,9 +215,11 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
   const validationSummary = summarizeValidation(validationRows);
   const issueQueueRows = buildIssueQueueRows(records);
   const issueWorkflowRows = buildIssueWorkflowRows(records);
-  const overviewStats = buildAdminOverviewStats(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows);
-  const overviewGroups = buildAdminOverviewGroups(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows);
-  const overviewTableRows = buildAdminOverviewTableRows(reviewQueue, promotionQueue, failedImportRows, validationAttentionRows, issueQueueRows);
+  const assistantTriageRows = buildAssistantTriageRows(records);
+  const recentAssistantTriageRows = assistantTriageRows.slice(0, 12);
+  const overviewStats = buildAdminOverviewStats(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows, assistantTriageRows.length);
+  const overviewGroups = buildAdminOverviewGroups(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows, assistantTriageRows.length);
+  const overviewTableRows = buildAdminOverviewTableRows(reviewQueue, promotionQueue, failedImportRows, validationAttentionRows, issueQueueRows, assistantTriageRows);
 
   /**
    * Writes one review action without collapsing review and export truth boundaries.
@@ -305,8 +326,9 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
       <WorkspaceJumpNav
         ariaLabel="Admin workspace sections"
         items={[
-          { href: "#import-by-mpn-heading", label: "Import by MPN" },
+          { href: "#assistant-triage-heading", label: "Assistant triage" },
           { href: "#issue-ops-heading", label: "Issue operations" },
+          { href: "#import-by-mpn-heading", label: "Import by MPN" },
           { href: "#review-queue-heading", label: "Review queue" },
           { href: "#promotion-queue-heading", label: "Promotion queue" },
           { href: "#ops-health-heading", label: "Imports and validation" },
@@ -317,10 +339,62 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
 
       <AdminQueuePresentation groups={overviewGroups} rows={overviewTableRows} stats={overviewStats} />
 
+      <section className="detail-section" aria-labelledby="assistant-triage-heading">
+        <SectionHeading
+          id="assistant-triage-heading"
+          index="00"
+          subtitle="Evidence packets for assistant-aided review prep. They summarize existing records only and never advance trust state."
+          title="Assistant triage prep"
+        />
+        <SectionPanel
+          description="Built from current source, metric, issue, extraction, and asset evidence. No assistant output is trusted automatically; review queues remain the authority."
+          title={`${assistantTriageRows.length} assistant triage ${assistantTriageRows.length === 1 ? "packet" : "packets"}`}
+        >
+          {recentAssistantTriageRows.length > 0 ? (
+            <div className="admin-table-wrap">
+              <table className="admin-table admin-table--dense">
+                <thead>
+                  <tr>
+                    <th>Part</th>
+                    <th>Why queued</th>
+                    <th>Evidence packet</th>
+                    <th>Guardrail</th>
+                    <th>Next action</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentAssistantTriageRows.map((row) => (
+                    <tr key={`assistant-triage-${row.partId}`}>
+                      <td>
+                        <Link href={`/parts/${row.partId}`}>
+                          <span className="ui-mono">{row.mpn}</span>
+                        </Link>
+                        <div className="muted-copy">{row.manufacturerName}</div>
+                      </td>
+                      <td>
+                        <StatusBadge label={row.stateLabel} tone={row.stateTone} />
+                        <div className="muted-copy">{row.attentionReason}</div>
+                      </td>
+                      <td>{row.evidenceSummary}</td>
+                      <td>{row.guardrail}</td>
+                      <td>{row.nextAction}</td>
+                      <td>{formatDateTime(row.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState title="No assistant triage packets" body="Current catalog records do not have source conflicts, generated-review assets, or low-confidence extraction work needing prep." />
+          )}
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="issue-ops-heading">
         <SectionHeading
           id="issue-ops-heading"
-          index="00"
+          index="01"
           subtitle="Assign, resolve, and reopen open issues. These stay separate from asset review and promotion."
           title="Issue operations"
         />
@@ -433,7 +507,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
       <section className="detail-section" aria-labelledby="import-by-mpn-heading">
         <SectionHeading
           id="import-by-mpn-heading"
-          index="01"
+          index="02"
           subtitle="Pull one part from a registered provider into the catalog database, then continue in part detail or the queues below."
           title="Import by MPN"
         />
@@ -447,7 +521,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
       </section>
 
       <section className="detail-section" aria-labelledby="review-queue-heading">
-        <SectionHeading id="review-queue-heading" index="02" title="Review queue" subtitle="Generated drafts and review-required outputs that need approve/reject/changes decisions." />
+        <SectionHeading id="review-queue-heading" index="03" title="Review queue" subtitle="Generated drafts and review-required outputs that need approve/reject/changes decisions." />
         <SectionPanel description="Review state and actions are explicit. Approval alone does not verify export." title={`${reviewQueue.length} review items`}>
           {reviewQueue.length > 0 ? (
             <div className="admin-table-wrap">
@@ -510,7 +584,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
       </section>
 
       <section className="detail-section" aria-labelledby="promotion-queue-heading">
-        <SectionHeading id="promotion-queue-heading" index="03" title="Promotion queue" subtitle="Approved assets eligible or blocked for explicit verified-for-export promotion." />
+        <SectionHeading id="promotion-queue-heading" index="04" title="Promotion queue" subtitle="Approved assets eligible or blocked for explicit verified-for-export promotion." />
         <SectionPanel description="Promotion remains separate from review. Blocker reasons are shown before action." title={`${promotionQueue.length} promotion candidates`}>
           {promotionQueue.length > 0 ? (
             <div className="admin-table-wrap">
@@ -576,7 +650,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
       </section>
 
       <section className="detail-section" aria-labelledby="ops-health-heading">
-        <SectionHeading id="ops-health-heading" index="04" title="Imports and validation" subtitle="Recent import results and validation evidence." />
+        <SectionHeading id="ops-health-heading" index="05" title="Imports and validation" subtitle="Recent import results and validation evidence." />
         <div className="detail-two-col">
           <SectionPanel title="Recent imports" description="Newest source imports.">
             {recentImportRows.length > 0 ? (
@@ -722,7 +796,7 @@ export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
       </section>
 
       <section className="detail-section" aria-labelledby="audit-heading">
-        <SectionHeading id="audit-heading" index="05" title="Promotion audit history" subtitle="Recent promotion attempts with actor, outcome, and blocker reasons." />
+        <SectionHeading id="audit-heading" index="06" title="Promotion audit history" subtitle="Recent promotion attempts with actor, outcome, and blocker reasons." />
         <SectionPanel title="Recent promotion audits" description="Promotion outcomes remain auditable even when denied by blocker rules.">
           {promotionAudits.length > 0 ? (
             <div className="admin-table-wrap">
@@ -789,7 +863,7 @@ function AdminUserActionAuditSection({ auditEventState }: { auditEventState: Adm
     <section className="detail-section" aria-labelledby="user-action-audit-heading">
       <SectionHeading
         id="user-action-audit-heading"
-        index="06"
+        index="07"
         title="User action audit trail"
         subtitle="Recent API write attempts with actor, target, outcome, and request correlation."
       />
@@ -993,7 +1067,8 @@ function buildAdminOverviewStats(
   promotionQueue: PromotionQueueItem[],
   failedImportCount: number,
   validationIssueCount: number,
-  issueQueueRows: OverviewQueueRow[]
+  issueQueueRows: OverviewQueueRow[],
+  assistantTriageCount: number
 ): AdminQueueOverviewStat[] {
   const eligiblePromotionCount = promotionQueue.filter((item) => item.canPromote).length;
   const blockedPromotionCount = promotionQueue.length - eligiblePromotionCount;
@@ -1003,8 +1078,10 @@ function buildAdminOverviewStats(
   const cadGapCount = countQueueRows(issueQueueRows, "cad_gaps");
   const connectorGapCount = countQueueRows(issueQueueRows, "connector");
   const duplicateCount = countQueueRows(issueQueueRows, "duplicates");
+  const assistantTriageTone: BadgeTone = assistantTriageCount > 0 ? "generated" : "verified";
 
   return [
+    { label: "Assistant triage", tone: assistantTriageTone, value: assistantTriageCount },
     { label: "Review items", tone: "review" as const, value: reviewQueue.length },
     { label: "Promotion candidates", tone: "info" as const, value: promotionQueue.length },
     { label: "Eligible promotions", tone: "verified" as const, value: eligiblePromotionCount },
@@ -1027,10 +1104,17 @@ function buildAdminOverviewGroups(
   promotionQueue: PromotionQueueItem[],
   failedImportCount: number,
   validationIssueCount: number,
-  issueQueueRows: OverviewQueueRow[]
+  issueQueueRows: OverviewQueueRow[],
+  assistantTriageCount: number
 ): AdminQueueOverviewGroup[] {
   const groups: AdminQueueOverviewGroup[] = [];
 
+  pushAdminOverviewGroup(groups, assistantTriageCount, {
+    description: "Review-prep packets assembled from existing evidence. They do not approve, normalize, or promote anything.",
+    id: "assistant_triage",
+    label: "Assistant triage prep",
+    tone: "generated"
+  });
   pushAdminOverviewGroup(groups, reviewQueue.length, {
     description: "Generated assets and generation workflows waiting for explicit review decisions.",
     id: "review",
@@ -1109,9 +1193,23 @@ function buildAdminOverviewTableRows(
   promotionQueue: PromotionQueueItem[],
   failedImportRows: ImportRow[],
   validationAttentionRows: ValidationAttentionRow[],
-  issueQueueRows: OverviewQueueRow[]
+  issueQueueRows: OverviewQueueRow[],
+  assistantTriageRows: AssistantTriageRow[]
 ): AdminQueueTableRow[] {
   const rows: OverviewQueueRow[] = [
+    ...assistantTriageRows.map((row) => ({
+      detail: `${row.attentionReason}. ${row.nextAction}`,
+      href: `/parts/${row.partId}`,
+      id: `assistant-triage-${row.partId}`,
+      manufacturerName: row.manufacturerName,
+      mpn: row.mpn,
+      queueId: "assistant_triage",
+      queueLabel: "Assistant triage prep",
+      stateLabel: row.stateLabel,
+      stateTone: row.stateTone,
+      updatedAtRaw: row.updatedAt,
+      updatedLabel: formatDateTime(row.updatedAt)
+    })),
     ...reviewQueue.map((item) => ({
       detail: `${item.context}. ${item.detail}`,
       href: `/parts/${item.partId}`,
@@ -1344,7 +1442,7 @@ function AdminHeroSnapshot({ stats }: { stats: AdminQueueOverviewStat[] }) {
  * Selects the most decision-critical queue counts for the admin hero snapshot.
  */
 function selectAdminHeroStats(stats: AdminQueueOverviewStat[]): AdminQueueOverviewStat[] {
-  const preferredLabels = ["Review items", "Eligible promotions", "Pending approval", "Missing verified CAD", "Failed imports", "Validation issues"];
+  const preferredLabels = ["Assistant triage", "Review items", "Eligible promotions", "Pending approval", "Missing verified CAD", "Failed imports", "Validation issues"];
 
   return preferredLabels
     .map((label) => stats.find((stat) => stat.label === label))
@@ -1912,6 +2010,223 @@ function nextValidationAction(status: AssetValidationRecord["validationStatus"])
   return "No action needed.";
 }
 
+/**
+ * Builds assistant-ready review prep packets from existing evidence without creating trusted conclusions.
+ */
+function buildAssistantTriageRows(records: PartSearchRecord[]): AssistantTriageRow[] {
+  const rows: AssistantTriageRow[] = [];
+
+  for (const record of records) {
+    const openIssues = record.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "ignored");
+    const failedSources = record.sources.filter((source) => source.importStatus === "failed");
+    const generatedReviewAssets = record.assets.filter((asset) => asset.provenance === "generated" && asset.reviewStatus !== "approved" && asset.reviewStatus !== "rejected");
+    const lowConfidenceMetrics = record.metrics.filter((metric) => metric.confidenceScore < ASSISTANT_TRIAGE_CONFIDENCE_THRESHOLD);
+    const reviewExtractionSignals = record.extractionSignals.filter(
+      (signal) => signal.extractionStatus === "needs_review" || signal.confidenceScore < ASSISTANT_TRIAGE_CONFIDENCE_THRESHOLD
+    );
+    const sourceConflictIssues = openIssues.filter((issue) => issue.code === "source_conflict");
+    const sourceConflictRiskFlags = record.riskFlags.filter((flag) => flag.code === "source_conflict");
+    const lifecycleIssues = openIssues.filter((issue) => issue.code === "lifecycle_risk");
+    const lifecycleRiskFlags = record.riskFlags.filter((flag) => flag.code === "lifecycle_not_active");
+    const lifecycleNeedsReview = record.part.lifecycleStatus === "not_recommended" || record.part.lifecycleStatus === "obsolete";
+    const hasSourceFollowUp = failedSources.length > 0 || sourceConflictIssues.length > 0 || sourceConflictRiskFlags.length > 0;
+    const hasGeneratedReviewWork = generatedReviewAssets.length > 0;
+    const hasLowConfidenceExtraction = lowConfidenceMetrics.length > 0 || reviewExtractionSignals.length > 0;
+    const hasLifecycleRisk = lifecycleIssues.length > 0 || lifecycleRiskFlags.length > 0 || lifecycleNeedsReview;
+    const reasons = buildAssistantTriageReasons({
+      failedSourceCount: failedSources.length,
+      generatedReviewAssetCount: generatedReviewAssets.length,
+      hasLifecycleRisk,
+      hasSourceFollowUp,
+      lowConfidenceMetricCount: lowConfidenceMetrics.length,
+      openIssueCount: openIssues.length,
+      reviewExtractionSignalCount: reviewExtractionSignals.length
+    });
+
+    if (reasons.length === 0) {
+      continue;
+    }
+
+    const state = selectAssistantTriageState({
+      hasErrorIssue: openIssues.some((issue) => issue.severity === "error"),
+      hasFailedSource: failedSources.length > 0,
+      hasGeneratedReviewWork,
+      hasLifecycleRisk,
+      hasLowConfidenceExtraction,
+      hasSourceFollowUp,
+      lifecycleStatus: record.part.lifecycleStatus
+    });
+
+    rows.push({
+      attentionReason: reasons.slice(0, 3).join("; "),
+      evidenceSummary: buildAssistantEvidenceSummary(record, {
+        failedSourceCount: failedSources.length,
+        generatedReviewAssetCount: generatedReviewAssets.length,
+        lowConfidenceMetricCount: lowConfidenceMetrics.length,
+        reviewExtractionSignalCount: reviewExtractionSignals.length
+      }),
+      guardrail: ASSISTANT_TRIAGE_GUARDRAIL,
+      manufacturerName: record.manufacturer.name,
+      mpn: record.part.mpn,
+      nextAction: selectAssistantTriageNextAction({
+        hasGeneratedReviewWork,
+        hasLifecycleRisk,
+        hasLowConfidenceExtraction,
+        hasSourceFollowUp
+      }),
+      partId: record.part.id,
+      stateLabel: state.label,
+      stateTone: state.tone,
+      updatedAt: latestTimestamp([
+        record.lastUpdatedAt,
+        record.part.lastUpdatedAt,
+        ...failedSources.map((source) => source.lastUpdatedAt),
+        ...generatedReviewAssets.map((asset) => asset.lastUpdatedAt),
+        ...lowConfidenceMetrics.map((metric) => metric.lastUpdatedAt),
+        ...reviewExtractionSignals.map((signal) => signal.lastUpdatedAt),
+        ...openIssues.map((issue) => issue.lastUpdatedAt),
+        ...record.riskFlags.map((flag) => flag.lastUpdatedAt)
+      ])
+    });
+  }
+
+  return rows.sort((left, right) => assistantTriageStateRank(left.stateLabel) - assistantTriageStateRank(right.stateLabel) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.mpn.localeCompare(right.mpn));
+}
+
+/**
+ * Turns backend evidence counts into short reasons an engineer can hand to an assistant.
+ */
+function buildAssistantTriageReasons(config: {
+  failedSourceCount: number;
+  generatedReviewAssetCount: number;
+  hasLifecycleRisk: boolean;
+  hasSourceFollowUp: boolean;
+  lowConfidenceMetricCount: number;
+  openIssueCount: number;
+  reviewExtractionSignalCount: number;
+}): string[] {
+  const reasons: string[] = [];
+
+  if (config.hasSourceFollowUp) {
+    reasons.push(config.failedSourceCount > 0 ? "Source evidence needs reconciliation after import failure" : "Source evidence needs reconciliation");
+  }
+
+  if (config.generatedReviewAssetCount > 0) {
+    reasons.push(`${formatCount(config.generatedReviewAssetCount, "generated asset")} needs human review`);
+  }
+
+  if (config.lowConfidenceMetricCount > 0 || config.reviewExtractionSignalCount > 0) {
+    reasons.push(`${formatCount(config.lowConfidenceMetricCount + config.reviewExtractionSignalCount, "low-confidence evidence item")} needs datasheet comparison`);
+  }
+
+  if (config.hasLifecycleRisk) {
+    reasons.push("Lifecycle risk needs design-use review");
+  }
+
+  if (reasons.length === 0 && config.openIssueCount > 0) {
+    reasons.push(`${formatCount(config.openIssueCount, "open issue")} needs review context`);
+  }
+
+  return reasons;
+}
+
+/**
+ * Summarizes the exact evidence attached to the packet without inventing new certainty.
+ */
+function buildAssistantEvidenceSummary(
+  record: PartSearchRecord,
+  counts: {
+    failedSourceCount: number;
+    generatedReviewAssetCount: number;
+    lowConfidenceMetricCount: number;
+    reviewExtractionSignalCount: number;
+  }
+): string {
+  const datasheetLabel = record.datasheetRevision ? `datasheet ${record.datasheetRevision.revisionLabel}` : "no parsed datasheet";
+  const fragments = [
+    formatCount(record.sources.length, "source row", "source rows"),
+    formatCount(record.metrics.length, "metric"),
+    formatCount(record.extractionSignals.length, "extraction signal"),
+    datasheetLabel,
+    counts.failedSourceCount > 0 ? `${formatCount(counts.failedSourceCount, "failed source")} with import errors` : null,
+    counts.lowConfidenceMetricCount > 0 ? formatCount(counts.lowConfidenceMetricCount, "low-confidence metric") : null,
+    counts.reviewExtractionSignalCount > 0 ? formatCount(counts.reviewExtractionSignalCount, "review extraction signal") : null,
+    counts.generatedReviewAssetCount > 0 ? `${formatCount(counts.generatedReviewAssetCount, "generated asset")} awaiting review` : null
+  ];
+
+  return fragments.filter((fragment): fragment is string => Boolean(fragment)).join(" | ");
+}
+
+/**
+ * Chooses the visible queue state while keeping assistant prep distinct from approval.
+ */
+function selectAssistantTriageState(config: {
+  hasErrorIssue: boolean;
+  hasFailedSource: boolean;
+  hasGeneratedReviewWork: boolean;
+  hasLifecycleRisk: boolean;
+  hasLowConfidenceExtraction: boolean;
+  hasSourceFollowUp: boolean;
+  lifecycleStatus: PartSearchRecord["part"]["lifecycleStatus"];
+}): { label: string; tone: BadgeTone } {
+  if (config.hasSourceFollowUp) {
+    return { label: "Source reconciliation", tone: config.hasFailedSource || config.hasErrorIssue ? "danger" : "review" };
+  }
+
+  if (config.hasGeneratedReviewWork) {
+    return { label: "Generated review", tone: "generated" };
+  }
+
+  if (config.hasLowConfidenceExtraction) {
+    return { label: "Extraction review", tone: "review" };
+  }
+
+  if (config.hasLifecycleRisk) {
+    return { label: "Lifecycle review", tone: config.lifecycleStatus === "obsolete" ? "danger" : "review" };
+  }
+
+  return { label: "Issue prep", tone: "review" };
+}
+
+/**
+ * Gives each assistant packet one concrete next action that maps back to existing admin workflows.
+ */
+function selectAssistantTriageNextAction(config: {
+  hasGeneratedReviewWork: boolean;
+  hasLifecycleRisk: boolean;
+  hasLowConfidenceExtraction: boolean;
+  hasSourceFollowUp: boolean;
+}): string {
+  if (config.hasSourceFollowUp) {
+    return "Compare source rows, choose or document the canonical source, then update issue operations.";
+  }
+
+  if (config.hasGeneratedReviewWork) {
+    return "Open part files and finish the explicit review decision before any promotion.";
+  }
+
+  if (config.hasLowConfidenceExtraction) {
+    return "Compare low-confidence values to the datasheet and keep uncertain fields pending.";
+  }
+
+  if (config.hasLifecycleRisk) {
+    return "Confirm lifecycle evidence before design-use approval or substitution work.";
+  }
+
+  return "Open part detail and use this packet as review context before changing trusted fields.";
+}
+
+/**
+ * Orders assistant packets by the kind of human review they need first.
+ */
+function assistantTriageStateRank(stateLabel: string): number {
+  if (stateLabel === "Source reconciliation") return 0;
+  if (stateLabel === "Generated review") return 1;
+  if (stateLabel === "Extraction review") return 2;
+  if (stateLabel === "Lifecycle review") return 3;
+  return 4;
+}
+
 function buildPromotionAuditRows(records: PartSearchRecord[]): PromotionAuditRow[] {
   const rows: PromotionAuditRow[] = [];
 
@@ -1944,6 +2259,13 @@ function summarizeValidation(rows: ValidationRow[]): { failed: number; needsRevi
     },
     { failed: 0, needsReview: 0, notValidated: 0, verified: 0 }
   );
+}
+
+/**
+ * Formats simple count labels for dense admin copy.
+ */
+function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function formatAssetType(assetType: Asset["assetType"]): string {

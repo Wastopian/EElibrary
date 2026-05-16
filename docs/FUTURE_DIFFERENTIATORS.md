@@ -5,10 +5,11 @@ Item 1 (reusable circuit blocks as the headline feature) is currently in flight 
 [`TODO.md`](../TODO.md) plus [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); items 2–7
 below are captured here as forward-looking direction so the strategic context is not lost.
 
-These are **not** shipped capabilities — keep them out of README "Current Capabilities" and
-out of the implementation-status matrix until real work lands. Each item is anchored against
-the project's existing honesty discipline (imported ≠ approved ≠ export-ready) and against
-the small-team product wedge.
+These are strategic directions, not wholesale shipped capabilities. Keep future-only claims
+out of README "Current Capabilities" and out of the implementation-status matrix until real
+work lands; when a trust-safe slice ships, record the exact slice here. Each item is anchored
+against the project's existing honesty discipline (imported ≠ approved ≠ export-ready) and
+against the small-team product wedge.
 
 Each item lists: **why it matters**, **what is already in the repo to build on**, and a
 **concrete first slice** that could be picked up later without breaking the boundaries above.
@@ -63,7 +64,16 @@ aerospace / medical / defense that cannot upload datasheets to a SaaS.
 - Admin queues already route review and promotion; LLM output can be routed through
   `imported → reviewed` without bypassing it.
 
-**Concrete first slice.**
+**First trust-safe slice shipped 2026-05-16.**
+
+- `/admin` now includes **Assistant triage prep** packets built from existing source,
+  metric, extraction, issue, and generated-asset evidence. The worklist tells
+  engineers why a part is a good candidate for assisted review prep, which evidence is
+  attached, the guardrail to keep in mind, and the next human action. The packet is
+  assembled from current trusted records only; no generated text is persisted as trusted
+  evidence, and packets never approve, normalize, or promote records.
+
+**Next concrete slices.**
 
 - Add a worker-only datasheet summarizer that produces normalized metric *candidates*. Land
   them as `SourceRecord` rows with `provenance: "generated"` and `importStatus: "imported"`
