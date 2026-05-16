@@ -9,6 +9,7 @@ import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { OperatorChecklist } from "../../components/OperatorChecklist";
+import { ProviderLookupPanel } from "../../components/ProviderLookupPanel";
 import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../../lib/detail-view-model";
@@ -63,7 +64,7 @@ type QuickLookupState =
   | { status: "ambiguous"; query: string; records: PartSearchRecord[]; totalRecords: number }
   | { status: "matched"; record: PartSearchRecord };
 
-/** NoMatchProviderLookupState keeps no-match intake honest and limited to direct exact-MPN import, not live search. */
+/** NoMatchProviderLookupState keeps no-match intake honest and limited to explicit exact-match provider lookup. */
 type NoMatchProviderLookupState =
   | { status: "available"; initialQuery: string; refreshHref: string }
   | { status: "unavailable"; reason: string };
@@ -523,22 +524,17 @@ function QuickLookupPanel({ noMatchProviderLookup, state }: { noMatchProviderLoo
 }
 
 /**
- * Renders direct exact-MPN import from a no-match state without pretending the site is doing live global search.
+ * Renders explicit provider lookup from a no-match state without pretending the site is doing live global search.
  */
 function NoMatchProviderLookup({ lookup, providerLookup }: { lookup: string; providerLookup: NoMatchProviderLookupState }) {
   return (
-    <div className="quick-check-empty quick-check-empty--acquisition" role="status">
+    <div className="quick-check-empty quick-check-empty--acquisition" id="catalog-acquisition" role="status">
       <strong>Part not found</strong>
       <p>
-        Nothing matched <span className="ui-mono">{lookup}</span> yet. We will not invent a record. Try the import option below or refine the search.
+        Nothing matched <span className="ui-mono">{lookup}</span> yet. We will not invent a record. Search supported providers for exact candidates below or refine the search.
       </p>
       {providerLookup.status === "available" ? (
-        <ImportByMpnPanel
-          autoRedirectOnSuccess
-          compact
-          initialMpn={providerLookup.initialQuery}
-          refreshHref={providerLookup.refreshHref}
-        />
+        <ProviderLookupPanel importMode="direct" initialQuery={providerLookup.initialQuery} refreshHref={providerLookup.refreshHref} />
       ) : (
         <p className="quick-check-empty__note">
           <strong>{importUiCopy.unavailableLead}</strong> {providerLookup.reason}
@@ -1698,9 +1694,9 @@ function buildCatalogPrimaryAction(state: QuickLookupState, providerLookup: NoMa
 
   if (state.status === "no_match" && providerLookup.status === "available") {
     return {
-      detail: "No match yet. Import this exact part number.",
-      href: "#import-by-mpn",
-      label: "Open import panel"
+      detail: "No match yet. Search supported providers for exact candidates.",
+      href: "#catalog-acquisition",
+      label: "Search supported providers"
     };
   }
 

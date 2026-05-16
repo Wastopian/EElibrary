@@ -46,12 +46,12 @@ export const importUiCopy = {
   providerLookupNoMatch: "No exact-match supplier candidates were found for this lookup.",
   /** Shown when explicit provider lookup fails before candidates can be listed. */
   providerLookupFailure: "Provider lookup did not complete.",
-  /** Shown while the selected provider candidate is being turned into a queued acquisition job. */
-  providerAcquisitionCreating: "Starting background import.",
-  /** Shown when one visible candidate currently owns the in-flight acquisition lock for this result set. */
-  providerAcquisitionActiveLead: "Acquisition in progress for",
+  /** Shown while the selected provider candidate import is starting. */
+  providerAcquisitionCreating: "Starting import.",
+  /** Shown when one visible candidate currently owns the in-flight import lock for this result set. */
+  providerAcquisitionActiveLead: "Import in progress for",
   /** Badge shown on the currently active candidate row. */
-  providerAcquisitionActiveBadge: "Background import running",
+  providerAcquisitionActiveBadge: "Import running",
   /** Explains why the other candidate buttons stay disabled while one job is still pending. */
   providerAcquisitionLocked: "Wait for this import to finish before starting another one.",
   /** Shown while a queued job is waiting for the worker to claim it. */

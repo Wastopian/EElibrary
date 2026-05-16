@@ -11,6 +11,7 @@ import { importUiCopy } from "../lib/import-ui-copy";
 import {
   ProviderLookupCandidateJobStatus,
   ProviderLookupPanelView,
+  buildProviderCandidateImportInput,
   buildProviderAcquisitionJobCreateInput,
   isPendingCandidateAcquisition,
   isQueueAcquisitionButtonDisabled,
@@ -37,6 +38,20 @@ test("provider lookup candidate acquisition uses provider part keys without over
     providerPartKey: "C1091",
     requestedLookup: "RC-02W300JT",
     sourceUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
+  });
+});
+
+test("provider lookup direct import uses selected candidate identity without making engineers retype provider details", () => {
+  const candidate = buildProviderCandidate();
+  const input = buildProviderCandidateImportInput(candidate);
+
+  assert.deepEqual(input, {
+    datasheetUrl: null,
+    manufacturerName: "Guangdong Fenghua Advanced Tech",
+    mpn: "RC-02W300JT",
+    providerId: "jlcparts",
+    providerPartId: "C1091",
+    providerUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
   });
 });
 
@@ -85,6 +100,39 @@ test("provider lookup candidate acquisition success without partId does not gues
     href: "/?q=RC-02W300JT",
     kind: "refresh_search"
   });
+});
+
+test("rendered provider lookup panel direct mode imports selected candidates instead of queueing jobs", () => {
+  const candidates = [buildProviderCandidate()];
+  const idleHtml = renderToStaticMarkup(
+    React.createElement(ProviderLookupPanelView, {
+      acquisitionState: { kind: "idle" },
+      importMode: "direct",
+      onQueueAcquisition: () => undefined,
+      onRunDirectImport: () => undefined,
+      onRunLookup: () => undefined,
+      status: { candidates, kind: "candidates" }
+    })
+  );
+  const succeededHtml = renderToStaticMarkup(
+    React.createElement(ProviderLookupPanelView, {
+      acquisitionState: {
+        action: { href: "/parts/part-jlcparts-c1091", kind: "open_part" },
+        candidateKey: "jlcparts:C1091",
+        kind: "succeeded"
+      },
+      importMode: "direct",
+      onQueueAcquisition: () => undefined,
+      onRunDirectImport: () => undefined,
+      onRunLookup: () => undefined,
+      status: { candidates, kind: "candidates" }
+    })
+  );
+
+  assert.match(idleHtml, new RegExp(importUiCopy.buttonImportCandidate, "u"));
+  assert.doesNotMatch(idleHtml, new RegExp(importUiCopy.buttonQueueAcquisition, "u"));
+  assert.match(succeededHtml, new RegExp(importUiCopy.successLead, "u"));
+  assert.doesNotMatch(succeededHtml, new RegExp(importUiCopy.providerAcquisitionSucceeded, "u"));
 });
 
 test("provider lookup candidates remain disabled when import is unavailable", () => {

@@ -21,7 +21,7 @@ Those histories were merged at their common base (`3a0d598`). **`main` now conta
 
 Typical flow (details and commands in [`README.md`](../README.md)):
 
-1. **Catalog** — Open `/` or `/catalog`: dense search, filters (readiness, approval, CAD, lifecycle, connectors, …), exact-MPN provider import when there is no internal match.
+1. **Catalog** — Open `/` or `/catalog`: dense search, filters (readiness, approval, CAD, lifecycle, connectors, …), exact-MPN provider lookup and selected-candidate import when there is no internal match.
 2. **Part detail** — `/parts/[partId]`: answer-first readiness, datasheet and CAD/export state, connector buildable set, provenance, admin-aligned actions.
 3. **Project memory** — `/projects`: create projects and revisions, CSV/XLSX BOM import and mapping, match rows to catalog parts, BOM diagnostics, revision compare, fleet risk on the dashboard, follow-ups, export bundle history and downloads where file-backed.
 4. **Cross-cutting** — `/where-used`, `/circuit-blocks`, `/evidence`, `/admin`, `/system/health` (see implementation matrix).

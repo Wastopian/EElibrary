@@ -221,8 +221,9 @@ test("catalog page shows no-match state with provider lookup panel for concrete 
 
     assert.match(html, /Part not found/u);
     assert.match(html, /TPS7A02DBVR/u);
-    assert.match(html, /Import exact part number/u);
-    assert.match(html, /Import this exact part number/u);
+    assert.match(html, /Search supported providers/u);
+    assert.match(html, /Search supported suppliers for exact matches/u);
+    assert.doesNotMatch(html, /Import exact part number/u);
   } finally {
     restoreFetch();
   }

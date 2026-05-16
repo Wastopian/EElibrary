@@ -349,7 +349,7 @@ test("homepage renders partial readiness data state from incomplete record", asy
 /**
  * Verifies no-match state remains explicit and does not fabricate readiness.
  */
-test("homepage renders direct exact-MPN import CTA for DB-backed concrete no-match queries", async () => {
+test("homepage renders exact provider lookup CTA for DB-backed concrete no-match queries", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const restoreFetch = mockFetch((url) => {
@@ -387,10 +387,10 @@ test("homepage renders direct exact-MPN import CTA for DB-backed concrete no-mat
 
     assert.match(html, /Part not found/u);
     assert.match(html, /We will not invent a record/u);
-    assert.match(html, new RegExp(importUiCopy.catalogAcquisitionLead, "u"));
+    assert.match(html, new RegExp(importUiCopy.providerLookupLead, "u"));
     assert.match(html, new RegExp(importUiCopy.catalogAcquisitionNote, "u"));
-    assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
-    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
     assert.doesNotMatch(html, /Readiness Checks/u);
   } finally {
     restoreFetch();
@@ -398,9 +398,9 @@ test("homepage renders direct exact-MPN import CTA for DB-backed concrete no-mat
 });
 
 /**
- * Verifies numeric-only MPN lookups still expose direct no-match acquisition when the catalog has no row yet.
+ * Verifies numeric-only MPN lookups still expose exact provider lookup when the catalog has no row yet.
  */
-test("homepage shows direct import CTA for numeric-only no-match lookups", async () => {
+test("homepage shows exact provider lookup CTA for numeric-only no-match lookups", async () => {
   const records = getAllPartRecords();
   const facets = getSearchFacetsFromRecords(records);
   const restoreFetch = mockFetch((url) => {
@@ -437,8 +437,8 @@ test("homepage shows direct import CTA for numeric-only no-match lookups", async
     const html = await renderHomepage({ q: "0430250200" });
 
     assert.match(html, /Part not found/u);
-    assert.match(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
-    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));
+    assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   } finally {
     restoreFetch();
   }
