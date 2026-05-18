@@ -69,8 +69,20 @@ export function formatProviderImportFailureMessage(error: unknown): string {
     return "Could not reach the provider catalog. Check your network connection and try again.";
   }
 
+  if (/DigiKey credentials are not configured/u.test(error.message)) {
+    return "DigiKey import requires DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET.";
+  }
+
+  if (/Mouser credentials are not configured/u.test(error.message)) {
+    return "Mouser import requires MOUSER_API_KEY.";
+  }
+
   if (/Octopart\/Nexar credentials are not configured/u.test(error.message)) {
-    return "Octopart/Nexar import requires configured provider credentials.";
+    return "Octopart/Nexar is an optional paid aggregator and requires configured Nexar credentials. Free providers do not.";
+  }
+
+  if (/Unable to fetch DigiKey/u.test(error.message) || /Unable to fetch Mouser/u.test(error.message) || /Mouser API returned errors/u.test(error.message)) {
+    return "Could not reach the distributor provider. Check credentials and network access and try again.";
   }
 
   if (/Unable to fetch Octopart\/Nexar/u.test(error.message) || /Octopart\/Nexar GraphQL returned errors/u.test(error.message)) {

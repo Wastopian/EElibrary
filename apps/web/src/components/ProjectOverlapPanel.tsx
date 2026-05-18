@@ -69,6 +69,33 @@ export function ProjectOverlapPanel({ overlap }: ProjectOverlapPanelProps) {
           never an approval signal; shared parts here do not imply that either project&apos;s assets are approved or verified for export.
         </p>
 
+        {(overlap.priorEngineeringMemoryWarnings ?? []).length > 0 && (
+          <div className="project-overlap-panel__memory-warning" role="alert">
+            <p className="project-overlap-panel__memory-warning-lead">
+              <strong>Past mistake about to be repeated.</strong> This BOM confirms parts your team already recorded durable
+              &ldquo;this bit us&rdquo; or blocking engineering memory against. This is a reuse warning, not a gate — it does not
+              change approval, validation, or export state.
+            </p>
+            <ul className="project-overlap-panel__memory-warning-list">
+              {(overlap.priorEngineeringMemoryWarnings ?? []).map((warning) => (
+                <li key={warning.recordId} className="project-overlap-panel__memory-warning-item">
+                  <StatusBadge
+                    label={warning.severity === "blocking" ? "blocking" : "bit us"}
+                    tone={warning.severity === "blocking" ? "danger" : "review"}
+                  />
+                  <Link href={`/parts/${encodeURIComponent(warning.partId)}#engineering-memory-heading`} className="ui-mono">
+                    {warning.partMpn}
+                  </Link>
+                  <span>{warning.title}</span>
+                  {warning.detail ? <span className="muted-copy">{warning.detail}</span> : null}
+                  {warning.relatedMpn ? <span className="muted-copy">(mate: {warning.relatedMpn})</span> : null}
+                  {warning.recordedBy ? <span className="muted-copy">— {warning.recordedBy}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="project-overlap-panel__stats">
           <ProjectOverlapStat
             label="Confirmed parts in this BOM"

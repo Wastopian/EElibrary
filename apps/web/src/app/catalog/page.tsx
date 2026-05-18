@@ -1446,6 +1446,13 @@ function buildCatalogResultRows(records: PartSearchRecord[], compareParts: strin
       id: record.part.id,
       lifecycleLabel: formatLifecycleShort(record.part.lifecycleStatus),
       manufacturerName: record.manufacturer.name,
+      memoryWarning: record.engineeringMemoryWarning
+        ? {
+            blocking: record.engineeringMemoryWarning.blockingCount > 0,
+            count: record.engineeringMemoryWarning.warningCount,
+            topTitle: record.engineeringMemoryWarning.preview[0]?.title ?? "Recorded engineering memory"
+          }
+        : null,
       mpn: record.part.mpn,
       nextActionDetail: nextAction.detail,
       nextActionLabel: nextAction.label,

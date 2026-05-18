@@ -906,20 +906,44 @@ Purpose:
 - supports engineer trust and internal decision-making
 - should be superseded or normalized into `ProjectPartUsage` as project memory is implemented
 
-### PartNote
-Represents an internal note associated with a part.
+### PartEngineeringRecord
+Represents one durable, provenance-bearing piece of private engineering memory about a part.
+This is the shipped entity (`infra/postgres/041_part_engineering_records.sql`) that supersedes
+the older `PartNote` sketch: it answers the questions a public component aggregator structurally
+cannot.
 
 Fields:
 - `id`
 - `part_id`
-- `note_type` (`engineering`, `manufacturing`, `procurement`, `library`)
-- `author`
-- `body`
+- `record_kind` (`outcome`, `harness_mate_verified`, `cad_physical_verified`, `dependency`, `decision_blocked`, `note`)
+- `title`
+- `detail`
+- `severity` (`info`, `limitation`, `caution`, `blocking`)
+- `outcome` (`worked`, `worked_with_caveats`, `bit_us`, `not_verified`; null for note/dependency/decision rows)
+- `related_asset_id` (nullable; the trusted footprint/symbol/3D asset this record is about — ON DELETE SET NULL)
+- `datasheet_revision_id` (nullable; the datasheet revision the team designed from — ON DELETE SET NULL)
+- `related_mpn` (nullable; counterpart connector MPN that actually mated in the real harness)
+- `depended_on_by` (nullable; test fixture / board / cable / program identifier)
+- `recorded_by`
+- `recorded_at`
+- `resolved_at` / `resolved_by` / `resolution_notes` (resolution preserves the original row)
+- `evidence_url`
 - `created_at`
 - `updated_at`
 
 Purpose:
-- stores internal corrections, cautions, manufacturing notes, and team knowledge that public part sites do not capture well
+- captures "have we used this / did it work or bite us / who approved it / which footprint and
+  datasheet revision did we trust / what mated in the real harness / which CAD was verified
+  against the physical part / what depended on it / what mistake must we not repeat"
+- append-only and provenance-first: resolving never deletes, so a project that reused the part
+  while a record was open stays auditable
+- Honesty contract: recording or resolving a record never changes part approval, asset
+  validation, review, or export state
+
+### PartNote (superseded)
+Original sketch for a part-level note (`note_type`, `author`, `body`). Superseded by
+`PartEngineeringRecord` (`record_kind = 'note'` covers the free-form case). Retained here only
+to document the design lineage.
 
 ---
 

@@ -2,8 +2,8 @@
  * File header: Project file mirror service.
  *
  * Persists project files outside the database so engineers can also drop files directly
- * into operating-system folders. For each project the service maintains three first-class
- * subfolders — parts list, datasheets, and 3D models — under a configurable root.
+ * into operating-system folders. For each project the service maintains first-class
+ * subfolders for parts lists, datasheets, 3D models, internal hardware, and notes.
  *
  * The root resolves in this order:
  *   1. The `EE_LIBRARY_PROJECT_FILES_ROOT` environment variable (absolute or relative).
@@ -15,10 +15,12 @@
  * traversal regardless of how a project key was persisted upstream.
  */
 
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type {
+  ProjectCustomHardwareListing,
+  ProjectCustomHardwareRecord,
   ProjectFilesAvailability,
   ProjectFilesResponse,
   ProjectFileUploadInput,
@@ -48,6 +50,12 @@ export const PROJECT_FOLDER_DEFINITIONS: readonly ProjectFolderDefinition[] = [
     folderName: "parts-list",
     label: "Parts list",
     description: "BOM exports, CSV imports, and other parts list source files."
+  },
+  {
+    category: "hardware",
+    folderName: "hardware",
+    label: "Custom designs",
+    description: "Internal boards, fixtures, harnesses, adapters, cables, and test hardware."
   },
   {
     category: "datasheets",
@@ -111,7 +119,7 @@ export function getProjectFilesRoot(): string | null {
  * Builds the project mirror response for one project.
  *
  * Auto-creates the project folder structure on first access so engineers always see the
- * expected three subfolders, even if no files have been imported yet. Filesystem failures
+ * expected subfolders, even if no files have been imported yet. Filesystem failures
  * surface as `availability: "error"` with a single human-readable message; the response
  * never silently hides drift or mistakes.
  */
@@ -126,6 +134,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
       projectId: project.id,
       projectKey: safeKey,
       folders: [],
+      customHardware: null,
       message: null
     };
   }
@@ -135,6 +144,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
   try {
     await ensureProjectFolderTree(projectRoot);
     const folders = await readFolderListings(projectRoot);
+    const customHardware = await readCustomHardwareListing(projectRoot);
 
     return {
       availability: "configured",
@@ -142,6 +152,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
       projectId: project.id,
       projectKey: safeKey,
       folders,
+      customHardware,
       message: null
     };
   } catch (error) {
@@ -151,6 +162,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
       projectId: project.id,
       projectKey: safeKey,
       folders: [],
+      customHardware: null,
       message: error instanceof Error ? error.message : "Project file mirror is unavailable."
     };
   }
@@ -192,7 +204,7 @@ function resolveProjectRoot(root: string, sanitizedKey: string): string {
 }
 
 /**
- * Ensures the project root and its three category subfolders exist on disk. Idempotent:
+ * Ensures the project root and its category subfolders exist on disk. Idempotent:
  * existing folders are preserved exactly so engineers can drop files in directly.
  */
 async function ensureProjectFolderTree(projectRoot: string): Promise<void> {
@@ -224,6 +236,424 @@ async function readFolderListings(projectRoot: string): Promise<ProjectFolderLis
   }
 
   return listings;
+}
+
+/** DEFAULT_CUSTOM_HARDWARE_PREFIXES covers the team's common internal hardware families. */
+const DEFAULT_CUSTOM_HARDWARE_PREFIXES = ["PTA", "PCA", "ICD"] as const;
+
+/**
+ * CUSTOM_HARDWARE_PART_NUMBER_PATTERN recognizes internal custom-design folder names
+ * without knowing the prefix ahead of time. It is only used on the dedicated hardware
+ * folder so broad manufacturer MPNs in BOM files do not become accidental custom designs.
+ */
+const CUSTOM_HARDWARE_PART_NUMBER_PATTERN = /^([A-Za-z][A-Za-z0-9]{1,19})[-._](\d{1,12})$/u;
+
+/**
+ * CUSTOM_HARDWARE_METADATA_FILENAMES lists metadata files read from inside each
+ * custom design folder.
+ * The first readable file wins so structured JSON and hand-written notes do not
+ * get merged into a misleading combined record.
+ */
+const CUSTOM_HARDWARE_METADATA_FILENAMES = [
+  "hardware.json",
+  "metadata.json",
+  "manifest.json",
+  "info.json",
+  "README.md",
+  "readme.md",
+  "hardware.md",
+  "metadata.md",
+  "info.md",
+  "notes.md"
+] as const;
+
+/** MAX_PARTS_LIST_SCAN_BYTES bounds passive custom-hardware reference scanning for one source file. */
+const MAX_PARTS_LIST_SCAN_BYTES = 2 * 1024 * 1024;
+
+/** PARTS_LIST_REFERENCE_EXTENSIONS names text-like parts-list files scanned for custom design numbers. */
+const PARTS_LIST_REFERENCE_EXTENSIONS = new Set([".csv", ".tsv", ".txt", ".md", ".json"]);
+
+/** CustomHardwareMetadataFields is the normalized shape read from one metadata file. */
+interface CustomHardwareMetadataFields {
+  connectsTo: string | null;
+  tests: string | null;
+  attachedProject: string | null;
+  notes: string | null;
+}
+
+/** CustomHardwareMetadataReadResult adds source filename and mtime provenance to parsed metadata. */
+interface CustomHardwareMetadataReadResult extends CustomHardwareMetadataFields {
+  metadataSource: string;
+  modifiedAt: string | null;
+}
+
+/**
+ * Returns the configured custom-hardware prefixes used as scan seeds.
+ *
+ * Teams can set `EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES=PTA,PCA,ICD,XYZ` to match their
+ * own internal codes. Values are normalized to uppercase alphanumerics; invalid or empty
+ * input falls back to the default set. Additional prefixes are discovered from real
+ * design folders during a project read.
+ */
+export function getCustomHardwarePrefixes(): string[] {
+  const raw = process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES;
+  const source = typeof raw === "string" && raw.trim().length > 0
+    ? raw.split(/[,\s;]+/u)
+    : [...DEFAULT_CUSTOM_HARDWARE_PREFIXES];
+  const cleaned = source
+    .map((prefix) => normalizeCustomHardwarePrefix(prefix))
+    .filter((prefix): prefix is string => Boolean(prefix));
+  const unique = sortedStrings(cleaned);
+
+  return unique.length > 0 ? unique : sortedStrings(DEFAULT_CUSTOM_HARDWARE_PREFIXES);
+}
+
+/**
+ * Reads custom internal hardware for one project from the file mirror.
+ *
+ * A record is created for every recognized or discoverable `<prefix>-<number>` folder
+ * under `hardware/`. Parts-list files are scanned only for configured/default prefixes
+ * plus prefixes discovered from real folders; that keeps public catalog MPNs from being
+ * misclassified while still catching team-specific hardware families.
+ */
+async function readCustomHardwareListing(projectRoot: string): Promise<ProjectCustomHardwareListing> {
+  const hardwareFolderPath = path.join(projectRoot, "hardware");
+  const partsListFolderPath = path.join(projectRoot, "parts-list");
+  const recordsByPartNumber = new Map<string, ProjectCustomHardwareRecord>();
+
+  const hardwareEntries = await readdir(hardwareFolderPath, { withFileTypes: true });
+  const visibleHardwareFolders = hardwareEntries.filter((entry) => !entry.name.startsWith(".") && entry.isDirectory());
+  const recognizedPrefixes = resolveCustomHardwarePrefixes(visibleHardwareFolders.map((entry) => entry.name), getCustomHardwarePrefixes());
+  const partsListReferences = await readCustomHardwareReferencesFromPartsList(partsListFolderPath, recognizedPrefixes);
+
+  for (const entry of visibleHardwareFolders) {
+    const partNumber = canonicalizeCustomHardwarePartNumber(entry.name, recognizedPrefixes);
+    if (!partNumber) {
+      continue;
+    }
+
+    const folderPath = path.join(hardwareFolderPath, entry.name);
+    const folderInfo = await stat(folderPath);
+    const metadata = await readCustomHardwareMetadata(folderPath, partNumber);
+
+    recordsByPartNumber.set(partNumber, {
+      absolutePath: folderPath,
+      attachedProject: metadata?.attachedProject ?? null,
+      connectsTo: metadata?.connectsTo ?? null,
+      folderName: entry.name,
+      folderState: "folder_backed",
+      mentionedInPartsListFiles: sortedStrings(partsListReferences.get(partNumber) ?? []),
+      metadataSource: metadata?.metadataSource ?? null,
+      modifiedAt: metadata?.modifiedAt ?? folderInfo.mtime.toISOString(),
+      notes: metadata?.notes ?? null,
+      partNumber,
+      tests: metadata?.tests ?? null
+    });
+  }
+
+  for (const [partNumber, sourceFiles] of partsListReferences) {
+    if (recordsByPartNumber.has(partNumber)) {
+      continue;
+    }
+
+    recordsByPartNumber.set(partNumber, {
+      absolutePath: null,
+      attachedProject: null,
+      connectsTo: null,
+      folderName: null,
+      folderState: "parts_list_reference_only",
+      mentionedInPartsListFiles: sortedStrings(sourceFiles),
+      metadataSource: null,
+      modifiedAt: null,
+      notes: null,
+      partNumber,
+      tests: null
+    });
+  }
+
+  return {
+    boundary: "Custom design notes are file-backed provenance only. They do not validate hardware, approve a BOM row, or unlock export.",
+    hardwareFolderPath,
+    recognizedPrefixes,
+    records: Array.from(recordsByPartNumber.values()).sort(compareCustomHardwareRecords)
+  };
+}
+
+/**
+ * Reads text-like parts-list source files and maps custom design part numbers to
+ * filenames where they were observed. Binary or oversized files are skipped instead of
+ * guessed.
+ */
+async function readCustomHardwareReferencesFromPartsList(partsListFolderPath: string, recognizedPrefixes: string[]): Promise<Map<string, string[]>> {
+  const references = new Map<string, string[]>();
+  const entries = await readdir(partsListFolderPath, { withFileTypes: true });
+  const visibleFiles = entries.filter((entry) => !entry.name.startsWith(".") && entry.isFile());
+
+  for (const entry of visibleFiles) {
+    const extension = path.extname(entry.name).toLowerCase();
+    if (!PARTS_LIST_REFERENCE_EXTENSIONS.has(extension)) {
+      continue;
+    }
+
+    const absolutePath = path.join(partsListFolderPath, entry.name);
+    const info = await stat(absolutePath);
+    if (info.size > MAX_PARTS_LIST_SCAN_BYTES) {
+      continue;
+    }
+
+    const content = await readFile(absolutePath, "utf8");
+    for (const partNumber of findCustomHardwarePartNumbers(content, recognizedPrefixes)) {
+      const filenames = references.get(partNumber) ?? [];
+      filenames.push(entry.name);
+      references.set(partNumber, filenames);
+    }
+  }
+
+  return references;
+}
+
+/**
+ * Reads the first supported metadata file inside a custom design folder. If the file
+ * has free-form notes but no structured labels, the whole trimmed body becomes `notes`.
+ */
+async function readCustomHardwareMetadata(folderPath: string, partNumber: string): Promise<CustomHardwareMetadataReadResult | null> {
+  const prefix = partNumber.split("-")[0]?.toLowerCase();
+  const filenames = prefix
+    ? [...CUSTOM_HARDWARE_METADATA_FILENAMES, `${prefix}.json`, `${prefix}.md`, `${prefix.toUpperCase()}.md`]
+    : [...CUSTOM_HARDWARE_METADATA_FILENAMES];
+
+  for (const filename of filenames) {
+    const filePath = path.join(folderPath, filename);
+    const info = await safeStat(filePath);
+
+    if (!info?.isFile()) {
+      continue;
+    }
+
+    const content = await readFile(filePath, "utf8");
+    const fields = filename.toLowerCase().endsWith(".json")
+      ? parseCustomHardwareJsonMetadata(content)
+      : parseCustomHardwareTextMetadata(content);
+
+    return {
+      ...fields,
+      metadataSource: filename,
+      modifiedAt: info.mtime.toISOString()
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Parses a JSON metadata file. Unknown keys are ignored so a design folder can carry extra
+ * team-local fields without breaking the API reader.
+ */
+function parseCustomHardwareJsonMetadata(content: string): CustomHardwareMetadataFields {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!isRecord(parsed)) {
+      return emptyCustomHardwareMetadataFields();
+    }
+
+    return {
+      attachedProject: readAliasedMetadataValue(parsed, ["attachedProject", "attached_project", "project", "projectAttached", "project_attached", "program", "usedOn", "used_on", "usedIn", "used_in"]),
+      connectsTo: readAliasedMetadataValue(parsed, ["connectsTo", "connects_to", "connects", "connectedTo", "connected_to", "connector", "connectors", "interface", "interfaces", "dut", "unitUnderTest", "unit_under_test"]),
+      notes: readAliasedMetadataValue(parsed, ["notes", "note", "description", "summary"]),
+      tests: readAliasedMetadataValue(parsed, ["tests", "test", "testsFor", "tests_for", "testIntent", "test_intent", "validates", "validate", "verification", "purpose"])
+    };
+  } catch {
+    return emptyCustomHardwareMetadataFields();
+  }
+}
+
+/**
+ * Parses Markdown or text metadata lines using labels such as `Connects to:` and
+ * `Tests:`. The parser is intentionally small and deterministic so it can be audited.
+ */
+function parseCustomHardwareTextMetadata(content: string): CustomHardwareMetadataFields {
+  const fields = emptyCustomHardwareMetadataFields();
+  const normalizedContent = content.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+  const lines = normalizedContent.split("\n");
+
+  for (const line of lines) {
+    const match = /^(?:[-*]\s*)?(connects?\s+to|connected\s+to|connects|connectors?|interfaces?|dut|unit\s+under\s+test|tests?|test\s+intent|what\s+it\s+tests|validates?|verification|purpose|attached\s+project|project\s+attached|project|program|used\s+on|used\s+in|notes?)\s*:\s*(.+)$/iu.exec(line.trim());
+    if (!match) {
+      continue;
+    }
+
+    const label = normalizeMetadataLabel(match[1] ?? "");
+    const value = normalizeMetadataText(match[2] ?? "");
+    if (!value) {
+      continue;
+    }
+
+    if (label === "connects to" || label === "connected to" || label === "connects" || label === "connector" || label === "connectors" || label === "interface" || label === "interfaces" || label === "dut" || label === "unit under test") {
+      fields.connectsTo = value;
+    } else if (label === "test" || label === "tests" || label === "test intent" || label === "what it tests" || label === "validate" || label === "validates" || label === "verification" || label === "purpose") {
+      fields.tests = value;
+    } else if (label === "attached project" || label === "project attached" || label === "project" || label === "program" || label === "used on" || label === "used in") {
+      fields.attachedProject = value;
+    } else if (label === "note" || label === "notes") {
+      fields.notes = value;
+    }
+  }
+
+  if (!fields.connectsTo && !fields.tests && !fields.attachedProject && !fields.notes) {
+    fields.notes = normalizeMetadataText(normalizedContent);
+  }
+
+  return fields;
+}
+
+/** Returns an empty metadata field set with every uncertain field represented as null. */
+function emptyCustomHardwareMetadataFields(): CustomHardwareMetadataFields {
+  return {
+    attachedProject: null,
+    connectsTo: null,
+    notes: null,
+    tests: null
+  };
+}
+
+/** Reads the first nonblank string value from a record by a list of accepted field names. */
+function readAliasedMetadataValue(record: Record<string, unknown>, aliases: string[]): string | null {
+  for (const alias of aliases) {
+    const value = normalizeMetadataValue(record[alias]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+/** Normalizes JSON metadata values without inventing text for non-string structures. */
+function normalizeMetadataValue(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return normalizeMetadataText(value);
+}
+
+/** Normalizes text metadata and caps huge notes to keep response payloads bounded. */
+function normalizeMetadataText(value: string): string | null {
+  const normalized = value.replace(/\u0000/gu, "").replace(/[ \t]+\n/gu, "\n").trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized.length > 1200 ? `${normalized.slice(0, 1197)}...` : normalized;
+}
+
+/** Normalizes metadata labels for compact switch logic. */
+function normalizeMetadataLabel(value: string): string {
+  return value.toLowerCase().replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
+/** Checks whether an unknown JSON payload is a plain object record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Builds the active prefix list from configured/default seeds plus real design folder
+ * names. Folder discovery is intentionally limited to the `hardware/` directory.
+ */
+function resolveCustomHardwarePrefixes(folderNames: string[], seedPrefixes: string[]): string[] {
+  const discoveredPrefixes = folderNames
+    .map((folderName) => parseCustomHardwarePartNumberCandidate(folderName)?.prefix ?? null)
+    .filter((prefix): prefix is string => Boolean(prefix));
+
+  return sortedStrings([...seedPrefixes, ...discoveredPrefixes]);
+}
+
+/**
+ * Parses a custom design part number candidate from a folder name. Accepted separators
+ * are dash, dot, and underscore; all responses use the canonical dash form.
+ */
+function parseCustomHardwarePartNumberCandidate(value: string): { partNumber: string; prefix: string; suffix: string } | null {
+  const match = CUSTOM_HARDWARE_PART_NUMBER_PATTERN.exec(value.trim());
+  const prefix = normalizeCustomHardwarePrefix(match?.[1] ?? "");
+  const suffix = match?.[2];
+
+  return prefix && suffix ? { partNumber: `${prefix}-${suffix}`, prefix, suffix } : null;
+}
+
+/** Normalizes configured or discovered custom design prefixes to a bounded token. */
+function normalizeCustomHardwarePrefix(value: string): string | null {
+  const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+  return normalized.length >= 2 && normalized.length <= 20 && /^[A-Z][A-Z0-9]*$/u.test(normalized) ? normalized : null;
+}
+
+/**
+ * Returns every canonical custom design part number in a body of text. Dot and
+ * underscore variants such as `PCA.1001` or `FIXTURE_7` normalize to dash form.
+ */
+function findCustomHardwarePartNumbers(content: string, recognizedPrefixes: string[]): string[] {
+  const pattern = buildCustomHardwareReferencePattern(recognizedPrefixes);
+  const matches = new Set<string>();
+  for (const match of content.matchAll(pattern)) {
+    const prefix = match[1]?.toUpperCase();
+    const suffix = match[2];
+    if (prefix && suffix) {
+      matches.add(`${prefix}-${suffix}`);
+    }
+  }
+
+  return Array.from(matches);
+}
+
+/**
+ * Canonicalizes custom design folder names. Folder reads are stricter than text
+ * scanning because a folder named `<prefix>-<number>` is the durable hardware record.
+ */
+function canonicalizeCustomHardwarePartNumber(folderName: string, recognizedPrefixes: string[]): string | null {
+  const candidate = parseCustomHardwarePartNumberCandidate(folderName);
+  if (!candidate || !recognizedPrefixes.includes(candidate.prefix)) {
+    return null;
+  }
+
+  return candidate.partNumber;
+}
+
+/** Sorts custom design records by numeric suffix, then by full part number. */
+function compareCustomHardwareRecords(left: ProjectCustomHardwareRecord, right: ProjectCustomHardwareRecord): number {
+  const leftNumber = Number(left.partNumber.replace(/^[A-Z0-9]+-/iu, ""));
+  const rightNumber = Number(right.partNumber.replace(/^[A-Z0-9]+-/iu, ""));
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+    return leftNumber - rightNumber;
+  }
+
+  return left.partNumber.localeCompare(right.partNumber);
+}
+
+/** Builds the text-scanning regex from the active custom-hardware prefixes. */
+function buildCustomHardwareReferencePattern(recognizedPrefixes: string[]): RegExp {
+  return new RegExp(`\\b(${recognizedPrefixes.map(escapeRegExp).join("|")})[-._](\\d{1,12})\\b`, "giu");
+}
+
+/** Escapes a configured prefix before embedding it in a dynamic regular expression. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Returns sorted unique strings for stable API responses. */
+function sortedStrings(values: Iterable<string>): string[] {
+  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
+/** Stats a path and returns null when the file is simply absent. */
+async function safeStat(target: string): Promise<Awaited<ReturnType<typeof stat>> | null> {
+  try {
+    return await stat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -306,7 +736,7 @@ export type SaveProjectFileResult =
 
 /**
  * Resolves a raw category string to the canonical ProjectFolderCategory, or null when
- * the category is not one of the four supported folders.
+ * the category is not one of the supported folders.
  */
 export function resolveProjectFolderCategory(raw: string): ProjectFolderCategory | null {
   const match = PROJECT_FOLDER_DEFINITIONS.find((folder) => folder.category === raw);

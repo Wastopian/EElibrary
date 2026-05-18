@@ -5,7 +5,7 @@
 import { performance } from "node:perf_hooks";
 import { providerAdapters } from "./provider-adapters";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, emitHeartbeat, resolveWorkerId, shutdownHeartbeatPool } from "./heartbeat";
-import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts } from "./catalog-repository";
+import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts, replayLocalCatalogCrossPartRelations } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
@@ -87,6 +87,10 @@ async function ingestAvailableProviderRequests(adapterId: string): Promise<void>
 
     for (const request of requests) {
       summaries.push(await runProviderPartImport(adapter.id, request));
+    }
+
+    if (adapterId === "local-catalog") {
+      await timeWorkerOperation("repository.replay_local_catalog_cross_part_relations", () => replayLocalCatalogCrossPartRelations(adapter), timings);
     }
 
     console.log(JSON.stringify({ imported: summaries.length, imports: summaries, timings }, null, 2));

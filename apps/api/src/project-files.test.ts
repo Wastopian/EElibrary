@@ -14,6 +14,7 @@ import path from "node:path";
 
 import {
   buildProjectFilesResponse,
+  getCustomHardwarePrefixes,
   getProjectFilesRoot,
   resolveProjectFolderCategory,
   sanitizeProjectKey,
@@ -61,6 +62,26 @@ test("getProjectFilesRoot uses the default folder for empty values and off disab
   }
 });
 
+test("getCustomHardwarePrefixes defaults to common prefixes and accepts team overrides", () => {
+  const previous = process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES;
+  try {
+    delete process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES;
+    assert.deepEqual(getCustomHardwarePrefixes(), ["ICD", "PCA", "PTA"]);
+
+    process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES = "pta, pca; jig ICD bad-prefix!";
+    assert.deepEqual(getCustomHardwarePrefixes(), ["BADPREFIX", "ICD", "JIG", "PCA", "PTA"]);
+
+    process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES = "-";
+    assert.deepEqual(getCustomHardwarePrefixes(), ["ICD", "PCA", "PTA"]);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES;
+    } else {
+      process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES = previous;
+    }
+  }
+});
+
 test("sanitizeProjectKey strips traversal-prone characters and preserves dashes", () => {
   assert.equal(sanitizeProjectKey("ALPHA"), "ALPHA");
   assert.equal(sanitizeProjectKey("alpha-1"), "alpha-1");
@@ -82,6 +103,7 @@ test("buildProjectFilesResponse returns not_configured when env var is off", asy
     assert.equal(response.rootPath, null);
     assert.deepEqual(response.folders, []);
     assert.equal(response.message, null);
+    assert.equal(response.customHardware, null);
   } finally {
     if (previous === undefined) {
       delete process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
@@ -152,6 +174,145 @@ test("buildProjectFilesResponse surfaces files dropped directly into the on-disk
   }
 });
 
+test("buildProjectFilesResponse lists custom design folders and parts-list references", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const partsListPath = path.join(sandbox.root, "ALPHA", "parts-list");
+    await mkdir(partsListPath, { recursive: true });
+    await writeFile(
+      path.join(partsListPath, "alpha-bom.csv"),
+      "Designator,MPN,Notes\nJIG1,PTA-1001,Bring-up adapter\nJIG2,PCA.2002,Referenced before folder exists\nJIG3,ICD-10,Debug cable\nJIG4,FIXTURE_7,Discovered prefix from design folder\n",
+      "utf8"
+    );
+
+    const ptaFolderPath = path.join(sandbox.root, "ALPHA", "hardware", "PTA-1001");
+    await mkdir(ptaFolderPath, { recursive: true });
+    await writeFile(
+      path.join(ptaFolderPath, "README.md"),
+      [
+        "# PTA-1001",
+        "",
+        "Connects to: J1 battery harness and SWD pogo header",
+        "Tests: MCU programming and rail bring-up",
+        "Project: Alpha controller",
+        "Notes: Keep with the Rev A bring-up kit.",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+
+    const jsonHardwareFolderPath = path.join(sandbox.root, "ALPHA", "hardware", "PCA-2003");
+    await mkdir(jsonHardwareFolderPath, { recursive: true });
+    await writeFile(
+      path.join(jsonHardwareFolderPath, "pca.json"),
+      JSON.stringify({
+        attachedProject: "Alpha controller",
+        connectsTo: "Load bank cable",
+        notes: "Stored as JSON metadata.",
+        tests: "Current-limit sweep"
+      }),
+      "utf8"
+    );
+
+    const fixtureFolderPath = path.join(sandbox.root, "ALPHA", "hardware", "FIXTURE_7");
+    await mkdir(fixtureFolderPath, { recursive: true });
+    await writeFile(
+      path.join(fixtureFolderPath, "info.md"),
+      [
+        "# FIXTURE-7",
+        "",
+        "DUT: sensor pod mezzanine",
+        "Validates: charge-path brownout behavior",
+        "Program: Alpha lab bring-up",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+
+    await mkdir(path.join(sandbox.root, "ALPHA", "hardware", "PTA-ABC"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "ALPHA", "hardware", "XYZ-board"), { recursive: true });
+
+    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    assert.equal(response.availability, "configured");
+    assert.ok(response.customHardware);
+    assert.ok(response.customHardware.hardwareFolderPath.endsWith(path.join("ALPHA", "hardware")));
+    assert.deepEqual(response.customHardware.recognizedPrefixes, ["FIXTURE", "ICD", "PCA", "PTA"]);
+    assert.deepEqual(
+      response.customHardware.records.map((record) => record.partNumber),
+      ["FIXTURE-7", "ICD-10", "PTA-1001", "PCA-2002", "PCA-2003"]
+    );
+
+    const discoveredFolderBacked = response.customHardware.records.find((record) => record.partNumber === "FIXTURE-7");
+    assert.ok(discoveredFolderBacked);
+    assert.equal(discoveredFolderBacked.folderState, "folder_backed");
+    assert.equal(discoveredFolderBacked.folderName, "FIXTURE_7");
+    assert.equal(discoveredFolderBacked.connectsTo, "sensor pod mezzanine");
+    assert.equal(discoveredFolderBacked.tests, "charge-path brownout behavior");
+    assert.equal(discoveredFolderBacked.attachedProject, "Alpha lab bring-up");
+    assert.deepEqual(discoveredFolderBacked.mentionedInPartsListFiles, ["alpha-bom.csv"]);
+
+    const folderBacked = response.customHardware.records.find((record) => record.partNumber === "PTA-1001");
+    assert.ok(folderBacked);
+    assert.equal(folderBacked.folderState, "folder_backed");
+    assert.equal(folderBacked.connectsTo, "J1 battery harness and SWD pogo header");
+    assert.equal(folderBacked.tests, "MCU programming and rail bring-up");
+    assert.equal(folderBacked.attachedProject, "Alpha controller");
+    assert.equal(folderBacked.notes, "Keep with the Rev A bring-up kit.");
+    assert.equal(folderBacked.metadataSource, "README.md");
+    assert.deepEqual(folderBacked.mentionedInPartsListFiles, ["alpha-bom.csv"]);
+
+    const partsListOnly = response.customHardware.records.find((record) => record.partNumber === "PCA-2002");
+    assert.ok(partsListOnly);
+    assert.equal(partsListOnly.folderState, "parts_list_reference_only");
+    assert.equal(partsListOnly.absolutePath, null);
+    assert.equal(partsListOnly.connectsTo, null);
+    assert.deepEqual(partsListOnly.mentionedInPartsListFiles, ["alpha-bom.csv"]);
+
+    const jsonBacked = response.customHardware.records.find((record) => record.partNumber === "PCA-2003");
+    assert.ok(jsonBacked);
+    assert.equal(jsonBacked.connectsTo, "Load bank cable");
+    assert.equal(jsonBacked.tests, "Current-limit sweep");
+    assert.equal(jsonBacked.metadataSource, "pca.json");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("buildProjectFilesResponse combines configured prefixes with discovered design folders", async () => {
+  const sandbox = await withSandboxRoot();
+  const previousPrefixes = process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES;
+  process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES = "JIG";
+
+  try {
+    const partsListPath = path.join(sandbox.root, "ALPHA", "parts-list");
+    await mkdir(partsListPath, { recursive: true });
+    await writeFile(path.join(partsListPath, "alpha-bom.csv"), "MPN\nJIG-77\nPTA-1001\nPCA-99\n", "utf8");
+
+    const jigFolderPath = path.join(sandbox.root, "ALPHA", "hardware", "JIG-77");
+    await mkdir(jigFolderPath, { recursive: true });
+    await writeFile(path.join(jigFolderPath, "hardware.json"), JSON.stringify({ tests: "Configured prefix scan" }), "utf8");
+    await mkdir(path.join(sandbox.root, "ALPHA", "hardware", "PTA-1001"), { recursive: true });
+
+    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    assert.ok(response.customHardware);
+    assert.deepEqual(response.customHardware.recognizedPrefixes, ["JIG", "PTA"]);
+    assert.deepEqual(
+      response.customHardware.records.map((record) => record.partNumber),
+      ["JIG-77", "PTA-1001"]
+    );
+    assert.equal(response.customHardware.records[0]?.tests, "Configured prefix scan");
+    assert.deepEqual(response.customHardware.records[1]?.mentionedInPartsListFiles, ["alpha-bom.csv"]);
+  } finally {
+    if (previousPrefixes === undefined) {
+      delete process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES;
+    } else {
+      process.env.EE_LIBRARY_CUSTOM_HARDWARE_PREFIXES = previousPrefixes;
+    }
+    await sandbox.restore();
+  }
+});
+
 test("buildProjectFilesResponse refuses to escape the configured root", async () => {
   const sandbox = await withSandboxRoot();
 
@@ -179,13 +340,14 @@ test("buildProjectFilesResponse falls back to project when projectKey is whitesp
   }
 });
 
-test("PROJECT_FOLDER_DEFINITIONS includes the notes category", () => {
+test("PROJECT_FOLDER_DEFINITIONS includes the hardware and notes categories", () => {
   const categories = PROJECT_FOLDER_DEFINITIONS.map((folder) => folder.category);
-  assert.deepEqual(categories, ["parts_list", "datasheets", "models", "notes"]);
+  assert.deepEqual(categories, ["parts_list", "hardware", "datasheets", "models", "notes"]);
 });
 
 test("resolveProjectFolderCategory rejects unknown categories", () => {
   assert.equal(resolveProjectFolderCategory("notes"), "notes");
+  assert.equal(resolveProjectFolderCategory("hardware"), "hardware");
   assert.equal(resolveProjectFolderCategory("datasheets"), "datasheets");
   assert.equal(resolveProjectFolderCategory("evidence"), null);
   assert.equal(resolveProjectFolderCategory(""), null);

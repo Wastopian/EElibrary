@@ -41,6 +41,11 @@ import type {
   PartIssue,
   PartReadinessStatus,
   PartRiskFlag,
+  PartEngineeringMemoryWarningPreview,
+  PartEngineeringMemoryWarningSummary,
+  PartEngineeringRecordKind,
+  PartEngineeringRecordOutcome,
+  PartEngineeringRecordSeverity,
   PartMetric,
   PartSearchFilters,
   PartSearchRecord,
@@ -1632,7 +1637,7 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, 
       timedCatalogQuery<DatabasePartRiskFlagRow>(databasePool, "part_risk_flags", PART_RISK_FLAG_ROWS_SQL, params, options)
     ]);
 
-    return buildPartRecords(
+    const built = buildPartRecords(
       partRows.rows,
       metricRows.rows,
       assetRows.rows,
@@ -1657,8 +1662,72 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, 
       sourceReconciliationRows.rows,
       riskFlagRows.rows
     );
+
+    return attachEngineeringMemoryWarnings(databasePool, built, options);
   } catch (error) {
     throw toCatalogStoreError(error);
+  }
+}
+
+/** Bounds the per-part scan-time memory preview so search rows and detail banners stay compact. */
+const ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT = 3;
+
+/**
+ * Attaches the read-only "this part bit us / is blocked" projection to built part records.
+ *
+ * This is the decision-point push: the same confirmed engineering memory the project overlap
+ * panel surfaces, now attached wherever a part is chosen (catalog search rows, part detail).
+ * It is a soft reuse signal — best-effort by design: if `part_engineering_records` is absent or
+ * the query fails, records come back with `engineeringMemoryWarning: null` rather than breaking
+ * catalog search or part detail. It never changes readiness, approval, validation, or export.
+ */
+async function attachEngineeringMemoryWarnings(
+  databasePool: Pool,
+  records: PartSearchRecord[],
+  options: CatalogReadOptions
+): Promise<PartSearchRecord[]> {
+  if (records.length === 0) {
+    return records;
+  }
+
+  const partIds = records.map((record) => record.part.id);
+
+  try {
+    const result = await timedCatalogQuery<{
+      part_id: string;
+      record_id: string;
+      record_kind: string;
+      severity: string;
+      outcome: string | null;
+      title: string;
+    }>(databasePool, "engineering_memory_warnings", ENGINEERING_MEMORY_WARNING_ROWS_SQL, [partIds], options);
+
+    const byPart = new Map<string, PartEngineeringMemoryWarningSummary>();
+
+    for (const row of result.rows) {
+      const summary = byPart.get(row.part_id) ?? { blockingCount: 0, preview: [], warningCount: 0 };
+      summary.warningCount += 1;
+
+      if (row.severity === "blocking") {
+        summary.blockingCount += 1;
+      }
+
+      if (summary.preview.length < ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT) {
+        summary.preview.push({
+          outcome: (row.outcome as PartEngineeringRecordOutcome | null) ?? null,
+          recordId: row.record_id,
+          recordKind: row.record_kind as PartEngineeringRecordKind,
+          severity: row.severity as PartEngineeringRecordSeverity,
+          title: row.title
+        } satisfies PartEngineeringMemoryWarningPreview);
+      }
+
+      byPart.set(row.part_id, summary);
+    }
+
+    return records.map((record) => ({ ...record, engineeringMemoryWarning: byPart.get(record.part.id) ?? null }));
+  } catch {
+    return records.map((record) => ({ ...record, engineeringMemoryWarning: null }));
   }
 }
 
@@ -1752,8 +1821,9 @@ async function readPartSearchSummaryRecords(databasePool: Pool, partIds: string[
       riskFlagRows.rows
     );
     const recordById = new Map(records.map((record) => [record.part.id, record]));
+    const orderedRecords = partIds.map((partId) => recordById.get(partId)).filter((record): record is PartSearchRecord => Boolean(record));
 
-    return partIds.map((partId) => recordById.get(partId)).filter((record): record is PartSearchRecord => Boolean(record));
+    return attachEngineeringMemoryWarnings(databasePool, orderedRecords, options);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -4415,6 +4485,27 @@ const PART_RISK_FLAG_ROWS_SQL = `
   FROM part_risk_flags
   WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY tone ASC, label ASC, id ASC
+`;
+
+/**
+ * ENGINEERING_MEMORY_WARNING_ROWS_SQL reads confirmed, unresolved "this bit us / blocking"
+ * private engineering memory for the queried parts. Blocking rows sort first, then most recent,
+ * so a bounded preview is meaningful at scan time.
+ */
+const ENGINEERING_MEMORY_WARNING_ROWS_SQL = `
+  SELECT
+    per.part_id AS part_id,
+    per.id AS record_id,
+    per.record_kind AS record_kind,
+    per.severity AS severity,
+    per.outcome AS outcome,
+    per.title AS title
+  FROM part_engineering_records per
+  WHERE ($1::text[] IS NULL OR per.part_id = ANY($1::text[]))
+    AND per.draft_status = 'confirmed'
+    AND per.resolved_at IS NULL
+    AND (per.outcome = 'bit_us' OR per.severity = 'blocking')
+  ORDER BY CASE WHEN per.severity = 'blocking' THEN 0 ELSE 1 END, per.recorded_at DESC, per.id ASC
 `;
 
 /** DATASHEET_ROWS_SQL reads datasheet revision records. */

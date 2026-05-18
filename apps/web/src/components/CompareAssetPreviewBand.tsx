@@ -55,7 +55,7 @@ export function CompareAssetPreviewBand({ rows }: CompareAssetPreviewBandProps) 
                     <AssetInlinePreview asset={cell.bestAsset} partId={cell.partId} />
                   ) : (
                     <p className="muted-copy compare-preview-cell__missing">
-                      No {row.label.toLowerCase()} asset recorded for this part.
+                      No {row.assetType === "three_d_model" ? "3D model" : row.label.toLowerCase()} asset recorded for this part.
                     </p>
                   )}
                 </td>

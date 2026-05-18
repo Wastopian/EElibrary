@@ -15,6 +15,10 @@ import {
   createCircuitBlockKnownRiskInDatabase,
   createCircuitBlockPartInDatabase,
   resolveCircuitBlockKnownRiskInDatabase,
+  createPartEngineeringRecordInDatabase,
+  decidePartEngineeringRecordDraftInDatabase,
+  readPartEngineeringRecordsForPartFromDatabase,
+  resolvePartEngineeringRecordInDatabase,
   createEvidenceAttachmentInDatabase,
   createProjectFromCsvInDatabase,
   createProjectInDatabase,
@@ -966,6 +970,259 @@ test("project memory store records, gates on, and resolves circuit block known r
     if (invalid.status === "invalid") {
       assert.equal(invalid.code, "INVALID_CIRCUIT_BLOCK_KNOWN_RISK_TITLE");
     }
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the part engineering-memory primitive records typed private truth, splits open vs
+ * resolved, preserves resolved rows for audit, and validates kind/title at the API boundary.
+ */
+test("project memory store records, lists, and resolves part engineering memory", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const baseline = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    assert.equal(baseline.status, "available");
+    if (baseline.status !== "available") throw new Error("baseline unavailable");
+    assert.deepEqual(baseline.response.open, []);
+    assert.deepEqual(baseline.response.resolved, []);
+
+    const outcome = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      detail: "VOUT drooped under cold-start inrush on Bravo Rev B; added soft-start.",
+      outcome: "bit_us",
+      recordKind: "outcome",
+      recordedBy: "gerry@hardware",
+      severity: "caution",
+      title: "Bit us: cold-start droop"
+    });
+    assert.equal(outcome.status, "created");
+    if (outcome.status !== "created") throw new Error("outcome create failed");
+    assert.equal(outcome.response.record.recordKind, "outcome");
+    assert.equal(outcome.response.record.outcome, "bit_us");
+    assert.equal(outcome.response.list.open.length, 1);
+
+    const mate = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      outcome: "worked",
+      recordKind: "harness_mate_verified",
+      relatedMpn: "DF13-4P-1.25H",
+      title: "Mated correctly in Falcon harness"
+    });
+    assert.equal(mate.status, "created");
+    if (mate.status !== "created") throw new Error("mate create failed");
+    assert.equal(mate.response.record.relatedMpn, "DF13-4P-1.25H");
+    assert.equal(mate.response.list.open.length, 2);
+
+    const badKind = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      recordKind: "totally_invalid" as never,
+      title: "x"
+    });
+    assert.equal(badKind.status, "invalid");
+    if (badKind.status === "invalid") {
+      assert.equal(badKind.code, "INVALID_PART_ENGINEERING_RECORD_KIND");
+    }
+
+    const badTitle = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      recordKind: "note",
+      title: "   "
+    });
+    assert.equal(badTitle.status, "invalid");
+    if (badTitle.status === "invalid") {
+      assert.equal(badTitle.code, "INVALID_PART_ENGINEERING_RECORD_TITLE");
+    }
+
+    const resolved = await resolvePartEngineeringRecordInDatabase("part-memory-ldo", outcome.response.record.id, {
+      resolutionNotes: "Soft-start added in Rev C; no longer reproduces.",
+      resolvedBy: "gerry@hardware"
+    });
+    assert.equal(resolved.status, "resolved");
+    if (resolved.status !== "resolved") throw new Error("resolve failed");
+    assert.notEqual(resolved.response.record.resolvedAt, null);
+    assert.equal(resolved.response.list.open.length, 1, "one record still open after resolving the other");
+    assert.equal(resolved.response.list.resolved.length, 1, "resolved row is preserved, not deleted");
+
+    const reResolve = await resolvePartEngineeringRecordInDatabase("part-memory-ldo", outcome.response.record.id, {});
+    assert.equal(reResolve.status, "not_found");
+
+    const missingPart = await readPartEngineeringRecordsForPartFromDatabase("part-does-not-exist");
+    assert.equal(missingPart.status, "not_found");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies passive capture: approving a substitution auto-drafts a PROPOSED engineering-memory
+ * record on the original part (not durable memory until confirmed), Confirm promotes it to open
+ * with confirmer provenance, Dismiss preserves it as audited history, and a decided draft cannot
+ * be decided again.
+ */
+test("substitution approval passively auto-drafts a proposed engineering record that confirm/dismiss resolves", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const sub1 = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "global", signoffNotes: "Accepted by hardware lead at 25C.", substitutePartId: "part-memory-resistor" },
+      "gerry@hardware"
+    );
+    assert.equal(sub1.status, "created");
+
+    const afterSub1 = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    assert.equal(afterSub1.status, "available");
+    if (afterSub1.status !== "available") throw new Error("list unavailable");
+    assert.equal(afterSub1.response.proposed.length, 1, "approval auto-drafts exactly one proposed record");
+    assert.equal(afterSub1.response.open.length, 0, "a proposed draft is NOT durable open memory");
+    const draft = afterSub1.response.proposed[0]!;
+    assert.equal(draft.draftStatus, "proposed");
+    assert.equal(draft.draftSource, "auto_substitution");
+    assert.equal(draft.recordKind, "decision_blocked");
+    assert.match(draft.title, /Substitute approved/u);
+    assert.equal(draft.confirmedBy, null);
+
+    const confirmed = await decidePartEngineeringRecordDraftInDatabase("part-memory-ldo", draft.id, "confirm", "test-admin", {});
+    assert.equal(confirmed.status, "decided");
+    if (confirmed.status !== "decided") throw new Error("confirm failed");
+    assert.equal(confirmed.response.record.draftStatus, "confirmed");
+    assert.equal(confirmed.response.record.confirmedBy, "test-admin");
+    assert.equal(confirmed.response.list.open.length, 1, "confirmed draft becomes durable open memory");
+    assert.equal(confirmed.response.list.proposed.length, 0);
+
+    const reConfirm = await decidePartEngineeringRecordDraftInDatabase("part-memory-ldo", draft.id, "confirm", "test-admin", {});
+    assert.equal(reConfirm.status, "not_found", "an already-decided draft cannot be decided again");
+
+    const sub2 = await createPartSubstitutionInDatabase(
+      "part-dup-alpha",
+      { scope: "global", substitutePartId: "part-dup-beta" },
+      "gerry@hardware"
+    );
+    assert.equal(sub2.status, "created");
+
+    const afterSub2 = await readPartEngineeringRecordsForPartFromDatabase("part-dup-alpha");
+    if (afterSub2.status !== "available") throw new Error("list unavailable");
+    const draft2 = afterSub2.response.proposed[0]!;
+
+    const dismissed = await decidePartEngineeringRecordDraftInDatabase("part-dup-alpha", draft2.id, "dismiss", "test-admin", { notes: "Not relevant to this part's memory." });
+    assert.equal(dismissed.status, "decided");
+    if (dismissed.status !== "decided") throw new Error("dismiss failed");
+    assert.equal(dismissed.response.record.draftStatus, "dismissed");
+    assert.equal(dismissed.response.record.resolvedBy, "test-admin");
+    assert.equal(dismissed.response.list.proposed.length, 0);
+    assert.equal(dismissed.response.list.open.length, 0, "a dismissed suggestion never becomes durable memory");
+    assert.equal(dismissed.response.list.resolved.length, 1, "dismissed rows are preserved for audit");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the read-side passive-capture payoff: confirmed "this bit us"/blocking engineering
+ * memory for a part this project confirmed surfaces on the overlap panel (the mistake interrupts
+ * at import/overlap time), while proposed and dismissed records never surface.
+ */
+test("overlap panel surfaces confirmed bit_us/blocking engineering memory for confirmed parts", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // project-alpha confirms the LDO so it is in scannedParts for overlap.
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-alpha-ldo', 'project-alpha', 'rev-alpha-a', NULL, 'part-memory-ldo', '{"U9"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`
+    );
+
+    const bitUs = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      detail: "Backed out of the harness after thermal cycling on Bravo.",
+      outcome: "bit_us",
+      recordKind: "outcome",
+      severity: "caution",
+      title: "Bit us: contact retention failure"
+    });
+    assert.equal(bitUs.status, "created");
+
+    const proposedOnly = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      outcome: "bit_us",
+      recordKind: "outcome",
+      title: "Unreviewed machine guess"
+    });
+    assert.equal(proposedOnly.status, "created");
+    if (proposedOnly.status === "created") {
+      // Force this row to proposed so we can prove proposed rows never surface as a warning.
+      await pool.query("UPDATE part_engineering_records SET draft_status = 'proposed' WHERE id = $1", [proposedOnly.response.record.id]);
+    }
+
+    const overlap = await readProjectOverlapPanelFromDatabase("project-alpha");
+    assert.equal(overlap.status, "available");
+    if (overlap.status !== "available") throw new Error("overlap unavailable");
+
+    const warnings = overlap.response.priorEngineeringMemoryWarnings;
+    assert.equal(warnings.length, 1, "only the confirmed bit_us record surfaces");
+    assert.equal(warnings[0]?.partId, "part-memory-ldo");
+    assert.equal(warnings[0]?.partMpn, "TPS7A02DBVR");
+    assert.equal(warnings[0]?.outcome, "bit_us");
+    assert.match(warnings[0]?.title ?? "", /contact retention/u);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the narrow BOM-match auto-draft: matching a row to a non-active part already used in a
+ * prior project drafts exactly one proposed lifecycle-risk record, idempotently per BOM import.
+ */
+test("BOM match passively drafts a lifecycle-risk record for a non-active part reused from a prior project", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // A prior project already confirmed the LDO, and it has since gone non-active.
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-prior-ldo', 'project-prior-x', 'rev-prior-x', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+    );
+    await pool.query("UPDATE parts SET lifecycle_status = 'not_recommended' WHERE id = 'part-memory-ldo'");
+
+    const created = await createBomImportInDatabase(
+      "project-alpha",
+      {
+        columnMapping: { manufacturer: "Maker", mpn: "MPN", quantity: "Qty" },
+        projectRevisionId: "rev-alpha-a",
+        rawContent: ["MPN,Maker,Qty", "TPS7A02DBVR,Texas Instruments,1"].join("\n"),
+        sourceFilename: "lifecycle-risk.csv",
+        sourceFormat: "csv"
+      },
+      "test-admin"
+    );
+    assert.equal(created.status, "created");
+    if (created.status !== "created") throw new Error("bom import create failed");
+
+    const match = await matchBomImportRowsInDatabase(created.response.bomImport.id);
+    assert.equal(match.status, "matched");
+
+    const afterMatch = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    if (afterMatch.status !== "available") throw new Error("list unavailable");
+    const lifecycleDrafts = afterMatch.response.proposed.filter((record) => record.draftSource === "auto_bom_lifecycle");
+    assert.equal(lifecycleDrafts.length, 1, "one proposed lifecycle-risk draft from the match");
+    assert.equal(lifecycleDrafts[0]?.recordKind, "decision_blocked");
+    assert.match(lifecycleDrafts[0]?.title ?? "", /not active|not_recommended/u);
+
+    // Re-running the match must not duplicate the draft (idempotent per bom import + part).
+    const rerun = await matchBomImportRowsInDatabase(created.response.bomImport.id);
+    assert.equal(rerun.status, "matched");
+    const afterRerun = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    if (afterRerun.status !== "available") throw new Error("list unavailable");
+    assert.equal(
+      afterRerun.response.proposed.filter((record) => record.draftSource === "auto_bom_lifecycle").length,
+      1,
+      "re-matching does not duplicate the lifecycle-risk draft"
+    );
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -3260,6 +3517,33 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       confidence_score NUMERIC NOT NULL DEFAULT 1,
       source_revision_id TEXT,
       notes TEXT
+    );
+
+    CREATE TABLE part_engineering_records (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      record_kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      severity TEXT NOT NULL DEFAULT 'info',
+      outcome TEXT,
+      related_asset_id TEXT,
+      datasheet_revision_id TEXT,
+      related_mpn TEXT,
+      depended_on_by TEXT,
+      recorded_by TEXT,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolved_by TEXT,
+      resolution_notes TEXT,
+      evidence_url TEXT,
+      draft_status TEXT NOT NULL DEFAULT 'confirmed',
+      draft_source TEXT NOT NULL DEFAULT 'manual',
+      trigger_ref TEXT,
+      confirmed_by TEXT,
+      confirmed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 

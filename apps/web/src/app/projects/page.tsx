@@ -396,7 +396,12 @@ function ProjectsEmptyState() {
  */
 function CapabilityList({ capabilities }: { capabilities: ProjectMemoryCapability[] }) {
   if (capabilities.length === 0) {
-    return <EmptyState title="No capabilities reported" body="We could not read capability information for this view." />;
+    return (
+      <EmptyState
+        title="Capability list came back empty"
+        body="The API returned no foundation capability rows for the project dashboard. Open System checks and confirm the API is healthy, or reload this page."
+      />
+    );
   }
 
   return (

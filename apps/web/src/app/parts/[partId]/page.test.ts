@@ -74,6 +74,46 @@ test("part detail renders readiness record summary from detail response", async 
 });
 
 /**
+ * Verifies the decision-point push: confirmed "this bit us" memory interrupts at the top of the
+ * part-detail hero as a warning (not a gate) before the use decision.
+ */
+test("part detail surfaces a prior engineering-memory warning banner near the use decision", async () => {
+  const records = getAllPartRecords();
+  const baseRecord = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(baseRecord, "expected seed part detail record");
+
+  const record = {
+    ...baseRecord,
+    engineeringMemoryWarning: {
+      blockingCount: 0,
+      preview: [
+        { outcome: "bit_us" as const, recordId: "perec-1", recordKind: "outcome" as const, severity: "caution" as const, title: "Bit us: contact retention failure on Bravo" }
+      ],
+      warningCount: 1
+    }
+  };
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /This part bit your team before/u);
+    assert.match(html, /contact retention failure on Bravo/u);
+    assert.match(html, /reuse warning, not a gate/u);
+    assert.match(html, /Review the full engineering memory/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies the top files panel does not label reference-only URLs as downloads
  * and does not duplicate the datasheet row.
  */

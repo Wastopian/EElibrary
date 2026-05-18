@@ -31,6 +31,41 @@ test("ProjectOverlapPanel renders shared usage clues and circuit-block role prev
 });
 
 /**
+ * Verifies the passive-capture interrupt: confirmed "this bit us / blocking" engineering memory
+ * renders as a prominent alert with the honesty boundary that it is a warning, not a gate.
+ */
+test("ProjectOverlapPanel surfaces prior engineering-memory warnings as an interrupt", () => {
+  const overlap = buildOverlapResponse();
+  const html = renderToStaticMarkup(
+    <ProjectOverlapPanel
+      overlap={{
+        ...overlap,
+        priorEngineeringMemoryWarnings: [
+          {
+            detail: "Contact backed out after thermal cycling on Bravo Rev B.",
+            outcome: "bit_us",
+            partId: "part-tps7a02dbvr",
+            partMpn: "TPS7A02DBVR",
+            recordId: "perec-1",
+            recordKind: "outcome",
+            recordedAt: "2026-05-01T00:00:00.000Z",
+            recordedBy: "gerry@hardware",
+            relatedMpn: null,
+            severity: "caution",
+            title: "Bit us: contact retention failure"
+          }
+        ]
+      }}
+    />
+  );
+
+  assert.match(html, /Past mistake about to be repeated/u);
+  assert.match(html, /reuse warning, not a gate/u);
+  assert.match(html, /Bit us: contact retention failure/u);
+  assert.match(html, /TPS7A02DBVR/u);
+});
+
+/**
  * Builds a representative overlap payload with both prior-project and block-role context.
  */
 function buildOverlapResponse(): ProjectOverlapPanelResponse {
@@ -52,6 +87,7 @@ function buildOverlapResponse(): ProjectOverlapPanelResponse {
     ],
     circuitBlockWhereUsedHitCount: 1,
     connectorWhereUsedHitCount: 1,
+    priorEngineeringMemoryWarnings: [],
     priorProjects: [
       {
         project: {

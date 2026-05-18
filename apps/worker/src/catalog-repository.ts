@@ -34,7 +34,7 @@ import type {
   SourceReconciliationRecord,
   SourceRecord
 } from "@ee-library/shared/types";
-import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak } from "./provider-adapters";
+import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter } from "./provider-adapters";
 
 /** pool is lazy so worker status can run without requiring a database. */
 let pool: Pool | null = null;
@@ -186,6 +186,76 @@ export interface WorkerOperationalDiagnostics {
   recentValidations: ValidationDiagnostic[];
   /** Recent export-promotion attempts and denials. */
   recentPromotions: PromotionDiagnostic[];
+}
+
+/**
+ * Returns true when a canonical part row exists (used to gate cross-part foreign keys during ingest).
+ */
+async function partRowExists(client: PoolClient, partId: string): Promise<boolean> {
+  const result = await client.query<{ exists: boolean }>(`SELECT EXISTS (SELECT 1 FROM parts WHERE id = $1) AS exists`, [partId]);
+
+  return Boolean(result.rows[0]?.exists);
+}
+
+/**
+ * Persists mate/accessory/cable/similar/companion edges only when both endpoints exist, then replays safely after a batch import.
+ */
+export async function persistCrossPartRelations(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
+  for (const relation of normalizedPart.mateRelations ?? []) {
+    if ((await partRowExists(client, relation.partId)) && (await partRowExists(client, relation.matePartId))) {
+      await persistMateRelation(client, relation);
+    }
+  }
+
+  for (const requirement of normalizedPart.accessoryRequirements ?? []) {
+    if ((await partRowExists(client, requirement.partId)) && (await partRowExists(client, requirement.accessoryPartId))) {
+      await persistAccessoryRequirement(client, requirement);
+    }
+  }
+
+  for (const compatibility of normalizedPart.cableCompatibilities ?? []) {
+    if ((await partRowExists(client, compatibility.partId)) && (await partRowExists(client, compatibility.cablePartId))) {
+      await persistCableCompatibility(client, compatibility);
+    }
+  }
+
+  for (const relation of normalizedPart.similarPartRelations ?? []) {
+    if ((await partRowExists(client, relation.partId)) && (await partRowExists(client, relation.similarPartId))) {
+      await persistSimilarPartRelation(client, relation);
+    }
+  }
+
+  for (const recommendation of normalizedPart.companionRecommendations ?? []) {
+    if ((await partRowExists(client, recommendation.partId)) && (await partRowExists(client, recommendation.companionPartId))) {
+      await persistCompanionRecommendation(client, recommendation);
+    }
+  }
+}
+
+/**
+ * Replays cross-part graph edges for every local-catalog row after a full ingest so housing-to-mate links persist once all endpoints exist.
+ */
+export async function replayLocalCatalogCrossPartRelations(adapter: ProviderAdapter): Promise<void> {
+  const databasePool = getDatabasePool();
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const requests = await adapter.listAvailablePartRequests();
+
+    for (const request of requests) {
+      const rawPayload = await adapter.fetchRawPart(request);
+      const normalizedPart = adapter.normalizeRawPart(rawPayload);
+      await persistCrossPartRelations(client, normalizedPart);
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -546,25 +616,7 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
     await persistSourceExtractionSignal(client, signal);
   }
 
-  for (const relation of normalizedPart.mateRelations) {
-    await persistMateRelation(client, relation);
-  }
-
-  for (const requirement of normalizedPart.accessoryRequirements) {
-    await persistAccessoryRequirement(client, requirement);
-  }
-
-  for (const compatibility of normalizedPart.cableCompatibilities) {
-    await persistCableCompatibility(client, compatibility);
-  }
-
-  for (const relation of normalizedPart.similarPartRelations) {
-    await persistSimilarPartRelation(client, relation);
-  }
-
-  for (const recommendation of normalizedPart.companionRecommendations) {
-    await persistCompanionRecommendation(client, recommendation);
-  }
+  await persistCrossPartRelations(client, normalizedPart);
 
   for (const workflow of normalizedPart.generationWorkflows) {
     await persistGenerationWorkflow(client, workflow);

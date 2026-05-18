@@ -27,6 +27,11 @@ import type {
   CircuitBlockKnownRiskCreateInput,
   CircuitBlockKnownRiskMutationResponse,
   CircuitBlockKnownRiskResolveInput,
+  PartEngineeringRecordCreateInput,
+  PartEngineeringRecordListResponse,
+  PartEngineeringRecordDraftDecisionInput,
+  PartEngineeringRecordMutationResponse,
+  PartEngineeringRecordResolveInput,
   CircuitBlockListFilters,
   CircuitBlockListResponse,
   CircuitBlockProjectDependency,
@@ -1049,6 +1054,95 @@ export async function resolveCircuitBlockKnownRisk(
   }
 
   const envelope = (await response.json()) as ApiEnvelope<CircuitBlockKnownRiskMutationResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches the full private engineering-memory history (open + resolved) for one catalog part.
+ */
+export async function fetchPartEngineeringRecords(partId: string): Promise<PartEngineeringRecordListResponse> {
+  const envelope = await fetchApi<ApiEnvelope<PartEngineeringRecordListResponse>>(`/parts/${encodeURIComponent(partId)}/engineering-records`);
+  return envelope.data;
+}
+
+/**
+ * Records one piece of private engineering memory against a part. Recording never approves the
+ * part, validates an asset, or unlocks export.
+ */
+export async function createPartEngineeringRecord(
+  partId: string,
+  input: PartEngineeringRecordCreateInput
+): Promise<PartEngineeringRecordMutationResponse> {
+  const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/engineering-records`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part engineering record create");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartEngineeringRecordMutationResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Marks one engineering-memory record resolved. The row is preserved (never deleted) so audits
+ * of past reuses of this part remain consistent with the state at the time.
+ */
+export async function resolvePartEngineeringRecord(
+  partId: string,
+  recordId: string,
+  input: PartEngineeringRecordResolveInput = {}
+): Promise<PartEngineeringRecordMutationResponse> {
+  const response = await fetch(
+    buildApiUrl(`/parts/${encodeURIComponent(partId)}/engineering-records/${encodeURIComponent(recordId)}/resolve`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part engineering record resolve");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartEngineeringRecordMutationResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Confirms (accept into durable memory) or dismisses (reject, preserved for audit) one proposed
+ * passive-capture engineering-memory draft.
+ */
+export async function decidePartEngineeringRecordDraft(
+  partId: string,
+  recordId: string,
+  decision: "confirm" | "dismiss",
+  input: PartEngineeringRecordDraftDecisionInput = {}
+): Promise<PartEngineeringRecordMutationResponse> {
+  const response = await fetch(
+    buildApiUrl(`/parts/${encodeURIComponent(partId)}/engineering-records/${encodeURIComponent(recordId)}/${decision}`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, `Part engineering record ${decision}`);
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartEngineeringRecordMutationResponse>;
 
   return envelope.data;
 }

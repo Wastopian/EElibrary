@@ -747,10 +747,10 @@ export interface ProjectListResponse {
 
 /**
  * ProjectFolderCategory enumerates the first-class subfolders the project file mirror
- * creates per project. Categories are the only directories the API exposes; any other
- * on-disk content is surfaced as an "extra" entry so engineers can audit drift.
+ * creates per project. Categories are the only top-level directories the API exposes;
+ * deeper folders are shown as entries instead of traversed blindly.
  */
-export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "notes";
+export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "hardware" | "notes";
 
 /**
  * ProjectFolderEntry describes one file persisted inside a project folder category.
@@ -782,6 +782,54 @@ export interface ProjectFolderListing {
   entries: ProjectFolderEntry[];
 }
 
+/** ProjectCustomHardwareFolderState separates real design folders from BOM-only references. */
+export type ProjectCustomHardwareFolderState = "folder_backed" | "parts_list_reference_only";
+
+/**
+ * ProjectCustomHardwareRecord describes one internally-designed custom item found
+ * through project file reads. Note fields stay nullable so the UI never presents an
+ * undocumented connection, test intent, or project attachment as known.
+ */
+export interface ProjectCustomHardwareRecord {
+  /** Canonical internal hardware part number such as PTA-1001, PCA-2042, or ICD-17. */
+  partNumber: string;
+  /** Folder name on disk when a design folder exists; null for parts-list-only references. */
+  folderName: string | null;
+  /** Absolute design folder path on the API host when one exists. */
+  absolutePath: string | null;
+  /** What this hardware connects to, copied from metadata when recorded. */
+  connectsTo: string | null;
+  /** What this hardware tests, copied from metadata when recorded. */
+  tests: string | null;
+  /** Project or program attachment copied from custom design metadata when recorded. */
+  attachedProject: string | null;
+  /** Extra note text copied from custom design metadata when recorded. */
+  notes: string | null;
+  /** Metadata filename that supplied the note fields, or null when none was found. */
+  metadataSource: string | null;
+  /** Parts-list files where this hardware part number was observed. */
+  mentionedInPartsListFiles: string[];
+  /** Latest filesystem mtime for the design folder or metadata source, when available. */
+  modifiedAt: string | null;
+  /** Whether the record came from a design folder or only from a parts-list mention. */
+  folderState: ProjectCustomHardwareFolderState;
+}
+
+/**
+ * ProjectCustomHardwareListing groups custom design reads for one project. The boundary
+ * is explicit because filesystem notes are provenance, not validation or release approval.
+ */
+export interface ProjectCustomHardwareListing {
+  /** Absolute path to the custom design folder for this project. */
+  hardwareFolderPath: string;
+  /** Uppercase configured or folder-discovered prefixes recognized during this read. */
+  recognizedPrefixes: string[];
+  /** Design folder and parts-list reference records, sorted by part number. */
+  records: ProjectCustomHardwareRecord[];
+  /** Short honesty reminder for UI surfaces. */
+  boundary: string;
+}
+
 /**
  * ProjectFilesAvailability tracks whether the file mirror is reachable. "configured"
  * means the API can read and write the project root; "not_configured" means the env
@@ -801,6 +849,8 @@ export interface ProjectFilesResponse {
   projectKey: string;
   /** Per-category listings; empty when availability is not_configured. */
   folders: ProjectFolderListing[];
+  /** Custom internal designs found under the custom design folder and parts-list files. */
+  customHardware: ProjectCustomHardwareListing | null;
   /** Human-readable detail when availability is "error". */
   message: string | null;
 }
@@ -1111,8 +1161,28 @@ export interface ProjectOverlapPriorProject {
 }
 
 /**
+ * ProjectOverlapMemoryWarning surfaces durable "this bit us / this is blocked" engineering
+ * memory for a part this project's BOM confirmed, so the mistake interrupts at import/overlap
+ * time instead of waiting for someone to open the part. Only confirmed, unresolved records with
+ * a `bit_us` outcome or `blocking` severity are surfaced; this is a reuse warning, never a gate.
+ */
+export interface ProjectOverlapMemoryWarning {
+  partId: string;
+  partMpn: string;
+  recordId: string;
+  recordKind: PartEngineeringRecordKind;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  title: string;
+  detail: string;
+  relatedMpn: string | null;
+  recordedBy: string | null;
+  recordedAt: string;
+}
+
+/**
  * ProjectOverlapPanelResponse is the read-only payload that drives the day-zero overlap
- * panel on a project's detail page. The panel surfaces three things, each derived from
+ * panel on a project's detail page. The panel surfaces these things, each derived from
  * existing project-memory tables (no new schema):
  *  - the top prior projects ranked by shared confirmed-usage parts,
  *  - the count of connector-class parts present in this project's confirmed usage that
@@ -1137,6 +1207,11 @@ export interface ProjectOverlapPanelResponse {
   circuitBlockWhereUsedHitCount: number;
   /** Bounded preview of the circuit-block roles that depend on this project's confirmed parts. */
   circuitBlockRoleHitsPreview: ProjectOverlapCircuitBlockRolePreview[];
+  /**
+   * Confirmed "this bit us / this is blocked" engineering memory for parts this BOM confirmed —
+   * the past mistake about to be repeated, surfaced at import time. Empty when none exist.
+   */
+  priorEngineeringMemoryWarnings: ProjectOverlapMemoryWarning[];
 }
 
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
@@ -1577,6 +1652,167 @@ export interface CircuitBlockDetailResponse {
    */
   knownRisks: CircuitBlockKnownRisk[];
   boundary: string;
+}
+
+/**
+ * PartEngineeringRecordKind classifies one piece of private engineering memory about a part.
+ * These are the questions a public component aggregator structurally cannot answer:
+ *   - `outcome`               — did this part work in real designs, or did it bite us?
+ *   - `harness_mate_verified` — a connector that actually mated correctly in a real harness.
+ *   - `cad_physical_verified` — a CAD/footprint/3D asset checked against the physical part.
+ *   - `dependency`            — a test fixture, board, cable, or program that depended on it.
+ *   - `decision_blocked`      — why this part was restricted/blocked; the mistake not to repeat.
+ *   - `note`                  — free-form tribal knowledge for the next engineer.
+ */
+export type PartEngineeringRecordKind =
+  | "outcome"
+  | "harness_mate_verified"
+  | "cad_physical_verified"
+  | "dependency"
+  | "decision_blocked"
+  | "note";
+
+/** PartEngineeringRecordSeverity reuses the known-risk severity ladder; only the engineer sets it. */
+export type PartEngineeringRecordSeverity = CircuitBlockKnownRiskSeverity;
+
+/**
+ * PartEngineeringRecordOutcome is the recording engineer's verdict for outcome/verification
+ * records. `not_verified` explicitly preserves "we tried to verify and could not", which is
+ * itself engineering memory worth keeping.
+ */
+export type PartEngineeringRecordOutcome = "worked" | "worked_with_caveats" | "bit_us" | "not_verified";
+
+/**
+ * PartEngineeringRecord is one durable, provenance-bearing observation or decision about a part.
+ *
+ * Provenance is first-class. `recordedBy`/`recordedAt` document who saw what, when; `resolvedAt`
+ * preserves the original observation even after the underlying issue is addressed. Recording or
+ * resolving a record never approves the part, validates an asset, or unlocks export.
+ */
+export interface PartEngineeringRecord {
+  id: string;
+  partId: string;
+  recordKind: PartEngineeringRecordKind;
+  title: string;
+  detail: string;
+  severity: PartEngineeringRecordSeverity;
+  /** Engineer verdict for outcome/verification kinds; null for note/dependency/decision rows. */
+  outcome: PartEngineeringRecordOutcome | null;
+  /** Trusted footprint/symbol/3D asset this record is about (Q5/Q8), null when not asset-scoped. */
+  relatedAssetId: string | null;
+  /** Datasheet revision the team designed from (Q6), null when not revision-scoped. */
+  datasheetRevisionId: string | null;
+  /** Counterpart connector MPN actually mated in the real harness (Q7). */
+  relatedMpn: string | null;
+  /** Test fixture / board / cable / program that depended on this part (Q9). */
+  dependedOnBy: string | null;
+  recordedBy: string | null;
+  recordedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNotes: string | null;
+  evidenceUrl: string | null;
+  /**
+   * Draft lifecycle. `confirmed` is durable engineering memory (all manual records, and
+   * auto-drafts a human accepted). `proposed` is a machine suggestion awaiting review — it never
+   * counts toward any gate. `dismissed` is a rejected suggestion, preserved for audit.
+   */
+  draftStatus: PartEngineeringRecordDraftStatus;
+  /** How the row originated; `manual` for hand-entered, `auto_*` for passive capture. */
+  draftSource: PartEngineeringRecordDraftSource;
+  /** Originating substitution/bundle id for an auto-draft, used for idempotent dedup. */
+  triggerRef: string | null;
+  /** Who accepted a proposed auto-draft into durable memory, and when. */
+  confirmedBy: string | null;
+  confirmedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** PartEngineeringRecordDraftStatus is the review lifecycle of one record. */
+export type PartEngineeringRecordDraftStatus = "proposed" | "confirmed" | "dismissed";
+
+/** PartEngineeringRecordDraftSource records whether a row was hand-entered or passively captured. */
+export type PartEngineeringRecordDraftSource = "manual" | "auto_substitution" | "auto_export" | "auto_bom_lifecycle";
+
+/** PartEngineeringRecordCreateInput defines the body of a create request. */
+export interface PartEngineeringRecordCreateInput {
+  recordKind: PartEngineeringRecordKind;
+  title: string;
+  detail?: string | null;
+  severity?: PartEngineeringRecordSeverity;
+  outcome?: PartEngineeringRecordOutcome | null;
+  relatedAssetId?: string | null;
+  datasheetRevisionId?: string | null;
+  relatedMpn?: string | null;
+  dependedOnBy?: string | null;
+  recordedBy?: string | null;
+  evidenceUrl?: string | null;
+}
+
+/** PartEngineeringRecordResolveInput defines the body of a resolve request. */
+export interface PartEngineeringRecordResolveInput {
+  resolvedBy?: string | null;
+  resolutionNotes?: string | null;
+}
+
+/**
+ * PartEngineeringRecordDraftDecisionInput is the body of a confirm/dismiss request on a proposed
+ * auto-draft. The acting user comes from the session; notes are optional dismissal context.
+ */
+export interface PartEngineeringRecordDraftDecisionInput {
+  notes?: string | null;
+}
+
+/**
+ * PartEngineeringRecordListResponse buckets records for the UI:
+ *   - `proposed`: machine suggestions from passive capture awaiting human review (never a gate)
+ *   - `open`: confirmed, durable, unresolved engineering memory
+ *   - `resolved`: resolved or dismissed rows, retained for audit
+ * The boundary copy repeats the honesty contract.
+ */
+export interface PartEngineeringRecordListResponse {
+  partId: string;
+  proposed: PartEngineeringRecord[];
+  open: PartEngineeringRecord[];
+  resolved: PartEngineeringRecord[];
+  boundary: string;
+}
+
+/**
+ * PartEngineeringRecordMutationResponse returns the affected record plus the rebuilt list so the
+ * UI can refresh in one round-trip without a follow-up read.
+ */
+export interface PartEngineeringRecordMutationResponse {
+  record: PartEngineeringRecord;
+  list: PartEngineeringRecordListResponse;
+  boundary: string;
+}
+
+/**
+ * PartEngineeringMemoryWarningPreview is one scan-time line of durable "this bit us / blocking"
+ * memory, used to interrupt at part-selection surfaces (catalog search, part detail, BOM match).
+ */
+export interface PartEngineeringMemoryWarningPreview {
+  recordId: string;
+  recordKind: PartEngineeringRecordKind;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  title: string;
+}
+
+/**
+ * PartEngineeringMemoryWarningSummary is a read-only per-part projection of confirmed, unresolved
+ * `bit_us`/`blocking` engineering memory. It is a reuse warning surfaced where engineers choose a
+ * part; it never changes approval, validation, readiness, or export state.
+ */
+export interface PartEngineeringMemoryWarningSummary {
+  /** Confirmed, unresolved records with a `bit_us` outcome or `blocking` severity. */
+  warningCount: number;
+  /** Subset of `warningCount` whose severity is `blocking`. */
+  blockingCount: number;
+  /** Newest-first, severity-first bounded preview for scan-time context. */
+  preview: PartEngineeringMemoryWarningPreview[];
 }
 
 /** CircuitBlockInstantiationHistoryRecord pairs one instantiation event with its project, revision, and BOM import context. */
@@ -2394,6 +2630,12 @@ export interface PartSearchRecord {
   promotionAudits: AssetPromotionAuditRecord[];
   /** Optional export-bundle readiness projection when a search API precomputes it. */
   bundleReadiness?: BundleReadinessSummary;
+  /**
+   * Optional read-only "this part bit us / is blocked" projection from confirmed engineering
+   * memory, surfaced at part-selection time. Null/absent when none or when not computed. Never a
+   * gate — it does not change readiness, approval, validation, or export state.
+   */
+  engineeringMemoryWarning?: PartEngineeringMemoryWarningSummary | null;
   readinessSummary: PartReadinessSummary;
   approval: PartApproval;
   duplicateCandidates: PartDuplicateCandidate[];

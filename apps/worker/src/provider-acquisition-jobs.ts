@@ -656,10 +656,34 @@ function mapProviderAcquisitionFailure(error: unknown): { code: string; message:
       };
     }
 
+    if (/DigiKey credentials are not configured/u.test(error.message)) {
+      return {
+        code: "PROVIDER_CREDENTIALS_MISSING",
+        message: "DigiKey acquisition requires DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET.",
+        rawError
+      };
+    }
+
+    if (/Mouser credentials are not configured/u.test(error.message)) {
+      return {
+        code: "PROVIDER_CREDENTIALS_MISSING",
+        message: "Mouser acquisition requires MOUSER_API_KEY.",
+        rawError
+      };
+    }
+
     if (/Octopart\/Nexar credentials are not configured/u.test(error.message)) {
       return {
         code: "PROVIDER_CREDENTIALS_MISSING",
-        message: "Octopart/Nexar acquisition requires configured provider credentials.",
+        message: "Octopart/Nexar is an optional paid aggregator and requires configured Nexar credentials.",
+        rawError
+      };
+    }
+
+    if (/Unable to fetch DigiKey/u.test(error.message) || /Unable to fetch Mouser/u.test(error.message) || /Mouser API returned errors/u.test(error.message)) {
+      return {
+        code: "PROVIDER_UNAVAILABLE",
+        message: "Could not reach the distributor provider. Check credentials and network access and try again.",
         rawError
       };
     }

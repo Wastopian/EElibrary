@@ -4,6 +4,7 @@
  * File header: Renders the shared workstation navigation for EE Library.
  */
 
+import { usePathname, useSearchParams } from "next/navigation";
 import React from "react";
 
 /** NavigationMatch explains how one navigation link determines its active state. */
@@ -36,30 +37,10 @@ type NavigationGroup = {
  * Renders the primary workstation navigation and keeps active state visible for operators.
  */
 export function AppNavigation() {
-  const [currentLocation, setCurrentLocation] = React.useState<string>("/");
-
-  React.useEffect(() => {
-    /**
-     * Reads the browser location so active route styling still works without
-     * pushing routing logic down into unrelated page components.
-     */
-    function updateCurrentLocation() {
-      if (typeof window === "undefined") {
-        return;
-      }
-
-      const pathname = window.location.pathname || "/";
-      const search = window.location.search || "";
-      setCurrentLocation(`${pathname}${search}`);
-    }
-
-    updateCurrentLocation();
-    window.addEventListener("popstate", updateCurrentLocation);
-
-    return () => {
-      window.removeEventListener("popstate", updateCurrentLocation);
-    };
-  }, []);
+  const pathname = usePathname() ?? "/";
+  const searchParams = useSearchParams();
+  const query = searchParams?.toString() ?? "";
+  const currentLocation = query ? `${pathname}?${query}` : pathname;
 
   return <AppNavigationLinks currentLocation={currentLocation} />;
 }
@@ -195,7 +176,7 @@ function isNavigationItemActive(item: NavigationItem, currentLocation: string): 
 
   if (item.match.type === "path") {
     if (item.match.path === "/catalog") {
-      return pathname === "/" || pathname === "/catalog" || pathname.startsWith("/parts/");
+      return pathname === "/" || pathname === "/catalog";
     }
 
     return pathname.startsWith(item.match.path);

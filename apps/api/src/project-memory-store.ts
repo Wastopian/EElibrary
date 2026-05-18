@@ -128,6 +128,16 @@ import type {
   PartSubstitutionScope,
   PartSubstitutionStatus,
   PartSubstitutionSummary,
+  PartEngineeringRecord,
+  PartEngineeringRecordCreateInput,
+  PartEngineeringRecordDraftDecisionInput,
+  PartEngineeringRecordDraftSource,
+  PartEngineeringRecordKind,
+  PartEngineeringRecordListResponse,
+  PartEngineeringRecordMutationResponse,
+  PartEngineeringRecordOutcome,
+  PartEngineeringRecordResolveInput,
+  PartEngineeringRecordSeverity,
   PartCircuitBlockDependencyRecord,
   PartWhereUsedRecord,
   PartWhereUsedResponse,
@@ -149,6 +159,7 @@ import type {
   ProjectListResponse,
   ProjectMemoryCapability,
   ProjectOverlapCircuitBlockRolePreview,
+  ProjectOverlapMemoryWarning,
   ProjectOverlapPanelResponse,
   ProjectOverlapPriorProject,
   ProjectOverlapSharedPartPreview,
@@ -348,6 +359,33 @@ export type CircuitBlockKnownRiskResolveResult =
   | { status: "invalid"; code: string; message: string }
   | { status: "not_configured" }
   | { status: "not_found"; code: string; message: string };
+
+/** PartEngineeringRecordCreateResult reports persistence of one new part engineering-memory row. */
+export type PartEngineeringRecordCreateResult =
+  | { status: "created"; response: PartEngineeringRecordMutationResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** PartEngineeringRecordResolveResult reports the lifecycle transition of one engineering-memory row. */
+export type PartEngineeringRecordResolveResult =
+  | { status: "resolved"; response: PartEngineeringRecordMutationResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** PartEngineeringRecordDraftDecisionResult reports confirm/dismiss of one proposed auto-draft. */
+export type PartEngineeringRecordDraftDecisionResult =
+  | { status: "decided"; response: PartEngineeringRecordMutationResponse }
+  | { status: "invalid"; code: string; message: string }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** PartEngineeringRecordListReadResult reports a read of all engineering-memory rows for one part. */
+export type PartEngineeringRecordListReadResult =
+  | { status: "available"; response: PartEngineeringRecordListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
 
 /** PartSubstitutionCreateResult reports approval persistence and validation outcomes for one substitution. */
 export type PartSubstitutionCreateResult =
@@ -767,6 +805,34 @@ interface DatabaseCircuitBlockKnownRiskRow {
   resolved_by: string | null;
   resolution_notes: string | null;
   evidence_url: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+/** DatabasePartEngineeringRecordRow models one persisted part engineering-memory row. */
+interface DatabasePartEngineeringRecordRow {
+  id: string;
+  part_id: string;
+  record_kind: string;
+  title: string;
+  detail: string;
+  severity: string;
+  outcome: string | null;
+  related_asset_id: string | null;
+  datasheet_revision_id: string | null;
+  related_mpn: string | null;
+  depended_on_by: string | null;
+  recorded_by: string | null;
+  recorded_at: Date | string;
+  resolved_at: Date | string | null;
+  resolved_by: string | null;
+  resolution_notes: string | null;
+  evidence_url: string | null;
+  draft_status: string;
+  draft_source: string;
+  trigger_ref: string | null;
+  confirmed_by: string | null;
+  confirmed_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -1767,6 +1833,7 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
       const updatedLines: BomLine[] = [];
       const updatedUsages: ProjectPartUsage[] = [];
       const importCandidates: BomLineImportCandidate[] = [];
+      const matchedPartIds = new Set<string>();
 
       for (const line of sourceLines) {
         const outcome = line.matchStatus === "ignored"
@@ -1777,6 +1844,7 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
         updatedLines.push(updatedLine);
 
         if (outcome.matchStatus === "matched" && outcome.matchedPartId) {
+          matchedPartIds.add(outcome.matchedPartId);
           updatedUsages.push(await upsertProjectPartUsageForMatchedLine(client, updatedLine, outcome.matchedPartId, now));
         } else {
           await deleteProjectPartUsageForBomLine(client, line.id);
@@ -1819,6 +1887,10 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
       await client.query("UPDATE project_revisions SET updated_at = $2 WHERE id = $1", [updatedBomImport.project_revision_id, now]);
       await client.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [updatedBomImport.project_id, now]);
       await client.query("COMMIT");
+
+      // Post-commit, best-effort: only committed matches feed passive capture, and a draft failure
+      // must never roll back or fail the BOM match the engineer just ran.
+      await autoDraftLifecycleRiskFromBomMatch(databasePool, updatedBomImport.project_id, bomImportId, [...matchedPartIds]);
 
       return {
         response: {
@@ -2047,6 +2119,7 @@ export async function readProjectOverlapPanelFromDatabase(
           circuitBlockRoleHitsPreview: [],
           circuitBlockWhereUsedHitCount: 0,
           connectorWhereUsedHitCount: 0,
+          priorEngineeringMemoryWarnings: [],
           priorProjects: [],
           projectId,
           scannedPartCount: 0,
@@ -2060,12 +2133,14 @@ export async function readProjectOverlapPanelFromDatabase(
       priorProjects,
       connectorWhereUsedHitCount,
       circuitBlockWhereUsedHitCount,
-      circuitBlockRoleHitsPreview
+      circuitBlockRoleHitsPreview,
+      priorEngineeringMemoryWarnings
     ] = await Promise.all([
       readPriorProjectOverlap(databasePool, projectId, scannedParts, topProjectsLimit, sharedPartIdsPerProjectLimit),
       readConnectorWhereUsedHitCount(databasePool, projectId, scannedParts),
       readCircuitBlockWhereUsedHitCount(databasePool, scannedParts),
-      readCircuitBlockWhereUsedPreview(databasePool, scannedParts, circuitBlockRolePreviewLimit)
+      readCircuitBlockWhereUsedPreview(databasePool, scannedParts, circuitBlockRolePreviewLimit),
+      readPriorEngineeringMemoryWarnings(databasePool, scannedParts, PRIOR_ENGINEERING_MEMORY_WARNING_LIMIT)
     ]);
 
     return {
@@ -2073,10 +2148,11 @@ export async function readProjectOverlapPanelFromDatabase(
         circuitBlockRoleHitsPreview,
         circuitBlockWhereUsedHitCount,
         connectorWhereUsedHitCount,
+        priorEngineeringMemoryWarnings,
         priorProjects,
         projectId,
         scannedPartCount: scannedParts.length,
-        state: priorProjects.length > 0 || connectorWhereUsedHitCount > 0 || circuitBlockWhereUsedHitCount > 0
+        state: priorProjects.length > 0 || connectorWhereUsedHitCount > 0 || circuitBlockWhereUsedHitCount > 0 || priorEngineeringMemoryWarnings.length > 0
           ? "available"
           : "empty"
       },
@@ -2196,6 +2272,73 @@ async function readPriorProjectOverlap(
         usageStatus: null
       }
     ))
+  }));
+}
+
+/** Bounds the "this bit us / this is blocked" memory list so the overlap panel stays scannable. */
+const PRIOR_ENGINEERING_MEMORY_WARNING_LIMIT = 12;
+
+/**
+ * Reads durable "this bit us / this is blocked" engineering memory for the parts this project's
+ * BOM confirmed. This is the passive-capture payoff: the past mistake interrupts at import/overlap
+ * time instead of waiting for someone to open the part detail. Only confirmed, unresolved records
+ * with a `bit_us` outcome or `blocking` severity surface; proposed/dismissed rows never do. This is
+ * a reuse warning, never a gate — it does not change approval, validation, or export state.
+ */
+async function readPriorEngineeringMemoryWarnings(
+  databasePool: Pool,
+  scannedPartIds: string[],
+  limit: number
+): Promise<ProjectOverlapMemoryWarning[]> {
+  if (scannedPartIds.length === 0) {
+    return [];
+  }
+
+  // Dynamic placeholder IN-list (not ANY($::text[])) for the same pg-mem PK-planner reason
+  // documented in readPriorProjectOverlap.
+  const placeholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await databasePool.query<{
+    part_id: string;
+    part_mpn: string;
+    record_id: string;
+    record_kind: string;
+    severity: string;
+    outcome: string | null;
+    title: string;
+    detail: string;
+    related_mpn: string | null;
+    recorded_by: string | null;
+    recorded_at: Date | string;
+  }>(
+    `
+      SELECT per.part_id AS part_id, p.mpn AS part_mpn, per.id AS record_id,
+             per.record_kind AS record_kind, per.severity AS severity, per.outcome AS outcome,
+             per.title AS title, per.detail AS detail, per.related_mpn AS related_mpn,
+             per.recorded_by AS recorded_by, per.recorded_at AS recorded_at
+      FROM part_engineering_records per
+      JOIN parts p ON p.id = per.part_id
+      WHERE per.part_id IN (${placeholders})
+        AND per.draft_status = 'confirmed'
+        AND per.resolved_at IS NULL
+        AND (per.outcome = 'bit_us' OR per.severity = 'blocking')
+      ORDER BY CASE WHEN per.severity = 'blocking' THEN 0 ELSE 1 END, per.recorded_at DESC, per.id ASC
+      LIMIT $${scannedPartIds.length + 1}
+    `,
+    [...scannedPartIds, limit]
+  );
+
+  return result.rows.map((row) => ({
+    detail: row.detail,
+    outcome: (row.outcome as PartEngineeringRecordOutcome | null) ?? null,
+    partId: row.part_id,
+    partMpn: row.part_mpn,
+    recordId: row.record_id,
+    recordKind: row.record_kind as PartEngineeringRecordKind,
+    recordedAt: toIsoTimestamp(row.recorded_at),
+    recordedBy: row.recorded_by,
+    relatedMpn: row.related_mpn,
+    severity: row.severity as PartEngineeringRecordSeverity,
+    title: row.title
   }));
 }
 
@@ -3622,6 +3765,529 @@ function normalizeCircuitBlockKnownRiskCreateInput(
     },
     ok: true
   };
+}
+
+/** Boundary copy repeated to callers: engineering memory never changes part trust state. */
+const PART_ENGINEERING_RECORD_BOUNDARY =
+  "Recording or resolving an engineering record preserves private engineering memory; it does not approve the part, validate assets, or unlock export.";
+
+/** Allowed engineering-record kinds. Kept in sync with the SQL CHECK constraint. */
+const ALLOWED_PART_ENGINEERING_RECORD_KINDS: ReadonlySet<PartEngineeringRecordKind> = new Set<PartEngineeringRecordKind>([
+  "outcome",
+  "harness_mate_verified",
+  "cad_physical_verified",
+  "dependency",
+  "decision_blocked",
+  "note"
+]);
+
+/** Allowed engineering-record severities. Kept in sync with the SQL CHECK constraint. */
+const ALLOWED_PART_ENGINEERING_RECORD_SEVERITIES: ReadonlySet<PartEngineeringRecordSeverity> = new Set<PartEngineeringRecordSeverity>([
+  "info",
+  "limitation",
+  "caution",
+  "blocking"
+]);
+
+/** Allowed engineering-record outcomes. Kept in sync with the SQL CHECK constraint. */
+const ALLOWED_PART_ENGINEERING_RECORD_OUTCOMES: ReadonlySet<PartEngineeringRecordOutcome> = new Set<PartEngineeringRecordOutcome>([
+  "worked",
+  "worked_with_caveats",
+  "bit_us",
+  "not_verified"
+]);
+
+/** Columns returned by every engineering-record query, in a stable order. */
+const PART_ENGINEERING_RECORD_RETURNING =
+  "id, part_id, record_kind, title, detail, severity, outcome, related_asset_id, datasheet_revision_id, related_mpn, depended_on_by, recorded_by, recorded_at, resolved_at, resolved_by, resolution_notes, evidence_url, draft_status, draft_source, trigger_ref, confirmed_by, confirmed_at, created_at, updated_at";
+
+/** NormalizedPartEngineeringRecordCreateInput is the validated shape applied by the create path. */
+interface NormalizedPartEngineeringRecordCreateInput {
+  recordKind: PartEngineeringRecordKind;
+  title: string;
+  detail: string;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  relatedAssetId: string | null;
+  datasheetRevisionId: string | null;
+  relatedMpn: string | null;
+  dependedOnBy: string | null;
+  recordedBy: string | null;
+  evidenceUrl: string | null;
+}
+
+/**
+ * Maps one persisted engineering-record row into the provider-neutral API shape.
+ */
+function mapPartEngineeringRecordRow(row: DatabasePartEngineeringRecordRow): PartEngineeringRecord {
+  return {
+    confirmedAt: row.confirmed_at ? toIsoTimestamp(row.confirmed_at) : null,
+    confirmedBy: row.confirmed_by,
+    createdAt: toIsoTimestamp(row.created_at),
+    datasheetRevisionId: row.datasheet_revision_id,
+    dependedOnBy: row.depended_on_by,
+    detail: row.detail,
+    draftSource: row.draft_source as PartEngineeringRecordDraftSource,
+    draftStatus: row.draft_status as PartEngineeringRecord["draftStatus"],
+    evidenceUrl: row.evidence_url,
+    id: row.id,
+    outcome: (row.outcome as PartEngineeringRecordOutcome | null) ?? null,
+    partId: row.part_id,
+    recordKind: row.record_kind as PartEngineeringRecordKind,
+    recordedAt: toIsoTimestamp(row.recorded_at),
+    recordedBy: row.recorded_by,
+    relatedAssetId: row.related_asset_id,
+    relatedMpn: row.related_mpn,
+    resolutionNotes: row.resolution_notes,
+    resolvedAt: row.resolved_at ? toIsoTimestamp(row.resolved_at) : null,
+    resolvedBy: row.resolved_by,
+    severity: row.severity as PartEngineeringRecordSeverity,
+    title: row.title,
+    triggerRef: row.trigger_ref,
+    updatedAt: toIsoTimestamp(row.updated_at)
+  };
+}
+
+/**
+ * Validates and trims an engineering-record create payload into a persistence-ready shape.
+ */
+function normalizePartEngineeringRecordCreateInput(
+  input: PartEngineeringRecordCreateInput | null | undefined
+): { ok: true; input: NormalizedPartEngineeringRecordCreateInput } | { ok: false; code: string; message: string } {
+  if (!input || typeof input !== "object") {
+    return { code: "INVALID_PART_ENGINEERING_RECORD", message: "Engineering record creation requires a JSON body with a kind and title.", ok: false };
+  }
+
+  const recordKind = input.recordKind as PartEngineeringRecordKind;
+  if (!ALLOWED_PART_ENGINEERING_RECORD_KINDS.has(recordKind)) {
+    return {
+      code: "INVALID_PART_ENGINEERING_RECORD_KIND",
+      message: "Kind must be one of outcome, harness_mate_verified, cad_physical_verified, dependency, decision_blocked, or note.",
+      ok: false
+    };
+  }
+
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  if (title.length === 0) {
+    return { code: "INVALID_PART_ENGINEERING_RECORD_TITLE", message: "Engineering record title is required.", ok: false };
+  }
+
+  const severity = (input.severity ?? "info") as PartEngineeringRecordSeverity;
+  if (!ALLOWED_PART_ENGINEERING_RECORD_SEVERITIES.has(severity)) {
+    return {
+      code: "INVALID_PART_ENGINEERING_RECORD_SEVERITY",
+      message: "Severity must be one of info, limitation, caution, or blocking.",
+      ok: false
+    };
+  }
+
+  const outcomeRaw = input.outcome ?? null;
+  if (outcomeRaw !== null && !ALLOWED_PART_ENGINEERING_RECORD_OUTCOMES.has(outcomeRaw)) {
+    return {
+      code: "INVALID_PART_ENGINEERING_RECORD_OUTCOME",
+      message: "Outcome must be one of worked, worked_with_caveats, bit_us, or not_verified.",
+      ok: false
+    };
+  }
+
+  return {
+    input: {
+      datasheetRevisionId: normalizeOptionalText(input.datasheetRevisionId ?? null),
+      dependedOnBy: normalizeOptionalText(input.dependedOnBy ?? null),
+      detail: typeof input.detail === "string" ? input.detail.trim() : "",
+      evidenceUrl: normalizeOptionalText(input.evidenceUrl ?? null),
+      outcome: outcomeRaw,
+      recordKind,
+      recordedBy: normalizeOptionalText(input.recordedBy ?? null),
+      relatedAssetId: normalizeOptionalText(input.relatedAssetId ?? null),
+      relatedMpn: normalizeOptionalText(input.relatedMpn ?? null),
+      severity,
+      title
+    },
+    ok: true
+  };
+}
+
+/**
+ * Reads all engineering-memory rows for one part, split into still-open and resolved (history).
+ */
+async function buildPartEngineeringRecordList(databasePool: Pool, partId: string): Promise<PartEngineeringRecordListResponse> {
+  const result = await databasePool.query<DatabasePartEngineeringRecordRow>(
+    `
+      SELECT ${PART_ENGINEERING_RECORD_RETURNING}
+      FROM part_engineering_records
+      WHERE part_id = $1
+      ORDER BY recorded_at DESC, id ASC
+    `,
+    [partId]
+  );
+  const records = result.rows.map(mapPartEngineeringRecordRow);
+
+  return {
+    boundary: PART_ENGINEERING_RECORD_BOUNDARY,
+    open: records.filter((record) => record.draftStatus === "confirmed" && record.resolvedAt === null),
+    partId,
+    proposed: records.filter((record) => record.draftStatus === "proposed"),
+    resolved: records.filter((record) => record.draftStatus === "dismissed" || record.resolvedAt !== null)
+  };
+}
+
+/**
+ * Reads the full engineering-memory history for one part.
+ */
+export async function readPartEngineeringRecordsForPartFromDatabase(partId: string): Promise<PartEngineeringRecordListReadResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    if (partCheck.rowCount === 0) {
+      return { status: "not_found" };
+    }
+
+    return { response: await buildPartEngineeringRecordList(databasePool, partId), status: "available" };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Records one piece of private engineering memory against a part.
+ *
+ * Honesty contract: persisting a record never changes the part's approval, validation, review,
+ * or export state. It is durable institutional knowledge, not a trust decision.
+ */
+export async function createPartEngineeringRecordInDatabase(
+  partId: string,
+  input: PartEngineeringRecordCreateInput
+): Promise<PartEngineeringRecordCreateResult> {
+  const normalized = normalizePartEngineeringRecordCreateInput(input);
+
+  if (!normalized.ok) {
+    return { code: normalized.code, message: normalized.message, status: "invalid" };
+  }
+
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    if (partCheck.rowCount === 0) {
+      return { code: "PART_NOT_FOUND", message: "Part not found.", status: "not_found" };
+    }
+
+    const now = new Date();
+    const recordId = `perec-${slugify(partId)}-${now.getTime().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const result = await databasePool.query<DatabasePartEngineeringRecordRow>(
+      `
+        INSERT INTO part_engineering_records (
+          id, part_id, record_kind, title, detail, severity, outcome,
+          related_asset_id, datasheet_revision_id, related_mpn, depended_on_by,
+          recorded_by, recorded_at, evidence_url, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $13, $13)
+        RETURNING ${PART_ENGINEERING_RECORD_RETURNING}
+      `,
+      [
+        recordId,
+        partId,
+        normalized.input.recordKind,
+        normalized.input.title,
+        normalized.input.detail,
+        normalized.input.severity,
+        normalized.input.outcome,
+        normalized.input.relatedAssetId,
+        normalized.input.datasheetRevisionId,
+        normalized.input.relatedMpn,
+        normalized.input.dependedOnBy,
+        normalized.input.recordedBy,
+        now,
+        normalized.input.evidenceUrl
+      ]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      throw new CatalogStoreError("query_failed", "Engineering record creation returned no persisted row.", new Error("missing_part_engineering_record_create_row"));
+    }
+
+    return {
+      response: {
+        boundary: PART_ENGINEERING_RECORD_BOUNDARY,
+        list: await buildPartEngineeringRecordList(databasePool, partId),
+        record: mapPartEngineeringRecordRow(row)
+      },
+      status: "created"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Marks one engineering-memory row as resolved. The row is never deleted; resolution preserves
+ * the original observation and adds resolution provenance so audits stay consistent.
+ */
+export async function resolvePartEngineeringRecordInDatabase(
+  partId: string,
+  recordId: string,
+  input: PartEngineeringRecordResolveInput
+): Promise<PartEngineeringRecordResolveResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const resolvedBy = normalizeOptionalText(input.resolvedBy ?? null);
+  const resolutionNotes = normalizeOptionalText(input.resolutionNotes ?? null);
+
+  try {
+    const now = new Date();
+    const result = await databasePool.query<DatabasePartEngineeringRecordRow>(
+      `
+        UPDATE part_engineering_records
+        SET resolved_at = $3, resolved_by = $4, resolution_notes = $5, updated_at = $3
+        WHERE id = $2 AND part_id = $1 AND resolved_at IS NULL
+        RETURNING ${PART_ENGINEERING_RECORD_RETURNING}
+      `,
+      [partId, recordId, now, resolvedBy, resolutionNotes]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return {
+        code: "PART_ENGINEERING_RECORD_NOT_FOUND",
+        message: "Engineering record not found or already resolved.",
+        status: "not_found"
+      };
+    }
+
+    return {
+      response: {
+        boundary: PART_ENGINEERING_RECORD_BOUNDARY,
+        list: await buildPartEngineeringRecordList(databasePool, partId),
+        record: mapPartEngineeringRecordRow(row)
+      },
+      status: "resolved"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/** AutoDraftPartEngineeringRecordParams is the provider-neutral input for one passive-capture draft. */
+interface AutoDraftPartEngineeringRecordParams {
+  partId: string;
+  draftSource: Exclude<PartEngineeringRecordDraftSource, "manual">;
+  /** Stable per-trigger key (substitution id, or `${bundleId}:${assetId}`) — drives idempotent dedup. */
+  dedupeKey: string;
+  /** Originating substitution/bundle id stored for correlation. */
+  triggerRef: string;
+  recordKind: PartEngineeringRecordKind;
+  title: string;
+  detail: string;
+  severity?: PartEngineeringRecordSeverity;
+  outcome?: PartEngineeringRecordOutcome | null;
+  relatedAssetId?: string | null;
+  datasheetRevisionId?: string | null;
+  relatedMpn?: string | null;
+  recordedBy?: string | null;
+}
+
+/**
+ * Best-effort passive capture: drafts one PROPOSED engineering-memory row from an action an
+ * engineer already performed. This is the heart of the "memory writes itself" bet — manual entry
+ * is the fallback, not the path.
+ *
+ * Contract:
+ *   * The row enters `draft_status = 'proposed'`; it is a suggestion, never durable memory, and
+ *     never counts toward any gate until a human confirms it.
+ *   * Idempotent: the id is derived deterministically from (source, dedupeKey, part) with
+ *     `ON CONFLICT (id) DO NOTHING`, so re-approving a substitution or re-exporting a bundle does
+ *     not flood the part with duplicates.
+ *   * Never throws: drafting must not fail or slow the triggering action. Any failure is logged
+ *     and swallowed — a substitution/export still succeeds even if drafting breaks.
+ */
+async function autoDraftPartEngineeringRecord(databasePool: Pool, params: AutoDraftPartEngineeringRecordParams): Promise<void> {
+  try {
+    const recordId = `perec-auto-${slugify(params.draftSource)}-${slugify(params.dedupeKey)}`.slice(0, 200);
+    const now = new Date();
+
+    await databasePool.query(
+      `
+        INSERT INTO part_engineering_records (
+          id, part_id, record_kind, title, detail, severity, outcome,
+          related_asset_id, datasheet_revision_id, related_mpn, depended_on_by,
+          recorded_by, recorded_at, evidence_url,
+          draft_status, draft_source, trigger_ref,
+          created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, NULL, 'proposed', $13, $14, $12, $12)
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [
+        recordId,
+        params.partId,
+        params.recordKind,
+        params.title,
+        params.detail,
+        params.severity ?? "info",
+        params.outcome ?? null,
+        params.relatedAssetId ?? null,
+        params.datasheetRevisionId ?? null,
+        params.relatedMpn ?? null,
+        params.recordedBy ?? null,
+        now,
+        params.draftSource,
+        params.triggerRef
+      ]
+    );
+  } catch (error) {
+    // Passive capture is best-effort: never let a draft failure surface to the triggering action.
+    console.error(
+      JSON.stringify({
+        draftSource: params.draftSource,
+        message: "Passive-capture engineering-memory draft failed and was skipped.",
+        partId: params.partId,
+        reason: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        triggerRef: params.triggerRef
+      })
+    );
+  }
+}
+
+/**
+ * Narrow passive capture at BOM match time: when a BOM row matches a part that is (a) no longer
+ * active in its lifecycle AND (b) already used in a prior project, that is the "we are about to
+ * repeat a part we already know is fading" signal. Draft one PROPOSED record so it surfaces for
+ * review instead of silently riding into another build.
+ *
+ * Deliberately narrow to avoid noise: a part that is active, or never used before, produces
+ * nothing. Idempotent per (bom import, part) so re-running matching does not duplicate. Best
+ * effort and post-commit — it never blocks or fails BOM matching.
+ */
+async function autoDraftLifecycleRiskFromBomMatch(
+  databasePool: Pool,
+  projectId: string,
+  bomImportId: string,
+  matchedPartIds: string[]
+): Promise<void> {
+  if (matchedPartIds.length === 0) {
+    return;
+  }
+
+  try {
+    // $1 is projectId; matched part ids start at $2. Dynamic IN-list for pg-mem PK-planner parity.
+    const placeholders = matchedPartIds.map((_, index) => `$${index + 2}`).join(", ");
+    const result = await databasePool.query<{ part_id: string; mpn: string; lifecycle_status: string }>(
+      `
+        SELECT DISTINCT p.id AS part_id, p.mpn AS mpn, p.lifecycle_status AS lifecycle_status
+        FROM parts p
+        WHERE p.id IN (${placeholders})
+          AND p.lifecycle_status <> 'active'
+          AND p.id IN (
+            SELECT ppu.part_id FROM project_part_usages ppu WHERE ppu.project_id <> $1
+          )
+      `,
+      [projectId, ...matchedPartIds]
+    );
+
+    for (const row of result.rows) {
+      await autoDraftPartEngineeringRecord(databasePool, {
+        dedupeKey: `${bomImportId}:${row.part_id}`,
+        detail: `This part is reused from a prior project but is no longer active (lifecycle: ${row.lifecycle_status}). Confirm only if this is a known, accepted risk you intend to repeat.`,
+        draftSource: "auto_bom_lifecycle",
+        partId: row.part_id,
+        recordKind: "decision_blocked",
+        recordedBy: null,
+        severity: "caution",
+        title: `Reused part ${row.mpn} is ${row.lifecycle_status}, not active`,
+        triggerRef: bomImportId
+      });
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        bomImportId,
+        message: "Passive-capture lifecycle-risk draft scan failed and was skipped.",
+        reason: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      })
+    );
+  }
+}
+
+/**
+ * Confirms (accepts into durable memory) or dismisses (rejects, preserved for audit) one PROPOSED
+ * auto-draft. Only `proposed` rows are decidable; confirming a manual or already-decided row is a
+ * no-op not_found. Neither decision changes part approval, validation, review, or export state.
+ */
+export async function decidePartEngineeringRecordDraftInDatabase(
+  partId: string,
+  recordId: string,
+  decision: "confirm" | "dismiss",
+  actor: string,
+  input: PartEngineeringRecordDraftDecisionInput
+): Promise<PartEngineeringRecordDraftDecisionResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const notes = normalizeOptionalText(input.notes ?? null);
+
+  try {
+    const now = new Date();
+    const result = decision === "confirm"
+      ? await databasePool.query<DatabasePartEngineeringRecordRow>(
+          `
+            UPDATE part_engineering_records
+            SET draft_status = 'confirmed', confirmed_by = $3, confirmed_at = $4, updated_at = $4
+            WHERE id = $2 AND part_id = $1 AND draft_status = 'proposed'
+            RETURNING ${PART_ENGINEERING_RECORD_RETURNING}
+          `,
+          [partId, recordId, actor, now]
+        )
+      : await databasePool.query<DatabasePartEngineeringRecordRow>(
+          `
+            UPDATE part_engineering_records
+            SET draft_status = 'dismissed', resolved_at = $4, resolved_by = $3, resolution_notes = $5, updated_at = $4
+            WHERE id = $2 AND part_id = $1 AND draft_status = 'proposed'
+            RETURNING ${PART_ENGINEERING_RECORD_RETURNING}
+          `,
+          [partId, recordId, actor, now, notes]
+        );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return {
+        code: "PART_ENGINEERING_RECORD_DRAFT_NOT_FOUND",
+        message: "Proposed engineering-memory draft not found, or it was already confirmed or dismissed.",
+        status: "not_found"
+      };
+    }
+
+    return {
+      response: {
+        boundary: PART_ENGINEERING_RECORD_BOUNDARY,
+        list: await buildPartEngineeringRecordList(databasePool, partId),
+        record: mapPartEngineeringRecordRow(row)
+      },
+      status: "decided"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
 }
 
 /**
@@ -7050,6 +7716,25 @@ export async function createExportBundleInDatabase(
       ]
     );
 
+    // Passive capture: shipping a bundle is the team committing to a specific trusted footprint /
+    // 3D model / datasheet revision. Stamp that as proposed engineering memory per included asset
+    // so the defensible "what did we stand behind" provenance writes itself at export time.
+    for (const includedAsset of includedAssets) {
+      await autoDraftPartEngineeringRecord(databasePool, {
+        datasheetRevisionId: null,
+        dedupeKey: `${bundleId}:${includedAsset.assetId}`,
+        detail: `${includedAsset.assetType} • provenance ${includedAsset.provenance}${includedAsset.fileHash ? ` • sha256 ${includedAsset.fileHash.slice(0, 12)}…` : ""}`,
+        draftSource: "auto_export",
+        partId: includedAsset.partId,
+        recordKind: "cad_physical_verified",
+        recordedBy: actor,
+        relatedAssetId: includedAsset.assetId,
+        severity: "info",
+        title: `Trusted in export bundle ${bundleId}`,
+        triggerRef: bundleId
+      });
+    }
+
     return { status: "created", response: { bundle } };
   } catch (error) {
     throw new CatalogStoreError("query_failed", "Export bundle creation failed.", error);
@@ -8833,6 +9518,20 @@ export async function createPartSubstitutionInDatabase(
     if (!summary) {
       throw new CatalogStoreError("query_failed", "Substitution insert returned no row.", new Error("missing_substitution_row"));
     }
+
+    // Passive capture: approving a substitute is an engineering decision worth remembering on the
+    // original part. Drafted as a proposed suggestion; one Confirm turns it into durable memory.
+    await autoDraftPartEngineeringRecord(databasePool, {
+      dedupeKey: id,
+      detail: signoffNotes,
+      draftSource: "auto_substitution",
+      partId: originalPartId,
+      recordKind: "decision_blocked",
+      recordedBy: approvedBy,
+      severity: "info",
+      title: `Substitute approved → ${summary.substitutePartMpn} (${scope})`,
+      triggerRef: id
+    });
 
     return {
       status: "created",

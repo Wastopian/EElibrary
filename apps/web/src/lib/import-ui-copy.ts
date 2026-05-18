@@ -35,7 +35,7 @@ export const importUiCopy = {
   /** Link used when search results must be rerun after a successful import. */
   linkRefreshSearch: "Refresh search results",
   /** Clarifies that no-match acquisition is still catalog ingestion, not a global live search. */
-  catalogAcquisitionNote: "Exact part-number import only. Supported sources are Local Catalog, JLC/LCSC, and Octopart/Nexar when credentials are configured.",
+  catalogAcquisitionNote: "Exact part-number import only. Free sources are JLC/LCSC, DigiKey, Mouser, the local KiCad CAD index, and Local Catalog. Octopart/Nexar is an optional paid aggregator and only appears when Nexar credentials are configured.",
   /** Introduces the explicit provider lookup step from a DB-backed no-match state. */
   providerLookupLead: "Search supported suppliers for exact matches before deciding whether to import.",
   /** Clarifies that provider lookup remains explicit and exact-match only. */

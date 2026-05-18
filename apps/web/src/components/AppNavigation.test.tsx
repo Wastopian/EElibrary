@@ -43,6 +43,17 @@ test("app navigation marks the projects route as active inside project memory pa
 });
 
 /**
+ * Part detail is its own route; catalog should not claim aria-current=page there.
+ */
+test("app navigation does not mark catalog active on part detail pages", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/parts/part-tps7a02dbvr" />);
+
+  assert.match(html, /Catalog/u);
+  assert.doesNotMatch(html, /href="\/catalog"[^>]*aria-current="page"/u);
+  assert.doesNotMatch(html, /href="\/"[^>]*aria-current="page"/u);
+});
+
+/**
  * Verifies the vendor notebook route is present and active for vendor pages.
  */
 test("app navigation marks the vendors route as active inside vendor notebook pages", () => {

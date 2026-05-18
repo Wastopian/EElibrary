@@ -33,6 +33,11 @@ export type CatalogResultRowViewModel = {
   id: string;
   lifecycleLabel: string;
   manufacturerName: string;
+  /**
+   * Read-only "this bit us / is blocked" memory projection for scan-time interrupt. Null when
+   * there is no confirmed warning memory. Never a gate.
+   */
+  memoryWarning: { count: number; blocking: boolean; topTitle: string } | null;
   mpn: string;
   packageName: string;
   nextActionDetail: string;
@@ -96,6 +101,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                   <th>Lifecycle</th>
                   <th>Datasheet</th>
                   <th>CAD/export</th>
+                  <th>Prior memory</th>
                   <th>Verification steps</th>
                   <th>Readiness</th>
                   <th>Next action</th>
@@ -122,6 +128,18 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
                     </td>
                     <td>
                       <StatusBadge label={row.cadExportLabel} tone={row.cadExportTone} />
+                    </td>
+                    <td>
+                      {row.memoryWarning ? (
+                        <span title={row.memoryWarning.topTitle}>
+                          <StatusBadge
+                            label={row.memoryWarning.blocking ? `Blocked before (${row.memoryWarning.count})` : `Bit us before (${row.memoryWarning.count})`}
+                            tone={row.memoryWarning.blocking ? "danger" : "review"}
+                          />
+                        </span>
+                      ) : (
+                        <span className="muted-copy">-</span>
+                      )}
                     </td>
                     <td>
                       <details className="catalog-trust-gates-cell">
@@ -179,6 +197,15 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
         <strong>{row.readinessHeadline}</strong>
         <p>{row.readinessSubhead}</p>
         <small>{row.readinessDetail}</small>
+        {row.memoryWarning && (
+          <p className="result-row__memory-warning">
+            <StatusBadge
+              label={row.memoryWarning.blocking ? "Blocked before" : "Bit us before"}
+              tone={row.memoryWarning.blocking ? "danger" : "review"}
+            />
+            <span>{row.memoryWarning.topTitle}{row.memoryWarning.count > 1 ? ` (+${row.memoryWarning.count - 1} more)` : ""}</span>
+          </p>
+        )}
       </div>
 
       <div className="result-row__sidebar">

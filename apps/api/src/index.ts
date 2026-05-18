@@ -30,7 +30,7 @@ import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
-import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -90,6 +90,9 @@ import type {
   ProviderLookupCandidate,
   PartSearchFilters,
   PartSearchRecord,
+  PartEngineeringRecordCreateInput,
+  PartEngineeringRecordDraftDecisionInput,
+  PartEngineeringRecordResolveInput,
   PartReadinessStatus,
   PartSearchSort,
   PartSubstitutionCreateInput,
@@ -220,6 +223,9 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
   const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
   const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(url.pathname);
+  const partEngineeringRecordsMatch = /^\/parts\/([^/]+)\/engineering-records$/u.exec(url.pathname);
+  const partEngineeringRecordResolveMatch = /^\/parts\/([^/]+)\/engineering-records\/([^/]+)\/resolve$/u.exec(url.pathname);
+  const partEngineeringRecordDecisionMatch = /^\/parts\/([^/]+)\/engineering-records\/([^/]+)\/(confirm|dismiss)$/u.exec(url.pathname);
   const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
   const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
   const exportBundleVerifyMatch = /^\/export-bundles\/([^/]+)\/verify$/u.exec(url.pathname);
@@ -510,6 +516,34 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && partEngineeringRecordResolveMatch?.[1] && partEngineeringRecordResolveMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePartEngineeringRecordResolve(request, response, decodeURIComponent(partEngineeringRecordResolveMatch[1]), decodeURIComponent(partEngineeringRecordResolveMatch[2]));
+    return;
+  }
+
+  if (request.method === "POST" && partEngineeringRecordDecisionMatch?.[1] && partEngineeringRecordDecisionMatch[2] && partEngineeringRecordDecisionMatch[3]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePartEngineeringRecordDraftDecision(
+      request,
+      response,
+      decodeURIComponent(partEngineeringRecordDecisionMatch[1]),
+      decodeURIComponent(partEngineeringRecordDecisionMatch[2]),
+      partEngineeringRecordDecisionMatch[3] as "confirm" | "dismiss",
+      session.sub
+    );
+    return;
+  }
+
+  if (request.method === "POST" && partEngineeringRecordsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePartEngineeringRecordCreate(request, response, decodeURIComponent(partEngineeringRecordsMatch[1]));
+    return;
+  }
+
   if (request.method === "POST" && projectApprovalBatchMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -731,6 +765,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (partSupplyOffersMatch?.[1]) {
     await handlePartSupplyOffersRead(response, decodeURIComponent(partSupplyOffersMatch[1]));
+    return;
+  }
+
+  if (partEngineeringRecordsMatch?.[1]) {
+    await handlePartEngineeringRecordsRead(response, decodeURIComponent(partEngineeringRecordsMatch[1]));
     return;
   }
 
@@ -2143,7 +2182,7 @@ async function handleProjectFileUpload(
     sendJson(response, 404, {
       error: {
         code: "PROJECT_FILE_CATEGORY_UNKNOWN",
-        message: "Project file category must be parts_list, datasheets, models, or notes."
+        message: "Project file category must be parts_list, datasheets, models, hardware, or notes."
       }
     });
     return;
@@ -2200,7 +2239,7 @@ async function handleProjectFileUpload(
       sendJson(response, 404, {
         error: {
           code: "PROJECT_FILE_CATEGORY_UNKNOWN",
-          message: "Project file category must be parts_list, datasheets, models, or notes."
+          message: "Project file category must be parts_list, datasheets, models, hardware, or notes."
         }
       });
       return;
@@ -5111,6 +5150,10 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitutions-read";
   if (method === "POST" && /^\/parts\/[^/]+\/substitutions$/u.test(pathname)) return "api-part-substitution-create";
   if (method === "POST" && /^\/substitutions\/[^/]+\/revoke$/u.test(pathname)) return "api-part-substitution-revoke";
+  if (method === "GET" && /^\/parts\/[^/]+\/engineering-records$/u.test(pathname)) return "api-part-engineering-records-read";
+  if (method === "POST" && /^\/parts\/[^/]+\/engineering-records$/u.test(pathname)) return "api-part-engineering-record-create";
+  if (method === "POST" && /^\/parts\/[^/]+\/engineering-records\/[^/]+\/resolve$/u.test(pathname)) return "api-part-engineering-record-resolve";
+  if (method === "POST" && /^\/parts\/[^/]+\/engineering-records\/[^/]+\/(confirm|dismiss)$/u.test(pathname)) return "api-part-engineering-record-draft-decision";
   if (method === "PATCH" && /^\/follow-ups\/[^/]+$/u.test(pathname)) return "api-follow-up-update";
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
@@ -5397,6 +5440,115 @@ async function handlePartSubstitutionsRead(response: ServerResponse, partId: str
 
     if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
     if (result.status === "not_found") { sendProjectMemoryNotFound(response, "PART_NOT_FOUND", "Part not found."); return; }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Reads the full private engineering-memory history for one catalog part.
+ */
+async function handlePartEngineeringRecordsRead(response: ServerResponse, partId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-engineering-records-read",
+      () => readPartEngineeringRecordsForPartFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendProjectMemoryNotFound(response, "PART_NOT_FOUND", "Part not found."); return; }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Records one piece of private engineering memory against a part (outcome, real-harness mate,
+ * CAD-vs-physical verification, fixture dependency, blocked-reason, or free note).
+ */
+async function handlePartEngineeringRecordCreate(request: IncomingMessage, response: ServerResponse, partId: string): Promise<void> {
+  const body = await readJsonBody<PartEngineeringRecordCreateInput>(request);
+
+  if (!body || typeof body !== "object") {
+    sendJson(response, 400, { error: { code: "INVALID_PART_ENGINEERING_RECORD", message: "Engineering record creation requires a JSON body with a kind and title." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-engineering-record-create",
+      () => createPartEngineeringRecordInDatabase(partId, body),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendJson(response, 404, { error: { code: result.code, message: result.message } }); return; }
+    if (result.status === "invalid") { sendJson(response, 400, { error: { code: result.code, message: result.message } }); return; }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Marks one engineering-memory record resolved while preserving the original observation for audit.
+ */
+async function handlePartEngineeringRecordResolve(request: IncomingMessage, response: ServerResponse, partId: string, recordId: string): Promise<void> {
+  const body = await readJsonBody<PartEngineeringRecordResolveInput>(request);
+  const resolveInput: PartEngineeringRecordResolveInput = body ?? {};
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-engineering-record-resolve",
+      () => resolvePartEngineeringRecordInDatabase(partId, recordId, resolveInput),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendProjectMemoryNotFound(response, result.code, result.message); return; }
+    if (result.status === "invalid") { sendJson(response, 400, { error: { code: result.code, message: result.message } }); return; }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Confirms (accepts into durable memory) or dismisses (rejects, preserved for audit) one proposed
+ * passive-capture engineering-memory draft.
+ */
+async function handlePartEngineeringRecordDraftDecision(
+  request: IncomingMessage,
+  response: ServerResponse,
+  partId: string,
+  recordId: string,
+  decision: "confirm" | "dismiss",
+  actor: string
+): Promise<void> {
+  const body = await readJsonBody<PartEngineeringRecordDraftDecisionInput>(request);
+  const decisionInput: PartEngineeringRecordDraftDecisionInput = body ?? {};
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "part-engineering-record-draft-decision",
+      () => decidePartEngineeringRecordDraftInDatabase(partId, recordId, decision, actor, decisionInput),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") { sendProjectMemoryNotConfigured(response); return; }
+    if (result.status === "not_found") { sendProjectMemoryNotFound(response, result.code, result.message); return; }
+    if (result.status === "invalid") { sendJson(response, 400, { error: { code: result.code, message: result.message } }); return; }
 
     sendCatalogJson(response, result.response, "database");
   } catch (error) {

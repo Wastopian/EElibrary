@@ -101,7 +101,9 @@ test("project detail renders persisted project memory sections", async () => {
     assert.match(html, /Evidence attachments/u);
     assert.match(html, /Design review link/u);
     assert.match(html, /Evidence is provenance/u);
-    assert.match(html, /Planned next/u);
+    assert.match(html, /Available now/u);
+    assert.match(html, /Capability state/u);
+    assert.doesNotMatch(html, /No capabilities reported/u);
     assert.doesNotMatch(html, /BOM health dashboard is planned/u);
   } finally {
     restoreFetch();
@@ -488,6 +490,7 @@ function buildProjectOverlapResponse(projectId: string): ProjectOverlapPanelResp
     ],
     circuitBlockWhereUsedHitCount: 1,
     connectorWhereUsedHitCount: 0,
+    priorEngineeringMemoryWarnings: [],
     priorProjects: [
       {
         project: {

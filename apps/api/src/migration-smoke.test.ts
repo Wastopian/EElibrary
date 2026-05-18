@@ -91,6 +91,12 @@ const exportBundleCryptographicProvenanceMigrationSql = readFileSync(new URL("..
 /** assetPreviewArtifactsMigrationSql loads the migration 040 derived-preview-artifact columns under test. */
 const assetPreviewArtifactsMigrationSql = readFileSync(new URL("../../../infra/postgres/040_asset_preview_artifacts.sql", import.meta.url), "utf8");
 
+/** partEngineeringRecordsMigrationSql loads the migration 041 part engineering-memory migration under test. */
+const partEngineeringRecordsMigrationSql = readFileSync(new URL("../../../infra/postgres/041_part_engineering_records.sql", import.meta.url), "utf8");
+
+/** partEngineeringRecordDraftsMigrationSql loads the migration 042 passive-capture draft migration under test. */
+const partEngineeringRecordDraftsMigrationSql = readFileSync(new URL("../../../infra/postgres/042_part_engineering_record_drafts.sql", import.meta.url), "utf8");
+
 /** exportBundlesMigrationSql loads the original migration 028 export-bundles table under test. */
 const exportBundlesMigrationSql = readFileSync(new URL("../../../infra/postgres/028_export_bundles.sql", import.meta.url), "utf8");
 
@@ -864,6 +870,108 @@ test("circuit block known risk migration preserves engineering memory provenance
 
   assert.match(circuitBlockKnownRisksMigrationSql, /CREATE TABLE IF NOT EXISTS circuit_block_known_risks/u);
   assert.match(circuitBlockKnownRisksMigrationSql, /idx_circuit_block_known_risks_active/u);
+});
+
+/**
+ * Verifies the part engineering-memory migration persists typed private truth, preserves resolved
+ * rows, and enforces kind/severity/empty-title/resolution CHECK constraints at the SQL boundary.
+ */
+test("part engineering records migration preserves private engineering memory provenance", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-memory', 'Memory Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-memory', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-memory-ldo', 'TPS7A02DBVR', 'mfr-memory', 'Power management', 'active', 'pkg-memory', 0.8);
+  `);
+  applyMigrationSql(db, partEngineeringRecordsMigrationSql);
+
+  db.public.none(`
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title, detail, severity, outcome, recorded_by, recorded_at)
+    VALUES ('perec-outcome', 'part-memory-ldo', 'outcome', 'Bit us: cold-start droop', 'VOUT drooped on Bravo Rev B.', 'caution', 'bit_us', 'gerry@hardware', '2026-04-30T12:00:00.000Z');
+
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title, related_mpn)
+    VALUES ('perec-mate', 'part-memory-ldo', 'harness_mate_verified', 'Mated correctly in Falcon harness', 'DF13-4P-1.25H');
+  `);
+
+  const openCount = db.public.one(`
+    SELECT COUNT(*)::int AS open FROM part_engineering_records WHERE part_id = 'part-memory-ldo' AND resolved_at IS NULL
+  `);
+  assert.equal(openCount.open, 2);
+
+  assert.throws(
+    () => db.public.none(`INSERT INTO part_engineering_records (id, part_id, record_kind, title) VALUES ('perec-bad-kind', 'part-memory-ldo', 'not_a_kind', 'Bad kind')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, severity) VALUES ('perec-bad-sev', 'part-memory-ldo', 'note', 'Bad severity', 'critical')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO part_engineering_records (id, part_id, record_kind, title) VALUES ('perec-empty', 'part-memory-ldo', 'note', '')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, resolved_at, resolved_by) VALUES ('perec-bad-res', 'part-memory-ldo', 'note', 'Resolved without timestamp', NULL, 'gerry@hardware')`),
+    /check/i
+  );
+
+  assert.match(partEngineeringRecordsMigrationSql, /CREATE TABLE IF NOT EXISTS part_engineering_records/u);
+  assert.match(partEngineeringRecordsMigrationSql, /idx_part_engineering_records_open/u);
+});
+
+/**
+ * Verifies the passive-capture draft migration adds proposed/confirmed/dismissed state with safe
+ * defaults (existing rows stay confirmed/manual), enforces draft CHECK constraints, and that the
+ * deterministic auto-draft id de-dupes via ON CONFLICT DO NOTHING.
+ */
+test("part engineering record drafts migration adds review state without disturbing existing memory", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-memory', 'Memory Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-memory', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-memory-ldo', 'TPS7A02DBVR', 'mfr-memory', 'Power management', 'active', 'pkg-memory', 0.8);
+  `);
+  applyMigrationSql(db, partEngineeringRecordsMigrationSql);
+  applyMigrationSql(db, partEngineeringRecordDraftsMigrationSql);
+
+  // Real Postgres backfills `ADD COLUMN NOT NULL DEFAULT` onto pre-existing rows (so legacy
+  // hand-entered records stay durable confirmed/manual memory). pg-mem does not emulate that
+  // backfill, so that guarantee is verified by `npm run migrations` against real Postgres; here
+  // we assert the column DEFAULT applies to new inserts, which pg-mem does emulate.
+  db.public.none(`
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title)
+    VALUES ('perec-default', 'part-memory-ldo', 'note', 'Default-source note');
+  `);
+  const defaulted = db.public.one(`SELECT draft_status, draft_source FROM part_engineering_records WHERE id = 'perec-default'`);
+  assert.deepEqual(defaulted, { draft_status: "confirmed", draft_source: "manual" });
+
+  db.public.none(`
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title, draft_status, draft_source, trigger_ref)
+    VALUES ('perec-auto-1', 'part-memory-ldo', 'decision_blocked', 'Substitute approved', 'proposed', 'auto_substitution', 'psub-xyz');
+  `);
+  db.public.none(`
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title, draft_status, draft_source)
+    VALUES ('perec-auto-1', 'part-memory-ldo', 'decision_blocked', 'Duplicate attempt', 'proposed', 'auto_substitution')
+    ON CONFLICT (id) DO NOTHING;
+  `);
+  const autoCount = db.public.one(`SELECT COUNT(*)::int AS n FROM part_engineering_records WHERE id = 'perec-auto-1'`);
+  assert.equal(autoCount.n, 1, "deterministic auto-draft id de-dupes via ON CONFLICT DO NOTHING");
+
+  assert.throws(
+    () => db.public.none(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, draft_status) VALUES ('perec-bad-ds', 'part-memory-ldo', 'note', 'bad', 'maybe')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, draft_source) VALUES ('perec-bad-src', 'part-memory-ldo', 'note', 'bad', 'auto_guess')`),
+    /check/i
+  );
+
+  assert.match(partEngineeringRecordDraftsMigrationSql, /ADD COLUMN IF NOT EXISTS draft_status/u);
+  assert.match(partEngineeringRecordDraftsMigrationSql, /idx_part_engineering_records_proposed/u);
 });
 
 /**

@@ -12,6 +12,7 @@ import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLab
 import { DetailSectionNav } from "./DetailSectionNav";
 import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
+import { PartEngineeringMemoryPanel } from "../../../components/PartEngineeringMemoryPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
 import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDetailEnvelope, fetchPartDocumentRevisions, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
@@ -354,6 +355,34 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               <TrustMeter label="Confidence" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
               <p className="muted-copy">A rough blended score from imported sources. The verification steps above are what actually gate export.</p>
             </details>
+            {record.engineeringMemoryWarning && record.engineeringMemoryWarning.warningCount > 0 && (
+              <div className="detail-memory-warning" role="alert">
+                <p className="detail-memory-warning__lead">
+                  <strong>
+                    {record.engineeringMemoryWarning.blockingCount > 0
+                      ? "Your team blocked this part before."
+                      : "This part bit your team before."}
+                  </strong>{" "}
+                  {record.engineeringMemoryWarning.warningCount}{" "}
+                  confirmed engineering-memory {record.engineeringMemoryWarning.warningCount === 1 ? "record" : "records"} on file. This is a
+                  reuse warning, not a gate — it does not change approval, validation, or export state.
+                </p>
+                <ul className="detail-memory-warning__list">
+                  {record.engineeringMemoryWarning.preview.map((entry) => (
+                    <li key={entry.recordId}>
+                      <StatusBadge
+                        label={entry.severity === "blocking" ? "blocking" : entry.outcome === "bit_us" ? "bit us" : entry.severity}
+                        tone={entry.severity === "blocking" ? "danger" : "review"}
+                      />
+                      <span>{entry.title}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted-copy">
+                  <a href="#engineering-memory-heading">Review the full engineering memory</a> before reusing this part.
+                </p>
+              </div>
+            )}
             <DetailUseDecision
               assetTruthSummary={assetTruthSummary}
               datasheetAsset={datasheetAsset}
@@ -636,6 +665,21 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           title="Substitution decisions"
         >
           <PartSubstitutionPanel partId={record.part.id} partMpn={record.part.mpn} />
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="engineering-memory-heading">
+        <SectionHeading
+          id="engineering-memory-heading"
+          index="04c"
+          subtitle="The private answers a public catalog cannot give: did it work or bite us, what mated in the real harness, which CAD was verified against the physical part, what depended on it, and why it was blocked."
+          title="Engineering memory"
+        />
+        <SectionPanel
+          description="Record outcomes, real-harness mate verification, CAD-vs-physical checks, fixture dependencies, blocked reasons, and tribal notes. Recording never approves the part or unlocks export."
+          title="Private engineering truth"
+        >
+          <PartEngineeringMemoryPanel partId={record.part.id} partMpn={record.part.mpn} />
         </SectionPanel>
       </section>
 

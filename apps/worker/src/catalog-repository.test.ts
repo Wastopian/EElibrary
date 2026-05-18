@@ -32,6 +32,12 @@ test("persistNormalizedPartRows persists connector relationships and generation 
   const client = {
     async query(text: string, values?: unknown[]) {
       calls.push({ text, values });
+      // Cross-part edges (mate/accessory/cable/similar/companion) only persist when both
+      // endpoint part rows exist; satisfy that endpoint-existence probe so this test exercises
+      // the relationship inserts rather than the FK-safe skip path.
+      if (/SELECT EXISTS \(SELECT 1 FROM parts WHERE id = \$1\) AS exists/u.test(text)) {
+        return { rows: [{ exists: true }] };
+      }
       return { rows: [] };
     }
   } as unknown as PoolClient;
