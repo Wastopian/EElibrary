@@ -189,44 +189,74 @@ export interface WorkerOperationalDiagnostics {
 }
 
 /**
- * Returns true when a canonical part row exists (used to gate cross-part foreign keys during ingest).
+ * Returns the subset of the given part ids that have a canonical row, in one query.
+ *
+ * Replaces a per-endpoint `SELECT EXISTS` that, inside the five cross-part loops below,
+ * issued up to 2 serial point-queries per relation — O(relations) round-trips per import.
+ * One `id = ANY($1)` lookup keeps cross-part persistence O(1) round-trips regardless of fan-out.
  */
-async function partRowExists(client: PoolClient, partId: string): Promise<boolean> {
-  const result = await client.query<{ exists: boolean }>(`SELECT EXISTS (SELECT 1 FROM parts WHERE id = $1) AS exists`, [partId]);
+async function selectExistingPartIds(client: PoolClient, partIds: string[]): Promise<Set<string>> {
+  const distinctIds = [...new Set(partIds)];
 
-  return Boolean(result.rows[0]?.exists);
+  if (distinctIds.length === 0) {
+    return new Set<string>();
+  }
+
+  // Dynamic placeholder IN-list, not `id = ANY($1::text[])`: pg-mem's planner mis-handles
+  // `pk = ANY($1::text[])` against primary-key columns and returns zero rows. The id set per
+  // import is small and bounded, so the expanded IN-list is both safe and inexpensive.
+  const placeholders = distinctIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await client.query<{ id: string }>(`SELECT id FROM parts WHERE id IN (${placeholders})`, distinctIds);
+
+  return new Set(result.rows.map((row) => row.id));
 }
 
 /**
  * Persists mate/accessory/cable/similar/companion edges only when both endpoints exist, then replays safely after a batch import.
  */
 export async function persistCrossPartRelations(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
-  for (const relation of normalizedPart.mateRelations ?? []) {
-    if ((await partRowExists(client, relation.partId)) && (await partRowExists(client, relation.matePartId))) {
+  const mateRelations = normalizedPart.mateRelations ?? [];
+  const accessoryRequirements = normalizedPart.accessoryRequirements ?? [];
+  const cableCompatibilities = normalizedPart.cableCompatibilities ?? [];
+  const similarPartRelations = normalizedPart.similarPartRelations ?? [];
+  const companionRecommendations = normalizedPart.companionRecommendations ?? [];
+
+  // One round-trip resolves every endpoint referenced by all five edge types.
+  const referencedPartIds = [
+    ...mateRelations.flatMap((relation) => [relation.partId, relation.matePartId]),
+    ...accessoryRequirements.flatMap((requirement) => [requirement.partId, requirement.accessoryPartId]),
+    ...cableCompatibilities.flatMap((compatibility) => [compatibility.partId, compatibility.cablePartId]),
+    ...similarPartRelations.flatMap((relation) => [relation.partId, relation.similarPartId]),
+    ...companionRecommendations.flatMap((recommendation) => [recommendation.partId, recommendation.companionPartId])
+  ];
+  const existingPartIds = await selectExistingPartIds(client, referencedPartIds);
+
+  for (const relation of mateRelations) {
+    if (existingPartIds.has(relation.partId) && existingPartIds.has(relation.matePartId)) {
       await persistMateRelation(client, relation);
     }
   }
 
-  for (const requirement of normalizedPart.accessoryRequirements ?? []) {
-    if ((await partRowExists(client, requirement.partId)) && (await partRowExists(client, requirement.accessoryPartId))) {
+  for (const requirement of accessoryRequirements) {
+    if (existingPartIds.has(requirement.partId) && existingPartIds.has(requirement.accessoryPartId)) {
       await persistAccessoryRequirement(client, requirement);
     }
   }
 
-  for (const compatibility of normalizedPart.cableCompatibilities ?? []) {
-    if ((await partRowExists(client, compatibility.partId)) && (await partRowExists(client, compatibility.cablePartId))) {
+  for (const compatibility of cableCompatibilities) {
+    if (existingPartIds.has(compatibility.partId) && existingPartIds.has(compatibility.cablePartId)) {
       await persistCableCompatibility(client, compatibility);
     }
   }
 
-  for (const relation of normalizedPart.similarPartRelations ?? []) {
-    if ((await partRowExists(client, relation.partId)) && (await partRowExists(client, relation.similarPartId))) {
+  for (const relation of similarPartRelations) {
+    if (existingPartIds.has(relation.partId) && existingPartIds.has(relation.similarPartId)) {
       await persistSimilarPartRelation(client, relation);
     }
   }
 
-  for (const recommendation of normalizedPart.companionRecommendations ?? []) {
-    if ((await partRowExists(client, recommendation.partId)) && (await partRowExists(client, recommendation.companionPartId))) {
+  for (const recommendation of companionRecommendations) {
+    if (existingPartIds.has(recommendation.partId) && existingPartIds.has(recommendation.companionPartId)) {
       await persistCompanionRecommendation(client, recommendation);
     }
   }

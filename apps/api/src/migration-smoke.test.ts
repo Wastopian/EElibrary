@@ -97,6 +97,9 @@ const partEngineeringRecordsMigrationSql = readFileSync(new URL("../../../infra/
 /** partEngineeringRecordDraftsMigrationSql loads the migration 042 passive-capture draft migration under test. */
 const partEngineeringRecordDraftsMigrationSql = readFileSync(new URL("../../../infra/postgres/042_part_engineering_record_drafts.sql", import.meta.url), "utf8");
 
+/** scaleIndexesMigrationSql loads the migration 043 pure-additive scale indexes under test. */
+const scaleIndexesMigrationSql = readFileSync(new URL("../../../infra/postgres/043_scale_indexes.sql", import.meta.url), "utf8");
+
 /** exportBundlesMigrationSql loads the original migration 028 export-bundles table under test. */
 const exportBundlesMigrationSql = readFileSync(new URL("../../../infra/postgres/028_export_bundles.sql", import.meta.url), "utf8");
 
@@ -972,6 +975,45 @@ test("part engineering record drafts migration adds review state without disturb
 
   assert.match(partEngineeringRecordDraftsMigrationSql, /ADD COLUMN IF NOT EXISTS draft_status/u);
   assert.match(partEngineeringRecordDraftsMigrationSql, /idx_part_engineering_records_proposed/u);
+});
+
+/**
+ * Verifies the scale-index migration applies cleanly on top of the engineering-memory tables and
+ * declares the partial confirmed/open index plus trigram URL indexes. The trigram GIN DDL is
+ * stripped by the pg-mem rewriter (no pg_trgm), so it is asserted on the SQL text; the partial
+ * btree must actually apply (pg-mem supports partial btree) and stay query-safe and idempotent.
+ */
+test("scale-index migration adds the confirmed/open and source-url indexes idempotently", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-scale', 'Scale Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-scale', 'SOT-23-5', 5, 0.95, 2.9, 1.6, 1.1);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-scale-ldo', 'TPS7A02DBVR', 'mfr-scale', 'Power management', 'active', 'pkg-scale', 0.8);
+  `);
+  applyMigrationSql(db, partEngineeringRecordsMigrationSql);
+  applyMigrationSql(db, partEngineeringRecordDraftsMigrationSql);
+  applyMigrationSql(db, scaleIndexesMigrationSql);
+  // Re-applying is a no-op (CREATE INDEX IF NOT EXISTS); migrations must stay idempotent.
+  applyMigrationSql(db, scaleIndexesMigrationSql);
+
+  db.public.none(`
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title, draft_status)
+    VALUES ('perec-open', 'part-scale-ldo', 'outcome', 'Bit us', 'confirmed');
+    INSERT INTO part_engineering_records (id, part_id, record_kind, title, draft_status, resolved_at, resolved_by)
+    VALUES ('perec-done', 'part-scale-ldo', 'outcome', 'Resolved', 'confirmed', now(), 'gerry');
+  `);
+
+  const openRows = db.public.many(`
+    SELECT id FROM part_engineering_records
+    WHERE part_id = 'part-scale-ldo' AND draft_status = 'confirmed' AND resolved_at IS NULL
+  `);
+  assert.deepEqual(openRows.map((row) => row.id), ["perec-open"]);
+
+  assert.match(scaleIndexesMigrationSql, /CREATE INDEX IF NOT EXISTS idx_part_engineering_records_confirmed_open\s+ON part_engineering_records\(part_id, recorded_at DESC\)\s+WHERE draft_status = 'confirmed' AND resolved_at IS NULL/u);
+  assert.match(scaleIndexesMigrationSql, /idx_source_records_source_url_trgm[\s\S]*gin_trgm_ops/u);
+  assert.match(scaleIndexesMigrationSql, /idx_assets_datasheet_source_url_trgm[\s\S]*gin_trgm_ops[\s\S]*WHERE asset_type = 'datasheet'/u);
 });
 
 /**

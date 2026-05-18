@@ -33,10 +33,12 @@ test("persistNormalizedPartRows persists connector relationships and generation 
     async query(text: string, values?: unknown[]) {
       calls.push({ text, values });
       // Cross-part edges (mate/accessory/cable/similar/companion) only persist when both
-      // endpoint part rows exist; satisfy that endpoint-existence probe so this test exercises
-      // the relationship inserts rather than the FK-safe skip path.
-      if (/SELECT EXISTS \(SELECT 1 FROM parts WHERE id = \$1\) AS exists/u.test(text)) {
-        return { rows: [{ exists: true }] };
+      // endpoint part rows exist. The batched endpoint resolver is one
+      // `SELECT id FROM parts WHERE id = ANY($1::text[])`; echo every requested id back as
+      // existing so this test exercises the relationship inserts, not the FK-safe skip path.
+      if (/SELECT id FROM parts WHERE id IN \(/u.test(text)) {
+        const requestedIds = (values as string[] | undefined) ?? [];
+        return { rows: requestedIds.map((id) => ({ id })) };
       }
       return { rows: [] };
     }
