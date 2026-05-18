@@ -80,3 +80,44 @@ test("resolveConnectorSetIntent uses parsed free-text constraints when class con
   assert.equal(resolution.intent.cableGauge, 28);
   assert.equal(resolution.candidates[0]?.connector.mpn, "215079-8");
 });
+
+/**
+ * Locks the contract the bounded connector-intent fetch relies on: resolver output depends only
+ * on the connector-class candidates plus the relation target parts they reference. Dropping every
+ * other (unrelated, non-connector) catalog record must not change the resolution. If a future
+ * change makes the resolver read more of the catalog, this fails — and the API-side
+ * `readConnectorIntentRecordsFromDatabase` reduction would need to widen to match.
+ */
+test("resolveConnectorSetIntent output depends only on the connector candidate + relation closure", () => {
+  const intent = { cableGauge: 28, class: "Micro-MaTch 8", pinCount: 8, query: "Micro-MaTch", sealing: null };
+  const all = getAllPartRecords();
+  const full = resolveConnectorSetIntent(intent, all);
+
+  // Build the exact closure readConnectorIntentRecordsFromDatabase fetches: connector-class
+  // records, plus the mate/accessory/cable target parts they reference.
+  const closureIds = new Set<string>();
+  for (const record of all) {
+    if (record.readinessSummary.connectorClass !== "connector") {
+      continue;
+    }
+    closureIds.add(record.part.id);
+    const mating = record.buildableMatingSet;
+    for (const relation of [mating.bestMate, ...mating.alternateMates]) {
+      if (relation) {
+        closureIds.add(relation.matePartId);
+      }
+    }
+    for (const accessory of [...mating.requiredAccessories, ...mating.optionalAccessories, ...mating.toolingRequirements]) {
+      closureIds.add(accessory.accessoryPartId);
+    }
+    for (const cable of mating.cableOptions) {
+      closureIds.add(cable.cablePartId);
+    }
+  }
+
+  const closure = all.filter((record) => closureIds.has(record.part.id));
+  const bounded = resolveConnectorSetIntent(intent, closure);
+
+  assert.equal(closure.length < all.length, true, "closure must exclude unrelated non-connector parts (the whole point)");
+  assert.deepEqual(bounded, full);
+});

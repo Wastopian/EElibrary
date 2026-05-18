@@ -698,6 +698,75 @@ export async function readCatalogRecordsFromDatabase(options: CatalogReadOptions
 }
 
 /**
+ * Bounds the connector-intent candidate fetch. The resolver only ever keeps connector-class
+ * parts and returns the top 8 by score, so this cap is effectively complete for real libraries
+ * while preventing the route from loading the entire catalog (and its parts×parts duplicate
+ * self-join) on every call.
+ */
+const CONNECTOR_INTENT_CANDIDATE_CAP = 2000;
+
+/**
+ * Returns the bounded record set the connector-set intent resolver needs, instead of the whole
+ * catalog. `resolveConnectorSetIntent` discards every non-connector record and then dereferences
+ * only the specific mate/accessory/cable target parts of its connector candidates via a
+ * `partById` map. So this fetches exactly that closure and nothing more:
+ *
+ *   Phase 1 — all connector-class parts (the resolver's exact candidate universe; pushed down to
+ *             SQL as the `connectorClass` filter, capped), with their full search summary
+ *             (buildableMatingSet included).
+ *   Phase 2 — the relation target parts referenced by those candidates that are not themselves
+ *             connector-class, fetched by id as lightweight summaries.
+ *
+ * Output is behavior-identical to the old full-catalog load except that connector candidates
+ * beyond {@link CONNECTOR_INTENT_CANDIDATE_CAP} are not considered.
+ */
+export async function readConnectorIntentRecordsFromDatabase(options: CatalogReadOptions = {}): Promise<CatalogReadResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const filters: PartSearchFilters = { connectorClass: "connector" };
+    const searchFilter = buildSearchSqlFilter(filters, "any");
+    const sort = buildSearchPagination(0, filters).sort;
+    const candidateIds = await readSearchPartIds(databasePool, searchFilter, sort, CONNECTOR_INTENT_CANDIDATE_CAP, 0, options);
+
+    if (candidateIds.length === 0) {
+      return { records: [], status: "available" };
+    }
+
+    const candidateRecords = await readPartSearchSummaryRecords(databasePool, candidateIds, options);
+    const presentIds = new Set(candidateRecords.map((record) => record.part.id));
+    const relatedIds = new Set<string>();
+
+    for (const record of candidateRecords) {
+      const mating = record.buildableMatingSet;
+
+      for (const relation of [mating.bestMate, ...mating.alternateMates]) {
+        if (relation) {
+          relatedIds.add(relation.matePartId);
+        }
+      }
+      for (const accessory of [...mating.requiredAccessories, ...mating.optionalAccessories, ...mating.toolingRequirements]) {
+        relatedIds.add(accessory.accessoryPartId);
+      }
+      for (const cable of mating.cableOptions) {
+        relatedIds.add(cable.cablePartId);
+      }
+    }
+
+    const missingRelatedIds = [...relatedIds].filter((id) => !presentIds.has(id)).sort();
+    const relatedRecords = await readPartSummaryRecords(databasePool, missingRelatedIds, options);
+
+    return { records: [...candidateRecords, ...relatedRecords], status: "available" };
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
  * Returns SQL-filtered and paginated search summary records without loading the full catalog.
  */
 export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilters = {}, options: CatalogReadOptions = {}): Promise<CatalogSearchReadResult> {
