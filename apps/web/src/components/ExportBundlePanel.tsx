@@ -603,6 +603,93 @@ function BundleManifestDetail({ bundle, onClose }: { bundle: ExportBundle; onClo
         </div>
       )}
 
+      {(bundle.manifest.partProvenance ?? []).length > 0 && (
+        <div className="bundle-manifest__section">
+          <h5>Defensible provenance ({(bundle.manifest.partProvenance ?? []).length} parts)</h5>
+          <p className="muted-copy">
+            Captured at generation time and covered by the bundle signature, so an auditor or customer can verify it was not
+            altered. This is a point-in-time record, not a re-derived trust gate.
+          </p>
+          <table className="data-table data-table--compact">
+            <thead>
+              <tr>
+                <th>Part MPN</th>
+                <th>Approved</th>
+                <th>Datasheet revision</th>
+                <th>Trusted assets</th>
+                <th>Confirmed engineering memory</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(bundle.manifest.partProvenance ?? []).map((entry) => (
+                <tr key={entry.partId}>
+                  <td className="ui-mono">{entry.partMpn}</td>
+                  <td>
+                    {entry.approval ? (
+                      <>
+                        <StatusBadge
+                          label={entry.approval.status.replace(/_/g, " ")}
+                          tone={entry.approval.status === "approved" ? "verified" : "review"}
+                        />
+                        {entry.approval.decidedBy ? (
+                          <div className="muted-copy">
+                            {entry.approval.decidedBy}
+                            {entry.approval.decidedAt ? ` · ${new Date(entry.approval.decidedAt).toLocaleDateString()}` : ""}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="muted-copy">-</span>
+                    )}
+                  </td>
+                  <td>
+                    {entry.datasheetRevision ? (
+                      <span>
+                        {entry.datasheetRevision.revisionLabel ?? entry.datasheetRevision.datasheetRevisionId}
+                        {entry.datasheetRevision.revisionDate ? ` (${new Date(entry.datasheetRevision.revisionDate).toLocaleDateString()})` : ""}
+                      </span>
+                    ) : (
+                      <span className="muted-copy">-</span>
+                    )}
+                  </td>
+                  <td>
+                    {entry.trustedAssets.length > 0 ? (
+                      <ul className="bundle-provenance__assets">
+                        {entry.trustedAssets.map((asset) => (
+                          <li key={asset.assetId}>
+                            {asset.assetType} · {asset.provenance}
+                            {asset.fileHash ? ` · sha256 ${asset.fileHash.slice(0, 12)}…` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="muted-copy">-</span>
+                    )}
+                  </td>
+                  <td>
+                    {entry.confirmedEngineeringMemory.length > 0 ? (
+                      <ul className="bundle-provenance__memory">
+                        {entry.confirmedEngineeringMemory.map((record) => (
+                          <li key={record.recordId}>
+                            <StatusBadge
+                              label={record.severity === "blocking" ? "blocking" : record.outcome === "bit_us" ? "bit us" : record.recordKind.replace(/_/g, " ")}
+                              tone={record.severity === "blocking" || record.outcome === "bit_us" ? "danger" : "info"}
+                            />
+                            <span>{record.title}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="muted-copy">none</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {bundle.manifest.omissions.length > 0 && (
         <div className="bundle-manifest__section">
           <h5>Omissions ({bundle.manifest.omissions.length})</h5>

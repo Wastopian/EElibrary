@@ -2899,6 +2899,78 @@ test("createExportBundleInDatabase tags controlled assets in the manifest", asyn
 });
 
 /**
+ * Verifies the defensible signed provenance: the manifest embeds per-part approval (who/when),
+ * the datasheet revision designed from, the trusted file-backed assets, and confirmed
+ * engineering memory — the audit/customer-review artifact a public aggregator cannot produce.
+ */
+test("createExportBundleInDatabase embeds defensible per-part provenance in the signed manifest", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_sym'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'official'");
+    await pool.query(`
+      CREATE TABLE datasheet_revisions (
+        id TEXT PRIMARY KEY,
+        part_id TEXT NOT NULL,
+        revision_label TEXT,
+        revision_date TIMESTAMPTZ,
+        page_count INTEGER,
+        file_asset_id TEXT,
+        parse_confidence NUMERIC
+      )
+    `);
+
+    await pool.query(`UPDATE assets SET export_status = 'verified_for_export', storage_key = 'parts/ldo/symbol.kicad_sym', provenance = 'official' WHERE id = 'asset-memory-ldo-symbol-ref'`);
+    await pool.query(`UPDATE part_approvals SET approval_status = 'approved', summary = 'Approved for new designs', detail = 'Signed off after Bravo qual.', decided_by = 'gerry@hardware', decided_at = '2026-05-01T00:00:00.000Z', last_updated_at = '2026-05-01T00:00:00.000Z' WHERE part_id = 'part-memory-ldo'`);
+    await pool.query(`INSERT INTO datasheet_revisions (id, part_id, revision_label, revision_date) VALUES ('dsr-ldo-c', 'part-memory-ldo', 'Rev C', '2026-03-01T00:00:00.000Z')`);
+    await pool.query(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, severity, outcome, draft_status, recorded_by, recorded_at) VALUES ('perec-ldo-bit', 'part-memory-ldo', 'outcome', 'Bit us: cold-start droop on Bravo', 'caution', 'bit_us', 'confirmed', 'gerry@hardware', '2026-04-01T00:00:00.000Z')`);
+
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const provenance = result.response.bundle.manifest.partProvenance;
+    const ldo = provenance.find((entry) => entry.partId === "part-memory-ldo");
+
+    assert.ok(ldo, "expected provenance entry for the confirmed LDO part");
+    assert.equal(ldo.partMpn, "TPS7A02DBVR");
+    assert.equal(ldo.approval?.status, "approved");
+    assert.equal(ldo.approval?.decidedBy, "gerry@hardware");
+    assert.equal(ldo.datasheetRevision?.revisionLabel, "Rev C");
+    assert.equal(ldo.trustedAssets.some((asset) => asset.assetId === "asset-memory-ldo-symbol-ref"), true);
+    assert.equal(ldo.confirmedEngineeringMemory.length, 1);
+    assert.equal(ldo.confirmedEngineeringMemory[0]?.outcome, "bit_us");
+    assert.match(ldo.confirmedEngineeringMemory[0]?.title ?? "", /cold-start droop/u);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies bundles with no controlled revisions report an empty summary and no warning.
  */
 test("createExportBundleInDatabase reports empty control summary when no controlled revision exists", async () => {

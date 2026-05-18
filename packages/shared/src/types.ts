@@ -3096,6 +3096,59 @@ export interface ExportBundleControlSummary {
   highestAccessLevel: DocumentAccessLevel | null;
 }
 
+/** ExportBundleProvenanceApproval is the part-approval decision captured at bundle generation. */
+export interface ExportBundleProvenanceApproval {
+  status: PartApprovalStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  summary: string;
+}
+
+/** ExportBundleProvenanceDatasheet records which datasheet revision the team designed from. */
+export interface ExportBundleProvenanceDatasheet {
+  datasheetRevisionId: string;
+  revisionLabel: string | null;
+  revisionDate: string | null;
+}
+
+/** ExportBundleProvenanceTrustedAsset is one verified file-backed asset the team stood behind. */
+export interface ExportBundleProvenanceTrustedAsset {
+  assetId: string;
+  assetType: AssetType;
+  fileFormat: FileFormat;
+  fileHash: string | null;
+  provenance: AssetProvenance;
+}
+
+/** ExportBundleProvenanceMemoryRecord is one confirmed engineering-memory record for the part. */
+export interface ExportBundleProvenanceMemoryRecord {
+  recordId: string;
+  recordKind: PartEngineeringRecordKind;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  title: string;
+  recordedBy: string | null;
+  recordedAt: string;
+}
+
+/**
+ * ExportBundlePartProvenance is the defensible per-part provenance record embedded in the
+ * signed manifest: who approved the part and when, the datasheet revision designed from, the
+ * verified footprint/symbol/3D assets the team stood behind, and the confirmed engineering
+ * memory around it. Because the manifest is serialized into the signed, hashed archive, this
+ * provenance is tamper-evident — an auditor or customer can verify it was not altered. It is a
+ * point-in-time record, never a re-derived trust gate.
+ */
+export interface ExportBundlePartProvenance {
+  partId: string;
+  partMpn: string;
+  manufacturerName: string;
+  approval: ExportBundleProvenanceApproval | null;
+  datasheetRevision: ExportBundleProvenanceDatasheet | null;
+  trustedAssets: ExportBundleProvenanceTrustedAsset[];
+  confirmedEngineeringMemory: ExportBundleProvenanceMemoryRecord[];
+}
+
 /** ExportBundleManifest is the deterministic record of what is and is not in a bundle. */
 export interface ExportBundleManifest {
   bundleId: string;
@@ -3117,6 +3170,12 @@ export interface ExportBundleManifest {
    * bundles default to all-zero with `highestAccessLevel: null` on read.
    */
   controlSummary: ExportBundleControlSummary;
+  /**
+   * Defensible per-part provenance (approval, datasheet revision, trusted assets, confirmed
+   * engineering memory) captured at generation time and covered by the bundle signature. Older
+   * bundles generated before this field existed default to an empty array on read.
+   */
+  partProvenance: ExportBundlePartProvenance[];
 }
 
 /**

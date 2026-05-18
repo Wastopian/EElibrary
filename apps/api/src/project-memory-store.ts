@@ -107,6 +107,9 @@ import type {
   ExportBundleListResponse,
   ExportBundleManifest,
   ExportBundleOmission,
+  ExportBundlePartProvenance,
+  ExportBundleProvenanceMemoryRecord,
+  ExportBundleProvenanceTrustedAsset,
   ExportBundleSignatureStatus,
   ExportBundleVerificationReason,
   ExportBundleVerifyResponse,
@@ -7638,6 +7641,7 @@ export async function createExportBundleInDatabase(
     const generatedAt = new Date().toISOString();
 
     const { controlledAssets, controlSummary } = await buildBundleControlContext(databasePool, includedAssets);
+    const partProvenance = await buildExportBundlePartProvenance(databasePool, partIds, includedAssets);
 
     if (controlSummary.highestAccessLevel === "itar_controlled") {
       warnings.push(`Bundle contains ${controlSummary.itarControlledCount} ITAR-controlled asset${controlSummary.itarControlledCount === 1 ? "" : "s"}. Confirm export authorization before transmitting.`);
@@ -7653,6 +7657,7 @@ export async function createExportBundleInDatabase(
       generatedAt,
       includedAssets,
       omissions,
+      partProvenance,
       projectId,
       revisionLabel: input.revisionLabel ?? null,
       warnings
@@ -7831,18 +7836,180 @@ function readEmptyBundleControlSummary(): ExportBundleControlSummary {
 }
 
 /**
+ * Builds the defensible per-part provenance embedded in the signed manifest: who approved the
+ * part and when, the datasheet revision designed from, the verified file-backed assets the team
+ * stood behind, and the confirmed engineering memory around it.
+ *
+ * Determinism matters: the manifest is serialized into the signed, hashed archive, so every
+ * collection is ordered (parts and trusted assets sorted by stable keys, memory ordered in SQL)
+ * to keep bundle bytes reproducible. The confirmed-memory read is best-effort — an absent table
+ * or query failure yields no memory rather than failing bundle generation.
+ */
+async function buildExportBundlePartProvenance(
+  databasePool: Pool,
+  partIds: string[],
+  includedAssets: ExportBundleIncludedAsset[]
+): Promise<ExportBundlePartProvenance[]> {
+  try {
+    return await buildExportBundlePartProvenanceFromTables(databasePool, partIds, includedAssets);
+  } catch {
+    // Best-effort: provenance enriches the signed manifest but must never fail bundle
+    // generation (e.g. an optional table absent in a partial deployment). Degrade to empty.
+    return [];
+  }
+}
+
+/**
+ * Inner provenance builder. Throws if a source table is unavailable; the resilient wrapper
+ * {@link buildExportBundlePartProvenance} degrades that to an empty provenance list.
+ */
+async function buildExportBundlePartProvenanceFromTables(
+  databasePool: Pool,
+  partIds: string[],
+  includedAssets: ExportBundleIncludedAsset[]
+): Promise<ExportBundlePartProvenance[]> {
+  if (partIds.length === 0) {
+    return [];
+  }
+
+  const orderedPartIds = [...new Set(partIds)].sort((first, second) => first.localeCompare(second));
+  const placeholders = orderedPartIds.map((_, index) => `$${index + 1}`).join(", ");
+
+  const identityRows = await databasePool.query<{ id: string; mpn: string; manufacturer_name: string }>(
+    `SELECT p.id AS id, p.mpn AS mpn, m.name AS manufacturer_name
+       FROM parts p
+       JOIN manufacturers m ON m.id = p.manufacturer_id
+       WHERE p.id IN (${placeholders})`,
+    orderedPartIds
+  );
+  const identityByPart = new Map(identityRows.rows.map((row) => [row.id, row]));
+
+  const approvalRows = await databasePool.query<{
+    part_id: string;
+    approval_status: PartApprovalStatus;
+    summary: string;
+    decided_by: string | null;
+    decided_at: Date | string | null;
+  }>(
+    `SELECT part_id, approval_status, summary, decided_by, decided_at
+       FROM part_approvals
+       WHERE part_id IN (${placeholders})`,
+    orderedPartIds
+  );
+  const approvalByPart = new Map(approvalRows.rows.map((row) => [row.part_id, row]));
+
+  const datasheetRows = await databasePool.query<{
+    part_id: string;
+    id: string;
+    revision_label: string | null;
+    revision_date: Date | string | null;
+  }>(
+    `SELECT DISTINCT ON (part_id) part_id, id, revision_label, revision_date
+       FROM datasheet_revisions
+       WHERE part_id IN (${placeholders})
+       ORDER BY part_id, revision_date DESC, id DESC`,
+    orderedPartIds
+  );
+  const datasheetByPart = new Map(datasheetRows.rows.map((row) => [row.part_id, row]));
+
+  const memoryByPart = new Map<string, ExportBundleProvenanceMemoryRecord[]>();
+  try {
+    const memoryRows = await databasePool.query<{
+      part_id: string;
+      id: string;
+      record_kind: string;
+      severity: string;
+      outcome: string | null;
+      title: string;
+      recorded_by: string | null;
+      recorded_at: Date | string;
+    }>(
+      `SELECT part_id, id, record_kind, severity, outcome, title, recorded_by, recorded_at
+         FROM part_engineering_records
+         WHERE part_id IN (${placeholders})
+           AND draft_status = 'confirmed'
+           AND resolved_at IS NULL
+         ORDER BY part_id, recorded_at DESC, id ASC`,
+      orderedPartIds
+    );
+
+    for (const row of memoryRows.rows) {
+      const list = memoryByPart.get(row.part_id) ?? [];
+      list.push({
+        outcome: (row.outcome as PartEngineeringRecordOutcome | null) ?? null,
+        recordedAt: toIsoTimestamp(row.recorded_at),
+        recordedBy: row.recorded_by,
+        recordId: row.id,
+        recordKind: row.record_kind as PartEngineeringRecordKind,
+        severity: row.severity as PartEngineeringRecordSeverity,
+        title: row.title
+      });
+      memoryByPart.set(row.part_id, list);
+    }
+  } catch {
+    // Best-effort: confirmed-memory provenance is omitted, not fatal, if unavailable.
+  }
+
+  const trustedAssetsByPart = new Map<string, ExportBundleProvenanceTrustedAsset[]>();
+  for (const asset of includedAssets) {
+    const list = trustedAssetsByPart.get(asset.partId) ?? [];
+    list.push({
+      assetId: asset.assetId,
+      assetType: asset.assetType,
+      fileFormat: asset.fileFormat,
+      fileHash: asset.fileHash,
+      provenance: asset.provenance
+    });
+    trustedAssetsByPart.set(asset.partId, list);
+  }
+
+  return orderedPartIds.map((partId) => {
+    const identity = identityByPart.get(partId);
+    const approval = approvalByPart.get(partId);
+    const datasheet = datasheetByPart.get(partId);
+    const trustedAssets = (trustedAssetsByPart.get(partId) ?? []).sort(
+      (first, second) => first.assetType.localeCompare(second.assetType) || first.assetId.localeCompare(second.assetId)
+    );
+
+    return {
+      approval: approval
+        ? {
+            decidedAt: approval.decided_at ? toIsoTimestamp(approval.decided_at) : null,
+            decidedBy: approval.decided_by,
+            status: approval.approval_status,
+            summary: approval.summary
+          }
+        : null,
+      confirmedEngineeringMemory: memoryByPart.get(partId) ?? [],
+      datasheetRevision: datasheet
+        ? {
+            datasheetRevisionId: datasheet.id,
+            revisionDate: datasheet.revision_date ? toIsoTimestamp(datasheet.revision_date) : null,
+            revisionLabel: datasheet.revision_label
+          }
+        : null,
+      manufacturerName: identity?.manufacturer_name ?? "Unknown manufacturer",
+      partId,
+      partMpn: identity?.mpn ?? partId,
+      trustedAssets
+    } satisfies ExportBundlePartProvenance;
+  });
+}
+
+/**
  * Normalizes a manifest read from storage so optional controlled-asset fields exist
  * even on older bundles. Keeps read paths unconditional and lets readers iterate
  * `controlledAssets` without nil-checks.
  */
 function normalizeManifestForRead(manifest: ExportBundleManifest): ExportBundleManifest {
-  if (manifest.controlledAssets && manifest.controlSummary) {
+  if (manifest.controlledAssets && manifest.controlSummary && manifest.partProvenance) {
     return manifest;
   }
   return {
     ...manifest,
     controlledAssets: manifest.controlledAssets ?? [],
-    controlSummary: manifest.controlSummary ?? readEmptyBundleControlSummary()
+    controlSummary: manifest.controlSummary ?? readEmptyBundleControlSummary(),
+    partProvenance: manifest.partProvenance ?? []
   };
 }
 

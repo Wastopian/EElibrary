@@ -30,6 +30,7 @@ function buildStubBundle(overrides: Partial<ExportBundle> = {}): ExportBundle {
     generatedAt: "2026-05-07T10:00:00.000Z",
     includedAssets: [],
     omissions: [],
+    partProvenance: [],
     projectId: "project-test",
     revisionLabel: null,
     warnings: []

@@ -72,6 +72,7 @@ function buildTestManifest(overrides: Partial<ExportBundleManifest> = {}): Expor
     },
     controlledAssets: [],
     omissions: [],
+    partProvenance: [],
     projectId: TEST_PROJECT_ID,
     revisionLabel: null,
     warnings: [],
