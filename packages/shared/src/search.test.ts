@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildBuildableMatingSet, formatAssetAvailabilityStatus, formatAssetExportStatus, formatAssetStatus, getExportAvailability, getPartDetail, getSearchFacets } from "./search";
+import { buildBuildableMatingSet, formatAssetAvailabilityStatus, formatAssetExportStatus, formatAssetStatus, getExportAvailability, getPartDetail, getSearchFacets, searchParts } from "./search";
 import type { AccessoryRequirement, CableCompatibility, MateRelation } from "./types";
 
 /**
@@ -307,4 +307,16 @@ test("facets still return normalized search data", () => {
   assert.equal(facets.readinessStatuses.length > 0, true);
   assert.equal(facets.approvalStatuses.length > 0, true);
   assert.equal(facets.connectorClasses.length > 0, true);
+});
+
+test("search tokenizes separator-heavy engineering queries without losing provenance filters", () => {
+  const spacedMpnMatches = searchParts({ query: "TPS7A02 DBVR" });
+  const connectorMatches = searchParts({ query: "215079 8" });
+  const passiveMatches = searchParts({ query: "0603 capacitor" });
+  const compactPackageMatches = searchParts({ query: "SOT23" });
+
+  assert.equal(spacedMpnMatches.some((record) => record.part.mpn === "TPS7A02DBVR"), true);
+  assert.equal(connectorMatches.some((record) => record.part.mpn === "215079-8"), true);
+  assert.equal(passiveMatches.some((record) => record.part.mpn === "GRM188R71C104KA01D"), true);
+  assert.equal(compactPackageMatches.some((record) => record.part.mpn === "TPS7A02DBVR"), true);
 });

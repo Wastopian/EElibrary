@@ -5,7 +5,7 @@
 import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
-import { buildSearchPagination } from "@ee-library/shared/catalog-runtime";
+import { buildSearchPagination, buildSearchQueryTokens, buildSearchTokenAlternates } from "@ee-library/shared/catalog-runtime";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
@@ -3760,6 +3760,47 @@ function buildSearchQueryPattern(query: string | undefined): string | null {
 }
 
 /**
+ * Builds one OR branch for a free-text LIKE parameter across the searchable catalog fields.
+ * Source-record and datasheet URL checks stay as non-correlated IN-subqueries so trigram
+ * indexes can be used before joining the matching part ids back to the parts table.
+ */
+function buildSearchLikeClause(paramIndex: number, options: { includeCompactSearch?: boolean } = {}): string {
+  const compactSearchClause = options.includeCompactSearch
+    ? `
+      OR ${buildCompactSearchSql("lower(p.mpn)")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}
+      OR ${buildCompactSearchSql("lower(p.description)")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}
+      OR ${buildCompactSearchSql("lower(pk.package_name)")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}
+      OR ${buildCompactSearchSql("lower(COALESCE(cf.name, ''))")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}`
+    : "";
+
+  return `(
+      lower(p.mpn) LIKE $${paramIndex}
+      OR lower(p.description) LIKE $${paramIndex}
+      OR lower(p.category) LIKE $${paramIndex}
+      OR lower(m.name) LIKE $${paramIndex}
+      OR lower(pk.package_name) LIKE $${paramIndex}
+      OR lower(COALESCE(cf.name, '')) LIKE $${paramIndex}
+      ${compactSearchClause}
+      OR p.id IN (
+        SELECT sr.part_id
+        FROM source_records sr
+        WHERE sr.part_id IS NOT NULL
+          AND (
+            lower(sr.provider_part_key) LIKE $${paramIndex}
+            OR lower(COALESCE(sr.source_url, '')) LIKE $${paramIndex}
+          )
+      )
+      OR p.id IN (
+        SELECT datasheet_asset.part_id
+        FROM assets datasheet_asset
+        WHERE datasheet_asset.part_id IS NOT NULL
+          AND datasheet_asset.asset_type = 'datasheet'
+          AND lower(COALESCE(datasheet_asset.source_url, '')) LIKE $${paramIndex}
+      )
+    )`;
+}
+
+/**
  * Builds the paged search identifier query. When a free-text query is active, relevance
  * ordering is used regardless of the caller's sort preference — queryText is appended as
  * the next parameter after the WHERE params, shifting LIMIT and OFFSET by one slot.
@@ -3950,39 +3991,34 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
   const clauses: string[] = [];
   const params: unknown[] = [];
   const queryPattern = buildSearchQueryPattern(filters.query);
+  const queryTokens = buildSearchQueryTokens(filters.query);
   const queryText = filters.query?.trim().toLowerCase() || null;
 
   if (queryPattern) {
     params.push(queryPattern);
+    const phraseParamIndex = params.length;
+    const includeCompactPhraseSearch = shouldUseCompactSearch(filters.query);
+    const tokenClauses = queryTokens.length > 1
+      ? queryTokens.map((token) => {
+          const tokenAlternates = buildSearchTokenAlternates(token).map((alternate) => `%${alternate}%`);
+          const alternateClauses = tokenAlternates.map((alternatePattern) => {
+            params.push(alternatePattern);
+            return buildSearchLikeClause(params.length, { includeCompactSearch: shouldUseCompactSearch(alternatePattern) });
+          });
+
+          return alternateClauses.length > 1 ? `(${alternateClauses.join("\n        OR ")})` : alternateClauses[0] ?? "FALSE";
+        })
+      : [];
     // The source_records and datasheet asset branches use non-correlated IN-subqueries instead of
     // correlated EXISTS so PostgreSQL pre-filters those tables on the trigram-indexed LIKE
     // (idx_source_records_provider_part_key_trgm) once, then performs a hash semi-join back to parts —
     // rather than running the inner LIKE per candidate part row. Direct LIKE columns stay on the
     // OR-chain to ride trigram indexes on parts.mpn, parts.category, manufacturers.name, etc.
-    clauses.push(`(
-      lower(p.mpn) LIKE $${params.length}
-      OR lower(p.description) LIKE $${params.length}
-      OR lower(p.category) LIKE $${params.length}
-      OR lower(m.name) LIKE $${params.length}
-      OR lower(pk.package_name) LIKE $${params.length}
-      OR lower(COALESCE(cf.name, '')) LIKE $${params.length}
-      OR p.id IN (
-        SELECT sr.part_id
-        FROM source_records sr
-        WHERE sr.part_id IS NOT NULL
-          AND (
-            lower(sr.provider_part_key) LIKE $${params.length}
-            OR lower(COALESCE(sr.source_url, '')) LIKE $${params.length}
-          )
-      )
-      OR p.id IN (
-        SELECT datasheet_asset.part_id
-        FROM assets datasheet_asset
-        WHERE datasheet_asset.part_id IS NOT NULL
-          AND datasheet_asset.asset_type = 'datasheet'
-          AND lower(COALESCE(datasheet_asset.source_url, '')) LIKE $${params.length}
-      )
-    )`);
+    // Multi-word searches keep the phrase branch and add an all-tokens branch for separator-heavy
+    // engineering queries such as "TPS7A02 DBVR" or "JST PH 2P".
+    clauses.push(tokenClauses.length > 0
+      ? `(${buildSearchLikeClause(phraseParamIndex, { includeCompactSearch: includeCompactPhraseSearch })} OR (${tokenClauses.join("\n      AND ")}))`
+      : buildSearchLikeClause(phraseParamIndex, { includeCompactSearch: includeCompactPhraseSearch }));
   }
 
   appendTextFilterClause(clauses, params, "p.manufacturer_id", filters.manufacturerId);
@@ -4030,6 +4066,15 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
     queryText,
     whereSql: clauses.length > 0 ? `WHERE ${clauses.join("\n    AND ")}` : ""
   };
+}
+
+/**
+ * Detects when compact field matching is useful for separator-heavy engineering text.
+ */
+function shouldUseCompactSearch(value: string | undefined): boolean {
+  const normalizedValue = value?.trim().toLowerCase() ?? "";
+
+  return /[a-z][0-9]|[0-9][a-z]|[-_\s/.]/u.test(normalizedValue);
 }
 
 /**
@@ -4099,6 +4144,8 @@ function searchOrderByClause(sort: PartSearchSort): string {
 /**
  * Builds a relevance ORDER BY clause that ranks results by how closely they match the
  * free-text query. The composite GREATEST() score picks the strongest matching signal:
+ * Compact MPN scoring removes punctuation from both sides, so space- or dash-separated
+ * user input can still rank the canonical contiguous MPN first.
  *
  *   1.5 — exact MPN match          (e.g. searching "LM358" finds part with mpn "LM358" first)
  *   1.2 — MPN prefix match         (e.g. "LM3" surfaces LM358, LM311, LM393 before unrelated parts)
@@ -4112,19 +4159,35 @@ function searchOrderByClause(sort: PartSearchSort): string {
  * queryParamIndex is the SQL parameter index ($N) that holds the raw lowercased query text.
  */
 function relevanceOrderByClause(queryParamIndex: number): string {
+  const compactMpnSql = buildCompactSearchSql("lower(p.mpn)");
+  const compactQuerySql = buildCompactSearchSql(`$${queryParamIndex}::text`);
+
   return `
     ORDER BY
       GREATEST(
+        CASE WHEN ${compactMpnSql} = ${compactQuerySql} THEN 1.65 ELSE 0 END,
         CASE WHEN lower(p.mpn) = $${queryParamIndex}                        THEN 1.5 ELSE 0 END,
+        CASE WHEN ${compactMpnSql} LIKE (${compactQuerySql} || '%') THEN 1.35 ELSE 0 END,
         CASE WHEN lower(p.mpn) LIKE ($${queryParamIndex} || '%')            THEN 1.2 ELSE 0 END,
         similarity(lower(p.mpn),      $${queryParamIndex}),
         similarity(lower(m.name),     $${queryParamIndex}) * 0.6,
+        similarity(lower(pk.package_name), $${queryParamIndex}) * 0.5,
+        similarity(lower(COALESCE(cf.name, '')), $${queryParamIndex}) * 0.5,
         similarity(lower(p.category), $${queryParamIndex}) * 0.4
       ) DESC,
       p.trust_score DESC,
       lower(p.mpn) ASC,
       p.id ASC
   `;
+}
+
+/**
+ * Removes common MPN separators in SQL for relevance ranking.
+ * Nested replace() is intentionally used instead of regexp_replace() because pg-mem,
+ * used by API unit tests, does not emulate PostgreSQL's regex replacement overloads.
+ */
+function buildCompactSearchSql(expression: string): string {
+  return `replace(replace(replace(replace(replace(${expression}, '-', ''), ' ', ''), '_', ''), '/', ''), '.', '')`;
 }
 
 /**

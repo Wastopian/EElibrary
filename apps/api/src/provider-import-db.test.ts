@@ -377,6 +377,32 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
 });
 
 /**
+ * Verifies SQL-backed free-text search handles engineering shorthand that differs from stored metadata.
+ */
+test("DB-backed search matches compact package names and LDO shorthand", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await seedSearchRows(pool);
+    await seedSearchLdoRows(pool);
+
+    const shorthandSearch = await readPartSearchRecordsFromDatabase({ query: "SOT23 LDO" });
+
+    assert.equal(shorthandSearch.status, "available");
+
+    if (shorthandSearch.status !== "available") {
+      throw new Error("expected DB-backed shorthand search records");
+    }
+
+    assert.deepEqual(shorthandSearch.records.map((record) => record.part.mpn), ["TPS7A02DBVR"]);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies SQL-backed search facets are grouped in-database and stay consistent with active filters.
  */
 test("DB-backed search facets are correct, filter-consistent, and timed", async () => {
@@ -545,6 +571,21 @@ function createProviderImportPool(options: ProviderImportPoolOptions = {}): Test
  * `npm run migrations` + integration testing, not by this in-memory shim.
  */
 function registerPgTrgmShims(db: ReturnType<typeof newDb>): void {
+  // Search relevance uses replace() to compact common MPN separators; pg-mem needs a shim.
+  db.public.registerFunction({
+    name: "replace",
+    args: ["text", "text", "text"] as never,
+    returns: "text" as never,
+    allowNullArguments: true,
+    implementation: (value: string | null, searchValue: string | null, replaceValue: string | null): string | null => {
+      if (value === null || searchValue === null || replaceValue === null) {
+        return null;
+      }
+
+      return value.split(searchValue).join(replaceValue);
+    }
+  });
+
   db.public.registerFunction({
     name: "similarity",
     args: ["text", "text"] as never,
@@ -728,6 +769,23 @@ async function seedSearchRows(pool: TestPool): Promise<void> {
     await insertSearchIdentityRows(client);
     await insertSearchAssetRows(client);
     await insertSearchProjectionRows(client);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Inserts one package/description mismatch row to exercise human-entered shorthand queries.
+ */
+async function seedSearchLdoRows(pool: TestPool): Promise<void> {
+  const client = await pool.connect();
+
+  try {
+    await client.query(`
+      INSERT INTO parts VALUES ('part-search-ldo', 'TPS7A02DBVR', '200 mA low-IQ linear regulator with SOT-23-5 package evidence.', 'mfr-search-alpha', 'Power', 'active', 'pkg-search-sot23', NULL, 0.88, '2026-04-13T00:00:00.000Z');
+      INSERT INTO part_readiness_summaries VALUES ('part-search-ldo', 'needs_attention', 'confirmed', 'non_connector', 1, ARRAY['CAD evidence is not verified for export.'], ARRAY['Attach or review CAD assets before export.'], 'CAD evidence is not verified for export.', '2026-04-13T00:00:00.000Z');
+      INSERT INTO part_approvals VALUES ('part-search-ldo', 'pending_review', 'Pending engineering approval', 'Review is still active, so the part should not be treated as approved yet.', ARRAY['Approval decision is pending.'], NULL, NULL, '2026-04-13T00:00:00.000Z');
+    `);
   } finally {
     client.release();
   }

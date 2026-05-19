@@ -62,6 +62,24 @@ test("free-text search covers MPN, description, category, manufacturer, package,
   }
 });
 
+test("free-text search keeps phrase matching and adds ANDed token matching for natural engineering queries", () => {
+  const filter = buildSearchSqlFilterForTests({ query: "TPS7A02 DBVR" }, "any");
+
+  assert.deepEqual(filter.params.slice(0, 3), ["%tps7a02 dbvr%", "%tps7a02%", "%dbvr%"]);
+  assert.match(filter.whereSql, /lower\(p\.mpn\) LIKE \$1/u);
+  assert.match(filter.whereSql, /lower\(p\.mpn\) LIKE \$2/u);
+  assert.match(filter.whereSql, /lower\(p\.mpn\) LIKE \$3/u);
+  assert.match(filter.whereSql, /\$2[\s\S]+AND[\s\S]+\$3/u);
+});
+
+test("free-text search adds compact package matching and LDO shorthand alternatives", () => {
+  const filter = buildSearchSqlFilterForTests({ query: "SOT23 LDO" }, "any");
+
+  assert.deepEqual(filter.params.slice(0, 4), ["%sot23 ldo%", "%sot23%", "%ldo%", "%linear regulator%"]);
+  assert.match(filter.whereSql, /replace\(replace\(replace\(replace\(replace\(lower\(pk\.package_name\)/u);
+  assert.match(filter.whereSql, /\$2[\s\S]+AND[\s\S]+\(\([\s\S]+\$3[\s\S]+OR[\s\S]+\$4[\s\S]+\)\)/u);
+});
+
 test("source_records and datasheet asset branches use non-correlated IN-subqueries instead of correlated EXISTS", () => {
   const filter = buildSearchSqlFilterForTests({ query: "LM358" }, "any");
 
