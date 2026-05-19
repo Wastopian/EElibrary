@@ -1839,17 +1839,35 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
       const matchedPartIds = new Set<string>();
       const candidatesByMpn = await prefetchPartMatchCandidatesByMpn(client, sourceLines.map((line) => line.rawMpn));
 
-      for (const line of sourceLines) {
-        const outcome = line.matchStatus === "ignored"
+      // Pass 1: resolve every line's outcome in memory (no DB) so the matched part ids are known
+      // before any write, letting the usage snapshot reads batch once per import.
+      const lineOutcomes = sourceLines.map((line) => ({
+        line,
+        outcome: line.matchStatus === "ignored"
           ? ({ matchConfidenceScore: line.matchConfidenceScore, matchedPartId: line.matchedPartId, matchStatus: "ignored" } satisfies BomLineMatchOutcome)
-          : resolveBomLineMatch(line, candidatesByMpn);
+          : resolveBomLineMatch(line, candidatesByMpn)
+      }));
+
+      for (const { outcome } of lineOutcomes) {
+        if (outcome.matchStatus === "matched" && outcome.matchedPartId) {
+          matchedPartIds.add(outcome.matchedPartId);
+        }
+      }
+
+      const usagePrefetch: MatchUsagePrefetch = {
+        approvalRowByPart: await prefetchPartApprovalRows(client, [...matchedPartIds]),
+        readinessRowByPart: await prefetchPartReadinessRows(client, [...matchedPartIds]),
+        usageIdByBomLine: await prefetchProjectPartUsageIdsByBomLine(client, sourceLines.map((line) => line.id))
+      };
+
+      // Pass 2: writes, in the same per-line order as before.
+      for (const { line, outcome } of lineOutcomes) {
         const updatedLine = await updateBomLineMatch(client, line, outcome, now);
 
         updatedLines.push(updatedLine);
 
         if (outcome.matchStatus === "matched" && outcome.matchedPartId) {
-          matchedPartIds.add(outcome.matchedPartId);
-          updatedUsages.push(await upsertProjectPartUsageForMatchedLine(client, updatedLine, outcome.matchedPartId, now));
+          updatedUsages.push(await upsertProjectPartUsageForMatchedLine(client, updatedLine, outcome.matchedPartId, now, usagePrefetch));
         } else {
           await deleteProjectPartUsageForBomLine(client, line.id);
 
@@ -5494,10 +5512,16 @@ async function updateBomLineMatch(client: PoolClient, line: BomLine, outcome: Bo
 /**
  * Creates or refreshes the confirmed usage row for one exact BOM line match.
  */
-async function upsertProjectPartUsageForMatchedLine(client: PoolClient, line: BomLine, partId: string, now: Date): Promise<ProjectPartUsage> {
-  const usageId = await resolveProjectPartUsageId(client, line);
-  const approvalSnapshot = await readPartApprovalSnapshot(client, partId, now);
-  const readinessSnapshot = await readPartReadinessSnapshot(client, partId, now);
+async function upsertProjectPartUsageForMatchedLine(
+  client: PoolClient,
+  line: BomLine,
+  partId: string,
+  now: Date,
+  prefetch: MatchUsagePrefetch
+): Promise<ProjectPartUsage> {
+  const usageId = prefetch.usageIdByBomLine.get(line.id) ?? buildProjectPartUsageId(line.id);
+  const approvalSnapshot = buildPartApprovalSnapshot(prefetch.approvalRowByPart.get(partId), now);
+  const readinessSnapshot = buildPartReadinessSnapshot(prefetch.readinessRowByPart.get(partId), now);
 
   await client.query("DELETE FROM project_part_usages WHERE bom_line_id = $1 AND id <> $2", [line.id, usageId]);
 
@@ -5550,37 +5574,114 @@ async function deleteProjectPartUsageForBomLine(client: PoolClient, bomLineId: s
 }
 
 /**
- * Reuses an existing usage id when present, otherwise builds a deterministic line-scoped id.
+ * MatchUsagePrefetch carries the per-import reads the usage upsert used to do per matched line.
+ * One query each replaces ~3 serial SELECTs per matched line; the snapshot builders below are
+ * pure transforms of these rows + the shared capture time, so output is byte-identical.
  */
-async function resolveProjectPartUsageId(client: PoolClient, line: BomLine): Promise<string> {
-  const result = await client.query<{ id: string }>(
-    `
-      SELECT id
-      FROM project_part_usages
-      WHERE bom_line_id = $1
-      ORDER BY created_at ASC, id ASC
-      LIMIT 1
-    `,
-    [line.id]
-  );
-
-  return result.rows[0]?.id ?? buildProjectPartUsageId(line.id);
+interface MatchUsagePrefetch {
+  /** Existing usage id keyed by bom_line_id (idempotent re-run reuses the same row). */
+  usageIdByBomLine: Map<string, string>;
+  /** part_approvals row keyed by part_id (PK ⇒ exactly one row per part). */
+  approvalRowByPart: Map<string, DatabasePartApprovalSnapshotRow>;
+  /** part_readiness_summaries row keyed by part_id (PK ⇒ exactly one row per part). */
+  readinessRowByPart: Map<string, DatabasePartReadinessSnapshotRow>;
 }
 
 /**
- * Reads persisted approval evidence for usage snapshots without changing part approval state.
+ * Reads the existing usage id for every BOM line in the import in one query, preserving the old
+ * per-line `ORDER BY created_at ASC, id ASC LIMIT 1` selection (lines never share bom_line_id, and
+ * no line's upsert/delete touches another line's rows, so prefetching before the write loop is
+ * equivalent to resolving each just-in-time).
  */
-async function readPartApprovalSnapshot(client: PoolClient, partId: string, capturedAt: Date): Promise<Record<string, unknown>> {
-  const result = await client.query<DatabasePartApprovalSnapshotRow>(
+async function prefetchProjectPartUsageIdsByBomLine(client: PoolClient, bomLineIds: string[]): Promise<Map<string, string>> {
+  const byBomLine = new Map<string, string>();
+  const distinctIds = [...new Set(bomLineIds)];
+
+  if (distinctIds.length === 0) {
+    return byBomLine;
+  }
+
+  const placeholders = distinctIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await client.query<{ id: string; bom_line_id: string }>(
     `
-      SELECT approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at
-      FROM part_approvals
-      WHERE part_id = $1
-      LIMIT 1
+      SELECT id, bom_line_id
+      FROM project_part_usages
+      WHERE bom_line_id IN (${placeholders})
+      ORDER BY created_at ASC, id ASC
     `,
-    [partId]
+    distinctIds
   );
-  const row = result.rows[0];
+
+  for (const row of result.rows) {
+    if (!byBomLine.has(row.bom_line_id)) {
+      byBomLine.set(row.bom_line_id, row.id);
+    }
+  }
+
+  return byBomLine;
+}
+
+/**
+ * Reads the part_approvals row for every matched part in one query, keyed by part_id (PK).
+ */
+async function prefetchPartApprovalRows(client: PoolClient, partIds: string[]): Promise<Map<string, DatabasePartApprovalSnapshotRow>> {
+  const byPart = new Map<string, DatabasePartApprovalSnapshotRow>();
+  const distinctIds = [...new Set(partIds)];
+
+  if (distinctIds.length === 0) {
+    return byPart;
+  }
+
+  const placeholders = distinctIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await client.query<DatabasePartApprovalSnapshotRow & { part_id: string }>(
+    `
+      SELECT part_id, approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at
+      FROM part_approvals
+      WHERE part_id IN (${placeholders})
+    `,
+    distinctIds
+  );
+
+  for (const row of result.rows) {
+    byPart.set(row.part_id, row);
+  }
+
+  return byPart;
+}
+
+/**
+ * Reads the part_readiness_summaries row for every matched part in one query, keyed by part_id (PK).
+ */
+async function prefetchPartReadinessRows(client: PoolClient, partIds: string[]): Promise<Map<string, DatabasePartReadinessSnapshotRow>> {
+  const byPart = new Map<string, DatabasePartReadinessSnapshotRow>();
+  const distinctIds = [...new Set(partIds)];
+
+  if (distinctIds.length === 0) {
+    return byPart;
+  }
+
+  const placeholders = distinctIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await client.query<DatabasePartReadinessSnapshotRow & { part_id: string }>(
+    `
+      SELECT part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at
+      FROM part_readiness_summaries
+      WHERE part_id IN (${placeholders})
+    `,
+    distinctIds
+  );
+
+  for (const row of result.rows) {
+    byPart.set(row.part_id, row);
+  }
+
+  return byPart;
+}
+
+/**
+ * Builds the approval-evidence snapshot from a prefetched row. Pure transform; identical output
+ * to the previous per-line read. Recording a usage never changes part approval state.
+ */
+function buildPartApprovalSnapshot(row: DatabasePartApprovalSnapshotRow | undefined, capturedAt: Date): Record<string, unknown> {
   const capturedAtIso = capturedAt.toISOString();
 
   if (!row) {
@@ -5606,19 +5707,10 @@ async function readPartApprovalSnapshot(client: PoolClient, partId: string, capt
 }
 
 /**
- * Reads persisted readiness evidence for usage snapshots without changing part readiness state.
+ * Builds the readiness-evidence snapshot from a prefetched row. Pure transform; identical output
+ * to the previous per-line read. Recording a usage never changes part readiness state.
  */
-async function readPartReadinessSnapshot(client: PoolClient, partId: string, capturedAt: Date): Promise<Record<string, unknown>> {
-  const result = await client.query<DatabasePartReadinessSnapshotRow>(
-    `
-      SELECT readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at
-      FROM part_readiness_summaries
-      WHERE part_id = $1
-      LIMIT 1
-    `,
-    [partId]
-  );
-  const row = result.rows[0];
+function buildPartReadinessSnapshot(row: DatabasePartReadinessSnapshotRow | undefined, capturedAt: Date): Record<string, unknown> {
   const capturedAtIso = capturedAt.toISOString();
 
   if (!row) {
@@ -10218,7 +10310,12 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
 
       const persistedLine = mapBomLineRow(lineRow);
       savedLines.push(persistedLine);
-      await upsertProjectPartUsageForMatchedLine(client, persistedLine, role.part_id, now);
+      const rolePrefetch: MatchUsagePrefetch = {
+        approvalRowByPart: await prefetchPartApprovalRows(client, [role.part_id]),
+        readinessRowByPart: await prefetchPartReadinessRows(client, [role.part_id]),
+        usageIdByBomLine: await prefetchProjectPartUsageIdsByBomLine(client, [persistedLine.id])
+      };
+      await upsertProjectPartUsageForMatchedLine(client, persistedLine, role.part_id, now, rolePrefetch);
     }
 
     const instantiationId = `cbinst-${randomUUID()}`;
