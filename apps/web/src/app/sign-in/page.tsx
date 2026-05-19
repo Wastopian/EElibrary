@@ -1,10 +1,29 @@
+/**
+ * File header: Renders the credentials sign-in form and returns users to their requested workspace.
+ */
+
 import { signIn } from "@/auth";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 
-export default async function SignInPage() {
+/** SignInSearchParams carries the middleware-provided return target after authentication. */
+type SignInSearchParams = {
+  callbackUrl?: string | string[];
+};
+
+/** SignInPageProps describes optional App Router search params for the login route. */
+interface SignInPageProps {
+  searchParams?: Promise<SignInSearchParams>;
+}
+
+/**
+ * Renders the sign-in page or redirects an already-authenticated user to the safe callback.
+ */
+export default async function SignInPage({ searchParams }: SignInPageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const callbackUrl = resolveSafeCallbackUrl(resolvedSearchParams.callbackUrl);
   const session = await auth();
-  if (session) redirect("/");
+  if (session) redirect(callbackUrl);
 
   return (
     <main className="sign-in-page">
@@ -16,7 +35,7 @@ export default async function SignInPage() {
             await signIn("credentials", {
               email: formData.get("email"),
               password: formData.get("password"),
-              redirectTo: "/admin",
+              redirectTo: callbackUrl,
             });
           }}
         >
@@ -42,4 +61,21 @@ export default async function SignInPage() {
       </div>
     </main>
   );
+}
+
+/**
+ * Accepts only app-local callback paths so sign-in cannot become an open redirect.
+ */
+function resolveSafeCallbackUrl(value: string | string[] | undefined): string {
+  const candidate = Array.isArray(value) ? value[0] : value;
+
+  if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
+    return "/";
+  }
+
+  if (candidate.startsWith("/api/") || candidate === "/sign-in") {
+    return "/";
+  }
+
+  return candidate;
 }

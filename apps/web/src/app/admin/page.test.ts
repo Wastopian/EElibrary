@@ -212,7 +212,7 @@ test("admin workspace renders lifecycle and source-conflict queues from DB-backe
 });
 
 async function renderAdminPage(): Promise<string> {
-  return renderToStaticMarkup(await AdminPage());
+  return renderToStaticMarkup(await AdminPage({}));
 }
 
 function mockFetch(handler: (url: URL) => Response): () => void {

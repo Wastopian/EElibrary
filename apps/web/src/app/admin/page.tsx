@@ -190,8 +190,8 @@ interface AdminPageProps {
  * Optional audit-* search params filter the user-action audit timeline so detail
  * pages can deep-link into a target-scoped audit view.
  */
-export default async function AdminPage({ searchParams }: AdminPageProps = {}) {
-  const resolvedSearchParams = searchParams ? await searchParams : {};
+export default async function AdminPage(props: AdminPageProps) {
+  const resolvedSearchParams = props.searchParams ? await props.searchParams : {};
   const auditFilters = readAuditFiltersFromSearchParams(resolvedSearchParams);
 
   const catalogState = await loadAdminCatalog();

@@ -899,8 +899,8 @@ function ProjectRiskFindingCard({ finding }: { finding: ProjectBomRiskFinding })
         </div>
       </dl>
       <ul>
-        {finding.inputs.map((input) => (
-          <li key={input}>{input}</li>
+        {finding.inputs.map((input, index) => (
+          <li key={`${finding.id}-${index}-${input}`}>{input}</li>
         ))}
       </ul>
     </article>

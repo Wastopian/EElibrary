@@ -213,9 +213,8 @@ function step9PrintReady() {
  */
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(resolveWindowsExecutable(command), args, {
       stdio: "inherit",
-      shell: process.platform === "win32",
       ...options
     });
 
@@ -235,10 +234,7 @@ function runCommand(command, args, options = {}) {
  */
 function runCommandWithOutput(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      shell: process.platform === "win32",
-      ...options
-    });
+    const child = spawn(resolveWindowsExecutable(command), args, options);
 
     let stdout = "";
     let stderr = "";
@@ -274,8 +270,7 @@ function runCommandWithOutput(command, args, options = {}) {
  */
 function runSilent(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      shell: process.platform === "win32",
+    const child = spawn(resolveWindowsExecutable(command), args, {
       stdio: "ignore"
     });
 
@@ -291,6 +286,27 @@ function runSilent(command, args) {
 }
 
 /**
+ * Resolves Windows command shims without enabling shell parsing.
+ * Shell parsing breaks quoted paths such as `C:\Program Files\nodejs\node.exe`.
+ */
+function resolveWindowsExecutable(command) {
+  if (process.platform !== "win32") {
+    return command;
+  }
+
+  if (command.endsWith(".cmd") || command.endsWith(".exe")) {
+    return command;
+  }
+
+  const commandShims = new Map([
+    ["npm", "npm.cmd"],
+    ["npx", "npx.cmd"]
+  ]);
+
+  return commandShims.get(command) ?? command;
+}
+
+/**
  * Runs a Node script from the repo root with inherited stdio.
  */
 function runNodeScript(relativePath) {
@@ -301,7 +317,10 @@ function runNodeScript(relativePath) {
  * Runs a package.json script from the repo root with inherited stdio.
  */
 function runNpmScript(scriptName) {
-  return runCommand("npm", ["run", scriptName], { cwd: fromRepoRoot() });
+  return runCommand("npm", ["run", scriptName], {
+    cwd: fromRepoRoot(),
+    shell: process.platform === "win32"
+  });
 }
 
 function extractCommandOutput(error) {
