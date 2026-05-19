@@ -6,6 +6,9 @@ node_modules/
 dist/
 coverage/
 
+# Local scratch directory for dev/test logs and fixtures.
+tmp/
+
 # Local environment files.
 .env
 .env.local
