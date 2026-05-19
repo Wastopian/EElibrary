@@ -34,7 +34,7 @@ import type {
   SourceReconciliationRecord,
   SourceRecord
 } from "@ee-library/shared/types";
-import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak } from "./provider-adapters";
+import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter } from "./provider-adapters";
 
 /** pool is lazy so worker status can run without requiring a database. */
 let pool: Pool | null = null;
@@ -186,6 +186,106 @@ export interface WorkerOperationalDiagnostics {
   recentValidations: ValidationDiagnostic[];
   /** Recent export-promotion attempts and denials. */
   recentPromotions: PromotionDiagnostic[];
+}
+
+/**
+ * Returns the subset of the given part ids that have a canonical row, in one query.
+ *
+ * Replaces a per-endpoint `SELECT EXISTS` that, inside the five cross-part loops below,
+ * issued up to 2 serial point-queries per relation — O(relations) round-trips per import.
+ * One `id = ANY($1)` lookup keeps cross-part persistence O(1) round-trips regardless of fan-out.
+ */
+async function selectExistingPartIds(client: PoolClient, partIds: string[]): Promise<Set<string>> {
+  const distinctIds = [...new Set(partIds)];
+
+  if (distinctIds.length === 0) {
+    return new Set<string>();
+  }
+
+  // Dynamic placeholder IN-list, not `id = ANY($1::text[])`: pg-mem's planner mis-handles
+  // `pk = ANY($1::text[])` against primary-key columns and returns zero rows. The id set per
+  // import is small and bounded, so the expanded IN-list is both safe and inexpensive.
+  const placeholders = distinctIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await client.query<{ id: string }>(`SELECT id FROM parts WHERE id IN (${placeholders})`, distinctIds);
+
+  return new Set(result.rows.map((row) => row.id));
+}
+
+/**
+ * Persists mate/accessory/cable/similar/companion edges only when both endpoints exist, then replays safely after a batch import.
+ */
+export async function persistCrossPartRelations(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
+  const mateRelations = normalizedPart.mateRelations ?? [];
+  const accessoryRequirements = normalizedPart.accessoryRequirements ?? [];
+  const cableCompatibilities = normalizedPart.cableCompatibilities ?? [];
+  const similarPartRelations = normalizedPart.similarPartRelations ?? [];
+  const companionRecommendations = normalizedPart.companionRecommendations ?? [];
+
+  // One round-trip resolves every endpoint referenced by all five edge types.
+  const referencedPartIds = [
+    ...mateRelations.flatMap((relation) => [relation.partId, relation.matePartId]),
+    ...accessoryRequirements.flatMap((requirement) => [requirement.partId, requirement.accessoryPartId]),
+    ...cableCompatibilities.flatMap((compatibility) => [compatibility.partId, compatibility.cablePartId]),
+    ...similarPartRelations.flatMap((relation) => [relation.partId, relation.similarPartId]),
+    ...companionRecommendations.flatMap((recommendation) => [recommendation.partId, recommendation.companionPartId])
+  ];
+  const existingPartIds = await selectExistingPartIds(client, referencedPartIds);
+
+  for (const relation of mateRelations) {
+    if (existingPartIds.has(relation.partId) && existingPartIds.has(relation.matePartId)) {
+      await persistMateRelation(client, relation);
+    }
+  }
+
+  for (const requirement of accessoryRequirements) {
+    if (existingPartIds.has(requirement.partId) && existingPartIds.has(requirement.accessoryPartId)) {
+      await persistAccessoryRequirement(client, requirement);
+    }
+  }
+
+  for (const compatibility of cableCompatibilities) {
+    if (existingPartIds.has(compatibility.partId) && existingPartIds.has(compatibility.cablePartId)) {
+      await persistCableCompatibility(client, compatibility);
+    }
+  }
+
+  for (const relation of similarPartRelations) {
+    if (existingPartIds.has(relation.partId) && existingPartIds.has(relation.similarPartId)) {
+      await persistSimilarPartRelation(client, relation);
+    }
+  }
+
+  for (const recommendation of companionRecommendations) {
+    if (existingPartIds.has(recommendation.partId) && existingPartIds.has(recommendation.companionPartId)) {
+      await persistCompanionRecommendation(client, recommendation);
+    }
+  }
+}
+
+/**
+ * Replays cross-part graph edges for every local-catalog row after a full ingest so housing-to-mate links persist once all endpoints exist.
+ */
+export async function replayLocalCatalogCrossPartRelations(adapter: ProviderAdapter): Promise<void> {
+  const databasePool = getDatabasePool();
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const requests = await adapter.listAvailablePartRequests();
+
+    for (const request of requests) {
+      const rawPayload = await adapter.fetchRawPart(request);
+      const normalizedPart = adapter.normalizeRawPart(rawPayload);
+      await persistCrossPartRelations(client, normalizedPart);
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -546,25 +646,7 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
     await persistSourceExtractionSignal(client, signal);
   }
 
-  for (const relation of normalizedPart.mateRelations) {
-    await persistMateRelation(client, relation);
-  }
-
-  for (const requirement of normalizedPart.accessoryRequirements) {
-    await persistAccessoryRequirement(client, requirement);
-  }
-
-  for (const compatibility of normalizedPart.cableCompatibilities) {
-    await persistCableCompatibility(client, compatibility);
-  }
-
-  for (const relation of normalizedPart.similarPartRelations) {
-    await persistSimilarPartRelation(client, relation);
-  }
-
-  for (const recommendation of normalizedPart.companionRecommendations) {
-    await persistCompanionRecommendation(client, recommendation);
-  }
+  await persistCrossPartRelations(client, normalizedPart);
 
   for (const workflow of normalizedPart.generationWorkflows) {
     await persistGenerationWorkflow(client, workflow);
@@ -613,6 +695,12 @@ export async function captureReferencedDatasheetEvidenceForPart(
     lastUpdatedAt: input.capturedAt,
     licenseMode: existingDatasheetAsset?.license_mode ?? "metadata_only",
     partId: input.partId,
+    previewArtifactFormat: existingDatasheetAsset?.preview_artifact_format ?? null,
+    previewArtifactGeneratedAt: existingDatasheetAsset?.preview_artifact_generated_at
+      ? toIsoTimestamp(existingDatasheetAsset.preview_artifact_generated_at)
+      : null,
+    previewArtifactSource: existingDatasheetAsset?.preview_artifact_source ?? null,
+    previewArtifactStorageKey: existingDatasheetAsset?.preview_artifact_storage_key ?? null,
     previewStatus: existingDatasheetAsset?.preview_status ?? "not_available",
     providerId: existingDatasheetAsset?.provider_id ?? input.providerId,
     provenance: existingDatasheetAsset?.provenance ?? "trusted_external",
@@ -1052,7 +1140,7 @@ async function persistSourceRecord(client: PoolClient, sourceRecord: SourceRecor
  * Upserts one asset registry row.
  */
 async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
-  const previewStatus = normalizePreviewStatusForPersistedAsset(asset);
+  const persistedPreviewState = normalizePreviewStateForPersistedAsset(asset);
   await client.query(
     `
       INSERT INTO assets (
@@ -1073,12 +1161,16 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
         generation_source_asset_id,
         validation_status,
         preview_status,
+        preview_artifact_storage_key,
+        preview_artifact_format,
+        preview_artifact_generated_at,
+        preview_artifact_source,
         asset_state,
         source_url,
         source_record_id,
         last_updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         asset_type = EXCLUDED.asset_type,
@@ -1096,6 +1188,10 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
         generation_source_asset_id = EXCLUDED.generation_source_asset_id,
         validation_status = EXCLUDED.validation_status,
         preview_status = EXCLUDED.preview_status,
+        preview_artifact_storage_key = EXCLUDED.preview_artifact_storage_key,
+        preview_artifact_format = EXCLUDED.preview_artifact_format,
+        preview_artifact_generated_at = EXCLUDED.preview_artifact_generated_at,
+        preview_artifact_source = EXCLUDED.preview_artifact_source,
         asset_state = EXCLUDED.asset_state,
         source_url = EXCLUDED.source_url,
         source_record_id = EXCLUDED.source_record_id,
@@ -1118,7 +1214,11 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
       asset.generationMethod,
       asset.generationSourceAssetId,
       asset.validationStatus,
-      previewStatus,
+      persistedPreviewState.previewStatus,
+      persistedPreviewState.previewArtifactStorageKey,
+      persistedPreviewState.previewArtifactFormat,
+      persistedPreviewState.previewArtifactGeneratedAt,
+      persistedPreviewState.previewArtifactSource,
       asset.assetState,
       asset.sourceUrl,
       asset.sourceRecordId,
@@ -1128,24 +1228,93 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
 }
 
 /**
- * Keeps preview readiness honest at the worker write boundary:
- * `ready` is persisted only when an embeddable file artifact exists in local storage.
+ * Keeps preview readiness honest at the worker write boundary.
+ *
+ * Two rules applied together:
+ *   1. `previewStatus = 'ready'` is persisted only when previewable bytes actually exist in
+ *      storage. Either the source `fileFormat` is itself directly embeddable AND locally stored,
+ *      OR a derived preview artifact (`previewArtifactStorageKey`) has been generated. Otherwise
+ *      `ready` is downgraded to `not_available` so the UI never advertises an inline preview that
+ *      cannot be rendered.
+ *   2. The artifact channel (`previewArtifactStorageKey` / `previewArtifactFormat` /
+ *      `previewArtifactSource` / `previewArtifactGeneratedAt`) is cleared to null when the source
+ *      file is missing or the asset has no previewable target. This prevents a stale artifact
+ *      pointer from outliving the source row it described.
  */
-function normalizePreviewStatusForPersistedAsset(asset: Asset): Asset["previewStatus"] {
-  if (asset.previewStatus !== "ready") {
-    return asset.previewStatus;
-  }
-
-  const fileEmbeddable = asset.fileFormat === "pdf"
-    || asset.fileFormat === "png"
-    || asset.fileFormat === "jpg"
-    || asset.fileFormat === "jpeg"
-    || asset.fileFormat === "webp";
-  const hasStoredFile = (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated")
+function normalizePreviewStateForPersistedAsset(asset: Asset): {
+  previewStatus: Asset["previewStatus"];
+  previewArtifactStorageKey: Asset["previewArtifactStorageKey"];
+  previewArtifactFormat: Asset["previewArtifactFormat"];
+  previewArtifactGeneratedAt: Asset["previewArtifactGeneratedAt"];
+  previewArtifactSource: Asset["previewArtifactSource"];
+} {
+  const hasStoredSource = (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated")
     && typeof asset.storageKey === "string"
     && asset.storageKey.length > 0;
+  const sourceIsEmbeddable = isEmbeddableFileFormat(asset.fileFormat);
+  const sourceCanBeReady = sourceIsEmbeddable && hasStoredSource;
+  const artifactCanBeReady = typeof asset.previewArtifactStorageKey === "string"
+    && asset.previewArtifactStorageKey.length > 0
+    && asset.previewArtifactFormat !== null
+    && asset.previewArtifactSource !== null;
 
-  return fileEmbeddable && hasStoredFile ? "ready" : "not_available";
+  // When the source file is gone, neither the source nor a derived artifact is renderable; clear
+  // the entire preview channel so a stale artifact pointer does not advertise rendering bytes
+  // that no longer correspond to a real asset row.
+  if (!hasStoredSource) {
+    return {
+      previewArtifactFormat: null,
+      previewArtifactGeneratedAt: null,
+      previewArtifactSource: null,
+      previewArtifactStorageKey: null,
+      previewStatus: asset.previewStatus === "ready" ? "not_available" : asset.previewStatus
+    };
+  }
+
+  if (asset.previewStatus !== "ready") {
+    // Non-ready states pass through with the artifact channel preserved (a worker may have
+    // written a partial artifact while the previewStatus is still `pending` for review).
+    return {
+      previewArtifactFormat: asset.previewArtifactFormat,
+      previewArtifactGeneratedAt: asset.previewArtifactGeneratedAt,
+      previewArtifactSource: asset.previewArtifactSource,
+      previewArtifactStorageKey: asset.previewArtifactStorageKey,
+      previewStatus: asset.previewStatus
+    };
+  }
+
+  if (sourceCanBeReady || artifactCanBeReady) {
+    return {
+      previewArtifactFormat: asset.previewArtifactFormat,
+      previewArtifactGeneratedAt: asset.previewArtifactGeneratedAt,
+      previewArtifactSource: asset.previewArtifactSource,
+      previewArtifactStorageKey: asset.previewArtifactStorageKey,
+      previewStatus: "ready"
+    };
+  }
+
+  return {
+    previewArtifactFormat: null,
+    previewArtifactGeneratedAt: null,
+    previewArtifactSource: null,
+    previewArtifactStorageKey: null,
+    previewStatus: "not_available"
+  };
+}
+
+/**
+ * Returns true for source file formats that can be rendered inline in a browser without a
+ * conversion step. STEP / kicad_mod / kicad_sym / dxf are excluded so their preview path stays
+ * gated on a derived artifact.
+ */
+function isEmbeddableFileFormat(fileFormat: Asset["fileFormat"]): boolean {
+  return fileFormat === "pdf"
+    || fileFormat === "png"
+    || fileFormat === "jpg"
+    || fileFormat === "jpeg"
+    || fileFormat === "webp"
+    || fileFormat === "glb"
+    || fileFormat === "gltf";
 }
 
 /**
@@ -1836,6 +2005,10 @@ async function readLatestDatasheetAssetRow(
   generation_source_asset_id: string | null;
   license_mode: Asset["licenseMode"];
   preview_status: Asset["previewStatus"];
+  preview_artifact_storage_key: string | null;
+  preview_artifact_format: Asset["previewArtifactFormat"];
+  preview_artifact_generated_at: Date | string | null;
+  preview_artifact_source: Asset["previewArtifactSource"];
   provider_id: string | null;
   provenance: Asset["provenance"];
   storage_key: string | null;
@@ -1849,6 +2022,10 @@ async function readLatestDatasheetAssetRow(
     generation_source_asset_id: string | null;
     license_mode: Asset["licenseMode"];
     preview_status: Asset["previewStatus"];
+    preview_artifact_storage_key: string | null;
+    preview_artifact_format: Asset["previewArtifactFormat"];
+    preview_artifact_generated_at: Date | string | null;
+    preview_artifact_source: Asset["previewArtifactSource"];
     provider_id: string | null;
     provenance: Asset["provenance"];
     storage_key: string | null;
@@ -1863,6 +2040,10 @@ async function readLatestDatasheetAssetRow(
         generation_source_asset_id,
         license_mode,
         preview_status,
+        preview_artifact_storage_key,
+        preview_artifact_format,
+        preview_artifact_generated_at,
+        preview_artifact_source,
         provider_id,
         provenance,
         storage_key,
@@ -2330,6 +2511,10 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
       generationSourceAssetId: string | null;
       validationStatus: Asset["validationStatus"];
       previewStatus: Asset["previewStatus"];
+      previewArtifactStorageKey: string | null;
+      previewArtifactFormat: Asset["previewArtifactFormat"];
+      previewArtifactGeneratedAt: Date | string | null;
+      previewArtifactSource: Asset["previewArtifactSource"];
       sourceUrl: string | null;
       sourceRecordId: string | null;
       lastUpdatedAt: Date | string;
@@ -2354,6 +2539,10 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
           generation_source_asset_id AS "generationSourceAssetId",
           validation_status AS "validationStatus",
           preview_status AS "previewStatus",
+          preview_artifact_storage_key AS "previewArtifactStorageKey",
+          preview_artifact_format AS "previewArtifactFormat",
+          preview_artifact_generated_at AS "previewArtifactGeneratedAt",
+          preview_artifact_source AS "previewArtifactSource",
           source_url AS "sourceUrl",
           source_record_id AS "sourceRecordId",
           last_updated_at AS "lastUpdatedAt"
@@ -2840,7 +3029,8 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
     })),
     assets: assetResult.rows.map((row) => ({
       ...row,
-      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt)
+      lastUpdatedAt: toIsoTimestamp(row.lastUpdatedAt),
+      previewArtifactGeneratedAt: row.previewArtifactGeneratedAt ? toIsoTimestamp(row.previewArtifactGeneratedAt) : null
     })),
     cableCompatibilities: cableResult.rows.map((row) => ({
       ...row,

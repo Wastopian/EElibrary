@@ -7,12 +7,14 @@ import React from "react";
 import { formatMetricLabel } from "@ee-library/shared/catalog-runtime";
 import { EmptyState, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import type { BadgeTone } from "@ee-library/ui";
-import { fetchPartDetail, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
+import { CompareAssetPreviewBand } from "../../components/CompareAssetPreviewBand";
 import { CompareSelectionTray } from "../../components/CompareSelectionTray";
 import { CompareMissingPartsRecovery, CompareNoPartsRecovery } from "../../components/CompareRecoveryStates";
+import { loadComparePage, type ComparePageState } from "../../lib/compare-page-loader";
 import {
   buildCompareAssetClassRows,
+  buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
   collectCompareMetricKeys,
@@ -21,7 +23,7 @@ import {
   shouldRenderConnectorCompareRows
 } from "../../lib/part-compare";
 import type { CompareCellTone, CompareRow } from "../../lib/part-compare";
-import type { BundleReadinessState, PartDetailResponse } from "@ee-library/shared/types";
+import type { BundleReadinessState } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,15 +33,10 @@ type ComparePageProps = {
   searchParams: Promise<{ parts?: string | string[] }>;
 };
 
-/** ComparePageState separates usable compare data from setup failures. */
-type ComparePageState =
-  | { details: PartDetailResponse[]; status: "ready" }
-  | { code: string; message: string; status: "setup_required" };
-
 /**
- * Parses comma-separated part ids from the query string (deduped, capped).
+ * Parses comma-separated part identifiers from the query string (deduped, capped).
  */
-function parsePartIdsParam(parts: string | undefined): string[] {
+function parsePartIdentifiersParam(parts: string | undefined): string[] {
   if (!parts || !parts.trim()) {
     return [];
   }
@@ -52,14 +49,15 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
   const resolved = await searchParams;
   const raw = resolved.parts;
   const param = Array.isArray(raw) ? raw[0] : raw;
-  const partIds = parsePartIdsParam(typeof param === "string" ? param : undefined);
-  const compareState = await loadComparePage(partIds);
+  const partIdentifiers = parsePartIdentifiersParam(typeof param === "string" ? param : undefined);
+  const compareState = await loadComparePage(partIdentifiers);
   const details = compareState.status === "ready" ? compareState.details : [];
 
   const records = detailsToRecords(details);
   const metricKeys = collectCompareMetricKeys(records);
   const assetClassRows = buildCompareAssetClassRows(records);
   const assetTrustRows = buildCompareAssetTrustRows(records);
+  const assetPreviewRows = buildCompareAssetPreviewRows(records);
   const showConnectorRows = shouldRenderConnectorCompareRows(records);
   const connectorRows = showConnectorRows ? buildCompareConnectorRows(records) : [];
 
@@ -78,11 +76,11 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
         </Link>
       </header>
 
-      {compareState.status === "ready" ? <CompareSelectionTray initialPartIds={partIds} /> : null}
+      {compareState.status === "ready" ? <CompareSelectionTray initialPartIds={partIdentifiers} /> : null}
 
       {compareState.status === "setup_required" ? (
         <CompareSetupState state={compareState} />
-      ) : partIds.length === 0 ? (
+      ) : partIdentifiers.length === 0 ? (
         <CompareNoPartsRecovery />
       ) : details.length === 0 ? (
         <CompareMissingPartsRecovery />
@@ -90,7 +88,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
         <>
           {details.length === 1 && records[0] ? (
             <p className="compare-callout" role="status">
-              One part is selected. Use the box above to add another part by id, or find another in the catalog and add it from there.
+              One part is selected. Use the box above to add another part by MPN or id, or find another in the catalog and add it from there.
             </p>
           ) : null}
 
@@ -209,6 +207,10 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetTrustRows} />
           </SectionPanel>
 
+          <SectionPanel description="Side-by-side symbol, footprint, and 3D preview cells. Preview availability is visual evidence only; trust and export state stay in the row above." title="CAD preview">
+            <CompareAssetPreviewBand rows={assetPreviewRows} />
+          </SectionPanel>
+
           {showConnectorRows ? (
             <SectionPanel description="Connector-only depth: best mate, accessories, family conflicts, and the saved mating-confidence score. Non-connector parts show a dash." title="Connector depth">
               <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={connectorRows} />
@@ -218,42 +220,6 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
       )}
     </main>
   );
-}
-
-/**
- * Loads compare detail records while preserving catalog setup errors as page state.
- */
-async function loadComparePage(partIds: string[]): Promise<ComparePageState> {
-  const details: PartDetailResponse[] = [];
-
-  try {
-    for (const partId of partIds) {
-      const detail = await fetchPartDetail(partId);
-
-      if (detail) {
-        details.push(detail);
-      }
-    }
-
-    return {
-      details,
-      status: "ready"
-    };
-  } catch (error) {
-    if (isApiClientError(error)) {
-      return {
-        code: error.code,
-        message: error.message,
-        status: "setup_required"
-      };
-    }
-
-    return {
-      code: "API_UNAVAILABLE",
-      message: "The API could not be reached, so compare detail truth cannot be read.",
-      status: "setup_required"
-    };
-  }
 }
 
 /**

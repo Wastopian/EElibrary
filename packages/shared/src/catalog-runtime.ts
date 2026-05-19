@@ -110,9 +110,10 @@ export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchF
  */
 export function filterPartRecords(records: PartSearchRecord[], filters: PartSearchFilters = {}): PartSearchRecord[] {
   const normalizedQuery = filters.query?.trim().toLowerCase();
+  const queryTokens = buildSearchQueryTokens(filters.query);
 
   return records.filter((record) => {
-    const hasQueryMatch = normalizedQuery ? recordMatchesQuery(record, normalizedQuery) : true;
+    const hasQueryMatch = normalizedQuery ? recordMatchesQuery(record, normalizedQuery, queryTokens) : true;
     const hasManufacturerMatch = filters.manufacturerId ? record.part.manufacturerId === filters.manufacturerId : true;
     const hasCategoryMatch = filters.category ? record.part.category === filters.category : true;
     const hasPackageMatch = filters.packageId ? record.part.packageId === filters.packageId : true;
@@ -142,6 +143,34 @@ export function filterPartRecords(records: PartSearchRecord[], filters: PartSear
       hasConnectorClassMatch
     );
   });
+}
+
+/**
+ * Splits an engineer-entered catalog query into searchable alphanumeric fragments.
+ * This lets `TPS7A02 DBVR` match `TPS7A02DBVR` and `JST PH 2P` match `JST-PH-2P-*`
+ * without inventing provider-specific parsing rules.
+ */
+export function buildSearchQueryTokens(query: string | undefined): string[] {
+  const normalizedQuery = normalizeSearchText(query ?? "");
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return [...new Set(normalizedQuery.split(" ").filter(Boolean))];
+}
+
+/**
+ * Returns explicit engineering shorthand alternatives for one normalized search token.
+ */
+export function buildSearchTokenAlternates(token: string): string[] {
+  const normalizedToken = normalizeSearchText(token);
+
+  if (normalizedToken === "ldo") {
+    return ["ldo", "linear regulator"];
+  }
+
+  return normalizedToken ? [normalizedToken] : [];
 }
 
 /**
@@ -323,10 +352,11 @@ export function getExportAvailability(record: PartSearchRecord): ExportAvailabil
 /**
  * Checks whether a joined record matches free-text engineering search.
  */
-function recordMatchesQuery(record: PartSearchRecord, normalizedQuery: string): boolean {
-  const haystack = [
+function recordMatchesQuery(record: PartSearchRecord, normalizedQuery: string, queryTokens: string[]): boolean {
+  const searchableValues = [
     record.part.mpn,
     record.part.category,
+    record.part.description ?? "",
     record.manufacturer.name,
     record.package.packageName,
     record.connectorFamily?.name ?? "",
@@ -334,11 +364,52 @@ function recordMatchesQuery(record: PartSearchRecord, normalizedQuery: string): 
     ...record.sources.map((source) => source.sourceUrl ?? ""),
     ...record.assets.filter((asset) => asset.assetType === "datasheet").map((asset) => asset.sourceUrl ?? ""),
     ...record.manufacturer.aliases
-  ]
-    .join(" ")
-    .toLowerCase();
+  ];
+  const haystack = searchableValues.join(" ").toLowerCase();
 
-  return haystack.includes(normalizedQuery);
+  if (haystack.includes(normalizedQuery)) {
+    return true;
+  }
+
+  const normalizedHaystack = expandSearchAliases(normalizeSearchText(searchableValues.join(" ")));
+  const compactHaystack = compactSearchText(normalizedHaystack);
+
+  return queryTokens.length > 0 && queryTokens.every((token) => {
+    const tokenAlternates = buildSearchTokenAlternates(token);
+
+    return tokenAlternates.some((candidate) => normalizedHaystack.includes(candidate) || compactHaystack.includes(compactSearchText(candidate)));
+  });
+}
+
+/**
+ * Converts punctuation, separators, and casing into a stable token-search string.
+ */
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, " ").trim();
+}
+
+/**
+ * Adds conservative engineering shorthand aliases to normalized searchable text.
+ */
+function expandSearchAliases(normalizedText: string): string {
+  const aliases: string[] = [];
+
+  if (/\bldo\b/u.test(normalizedText)) {
+    aliases.push("linear regulator");
+  }
+
+  if (/\blinear regulator\b/u.test(normalizedText)) {
+    aliases.push("ldo");
+  }
+
+  return aliases.length > 0 ? `${normalizedText} ${aliases.join(" ")}` : normalizedText;
+}
+
+/**
+ * Removes token separators so package searches like `SOT23` can match `SOT-23-5`.
+ */
+function compactSearchText(value: string): string {
+  return value.replace(/\s+/gu, "");
 }
 
 /**

@@ -25,8 +25,11 @@ import type {
   SourceExtractionSignal,
   SourceRecord
 } from "@ee-library/shared/types";
+import { digikeyProviderAdapter } from "./providers/digikey-provider";
 import { jlcpartsProviderAdapter } from "./providers/jlcparts-provider";
+import { kicadProviderAdapter } from "./providers/kicad-provider";
 import { localCatalogProviderAdapter } from "./providers/local-catalog-provider";
+import { mouserProviderAdapter } from "./providers/mouser-provider";
 import { octopartProviderAdapter } from "./providers/octopart-provider";
 
 /** ProviderPartRequest describes the minimum lookup input for future provider fetches. */
@@ -177,5 +180,19 @@ export interface ProviderAdapter {
   normalizeRawPart: (rawPayload: RawProviderPayload) => NormalizedProviderPart;
 }
 
-/** providerAdapters registers worker-only provider implementations. */
-export const providerAdapters: ProviderAdapter[] = [localCatalogProviderAdapter, jlcpartsProviderAdapter, octopartProviderAdapter];
+/**
+ * providerAdapters registers worker-only provider implementations.
+ *
+ * Order is product policy: free providers (local catalog, JLC/LCSC, DigiKey,
+ * Mouser, local KiCad index) come first so they are the default intake path.
+ * The paid Octopart-via-Nexar aggregator is registered last and stays opt-in;
+ * it only does anything when NEXAR_* credentials are configured.
+ */
+export const providerAdapters: ProviderAdapter[] = [
+  localCatalogProviderAdapter,
+  jlcpartsProviderAdapter,
+  digikeyProviderAdapter,
+  mouserProviderAdapter,
+  kicadProviderAdapter,
+  octopartProviderAdapter
+];

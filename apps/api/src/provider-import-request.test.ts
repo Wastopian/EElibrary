@@ -85,7 +85,7 @@ test("formatProviderImportFailureMessage maps Octopart credential and provider f
   const missingCredentials = formatProviderImportFailureMessage(new Error("Octopart/Nexar credentials are not configured. Set NEXAR_ACCESS_TOKEN or NEXAR_CLIENT_ID and NEXAR_CLIENT_SECRET."));
   const unavailable = formatProviderImportFailureMessage(new Error("Unable to fetch Octopart/Nexar GraphQL response (401)"));
 
-  assert.match(missingCredentials, /requires configured provider credentials/u);
+  assert.match(missingCredentials, /optional paid aggregator and requires configured Nexar credentials/u);
   assert.match(unavailable, /Octopart\/Nexar provider/u);
   assert.doesNotMatch(missingCredentials, /CLIENT_SECRET/u);
 });

@@ -11,8 +11,9 @@
  */
 
 import React from "react";
-import { buildAssetDownloadUrl } from "../lib/api-client";
-import type { Asset, AssetAvailabilityStatus } from "@ee-library/shared/types";
+import { buildAssetDownloadUrl, buildAssetPreviewArtifactDownloadUrl } from "../lib/api-client";
+import { ThreeDInlinePreview } from "./ThreeDInlinePreview";
+import type { Asset, AssetAvailabilityStatus, AssetPreviewArtifactFormat } from "@ee-library/shared/types";
 
 /**
  * AssetPreviewState is the explicit, scannable outcome the inline preview component
@@ -21,6 +22,8 @@ import type { Asset, AssetAvailabilityStatus } from "@ee-library/shared/types";
 export type AssetPreviewState =
   | { kind: "stored_pdf_inline" }
   | { kind: "stored_image_inline" }
+  | { kind: "stored_three_d_inline"; previewArtifactFormat: Extract<AssetPreviewArtifactFormat, "glb" | "gltf"> }
+  | { kind: "three_d_preview_pending_artifact" }
   | { kind: "pdf_reference_only" }
   | { kind: "image_reference_only" }
   | { kind: "ready_unsupported_format" }
@@ -39,6 +42,17 @@ export function getAssetPreviewState(asset: Asset): AssetPreviewState {
 
   if (asset.previewStatus !== "ready") {
     return { kind: "preview_not_available" };
+  }
+
+  if (isThreeDViewerFormat(asset.fileFormat)) {
+    if (hasEmbeddableThreeDPreviewArtifact(asset)) {
+      return {
+        kind: "stored_three_d_inline",
+        previewArtifactFormat: asset.previewArtifactFormat
+      };
+    }
+
+    return { kind: "three_d_preview_pending_artifact" };
   }
 
   if (isStoredImageFormat(asset.fileFormat) && isStoredFileAvailability(asset.availabilityStatus)) {
@@ -65,7 +79,7 @@ export function getAssetPreviewState(asset: Asset): AssetPreviewState {
  */
 export function canEmbedAssetPreview(asset: Asset): boolean {
   const kind = getAssetPreviewState(asset).kind;
-  return kind === "stored_pdf_inline" || kind === "stored_image_inline";
+  return kind === "stored_pdf_inline" || kind === "stored_image_inline" || kind === "stored_three_d_inline";
 }
 
 /**
@@ -80,6 +94,24 @@ function isStoredFileAvailability(status: AssetAvailabilityStatus): boolean {
  */
 function isStoredImageFormat(format: Asset["fileFormat"]): boolean {
   return format === "png" || format === "jpg" || format === "jpeg" || format === "webp";
+}
+
+/**
+ * Returns true for source formats that require or can use the browser 3D viewer path.
+ */
+function isThreeDViewerFormat(format: Asset["fileFormat"]): boolean {
+  return format === "step" || format === "glb" || format === "gltf";
+}
+
+/**
+ * Returns true when the asset has a recorded glb/gltf preview artifact that model-viewer can open.
+ */
+function hasEmbeddableThreeDPreviewArtifact(
+  asset: Asset
+): asset is Asset & { previewArtifactFormat: Extract<AssetPreviewArtifactFormat, "glb" | "gltf">; previewArtifactStorageKey: string } {
+  return typeof asset.previewArtifactStorageKey === "string"
+    && asset.previewArtifactStorageKey.length > 0
+    && (asset.previewArtifactFormat === "glb" || asset.previewArtifactFormat === "gltf");
 }
 
 type AssetInlinePreviewProps = {
@@ -122,6 +154,26 @@ export function AssetInlinePreview({ asset, partId }: AssetInlinePreviewProps) {
         </div>
       );
     }
+
+    case "stored_three_d_inline": {
+      const src = buildAssetPreviewArtifactDownloadUrl(partId, asset.id);
+
+      return (
+        <ThreeDInlinePreview
+          altText={`${asset.assetType} ${state.previewArtifactFormat} preview`}
+          artifactUrl={src}
+        />
+      );
+    }
+
+    case "three_d_preview_pending_artifact":
+      return (
+        <div className="asset-inline-preview asset-inline-preview--note" role="status">
+          <p className="muted-copy">
+            Preview metadata is ready, but the browser-viewable 3D artifact is not recorded yet. Use <strong>Download</strong> for the source file while conversion catches up.
+          </p>
+        </div>
+      );
 
     case "pdf_reference_only":
       return (

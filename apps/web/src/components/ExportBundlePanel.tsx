@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { buildExportBundleDownloadUrl, createExportBundle, fetchProjectExportBundles, isApiClientError } from "../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { ExportBundle, ExportBundleAssemblyStatus, ExportBundleFormat, ExportBundleListResponse, ProjectRevision } from "@ee-library/shared/types";
+import type { ExportBundle, ExportBundleAssemblyStatus, ExportBundleFormat, ExportBundleListResponse, ExportBundleSignatureStatus, ExportBundleVerificationReason, ProjectRevision } from "@ee-library/shared/types";
 
 /**
  * BUNDLE_AUTO_REFRESH_INTERVAL_MS controls how often the panel re-fetches the bundle list while
@@ -215,6 +215,7 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
                 <th>Controlled</th>
                 <th>Warnings</th>
                 <th>Assembly</th>
+                <th>Signature</th>
                 <th>Generated</th>
                 <th>Download</th>
               </tr>
@@ -266,6 +267,9 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
         <td>
           <BundleAssemblyCell bundle={bundle} />
         </td>
+        <td>
+          <BundleSignatureCell bundle={bundle} />
+        </td>
         <td className="ui-mono">{new Date(bundle.createdAt).toLocaleString()}</td>
         <td>
           <BundleAvailabilityCell bundle={bundle} archiveDownloadUrl={archiveDownloadUrl} manifestDownloadUrl={manifestDownloadUrl} />
@@ -273,7 +277,7 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
       </tr>
       {inlineWarnings.length > 0 && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={11}>
             <ul className="bundle-inline-warnings">
               {inlineWarnings.map((warning, i) => (
                 <li key={i} className="form-feedback form-feedback--warning">
@@ -286,14 +290,14 @@ function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElem
       )}
       {showManifest && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={11}>
             <BundleManifestDetail bundle={bundle} onClose={() => setShowManifest(false)} />
           </td>
         </tr>
       )}
       {!showManifest && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={11}>
             <button
               className="link-button"
               type="button"
@@ -337,19 +341,7 @@ function BundleControlledCell({ bundle }: { bundle: ExportBundle }): React.React
 }
 
 function BundleAssemblyCell({ bundle }: { bundle: ExportBundle }): React.ReactElement {
-  if (bundle.assemblyStatus === "assembled") {
-    return <StatusBadge label="Assembled" tone="verified" />;
-  }
-
-  if (bundle.assemblyStatus === "pending") {
-    return <StatusBadge label="Assembling" tone="review" />;
-  }
-
-  if (bundle.assemblyStatus === "assembly_failed") {
-    return <StatusBadge label="Assembly failed" tone="danger" />;
-  }
-
-  return <StatusBadge label="Not required" tone="info" />;
+  return <StatusBadge label={describeBundleAssemblyStatus(bundle.assemblyStatus)} tone={assemblyStatusTone(bundle.assemblyStatus)} />;
 }
 
 /**
@@ -392,6 +384,87 @@ export function describeBundleAssemblyStatus(status: ExportBundleAssemblyStatus)
     default:
       return "Not required";
   }
+}
+
+/**
+ * Maps an assembly status to the matching badge tone without treating manifest creation as archive readiness.
+ */
+function assemblyStatusTone(status: ExportBundleAssemblyStatus): BadgeTone {
+  switch (status) {
+    case "assembled":
+      return "verified";
+    case "pending":
+      return "review";
+    case "assembly_failed":
+      return "danger";
+    default:
+      return "info";
+  }
+}
+
+/**
+ * Maps cryptographic signature state to the label/tone shown in bundle history.
+ */
+export function describeSignatureStatus(status: ExportBundleSignatureStatus): { label: string; tone: BadgeTone } {
+  switch (status) {
+    case "signed":
+      return { label: "Signed", tone: "verified" };
+    case "verification_failed":
+      return { label: "Verification failed", tone: "danger" };
+    default:
+      return { label: "Unsigned", tone: "info" };
+  }
+}
+
+/**
+ * Renders one bundle's signature and hash provenance without implying part approval.
+ */
+function BundleSignatureCell({ bundle }: { bundle: ExportBundle }): React.ReactElement {
+  const status = describeSignatureStatus(bundle.signatureStatus);
+  const fingerprint = bundle.signaturePublicKeyFingerprint ? shortHexHash(bundle.signaturePublicKeyFingerprint) : null;
+
+  return (
+    <div className="bundle-signature-cell">
+      <StatusBadge label={status.label} tone={status.tone} />
+      {fingerprint ? <span className="ui-mono text-muted">key {fingerprint}</span> : null}
+      {bundle.archiveSha256 ? <span className="ui-mono text-muted">archive {shortHexHash(bundle.archiveSha256)}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * Maps a verification failure reason to operator-facing recovery copy.
+ */
+export function describeVerificationReason(reason: ExportBundleVerificationReason): string {
+  switch (reason) {
+    case "archive_missing":
+      return "The assembled archive is missing from storage. Regenerate the bundle before using it.";
+    case "archive_hash_mismatch":
+      return "The archive bytes appear altered because the recomputed hash no longer matches the recorded hash.";
+    case "signature_missing":
+      return "The bundle was recorded as signed, but the detached signature file is missing. Regenerate or restore the signature.";
+    case "signature_unreadable":
+      return "The detached signature could not be read as a valid Ed25519 signature payload.";
+    case "signature_algorithm_unsupported":
+      return "The recorded signature algorithm is not supported by this deployment's verifier.";
+    case "verification_key_unavailable":
+      return "No verification key is configured. Set EE_LIBRARY_BUNDLE_VERIFICATION_KEY before relying on signed bundle verification.";
+    case "verification_key_fingerprint_mismatch":
+      return "The configured verification key does not match the signer key fingerprint recorded on this bundle.";
+    case "signature_mismatch":
+      return "The signature does not verify against the archive hash. Treat the bundle as altered and regenerate it.";
+  }
+}
+
+/**
+ * Shortens long hex identifiers while preserving enough leading and trailing context to compare rows.
+ */
+export function shortHexHash(hash: string): string {
+  if (hash.length <= 16) {
+    return hash;
+  }
+
+  return `${hash.slice(0, 8)}\u2026${hash.slice(-6)}`;
 }
 
 /**
@@ -523,6 +596,93 @@ function BundleManifestDetail({ bundle, onClose }: { bundle: ExportBundle; onClo
                   <td>{asset.fileFormat}</td>
                   <td className="ui-mono text-muted">{asset.bundlePath}</td>
                   <td className="ui-mono text-muted">{asset.fileHash ? asset.fileHash.slice(0, 12) + "…" : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(bundle.manifest.partProvenance ?? []).length > 0 && (
+        <div className="bundle-manifest__section">
+          <h5>Defensible provenance ({(bundle.manifest.partProvenance ?? []).length} parts)</h5>
+          <p className="muted-copy">
+            Captured at generation time and covered by the bundle signature, so an auditor or customer can verify it was not
+            altered. This is a point-in-time record, not a re-derived trust gate.
+          </p>
+          <table className="data-table data-table--compact">
+            <thead>
+              <tr>
+                <th>Part MPN</th>
+                <th>Approved</th>
+                <th>Datasheet revision</th>
+                <th>Trusted assets</th>
+                <th>Confirmed engineering memory</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(bundle.manifest.partProvenance ?? []).map((entry) => (
+                <tr key={entry.partId}>
+                  <td className="ui-mono">{entry.partMpn}</td>
+                  <td>
+                    {entry.approval ? (
+                      <>
+                        <StatusBadge
+                          label={entry.approval.status.replace(/_/g, " ")}
+                          tone={entry.approval.status === "approved" ? "verified" : "review"}
+                        />
+                        {entry.approval.decidedBy ? (
+                          <div className="muted-copy">
+                            {entry.approval.decidedBy}
+                            {entry.approval.decidedAt ? ` · ${new Date(entry.approval.decidedAt).toLocaleDateString()}` : ""}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="muted-copy">-</span>
+                    )}
+                  </td>
+                  <td>
+                    {entry.datasheetRevision ? (
+                      <span>
+                        {entry.datasheetRevision.revisionLabel ?? entry.datasheetRevision.datasheetRevisionId}
+                        {entry.datasheetRevision.revisionDate ? ` (${new Date(entry.datasheetRevision.revisionDate).toLocaleDateString()})` : ""}
+                      </span>
+                    ) : (
+                      <span className="muted-copy">-</span>
+                    )}
+                  </td>
+                  <td>
+                    {entry.trustedAssets.length > 0 ? (
+                      <ul className="bundle-provenance__assets">
+                        {entry.trustedAssets.map((asset) => (
+                          <li key={asset.assetId}>
+                            {asset.assetType} · {asset.provenance}
+                            {asset.fileHash ? ` · sha256 ${asset.fileHash.slice(0, 12)}…` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="muted-copy">-</span>
+                    )}
+                  </td>
+                  <td>
+                    {entry.confirmedEngineeringMemory.length > 0 ? (
+                      <ul className="bundle-provenance__memory">
+                        {entry.confirmedEngineeringMemory.map((record) => (
+                          <li key={record.recordId}>
+                            <StatusBadge
+                              label={record.severity === "blocking" ? "blocking" : record.outcome === "bit_us" ? "bit us" : record.recordKind.replace(/_/g, " ")}
+                              tone={record.severity === "blocking" || record.outcome === "bit_us" ? "danger" : "info"}
+                            />
+                            <span>{record.title}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="muted-copy">none</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

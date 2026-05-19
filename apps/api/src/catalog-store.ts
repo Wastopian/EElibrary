@@ -5,7 +5,7 @@
 import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
-import { buildSearchPagination } from "@ee-library/shared/catalog-runtime";
+import { buildSearchPagination, buildSearchQueryTokens, buildSearchTokenAlternates } from "@ee-library/shared/catalog-runtime";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
@@ -41,6 +41,11 @@ import type {
   PartIssue,
   PartReadinessStatus,
   PartRiskFlag,
+  PartEngineeringMemoryWarningPreview,
+  PartEngineeringMemoryWarningSummary,
+  PartEngineeringRecordKind,
+  PartEngineeringRecordOutcome,
+  PartEngineeringRecordSeverity,
   PartMetric,
   PartSearchFilters,
   PartSearchRecord,
@@ -235,6 +240,10 @@ interface DatabaseAssetRow {
   generation_source_asset_id: string | null;
   validation_status: Asset["validationStatus"];
   preview_status: Asset["previewStatus"];
+  preview_artifact_storage_key: string | null;
+  preview_artifact_format: Asset["previewArtifactFormat"];
+  preview_artifact_generated_at: Date | string | null;
+  preview_artifact_source: Asset["previewArtifactSource"];
   asset_state: Asset["assetState"];
   source_url: string | null;
   source_record_id: string | null;
@@ -689,6 +698,75 @@ export async function readCatalogRecordsFromDatabase(options: CatalogReadOptions
 }
 
 /**
+ * Bounds the connector-intent candidate fetch. The resolver only ever keeps connector-class
+ * parts and returns the top 8 by score, so this cap is effectively complete for real libraries
+ * while preventing the route from loading the entire catalog (and its parts×parts duplicate
+ * self-join) on every call.
+ */
+const CONNECTOR_INTENT_CANDIDATE_CAP = 2000;
+
+/**
+ * Returns the bounded record set the connector-set intent resolver needs, instead of the whole
+ * catalog. `resolveConnectorSetIntent` discards every non-connector record and then dereferences
+ * only the specific mate/accessory/cable target parts of its connector candidates via a
+ * `partById` map. So this fetches exactly that closure and nothing more:
+ *
+ *   Phase 1 — all connector-class parts (the resolver's exact candidate universe; pushed down to
+ *             SQL as the `connectorClass` filter, capped), with their full search summary
+ *             (buildableMatingSet included).
+ *   Phase 2 — the relation target parts referenced by those candidates that are not themselves
+ *             connector-class, fetched by id as lightweight summaries.
+ *
+ * Output is behavior-identical to the old full-catalog load except that connector candidates
+ * beyond {@link CONNECTOR_INTENT_CANDIDATE_CAP} are not considered.
+ */
+export async function readConnectorIntentRecordsFromDatabase(options: CatalogReadOptions = {}): Promise<CatalogReadResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const filters: PartSearchFilters = { connectorClass: "connector" };
+    const searchFilter = buildSearchSqlFilter(filters, "any");
+    const sort = buildSearchPagination(0, filters).sort;
+    const candidateIds = await readSearchPartIds(databasePool, searchFilter, sort, CONNECTOR_INTENT_CANDIDATE_CAP, 0, options);
+
+    if (candidateIds.length === 0) {
+      return { records: [], status: "available" };
+    }
+
+    const candidateRecords = await readPartSearchSummaryRecords(databasePool, candidateIds, options);
+    const presentIds = new Set(candidateRecords.map((record) => record.part.id));
+    const relatedIds = new Set<string>();
+
+    for (const record of candidateRecords) {
+      const mating = record.buildableMatingSet;
+
+      for (const relation of [mating.bestMate, ...mating.alternateMates]) {
+        if (relation) {
+          relatedIds.add(relation.matePartId);
+        }
+      }
+      for (const accessory of [...mating.requiredAccessories, ...mating.optionalAccessories, ...mating.toolingRequirements]) {
+        relatedIds.add(accessory.accessoryPartId);
+      }
+      for (const cable of mating.cableOptions) {
+        relatedIds.add(cable.cablePartId);
+      }
+    }
+
+    const missingRelatedIds = [...relatedIds].filter((id) => !presentIds.has(id)).sort();
+    const relatedRecords = await readPartSummaryRecords(databasePool, missingRelatedIds, options);
+
+    return { records: [...candidateRecords, ...relatedRecords], status: "available" };
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
  * Returns SQL-filtered and paginated search summary records without loading the full catalog.
  */
 export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilters = {}, options: CatalogReadOptions = {}): Promise<CatalogSearchReadResult> {
@@ -831,6 +909,25 @@ export type AssetDownloadTargetResult =
   | { status: "redirect"; url: string; assetType: Asset["assetType"]; fileFormat: Asset["fileFormat"] }
   | { status: "file_only"; storageKey: string; assetType: Asset["assetType"]; fileFormat: Asset["fileFormat"] };
 
+/**
+ * AssetPreviewArtifactDownloadTargetResult describes what the preview-artifact download
+ * route should do for one asset. The preview artifact is a derived browser-renderable
+ * file (e.g. glb/gltf converted from a STEP) and is intentionally separate from the
+ * source asset download path so the source bytes' availability/trust contract is never
+ * confused with the preview artifact's existence.
+ */
+export type AssetPreviewArtifactDownloadTargetResult =
+  | { status: "not_configured" }
+  | { status: "not_found" }
+  | { status: "not_available"; reason: string }
+  | {
+      status: "file_only";
+      storageKey: string;
+      assetType: Asset["assetType"];
+      fileFormat: Asset["fileFormat"];
+      previewArtifactFormat: NonNullable<Asset["previewArtifactFormat"]>;
+    };
+
 /** DatabaseAssetDownloadRow is the minimal shape needed to resolve one asset download target. */
 interface DatabaseAssetDownloadRow {
   id: string;
@@ -840,6 +937,17 @@ interface DatabaseAssetDownloadRow {
   availability_status: Asset["availabilityStatus"];
   source_url: string | null;
   storage_key: string | null;
+}
+
+/** DatabaseAssetPreviewArtifactDownloadRow is the minimal shape needed to resolve one preview-artifact download target. */
+interface DatabaseAssetPreviewArtifactDownloadRow {
+  id: string;
+  part_id: string;
+  asset_type: Asset["assetType"];
+  file_format: Asset["fileFormat"];
+  preview_status: Asset["previewStatus"];
+  preview_artifact_storage_key: string | null;
+  preview_artifact_format: Asset["previewArtifactFormat"];
 }
 
 /**
@@ -886,6 +994,79 @@ export async function readAssetDownloadTargetFromDatabase(partId: string, assetI
     }
 
     return { status: "not_accessible", reason: "This asset has no accessible URL or stored file." };
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads the minimum asset preview-artifact fields needed to resolve a derived-preview file path.
+ *
+ * Honesty rules enforced here:
+ *  - Returns `not_found` only when the asset row itself does not exist.
+ *  - Returns `not_available` for every other "no derived preview to serve" case (status not
+ *    ready, missing storage key, or missing format) with a human-readable reason. This keeps
+ *    the API contract honest: a 404 means the asset is unknown, while 409 means the asset is
+ *    real but no derived preview artifact has been written yet.
+ *  - Never reads `source_url` or the source `storage_key`: the preview-artifact download
+ *    must never accidentally serve unconverted source bytes.
+ */
+export async function readAssetPreviewArtifactDownloadTargetFromDatabase(
+  partId: string,
+  assetId: string
+): Promise<AssetPreviewArtifactDownloadTargetResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const result = await databasePool.query<DatabaseAssetPreviewArtifactDownloadRow>(
+      `
+        SELECT id, part_id, asset_type, file_format, preview_status,
+               preview_artifact_storage_key, preview_artifact_format
+        FROM assets
+        WHERE id = $1 AND part_id = $2
+        LIMIT 1
+      `,
+      [assetId, partId]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: "not_found" };
+    }
+
+    if (row.preview_status !== "ready") {
+      return {
+        status: "not_available",
+        reason: "No derived preview artifact has been generated for this asset yet."
+      };
+    }
+
+    if (!row.preview_artifact_storage_key) {
+      return {
+        status: "not_available",
+        reason: "Preview status is ready but no derived preview artifact storage key is recorded."
+      };
+    }
+
+    if (!row.preview_artifact_format) {
+      return {
+        status: "not_available",
+        reason: "Preview status is ready but no derived preview artifact format is recorded."
+      };
+    }
+
+    return {
+      status: "file_only",
+      storageKey: row.preview_artifact_storage_key,
+      assetType: row.asset_type,
+      fileFormat: row.file_format,
+      previewArtifactFormat: row.preview_artifact_format
+    };
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -1525,7 +1706,7 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, 
       timedCatalogQuery<DatabasePartRiskFlagRow>(databasePool, "part_risk_flags", PART_RISK_FLAG_ROWS_SQL, params, options)
     ]);
 
-    return buildPartRecords(
+    const built = buildPartRecords(
       partRows.rows,
       metricRows.rows,
       assetRows.rows,
@@ -1550,8 +1731,72 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, 
       sourceReconciliationRows.rows,
       riskFlagRows.rows
     );
+
+    return attachEngineeringMemoryWarnings(databasePool, built, options);
   } catch (error) {
     throw toCatalogStoreError(error);
+  }
+}
+
+/** Bounds the per-part scan-time memory preview so search rows and detail banners stay compact. */
+const ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT = 3;
+
+/**
+ * Attaches the read-only "this part bit us / is blocked" projection to built part records.
+ *
+ * This is the decision-point push: the same confirmed engineering memory the project overlap
+ * panel surfaces, now attached wherever a part is chosen (catalog search rows, part detail).
+ * It is a soft reuse signal — best-effort by design: if `part_engineering_records` is absent or
+ * the query fails, records come back with `engineeringMemoryWarning: null` rather than breaking
+ * catalog search or part detail. It never changes readiness, approval, validation, or export.
+ */
+async function attachEngineeringMemoryWarnings(
+  databasePool: Pool,
+  records: PartSearchRecord[],
+  options: CatalogReadOptions
+): Promise<PartSearchRecord[]> {
+  if (records.length === 0) {
+    return records;
+  }
+
+  const partIds = records.map((record) => record.part.id);
+
+  try {
+    const result = await timedCatalogQuery<{
+      part_id: string;
+      record_id: string;
+      record_kind: string;
+      severity: string;
+      outcome: string | null;
+      title: string;
+    }>(databasePool, "engineering_memory_warnings", ENGINEERING_MEMORY_WARNING_ROWS_SQL, [partIds], options);
+
+    const byPart = new Map<string, PartEngineeringMemoryWarningSummary>();
+
+    for (const row of result.rows) {
+      const summary = byPart.get(row.part_id) ?? { blockingCount: 0, preview: [], warningCount: 0 };
+      summary.warningCount += 1;
+
+      if (row.severity === "blocking") {
+        summary.blockingCount += 1;
+      }
+
+      if (summary.preview.length < ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT) {
+        summary.preview.push({
+          outcome: (row.outcome as PartEngineeringRecordOutcome | null) ?? null,
+          recordId: row.record_id,
+          recordKind: row.record_kind as PartEngineeringRecordKind,
+          severity: row.severity as PartEngineeringRecordSeverity,
+          title: row.title
+        } satisfies PartEngineeringMemoryWarningPreview);
+      }
+
+      byPart.set(row.part_id, summary);
+    }
+
+    return records.map((record) => ({ ...record, engineeringMemoryWarning: byPart.get(record.part.id) ?? null }));
+  } catch {
+    return records.map((record) => ({ ...record, engineeringMemoryWarning: null }));
   }
 }
 
@@ -1645,8 +1890,9 @@ async function readPartSearchSummaryRecords(databasePool: Pool, partIds: string[
       riskFlagRows.rows
     );
     const recordById = new Map(records.map((record) => [record.part.id, record]));
+    const orderedRecords = partIds.map((partId) => recordById.get(partId)).filter((record): record is PartSearchRecord => Boolean(record));
 
-    return partIds.map((partId) => recordById.get(partId)).filter((record): record is PartSearchRecord => Boolean(record));
+    return attachEngineeringMemoryWarnings(databasePool, orderedRecords, options);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -2936,6 +3182,10 @@ function mapAssetRow(row: DatabaseAssetRow): Asset {
     lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
     licenseMode: row.license_mode,
     partId: row.part_id,
+    previewArtifactFormat: row.preview_artifact_format,
+    previewArtifactGeneratedAt: row.preview_artifact_generated_at ? toIsoTimestamp(row.preview_artifact_generated_at) : null,
+    previewArtifactSource: row.preview_artifact_source,
+    previewArtifactStorageKey: row.preview_artifact_storage_key,
     previewStatus: row.preview_status,
     providerId: row.provider_id,
     provenance: row.provenance,
@@ -3510,6 +3760,47 @@ function buildSearchQueryPattern(query: string | undefined): string | null {
 }
 
 /**
+ * Builds one OR branch for a free-text LIKE parameter across the searchable catalog fields.
+ * Source-record and datasheet URL checks stay as non-correlated IN-subqueries so trigram
+ * indexes can be used before joining the matching part ids back to the parts table.
+ */
+function buildSearchLikeClause(paramIndex: number, options: { includeCompactSearch?: boolean } = {}): string {
+  const compactSearchClause = options.includeCompactSearch
+    ? `
+      OR ${buildCompactSearchSql("lower(p.mpn)")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}
+      OR ${buildCompactSearchSql("lower(p.description)")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}
+      OR ${buildCompactSearchSql("lower(pk.package_name)")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}
+      OR ${buildCompactSearchSql("lower(COALESCE(cf.name, ''))")} LIKE ${buildCompactSearchSql(`$${paramIndex}::text`)}`
+    : "";
+
+  return `(
+      lower(p.mpn) LIKE $${paramIndex}
+      OR lower(p.description) LIKE $${paramIndex}
+      OR lower(p.category) LIKE $${paramIndex}
+      OR lower(m.name) LIKE $${paramIndex}
+      OR lower(pk.package_name) LIKE $${paramIndex}
+      OR lower(COALESCE(cf.name, '')) LIKE $${paramIndex}
+      ${compactSearchClause}
+      OR p.id IN (
+        SELECT sr.part_id
+        FROM source_records sr
+        WHERE sr.part_id IS NOT NULL
+          AND (
+            lower(sr.provider_part_key) LIKE $${paramIndex}
+            OR lower(COALESCE(sr.source_url, '')) LIKE $${paramIndex}
+          )
+      )
+      OR p.id IN (
+        SELECT datasheet_asset.part_id
+        FROM assets datasheet_asset
+        WHERE datasheet_asset.part_id IS NOT NULL
+          AND datasheet_asset.asset_type = 'datasheet'
+          AND lower(COALESCE(datasheet_asset.source_url, '')) LIKE $${paramIndex}
+      )
+    )`;
+}
+
+/**
  * Builds the paged search identifier query. When a free-text query is active, relevance
  * ordering is used regardless of the caller's sort preference — queryText is appended as
  * the next parameter after the WHERE params, shifting LIMIT and OFFSET by one slot.
@@ -3700,39 +3991,34 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
   const clauses: string[] = [];
   const params: unknown[] = [];
   const queryPattern = buildSearchQueryPattern(filters.query);
+  const queryTokens = buildSearchQueryTokens(filters.query);
   const queryText = filters.query?.trim().toLowerCase() || null;
 
   if (queryPattern) {
     params.push(queryPattern);
+    const phraseParamIndex = params.length;
+    const includeCompactPhraseSearch = shouldUseCompactSearch(filters.query);
+    const tokenClauses = queryTokens.length > 1
+      ? queryTokens.map((token) => {
+          const tokenAlternates = buildSearchTokenAlternates(token).map((alternate) => `%${alternate}%`);
+          const alternateClauses = tokenAlternates.map((alternatePattern) => {
+            params.push(alternatePattern);
+            return buildSearchLikeClause(params.length, { includeCompactSearch: shouldUseCompactSearch(alternatePattern) });
+          });
+
+          return alternateClauses.length > 1 ? `(${alternateClauses.join("\n        OR ")})` : alternateClauses[0] ?? "FALSE";
+        })
+      : [];
     // The source_records and datasheet asset branches use non-correlated IN-subqueries instead of
     // correlated EXISTS so PostgreSQL pre-filters those tables on the trigram-indexed LIKE
     // (idx_source_records_provider_part_key_trgm) once, then performs a hash semi-join back to parts —
     // rather than running the inner LIKE per candidate part row. Direct LIKE columns stay on the
     // OR-chain to ride trigram indexes on parts.mpn, parts.category, manufacturers.name, etc.
-    clauses.push(`(
-      lower(p.mpn) LIKE $${params.length}
-      OR lower(p.description) LIKE $${params.length}
-      OR lower(p.category) LIKE $${params.length}
-      OR lower(m.name) LIKE $${params.length}
-      OR lower(pk.package_name) LIKE $${params.length}
-      OR lower(COALESCE(cf.name, '')) LIKE $${params.length}
-      OR p.id IN (
-        SELECT sr.part_id
-        FROM source_records sr
-        WHERE sr.part_id IS NOT NULL
-          AND (
-            lower(sr.provider_part_key) LIKE $${params.length}
-            OR lower(COALESCE(sr.source_url, '')) LIKE $${params.length}
-          )
-      )
-      OR p.id IN (
-        SELECT datasheet_asset.part_id
-        FROM assets datasheet_asset
-        WHERE datasheet_asset.part_id IS NOT NULL
-          AND datasheet_asset.asset_type = 'datasheet'
-          AND lower(COALESCE(datasheet_asset.source_url, '')) LIKE $${params.length}
-      )
-    )`);
+    // Multi-word searches keep the phrase branch and add an all-tokens branch for separator-heavy
+    // engineering queries such as "TPS7A02 DBVR" or "JST PH 2P".
+    clauses.push(tokenClauses.length > 0
+      ? `(${buildSearchLikeClause(phraseParamIndex, { includeCompactSearch: includeCompactPhraseSearch })} OR (${tokenClauses.join("\n      AND ")}))`
+      : buildSearchLikeClause(phraseParamIndex, { includeCompactSearch: includeCompactPhraseSearch }));
   }
 
   appendTextFilterClause(clauses, params, "p.manufacturer_id", filters.manufacturerId);
@@ -3780,6 +4066,15 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
     queryText,
     whereSql: clauses.length > 0 ? `WHERE ${clauses.join("\n    AND ")}` : ""
   };
+}
+
+/**
+ * Detects when compact field matching is useful for separator-heavy engineering text.
+ */
+function shouldUseCompactSearch(value: string | undefined): boolean {
+  const normalizedValue = value?.trim().toLowerCase() ?? "";
+
+  return /[a-z][0-9]|[0-9][a-z]|[-_\s/.]/u.test(normalizedValue);
 }
 
 /**
@@ -3849,6 +4144,8 @@ function searchOrderByClause(sort: PartSearchSort): string {
 /**
  * Builds a relevance ORDER BY clause that ranks results by how closely they match the
  * free-text query. The composite GREATEST() score picks the strongest matching signal:
+ * Compact MPN scoring removes punctuation from both sides, so space- or dash-separated
+ * user input can still rank the canonical contiguous MPN first.
  *
  *   1.5 — exact MPN match          (e.g. searching "LM358" finds part with mpn "LM358" first)
  *   1.2 — MPN prefix match         (e.g. "LM3" surfaces LM358, LM311, LM393 before unrelated parts)
@@ -3862,19 +4159,35 @@ function searchOrderByClause(sort: PartSearchSort): string {
  * queryParamIndex is the SQL parameter index ($N) that holds the raw lowercased query text.
  */
 function relevanceOrderByClause(queryParamIndex: number): string {
+  const compactMpnSql = buildCompactSearchSql("lower(p.mpn)");
+  const compactQuerySql = buildCompactSearchSql(`$${queryParamIndex}::text`);
+
   return `
     ORDER BY
       GREATEST(
+        CASE WHEN ${compactMpnSql} = ${compactQuerySql} THEN 1.65 ELSE 0 END,
         CASE WHEN lower(p.mpn) = $${queryParamIndex}                        THEN 1.5 ELSE 0 END,
+        CASE WHEN ${compactMpnSql} LIKE (${compactQuerySql} || '%') THEN 1.35 ELSE 0 END,
         CASE WHEN lower(p.mpn) LIKE ($${queryParamIndex} || '%')            THEN 1.2 ELSE 0 END,
         similarity(lower(p.mpn),      $${queryParamIndex}),
         similarity(lower(m.name),     $${queryParamIndex}) * 0.6,
+        similarity(lower(pk.package_name), $${queryParamIndex}) * 0.5,
+        similarity(lower(COALESCE(cf.name, '')), $${queryParamIndex}) * 0.5,
         similarity(lower(p.category), $${queryParamIndex}) * 0.4
       ) DESC,
       p.trust_score DESC,
       lower(p.mpn) ASC,
       p.id ASC
   `;
+}
+
+/**
+ * Removes common MPN separators in SQL for relevance ranking.
+ * Nested replace() is intentionally used instead of regexp_replace() because pg-mem,
+ * used by API unit tests, does not emulate PostgreSQL's regex replacement overloads.
+ */
+function buildCompactSearchSql(expression: string): string {
+  return `replace(replace(replace(replace(replace(${expression}, '-', ''), ' ', ''), '_', ''), '/', ''), '.', '')`;
 }
 
 /**
@@ -3989,6 +4302,10 @@ const ASSET_ROWS_SQL = `
     generation_source_asset_id,
     validation_status,
     preview_status,
+    preview_artifact_storage_key,
+    preview_artifact_format,
+    preview_artifact_generated_at,
+    preview_artifact_source,
     asset_state,
     source_url,
     source_record_id,
@@ -4300,6 +4617,27 @@ const PART_RISK_FLAG_ROWS_SQL = `
   FROM part_risk_flags
   WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY tone ASC, label ASC, id ASC
+`;
+
+/**
+ * ENGINEERING_MEMORY_WARNING_ROWS_SQL reads confirmed, unresolved "this bit us / blocking"
+ * private engineering memory for the queried parts. Blocking rows sort first, then most recent,
+ * so a bounded preview is meaningful at scan time.
+ */
+const ENGINEERING_MEMORY_WARNING_ROWS_SQL = `
+  SELECT
+    per.part_id AS part_id,
+    per.id AS record_id,
+    per.record_kind AS record_kind,
+    per.severity AS severity,
+    per.outcome AS outcome,
+    per.title AS title
+  FROM part_engineering_records per
+  WHERE ($1::text[] IS NULL OR per.part_id = ANY($1::text[]))
+    AND per.draft_status = 'confirmed'
+    AND per.resolved_at IS NULL
+    AND (per.outcome = 'bit_us' OR per.severity = 'blocking')
+  ORDER BY CASE WHEN per.severity = 'blocking' THEN 0 ELSE 1 END, per.recorded_at DESC, per.id ASC
 `;
 
 /** DATASHEET_ROWS_SQL reads datasheet revision records. */

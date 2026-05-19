@@ -27,6 +27,7 @@
     "refresh:supply-offers": "node scripts/with-local-env.mjs npm run refresh-supply-offers -w @ee-library/worker",
     "lint": "npm run lint --workspaces",
     "seed:admin": "node scripts/with-local-env.mjs node scripts/seed-admin.mjs",
+    "seed:demo-project": "node scripts/with-local-env.mjs node scripts/seed-demo-project.mjs",
     "setup:dev": "node scripts/setup-dev.mjs",
     "smoke:local": "node scripts/with-local-env.mjs --warn-only node scripts/smoke-local.mjs",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",

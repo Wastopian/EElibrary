@@ -1,11 +1,18 @@
 "use client";
 
+/**
+ * File header: Client-side tray for adding and removing compare identifiers.
+ */
+
 import React from "react";
 import { useRouter } from "next/navigation";
 import { buildCompareUrl } from "../lib/api-client";
 
 const MAX_PARTS = 4;
 
+/**
+ * Parses comma-separated MPNs or internal part ids from the add-parts field.
+ */
 function parseCompareInput(value: string): string[] {
   return value
     .split(",")
@@ -13,16 +20,25 @@ function parseCompareInput(value: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Renders compare selection controls and syncs the selected identifiers into the URL.
+ */
 export function CompareSelectionTray({ initialPartIds }: { initialPartIds: string[] }) {
   const router = useRouter();
   const [partIds, setPartIds] = React.useState<string[]>(initialPartIds);
   const [input, setInput] = React.useState("");
   const [warning, setWarning] = React.useState<string | null>(null);
 
+  /**
+   * Pushes the compare token list to the route so the server loader can resolve ids or exact MPNs.
+   */
   function syncToUrl(nextPartIds: string[]) {
     router.push(buildCompareUrl(nextPartIds));
   }
 
+  /**
+   * Removes one selected compare token from both local state and the URL.
+   */
   function removePart(partId: string) {
     const next = partIds.filter((id) => id !== partId);
     setPartIds(next);
@@ -30,6 +46,9 @@ export function CompareSelectionTray({ initialPartIds }: { initialPartIds: strin
     syncToUrl(next);
   }
 
+  /**
+   * Adds comma-separated MPN/id tokens while enforcing the compare limit before navigation.
+   */
   function addParts(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextFromInput = parseCompareInput(input);
@@ -40,7 +59,7 @@ export function CompareSelectionTray({ initialPartIds }: { initialPartIds: strin
     const merged = [...new Set([...partIds, ...nextFromInput])];
     const capped = merged.slice(0, MAX_PARTS);
     if (merged.length > MAX_PARTS) {
-      setWarning(`Compare supports up to ${MAX_PARTS} parts. Extra ids were ignored.`);
+      setWarning(`Compare supports up to ${MAX_PARTS} parts. Extra entries were ignored.`);
     } else {
       setWarning(null);
     }
@@ -65,7 +84,7 @@ export function CompareSelectionTray({ initialPartIds }: { initialPartIds: strin
               onClick={() => removePart(partId)}
               type="button"
             >
-              <span className="ui-mono">{partId}</span> ×
+              <span className="ui-mono">{partId}</span> <span aria-hidden="true">&times;</span>
             </button>
           ))
         ) : (
@@ -74,12 +93,12 @@ export function CompareSelectionTray({ initialPartIds }: { initialPartIds: strin
       </div>
       <form className="compare-selection-tray__form" onSubmit={addParts}>
         <label htmlFor="compare-add-input">
-          Add part id(s)
+          Add MPNs or part IDs
         </label>
         <input
           id="compare-add-input"
           onChange={(event) => setInput(event.target.value)}
-          placeholder="part-id-1, part-id-2"
+          placeholder="215079-8, TPS7A02DBVR, part-id"
           value={input}
         />
         <button type="submit">Add parts</button>

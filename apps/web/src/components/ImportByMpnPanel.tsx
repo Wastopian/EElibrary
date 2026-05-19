@@ -292,9 +292,12 @@ export function ImportByMpnPanel({
         <label className="import-by-mpn-panel__field">
           <span>Provider</span>
           <select disabled={status.kind === "submitting"} onChange={(event) => setProviderId(event.target.value)} value={providerId}>
-            <option value="jlcparts">JLCPCB / LCSC (jlcparts)</option>
-            <option value="octopart">Octopart / Nexar (octopart)</option>
+            <option value="jlcparts">JLCPCB / LCSC (jlcparts) — free</option>
+            <option value="digikey">DigiKey (digikey) — free API</option>
+            <option value="mouser">Mouser (mouser) — free API</option>
+            <option value="kicad">Local KiCad CAD index (kicad) — local</option>
             <option value="local-catalog">Local catalog (development)</option>
+            <option value="octopart">Octopart / Nexar (octopart) — optional paid aggregator</option>
           </select>
         </label>
 

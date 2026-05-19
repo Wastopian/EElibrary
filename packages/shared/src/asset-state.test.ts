@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { deriveAssetState, getExportAvailability, isValidatedDownloadableAsset, withCanonicalAssetTruth } from "./index";
-import type { Asset, PartSearchRecord } from "./index";
+import type { Asset, AssetTruthInput, PartSearchRecord } from "./index";
 
 /** baseAsset supplies a complete asset shape for focused state tests. */
 const baseAssetRow = {
@@ -27,7 +27,7 @@ const baseAssetRow = {
   sourceUrl: null,
   storageKey: null,
   validationStatus: "not_validated"
-} satisfies Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus">;
+} satisfies AssetTruthInput;
 
 /** buildAsset keeps canonical truth fields aligned after individual test overrides. */
 function buildAsset(overrides: Partial<Asset> = {}): Asset {

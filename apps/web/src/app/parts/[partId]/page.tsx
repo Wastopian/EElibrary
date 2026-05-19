@@ -12,9 +12,10 @@ import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLab
 import { DetailSectionNav } from "./DetailSectionNav";
 import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
+import { PartEngineeringMemoryPanel } from "../../../components/PartEngineeringMemoryPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDocumentRevisions, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDetailEnvelope, fetchPartDocumentRevisions, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../../lib/trust-lineage";
@@ -51,7 +52,7 @@ import { getCircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-r
 import type { CircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -93,7 +94,7 @@ type PartSupplyOffersState =
 
 /** PartDetailPageState keeps catalog setup errors separate from genuine 404s. */
 type PartDetailPageState =
-  | { detail: PartDetailPageDetail; documentControlState: PartDocumentControlState; status: "ready"; supplyOffersState: PartSupplyOffersState; whereUsedState: PartWhereUsedState }
+  | { detail: PartDetailPageDetail; documentControlState: PartDocumentControlState; source: CatalogDataSource | undefined; status: "ready"; supplyOffersState: PartSupplyOffersState; whereUsedState: PartWhereUsedState }
   | { status: "not_found" }
   | { code: string; message: string; partId: string; status: "setup_required"; whereUsedState: PartWhereUsedState };
 
@@ -112,7 +113,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     return <PartDetailSetupState state={pageState} />;
   }
 
-  const { detail, documentControlState, supplyOffersState, whereUsedState } = pageState;
+  const { detail, documentControlState, source, supplyOffersState, whereUsedState } = pageState;
   const { assetGroups, assetPromotionSummaries, assetReviewStatuses, assetValidationSummaries, bundleReadiness, generationOptions, record, relatedPartSummaries, workflowReviewStatuses } = detail;
   const recentActivity = await loadRecentActivityForPart(record.part.id);
   const bestMate = record.buildableMatingSet.bestMate;
@@ -354,6 +355,34 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               <TrustMeter label="Confidence" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
               <p className="muted-copy">A rough blended score from imported sources. The verification steps above are what actually gate export.</p>
             </details>
+            {record.engineeringMemoryWarning && record.engineeringMemoryWarning.warningCount > 0 && (
+              <div className="detail-memory-warning" role="alert">
+                <p className="detail-memory-warning__lead">
+                  <strong>
+                    {record.engineeringMemoryWarning.blockingCount > 0
+                      ? "Your team blocked this part before."
+                      : "This part bit your team before."}
+                  </strong>{" "}
+                  {record.engineeringMemoryWarning.warningCount}{" "}
+                  confirmed engineering-memory {record.engineeringMemoryWarning.warningCount === 1 ? "record" : "records"} on file. This is a
+                  reuse warning, not a gate — it does not change approval, validation, or export state.
+                </p>
+                <ul className="detail-memory-warning__list">
+                  {record.engineeringMemoryWarning.preview.map((entry) => (
+                    <li key={entry.recordId}>
+                      <StatusBadge
+                        label={entry.severity === "blocking" ? "blocking" : entry.outcome === "bit_us" ? "bit us" : entry.severity}
+                        tone={entry.severity === "blocking" ? "danger" : "review"}
+                      />
+                      <span>{entry.title}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted-copy">
+                  <a href="#engineering-memory-heading">Review the full engineering memory</a> before reusing this part.
+                </p>
+              </div>
+            )}
             <DetailUseDecision
               assetTruthSummary={assetTruthSummary}
               datasheetAsset={datasheetAsset}
@@ -368,8 +397,9 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
         <PartFilesPanel
           assetGroups={assetGroups}
-          datasheetAsset={datasheetAsset}
           partId={record.part.id}
+          source={source}
+          validationSummaries={assetValidationSummaries}
         />
 
         <WorkspaceActionPanel
@@ -638,6 +668,21 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </SectionPanel>
       </section>
 
+      <section className="detail-section" aria-labelledby="engineering-memory-heading">
+        <SectionHeading
+          id="engineering-memory-heading"
+          index="04c"
+          subtitle="The private answers a public catalog cannot give: did it work or bite us, what mated in the real harness, which CAD was verified against the physical part, what depended on it, and why it was blocked."
+          title="Engineering memory"
+        />
+        <SectionPanel
+          description="Record outcomes, real-harness mate verification, CAD-vs-physical checks, fixture dependencies, blocked reasons, and tribal notes. Recording never approves the part or unlocks export."
+          title="Private engineering truth"
+        >
+          <PartEngineeringMemoryPanel partId={record.part.id} partMpn={record.part.mpn} />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="sourcing-heading">
         <SectionHeading
           id="sourcing-heading"
@@ -697,6 +742,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                 promotionSummaries={assetPromotionSummaries}
                 reviewAction={submitReviewAction}
                 reviewStatuses={assetReviewStatuses}
+                source={source}
                 validationSummaries={assetValidationSummaries}
                 gatedRevision={group.bestAsset ? gatingByAssetId.get(group.bestAsset.id) ?? null : null}
               />
@@ -810,12 +856,13 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
   const supplyOffersPromise = loadPartSupplyOffers(partId);
 
   try {
-    const detail = await fetchPartDetail(partId);
+    const detailEnvelope = await fetchPartDetailEnvelope(partId);
 
-    if (!detail) {
+    if (!detailEnvelope) {
       return { status: "not_found" };
     }
 
+    const detail = detailEnvelope.data;
     const [whereUsedState, documentControlState, supplyOffersState] = await Promise.all([
       whereUsedPromise,
       loadPartDocumentControl(partId),
@@ -825,6 +872,7 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
     return {
       detail,
       documentControlState,
+      source: detailEnvelope.source,
       status: "ready",
       supplyOffersState,
       whereUsedState
@@ -1668,84 +1716,140 @@ function DetailUseDecision({
 
 /** PartFilesRow describes one row of the Files and downloads panel. */
 type PartFilesRow = {
+  action: { href: string; label: string } | null;
   format: string | null | undefined;
-  href: string | undefined;
   label: string;
   status: { label: string; tone: BadgeTone };
+  trustCheck: AssetTrustCheckSummary;
+  unavailableLabel: string;
+};
+
+/** AssetTrustCheckSummary is the operator-facing result of the latest durable asset check. */
+type AssetTrustCheckSummary = {
+  detail: string;
+  label: string;
+  tone: BadgeTone;
 };
 
 /**
  * Renders the Files and downloads panel near the top of the part detail page so
  * cross-discipline engineers can find datasheets, footprints, symbols, and 3D
- * models without scrolling past the trust workflow. Only verified or
- * file-backed assets receive a download link.
+ * models without scrolling past the trust workflow. Stored files and reference
+ * URLs intentionally use different action labels so a reference never looks like
+ * captured local bytes.
  */
 function PartFilesPanel({
   assetGroups,
-  datasheetAsset,
-  partId
+  partId,
+  source,
+  validationSummaries
 }: {
   assetGroups: AssetClassSummary[];
-  datasheetAsset: Asset | undefined;
   partId: string;
+  source: CatalogDataSource | undefined;
+  validationSummaries: AssetValidationSummary[];
 }) {
-  const datasheetRow: PartFilesRow = datasheetAsset
-    ? {
-        format: datasheetAsset.fileFormat,
-        href: isFileBackedAsset(datasheetAsset) ? buildAssetDownloadUrl(partId, datasheetAsset.id) : undefined,
-        label: "Datasheet",
-        status: isFileBackedAsset(datasheetAsset)
-          ? { label: "PDF stored", tone: "verified" }
-          : { label: datasheetAssetLabel(datasheetAsset), tone: "review" }
-      }
-    : { format: undefined, href: undefined, label: "Datasheet", status: { label: "Not attached", tone: "neutral" } };
-
   const assetRows: PartFilesRow[] = assetGroups.map((group) => {
     const best = group.bestAsset;
     if (!best) {
       return {
+        action: null,
         format: undefined,
-        href: undefined,
         label: assetTypeLabel(group.assetType),
-        status: { label: "Not yet generated", tone: "neutral" }
+        status: { label: "Not yet generated", tone: "neutral" },
+        trustCheck: buildMissingAssetTrustCheckSummary(),
+        unavailableLabel: "No file yet"
       };
     }
-    const downloadable = best.availabilityStatus !== "missing" && best.availabilityStatus !== "failed";
+
+    const validationSummary = findAssetValidationSummary(validationSummaries, best);
+
     return {
+      action: buildPartFileAction(best, partId, source),
       format: best.fileFormat,
-      href: downloadable ? buildAssetDownloadUrl(best.partId, best.id) : undefined,
       label: assetTypeLabel(group.assetType),
-      status: { label: formatAssetClassReadinessLabel(group.readiness), tone: assetClassReadinessTone(group.readiness) }
+      status: { label: formatAssetClassReadinessLabel(group.readiness), tone: assetClassReadinessTone(group.readiness) },
+      trustCheck: buildAssetTrustCheckSummary(best, validationSummary),
+      unavailableLabel: formatPartFileUnavailableLabel(best, source)
     };
   });
 
-  const rows = [datasheetRow, ...assetRows];
-
   return (
     <SectionPanel
-      description="Datasheet PDF, 3D model, footprint, and symbol with one click each. Generated drafts stay labeled; only verified files unlock export."
+      description="Datasheet PDF, 3D model, footprint, and symbol. Stored files are downloads; reference-only rows open their source. Only verified files unlock export."
       title="Files and downloads"
     >
       <ul className="part-files-list">
-        {rows.map((row) => (
+        {assetRows.map((row) => (
           <li className="part-files-list__row" key={row.label}>
             <div className="part-files-list__identity">
               <strong>{row.label}</strong>
               {row.format ? <span className="ui-mono part-files-list__format">{row.format}</span> : null}
             </div>
             <StatusBadge label={row.status.label} tone={row.status.tone} />
-            {row.href ? (
-              <a className="button-link button-link--quiet part-files-list__action" href={row.href} rel="noopener noreferrer" target="_blank">
-                Download
+            <span className="part-files-list__trust-check" title={row.trustCheck.detail}>
+              <StatusBadge label={row.trustCheck.label} tone={row.trustCheck.tone} />
+            </span>
+            {row.action ? (
+              <a className="button-link button-link--quiet part-files-list__action" href={row.action.href} rel="noopener noreferrer" target="_blank">
+                {row.action.label}
               </a>
             ) : (
-              <span className="muted-copy part-files-list__action">No file yet</span>
+              <span className="muted-copy part-files-list__action">{row.unavailableLabel}</span>
             )}
           </li>
         ))}
       </ul>
     </SectionPanel>
   );
+}
+
+/**
+ * Builds the top-panel action for one asset without collapsing references into downloads.
+ */
+function buildPartFileAction(asset: Asset, partId: string, source: CatalogDataSource | undefined): PartFilesRow["action"] {
+  if (source === "seed_fallback") {
+    return asset.sourceUrl ? { href: asset.sourceUrl, label: "View source" } : null;
+  }
+
+  if (isFileBackedAsset(asset)) {
+    return {
+      href: buildAssetDownloadUrl(partId, asset.id),
+      label: "Download file"
+    };
+  }
+
+  if (asset.availabilityStatus === "referenced" && asset.sourceUrl) {
+    return {
+      href: asset.sourceUrl,
+      label: "View source"
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Explains why the top files panel is not offering an action for this asset row.
+ */
+function formatPartFileUnavailableLabel(asset: Asset, source: CatalogDataSource | undefined): string {
+  if (source === "seed_fallback" && isFileBackedAsset(asset)) {
+    return "Sample file not available";
+  }
+
+  if (asset.availabilityStatus === "failed") {
+    return "File failed";
+  }
+
+  if (asset.availabilityStatus === "referenced") {
+    return "No source URL";
+  }
+
+  if (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated") {
+    return "File evidence incomplete";
+  }
+
+  return "No file yet";
 }
 
 /**
@@ -2460,7 +2564,7 @@ function gatedAccessBadge(level: DocumentAccessLevel): { label: string; tone: Ba
 /**
  * Renders the best available asset for one engineering asset class.
  */
-function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewAction, reviewStatuses, validationSummaries, gatedRevision }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[]; validationSummaries: AssetValidationSummary[]; gatedRevision: ControlledDocumentRevision | null }) {
+function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewAction, reviewStatuses, source, validationSummaries, gatedRevision }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[]; source: CatalogDataSource | undefined; validationSummaries: AssetValidationSummary[]; gatedRevision: ControlledDocumentRevision | null }) {
   const bestAsset = group.bestAsset;
 
   if (!bestAsset) {
@@ -2505,6 +2609,8 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
   const validationSummary = findAssetValidationSummary(validationSummaries, bestAsset);
   const promotionSummary = findAssetPromotionSummary(promotionSummaries, bestAsset);
   const workflowSummary = buildAssetWorkflowSurfaceSummary(bestAsset, promotionSummary, reviewStatus);
+  const trustCheckSummary = buildAssetTrustCheckSummary(bestAsset, validationSummary);
+  const accessAction = buildAssetAccessAction(bestAsset, source, gatedRevision);
 
   return (
     <div className="asset-review-card">
@@ -2534,9 +2640,17 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
           <strong>{workflowSummary.title}</strong>
           <p>{workflowSummary.detail}</p>
         </div>
+        <div>
+          <span>Trust check</span>
+          <div className="asset-review-card__snapshot-heading">
+            <strong>{trustCheckSummary.label}</strong>
+            <StatusBadge label={trustCheckSummary.label} tone={trustCheckSummary.tone} />
+          </div>
+          <p>{trustCheckSummary.detail}</p>
+        </div>
       </div>
       <details className="audit-disclosure audit-disclosure--asset">
-        <summary>Validation evidence and promotion history</summary>
+        <summary>Detailed validation evidence and promotion history</summary>
         <div className="asset-review-card__evidence">
           <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
           <p>Promotion audit: {formatAssetPromotionHistory(promotionSummary)}</p>
@@ -2552,22 +2666,47 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
             </p>
           </div>
         ) : null}
-        {bestAsset.availabilityStatus !== "missing" && bestAsset.availabilityStatus !== "failed" ? (
-          gatedRevision ? (
-            <a className="asset-download-link asset-download-link--gated" href={`${buildAssetDownloadUrl(bestAsset.partId, bestAsset.id)}?ack=1`} rel="noopener noreferrer" target="_blank">
-              Acknowledge and download
-            </a>
-          ) : (
-            <a className="asset-download-link" href={buildAssetDownloadUrl(bestAsset.partId, bestAsset.id)} rel="noopener noreferrer" target="_blank">
-              {bestAsset.availabilityStatus === "referenced" ? "View source" : "Download"}
-            </a>
-          )
+        {accessAction ? (
+          <a className={accessAction.gated ? "asset-download-link asset-download-link--gated" : "asset-download-link"} href={accessAction.href} rel="noopener noreferrer" target="_blank">
+            {accessAction.label}
+          </a>
         ) : null}
         <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
         <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
       </div>
     </div>
   );
+}
+
+/**
+ * Builds the detailed asset action without showing sample storage keys as real downloads.
+ */
+function buildAssetAccessAction(asset: Asset, source: CatalogDataSource | undefined, gatedRevision: ControlledDocumentRevision | null): { gated: boolean; href: string; label: string } | null {
+  if (source === "seed_fallback") {
+    return asset.sourceUrl ? { gated: false, href: asset.sourceUrl, label: "View source" } : null;
+  }
+
+  if (asset.availabilityStatus === "referenced" && asset.sourceUrl) {
+    return { gated: false, href: asset.sourceUrl, label: "View source" };
+  }
+
+  if (!isFileBackedAsset(asset)) {
+    return null;
+  }
+
+  if (gatedRevision) {
+    return {
+      gated: true,
+      href: `${buildAssetDownloadUrl(asset.partId, asset.id)}?ack=1`,
+      label: "Acknowledge and download"
+    };
+  }
+
+  return {
+    gated: false,
+    href: buildAssetDownloadUrl(asset.partId, asset.id),
+    label: "Download file"
+  };
 }
 
 /**
@@ -2674,6 +2813,118 @@ function findAssetPromotionSummary(summaries: AssetPromotionSummary[], asset: As
       promotionHistory: []
     }
   );
+}
+
+/**
+ * Builds the top files-panel trust check copy when no asset row exists yet.
+ */
+function buildMissingAssetTrustCheckSummary(): AssetTrustCheckSummary {
+  return {
+    detail: "No file exists for this class yet, so there is nothing for an engineer or validator to check.",
+    label: "No file to check",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Converts validation evidence into a plain asset trust check result for engineers.
+ */
+function buildAssetTrustCheckSummary(asset: Asset, summary: AssetValidationSummary): AssetTrustCheckSummary {
+  const latestValidation = summary.latestValidation;
+
+  if (latestValidation) {
+    const checkType = formatAssetValidationType(latestValidation.validationType);
+    const note = latestValidation.validationNotes ? ` ${latestValidation.validationNotes}` : "";
+    const detail = `${checkType} by ${latestValidation.validator} on ${formatDateTime(latestValidation.validatedAt)}.${note}`;
+
+    if (latestValidation.validationStatus === "verified") {
+      return {
+        detail,
+        label: "Check passed",
+        tone: "verified"
+      };
+    }
+
+    if (latestValidation.validationStatus === "failed") {
+      return {
+        detail: `${detail} Do not rely on this file until the failure is reviewed or replaced.`,
+        label: "Check failed",
+        tone: "danger"
+      };
+    }
+
+    if (latestValidation.validationStatus === "needs_review") {
+      return {
+        detail: `${detail} Engineering review is still required before this file can support export promotion.`,
+        label: "Needs review",
+        tone: "review"
+      };
+    }
+
+    return {
+      detail: `${detail} This check has not produced usable validation evidence yet.`,
+      label: "Not checked",
+      tone: "neutral"
+    };
+  }
+
+  if (!isAutomatedTrustCheckAsset(asset)) {
+    return {
+      detail: "No automated CAD check is defined for this file class yet. Use manual review and attached evidence before relying on it.",
+      label: "Manual review",
+      tone: "neutral"
+    };
+  }
+
+  if (asset.validationStatus === "failed") {
+    return {
+      detail: "The asset is marked as failed, but no durable validation record is attached. Review or replace the file before using it.",
+      label: "Check failed",
+      tone: "danger"
+    };
+  }
+
+  if (asset.validationStatus === "needs_review") {
+    return {
+      detail: "The file exists, but no durable check result is attached yet. Run or review CAD checks before promotion.",
+      label: "Needs review",
+      tone: "review"
+    };
+  }
+
+  if (asset.validationStatus === "verified") {
+    return {
+      detail: "The asset is marked verified, but no durable validation record is attached in this response. Confirm evidence before promotion.",
+      label: "Verify evidence",
+      tone: "review"
+    };
+  }
+
+  return {
+    detail: "No CAD check evidence is recorded yet. The file can be inspected, but it should not be treated as trusted for export.",
+    label: "Not checked",
+    tone: "neutral"
+  };
+}
+
+/**
+ * Returns true for file classes covered by automated CAD validation jobs.
+ */
+function isAutomatedTrustCheckAsset(asset: Asset): boolean {
+  return asset.assetType === "footprint" || asset.assetType === "symbol" || asset.assetType === "three_d_model";
+}
+
+/**
+ * Formats validation evidence types without leaking validator implementation names.
+ */
+function formatAssetValidationType(type: NonNullable<AssetValidationSummary["latestValidation"]>["validationType"]): string {
+  return {
+    file_integrity: "File integrity check",
+    footprint_geometry: "Footprint geometry check",
+    manual_engineering_review: "Manual engineering review",
+    symbol_pin_mapping: "Symbol pin-count check",
+    three_d_geometry: "3D model geometry check"
+  }[type];
 }
 
 /**

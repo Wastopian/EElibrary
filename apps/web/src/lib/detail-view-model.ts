@@ -389,8 +389,9 @@ export function getRecoveryWorkflowSummary(record: PartSearchRecord): WorkflowSi
   }
 
   if (requestableCount > 0) {
+    const verb = requestableCount === 1 ? "has" : "have";
     return {
-      detail: `${requestableCount} missing CAD ${pluralize("class", requestableCount, "classes")} have enough extracted source material to request generation.`,
+      detail: `${requestableCount} missing CAD ${pluralize("class", requestableCount, "classes")} ${verb} enough extracted source material to request generation.`,
       label: `${requestableCount} recovery ${pluralize("action", requestableCount)}`,
       tone: "info"
     };

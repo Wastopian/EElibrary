@@ -1,5 +1,5 @@
 /**
- * File header: Explicit client-side provider candidate lookup and admin-gated acquisition-job intake for DB-backed no-match states only.
+ * File header: Explicit client-side provider candidate lookup plus selected-candidate import intake for DB-backed no-match states.
  */
 
 "use client";
@@ -11,23 +11,30 @@ import {
   fetchProviderAcquisitionJob,
   isApiClientError,
   requestProviderAcquisitionJob,
+  requestProviderImport,
   requestProviderLookup
 } from "../lib/api-client";
 import { importUiCopy } from "../lib/import-ui-copy";
-import { resolveImportSuccessAction, type ImportPanelSuccessAction } from "./ImportByMpnPanel";
+import { resolveImportFailureState, resolveImportSuccessAction, type ImportPanelSuccessAction } from "./ImportByMpnPanel";
 import type {
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
+  ProviderImportCreateInput,
   ProviderLookupCandidate
 } from "@ee-library/shared/types";
 
-/** ProviderLookupPanelProps carries the no-match lookup text and refresh target from the homepage. */
+/** ProviderLookupPanelProps carries the no-match lookup text, import mode, and refresh target from catalog surfaces. */
 export interface ProviderLookupPanelProps {
   /** Concrete lookup text from the homepage quick-search field. */
   initialQuery: string;
-  /** Search href used when a successful acquisition should rerun the current catalog query. */
+  /** Selects direct import for catalog no-match UX or durable queue intake for worker-backed flows. */
+  importMode?: ProviderLookupImportMode;
+  /** Search href used when a successful import should rerun the current catalog query. */
   refreshHref: string;
 }
+
+/** ProviderLookupImportMode controls whether a candidate imports now or enters the worker queue. */
+export type ProviderLookupImportMode = "direct" | "queue";
 
 /** ProviderLookupPanelState keeps the explicit provider-lookup workflow honest and click-driven. */
 type ProviderLookupPanelState =
@@ -37,26 +44,30 @@ type ProviderLookupPanelState =
   | { kind: "no_candidates" }
   | { kind: "failed"; message: string };
 
-/** CandidateAcquisitionState keeps the selected provider candidate job state explicit and testable. */
+/** CandidateAcquisitionState keeps the selected provider candidate import state explicit and testable. */
 export type CandidateAcquisitionState =
   | { kind: "idle" }
   | { kind: "creating"; candidateKey: string }
   | { kind: "queued"; candidateKey: string; detail: ProviderAcquisitionJobDetailResponse }
   | { kind: "running"; candidateKey: string; detail: ProviderAcquisitionJobDetailResponse }
-  | { kind: "succeeded"; candidateKey: string; detail: ProviderAcquisitionJobDetailResponse; action: ImportPanelSuccessAction }
+  | { kind: "succeeded"; candidateKey: string; detail?: ProviderAcquisitionJobDetailResponse; action: ImportPanelSuccessAction }
   | { kind: "failed"; candidateKey: string; detail?: ProviderAcquisitionJobDetailResponse; message: string }
   | { kind: "unavailable"; candidateKey: string; message: string };
 
-/** ProviderLookupPanelViewProps carries the pure rendered panel state so tests can verify multi-candidate job locking without browser-only hooks. */
+/** ProviderLookupPanelViewProps carries the pure rendered panel state so tests can verify multi-candidate locking without browser-only hooks. */
 export interface ProviderLookupPanelViewProps {
   /** Current lookup-panel state. */
   status: ProviderLookupPanelState;
-  /** Current selected-candidate acquisition state. */
+  /** Current selected-candidate import state. */
   acquisitionState: CandidateAcquisitionState;
+  /** Import behavior used by the rendered candidate action button. */
+  importMode?: ProviderLookupImportMode;
   /** Runs explicit provider lookup from the no-match panel. */
   onRunLookup: () => void;
-  /** Queues one selected provider candidate for acquisition. */
+  /** Queues one selected provider candidate for acquisition when the worker-backed flow is active. */
   onQueueAcquisition: (candidate: ProviderLookupCandidate) => void;
+  /** Imports one selected provider candidate immediately when the catalog surface is in direct mode. */
+  onRunDirectImport?: (candidate: ProviderLookupCandidate) => void;
 }
 
 /** ProviderLookupCandidateCardProps carries one candidate row plus the current acquisition state for that row. */
@@ -65,18 +76,22 @@ interface ProviderLookupCandidateCardProps {
   candidate: ProviderLookupCandidate;
   /** Current acquisition state for the candidate, if any. */
   acquisitionState: CandidateAcquisitionState;
+  /** Import behavior used by this candidate action button. */
+  importMode: ProviderLookupImportMode;
   /** True when any candidate in the current lookup result set already has an active pending job. */
   hasPendingAcquisition: boolean;
   /** True when this candidate currently owns the active pending job slot. */
   isActivePendingCandidate: boolean;
-  /** Queues provider acquisition for the selected candidate. */
-  onQueueAcquisition: (candidate: ProviderLookupCandidate) => void;
+  /** Runs the current provider-candidate import action for the selected candidate. */
+  onRunCandidateImport: (candidate: ProviderLookupCandidate) => void;
 }
 
-/** ProviderLookupCandidateJobStatusProps isolates candidate-job rendering for focused status tests. */
+/** ProviderLookupCandidateJobStatusProps isolates candidate import status rendering for focused status tests. */
 interface ProviderLookupCandidateJobStatusProps {
   /** Current acquisition state for one selected candidate. */
   state: CandidateAcquisitionState;
+  /** Import behavior used by this candidate action button. */
+  importMode?: ProviderLookupImportMode;
 }
 
 /**
@@ -96,6 +111,20 @@ export function buildProviderAcquisitionJobCreateInput(
     providerPartKey: candidate.providerPartKey,
     requestedLookup,
     sourceUrl: candidate.sourceUrl
+  };
+}
+
+/**
+ * Builds the direct provider import body from one selected exact-match provider candidate.
+ */
+export function buildProviderCandidateImportInput(candidate: ProviderLookupCandidate): ProviderImportCreateInput {
+  return {
+    datasheetUrl: null,
+    manufacturerName: candidate.manufacturerName,
+    mpn: candidate.mpn,
+    providerId: candidate.providerId,
+    providerPartId: candidate.providerPartKey,
+    providerUrl: candidate.sourceUrl
   };
 }
 
@@ -202,9 +231,10 @@ export function isPendingCandidateAcquisition(acquisitionState: CandidateAcquisi
 }
 
 /**
- * Renders explicit exact-match provider lookup and queues admin-gated acquisition jobs for selected candidates.
+ * Renders explicit exact-match provider lookup and imports selected candidates through the configured intake mode.
  */
 export function ProviderLookupPanel({
+  importMode = "queue",
   initialQuery,
   refreshHref
 }: ProviderLookupPanelProps): React.ReactElement {
@@ -333,6 +363,41 @@ export function ProviderLookupPanel({
   );
 
   /**
+   * Imports one selected exact-match candidate immediately through the existing provider import route.
+   */
+  const importCandidateDirectly = useCallback(
+    async (candidate: ProviderLookupCandidate) => {
+      const candidateKey = buildCandidateKey(candidate);
+      clearScheduledPoll();
+      requestCycleRef.current += 1;
+      const requestCycle = requestCycleRef.current;
+      setAcquisitionState({ candidateKey, kind: "creating" });
+
+      try {
+        const result = await requestProviderImport(buildProviderCandidateImportInput(candidate));
+        if (requestCycle !== requestCycleRef.current) {
+          return;
+        }
+
+        applyAcquisitionState(
+          {
+            action: resolveImportSuccessAction({
+              partId: result.partId,
+              refreshHref
+            }),
+            candidateKey,
+            kind: "succeeded"
+          },
+          requestCycle
+        );
+      } catch (error) {
+        applyAcquisitionState(resolveProviderDirectImportFailure(candidateKey, error), requestCycle);
+      }
+    },
+    [applyAcquisitionState, clearScheduledPoll, refreshHref]
+  );
+
+  /**
    * Resets acquisition polling when the no-match lookup changes underneath the client component.
    */
   useEffect(() => {
@@ -350,7 +415,9 @@ export function ProviderLookupPanel({
   return (
     <ProviderLookupPanelView
       acquisitionState={acquisitionState}
+      importMode={importMode}
       onQueueAcquisition={queueCandidateAcquisition}
+      onRunDirectImport={importCandidateDirectly}
       onRunLookup={runLookup}
       status={status}
     />
@@ -362,7 +429,9 @@ export function ProviderLookupPanel({
  */
 export function ProviderLookupPanelView({
   acquisitionState,
+  importMode = "queue",
   onQueueAcquisition,
+  onRunDirectImport,
   onRunLookup,
   status
 }: ProviderLookupPanelViewProps): React.ReactElement {
@@ -418,9 +487,10 @@ export function ProviderLookupPanelView({
                 acquisitionState={candidateState}
                 candidate={candidate}
                 hasPendingAcquisition={hasPendingAcquisition}
+                importMode={importMode}
                 isActivePendingCandidate={candidateKey === activePendingCandidateKey}
                 key={candidateKey}
-                onQueueAcquisition={onQueueAcquisition}
+                onRunCandidateImport={importMode === "direct" && onRunDirectImport ? onRunDirectImport : onQueueAcquisition}
               />
             );
           })}
@@ -431,16 +501,18 @@ export function ProviderLookupPanelView({
 }
 
 /**
- * Renders one provider candidate row plus the current acquisition-job action and status for that row.
+ * Renders one provider candidate row plus the current import action and status for that row.
  */
 function ProviderLookupCandidateCard({
   acquisitionState,
   candidate,
   hasPendingAcquisition,
+  importMode,
   isActivePendingCandidate,
-  onQueueAcquisition
+  onRunCandidateImport
 }: ProviderLookupCandidateCardProps): React.ReactElement {
   const isPending = isQueueAcquisitionButtonDisabled(candidate.importAllowed, acquisitionState, hasPendingAcquisition);
+  const idleButtonLabel = importMode === "direct" ? importUiCopy.buttonImportCandidate : importUiCopy.buttonQueueAcquisition;
 
   return (
     <section className="quick-provider-candidate">
@@ -480,27 +552,28 @@ function ProviderLookupCandidateCard({
       <div className="quick-provider-candidate__actions">
         <button
           disabled={isPending}
-          onClick={() => onQueueAcquisition(candidate)}
+          onClick={() => onRunCandidateImport(candidate)}
           type="button"
         >
           {isPending && acquisitionState.kind === "creating"
             ? importUiCopy.providerAcquisitionCreating
-            : importUiCopy.buttonQueueAcquisition}
+            : idleButtonLabel}
         </button>
         {!candidate.importAllowed ? (
           <p className="quick-check-empty__note">{importUiCopy.providerLookupImportUnavailable}</p>
         ) : null}
       </div>
 
-      <ProviderLookupCandidateJobStatus state={acquisitionState} />
+      <ProviderLookupCandidateJobStatus importMode={importMode} state={acquisitionState} />
     </section>
   );
 }
 
 /**
- * Renders the selected candidate's queued/running/succeeded/failed acquisition status.
+ * Renders the selected candidate's queued/running/succeeded/failed import status.
  */
 export function ProviderLookupCandidateJobStatus({
+  importMode = "queue",
   state
 }: ProviderLookupCandidateJobStatusProps): React.ReactElement | null {
   if (state.kind === "idle") {
@@ -532,13 +605,13 @@ export function ProviderLookupCandidateJobStatus({
   }
 
   if (state.kind === "succeeded") {
+    const successCopy = state.action.kind === "refresh_search"
+      ? (importMode === "direct" ? importUiCopy.successRefreshLead : importUiCopy.providerAcquisitionSucceededRefresh)
+      : (importMode === "direct" ? importUiCopy.successLead : importUiCopy.providerAcquisitionSucceeded);
+
     return (
       <div className="quick-provider-candidate__job-status quick-provider-candidate__job-status--success">
-        <p>
-          {state.action.kind === "refresh_search"
-            ? importUiCopy.providerAcquisitionSucceededRefresh
-            : importUiCopy.providerAcquisitionSucceeded}
-        </p>
+        <p>{successCopy}</p>
         {state.action.kind === "open_part" ? (
           <Link className="button-link button-link--quiet" href={state.action.href}>
             {importUiCopy.linkOpenPart}
@@ -603,10 +676,23 @@ function readCandidateAcquisitionState(
 }
 
 /**
- * Removes the repetitive API client prefix so queued-acquisition failure copy stays compact.
+ * Removes the repetitive API client prefix so queue failure copy stays compact.
  */
 function stripProviderAcquisitionFailurePrefix(message: string): string {
   return message.replace(/^Provider acquisition job failed \([^)]+?\):\s*/u, "");
+}
+
+/**
+ * Maps direct selected-candidate import failures into the provider candidate status shape.
+ */
+function resolveProviderDirectImportFailure(candidateKey: string, error: unknown): CandidateAcquisitionState {
+  const failure = resolveImportFailureState(error);
+
+  return {
+    candidateKey,
+    kind: failure.kind,
+    message: failure.message
+  };
 }
 
 /**

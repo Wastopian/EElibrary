@@ -15,6 +15,10 @@ import {
   createCircuitBlockKnownRiskInDatabase,
   createCircuitBlockPartInDatabase,
   resolveCircuitBlockKnownRiskInDatabase,
+  createPartEngineeringRecordInDatabase,
+  decidePartEngineeringRecordDraftInDatabase,
+  readPartEngineeringRecordsForPartFromDatabase,
+  resolvePartEngineeringRecordInDatabase,
   createEvidenceAttachmentInDatabase,
   createProjectFromCsvInDatabase,
   createProjectInDatabase,
@@ -35,6 +39,7 @@ import {
   readProjectEvidenceAttachmentsFromDatabase,
   readProjectFleetRiskFromDatabase,
   readProjectFollowUpsFromDatabase,
+  readProjectOverlapPanelFromDatabase,
   readProjectRevisionApprovalGatesFromDatabase,
   readProjectRevisionCompareFromDatabase,
   readProjectsFromDatabase,
@@ -49,7 +54,8 @@ import {
   updateFollowUpInDatabase,
   updateProjectInDatabase,
   upsertProjectRevisionApprovalGateInDatabase,
-  updateProjectRevisionInDatabase
+  updateProjectRevisionInDatabase,
+  verifyExportBundleInDatabase
 } from "./project-memory-store";
 import { setStorageClientForTests } from "./file-storage";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -154,6 +160,194 @@ test("project memory store exposes where-used context for confirmed part usage",
     assert.equal(result.response.circuitBlockDependencies[0]?.blockParts.length, 1);
     assert.equal(result.response.circuitBlockDependencies[0]?.blockParts[0]?.role, "Main LDO");
     assert.equal(result.response.circuitBlockDependencies[0]?.blockParts[0]?.isRequired, true);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the day-zero overlap panel returns an empty payload when the current project
+ * has no confirmed part usage yet. The signal must be empty, not "no prior projects",
+ * so callers can render an honest "upload a BOM and match rows first" hint.
+ */
+test("readProjectOverlapPanelFromDatabase returns scanned_count=0 and no prior projects when the current project has no confirmed usage", async () => {
+  const pool = createProjectMemoryPool(false);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(
+      `INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
+       VALUES ('project-fresh', 'FRESH', 'Fresh Empty', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`
+    );
+
+    const result = await readProjectOverlapPanelFromDatabase("project-fresh");
+
+    assert.equal(result.status, "available");
+    if (result.status !== "available") throw new Error("overlap result unavailable");
+    assert.equal(result.response.state, "empty");
+    assert.equal(result.response.scannedPartCount, 0);
+    assert.deepEqual(result.response.priorProjects, []);
+    assert.equal(result.response.connectorWhereUsedHitCount, 0);
+    assert.equal(result.response.circuitBlockWhereUsedHitCount, 0);
+    assert.deepEqual(result.response.circuitBlockRoleHitsPreview, []);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the overlap panel reports `not_found` for an unknown project id and
+ * `not_configured` when persistence is unavailable. These two states preserve the
+ * honesty contract -- the panel never silently returns an empty success payload
+ * when the underlying truth is "we don't know" or "we can't read".
+ */
+test("readProjectOverlapPanelFromDatabase reports not_configured and not_found honestly", async () => {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  delete process.env.DATABASE_URL;
+  setProjectMemoryStorePoolForTests(null);
+
+  try {
+    const notConfigured = await readProjectOverlapPanelFromDatabase("project-anywhere");
+    assert.equal(notConfigured.status, "not_configured");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    restoreDatabaseUrl(previousDatabaseUrl);
+  }
+
+  const pool = createProjectMemoryPool(false);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const notFound = await readProjectOverlapPanelFromDatabase("project-not-here");
+    assert.equal(notFound.status, "not_found");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the overlap panel ranks prior projects by shared confirmed-usage parts,
+ * excludes the current project, and reports connector + circuit-block where-used hits.
+ *
+ * Honesty rules under test:
+ *  - Only confirmed usage rows drive overlap; weak/unmatched BOM rows must not inflate
+ *    the shared-part count.
+ *  - The current project never appears in its own ranking.
+ *  - `sharedPartCount` is the full overlap; `sharedPartIds` is bounded.
+ *  - Connector hits count distinct connector parts in the current project that have any
+ *    prior usage elsewhere; non-connector parts must not be counted.
+ *  - Circuit-block hits count circuit-block role rows pointing at parts confirmed in
+ *    the current project (the "reuse a part already proven in a block" hint).
+ */
+test("readProjectOverlapPanelFromDatabase ranks prior projects by shared confirmed parts and counts connector + circuit-block hits", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // Add a connector part used by the current project AND a prior project.
+    await pool.query(
+      `INSERT INTO parts (id, mpn, manufacturer_id, category, last_updated_at)
+       VALUES ('part-connector-jst', 'BM02B-SRSS', 'mfg-ti', 'Connector', '2026-04-30T00:06:00.000Z')`
+    );
+
+    // Add a second confirmed usage for the current project (project-alpha) pointing at the connector,
+    // so this BOM has two confirmed parts (LDO + Connector).
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-alpha-j1', 'project-alpha', 'rev-alpha-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', '2026-04-30T00:06:30.000Z', '2026-04-30T00:06:30.000Z')`
+    );
+
+    // Prior project beta: shares the LDO part. Heavier overlap target.
+    await pool.query(
+      `INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
+       VALUES ('project-beta', 'BETA', 'Beta Build', 'active', '2026-04-15T00:00:00.000Z', '2026-04-15T00:00:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
+       VALUES ('rev-beta-a', 'project-beta', 'A', 'released', 'beta-a', '2026-04-15T00:01:00.000Z', '2026-04-15T00:01:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-beta-u1', 'project-beta', 'rev-beta-a', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', '2026-04-15T00:02:00.000Z', '2026-04-15T00:02:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-beta-j1', 'project-beta', 'rev-beta-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', '2026-04-15T00:03:00.000Z', '2026-04-15T00:03:00.000Z')`
+    );
+
+    // Prior project gamma: shares only the connector. Lighter overlap target.
+    await pool.query(
+      `INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
+       VALUES ('project-gamma', 'GAMMA', 'Gamma Tester', 'active', '2026-04-20T00:00:00.000Z', '2026-04-20T00:00:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
+       VALUES ('rev-gamma-a', 'project-gamma', 'A', 'released', 'gamma-a', '2026-04-20T00:01:00.000Z', '2026-04-20T00:01:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-gamma-j1', 'project-gamma', 'rev-gamma-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', '2026-04-20T00:02:00.000Z', '2026-04-20T00:02:00.000Z')`
+    );
+
+    const result = await readProjectOverlapPanelFromDatabase("project-alpha");
+
+    assert.equal(result.status, "available");
+    if (result.status !== "available") throw new Error("overlap result unavailable");
+    assert.equal(result.response.state, "available");
+    assert.equal(result.response.scannedPartCount, 2, "project-alpha has two confirmed-usage parts");
+
+    assert.equal(result.response.priorProjects.length, 2, "two prior projects share at least one part");
+    assert.equal(result.response.priorProjects[0]?.project.id, "project-beta", "beta shares two parts -> ranked first");
+    assert.equal(result.response.priorProjects[0]?.sharedPartCount, 2);
+    assert.equal(result.response.priorProjects[1]?.project.id, "project-gamma", "gamma shares one part -> ranked second");
+    assert.equal(result.response.priorProjects[1]?.sharedPartCount, 1);
+    for (const prior of result.response.priorProjects) {
+      assert.ok(!prior.project.id.startsWith("project-alpha"), "current project is never ranked against itself");
+      assert.equal(
+        prior.sharedPartsPreview.length,
+        prior.sharedPartIds.length,
+        "MPN preview stays aligned with bounded id list"
+      );
+    }
+
+    const betaRow = result.response.priorProjects.find((row) => row.project.id === "project-beta");
+    assert.ok(betaRow);
+    assert.ok(
+      betaRow.sharedPartsPreview.some((entry) => entry.partId === "part-memory-ldo" && entry.mpn === "TPS7A02DBVR"),
+      "overlap preview carries readable MPN for the shared LDO"
+    );
+    const betaLdoPreview = betaRow.sharedPartsPreview.find((entry) => entry.partId === "part-memory-ldo");
+    assert.ok(betaLdoPreview, "overlap preview carries prior-project usage clues for the shared LDO");
+    assert.equal(betaLdoPreview.projectRevisionLabel, "A");
+    assert.deepEqual(betaLdoPreview.designatorsPreview, ["U1"]);
+    assert.equal(betaLdoPreview.quantityTotal, 1);
+    assert.equal(betaLdoPreview.usageCount, 1);
+    assert.equal(betaLdoPreview.usageStatus, "proposed");
+    assert.ok(
+      betaRow.sharedPartsPreview.some((entry) => entry.partId === "part-connector-jst" && entry.mpn === "BM02B-SRSS"),
+      "overlap preview carries readable MPN for the shared connector"
+    );
+
+    const gammaRow = result.response.priorProjects.find((row) => row.project.id === "project-gamma");
+    assert.ok(gammaRow);
+    assert.equal(gammaRow.sharedPartsPreview.length, 1);
+    assert.equal(gammaRow.sharedPartsPreview[0]?.partId, "part-connector-jst");
+
+    // Connector hits: the connector is in the current project AND in beta/gamma -> 1 distinct connector with prior reuse.
+    assert.equal(result.response.connectorWhereUsedHitCount, 1);
+
+    // Circuit-block hits: the LDO is in the current project and fills the Main LDO role of cblock-alpha-power -> 1.
+    assert.equal(result.response.circuitBlockWhereUsedHitCount, 1);
+    assert.equal(result.response.circuitBlockRoleHitsPreview.length, 1);
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.circuitBlockId, "cblock-alpha-power");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.blockKey, "ALPHA-POWER");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.role, "Main LDO");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.partId, "part-memory-ldo");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.mpn, "TPS7A02DBVR");
+    assert.equal(result.response.circuitBlockRoleHitsPreview[0]?.isRequired, true);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -776,6 +970,259 @@ test("project memory store records, gates on, and resolves circuit block known r
     if (invalid.status === "invalid") {
       assert.equal(invalid.code, "INVALID_CIRCUIT_BLOCK_KNOWN_RISK_TITLE");
     }
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the part engineering-memory primitive records typed private truth, splits open vs
+ * resolved, preserves resolved rows for audit, and validates kind/title at the API boundary.
+ */
+test("project memory store records, lists, and resolves part engineering memory", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const baseline = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    assert.equal(baseline.status, "available");
+    if (baseline.status !== "available") throw new Error("baseline unavailable");
+    assert.deepEqual(baseline.response.open, []);
+    assert.deepEqual(baseline.response.resolved, []);
+
+    const outcome = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      detail: "VOUT drooped under cold-start inrush on Bravo Rev B; added soft-start.",
+      outcome: "bit_us",
+      recordKind: "outcome",
+      recordedBy: "gerry@hardware",
+      severity: "caution",
+      title: "Bit us: cold-start droop"
+    });
+    assert.equal(outcome.status, "created");
+    if (outcome.status !== "created") throw new Error("outcome create failed");
+    assert.equal(outcome.response.record.recordKind, "outcome");
+    assert.equal(outcome.response.record.outcome, "bit_us");
+    assert.equal(outcome.response.list.open.length, 1);
+
+    const mate = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      outcome: "worked",
+      recordKind: "harness_mate_verified",
+      relatedMpn: "DF13-4P-1.25H",
+      title: "Mated correctly in Falcon harness"
+    });
+    assert.equal(mate.status, "created");
+    if (mate.status !== "created") throw new Error("mate create failed");
+    assert.equal(mate.response.record.relatedMpn, "DF13-4P-1.25H");
+    assert.equal(mate.response.list.open.length, 2);
+
+    const badKind = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      recordKind: "totally_invalid" as never,
+      title: "x"
+    });
+    assert.equal(badKind.status, "invalid");
+    if (badKind.status === "invalid") {
+      assert.equal(badKind.code, "INVALID_PART_ENGINEERING_RECORD_KIND");
+    }
+
+    const badTitle = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      recordKind: "note",
+      title: "   "
+    });
+    assert.equal(badTitle.status, "invalid");
+    if (badTitle.status === "invalid") {
+      assert.equal(badTitle.code, "INVALID_PART_ENGINEERING_RECORD_TITLE");
+    }
+
+    const resolved = await resolvePartEngineeringRecordInDatabase("part-memory-ldo", outcome.response.record.id, {
+      resolutionNotes: "Soft-start added in Rev C; no longer reproduces.",
+      resolvedBy: "gerry@hardware"
+    });
+    assert.equal(resolved.status, "resolved");
+    if (resolved.status !== "resolved") throw new Error("resolve failed");
+    assert.notEqual(resolved.response.record.resolvedAt, null);
+    assert.equal(resolved.response.list.open.length, 1, "one record still open after resolving the other");
+    assert.equal(resolved.response.list.resolved.length, 1, "resolved row is preserved, not deleted");
+
+    const reResolve = await resolvePartEngineeringRecordInDatabase("part-memory-ldo", outcome.response.record.id, {});
+    assert.equal(reResolve.status, "not_found");
+
+    const missingPart = await readPartEngineeringRecordsForPartFromDatabase("part-does-not-exist");
+    assert.equal(missingPart.status, "not_found");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies passive capture: approving a substitution auto-drafts a PROPOSED engineering-memory
+ * record on the original part (not durable memory until confirmed), Confirm promotes it to open
+ * with confirmer provenance, Dismiss preserves it as audited history, and a decided draft cannot
+ * be decided again.
+ */
+test("substitution approval passively auto-drafts a proposed engineering record that confirm/dismiss resolves", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const sub1 = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "global", signoffNotes: "Accepted by hardware lead at 25C.", substitutePartId: "part-memory-resistor" },
+      "gerry@hardware"
+    );
+    assert.equal(sub1.status, "created");
+
+    const afterSub1 = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    assert.equal(afterSub1.status, "available");
+    if (afterSub1.status !== "available") throw new Error("list unavailable");
+    assert.equal(afterSub1.response.proposed.length, 1, "approval auto-drafts exactly one proposed record");
+    assert.equal(afterSub1.response.open.length, 0, "a proposed draft is NOT durable open memory");
+    const draft = afterSub1.response.proposed[0]!;
+    assert.equal(draft.draftStatus, "proposed");
+    assert.equal(draft.draftSource, "auto_substitution");
+    assert.equal(draft.recordKind, "decision_blocked");
+    assert.match(draft.title, /Substitute approved/u);
+    assert.equal(draft.confirmedBy, null);
+
+    const confirmed = await decidePartEngineeringRecordDraftInDatabase("part-memory-ldo", draft.id, "confirm", "test-admin", {});
+    assert.equal(confirmed.status, "decided");
+    if (confirmed.status !== "decided") throw new Error("confirm failed");
+    assert.equal(confirmed.response.record.draftStatus, "confirmed");
+    assert.equal(confirmed.response.record.confirmedBy, "test-admin");
+    assert.equal(confirmed.response.list.open.length, 1, "confirmed draft becomes durable open memory");
+    assert.equal(confirmed.response.list.proposed.length, 0);
+
+    const reConfirm = await decidePartEngineeringRecordDraftInDatabase("part-memory-ldo", draft.id, "confirm", "test-admin", {});
+    assert.equal(reConfirm.status, "not_found", "an already-decided draft cannot be decided again");
+
+    const sub2 = await createPartSubstitutionInDatabase(
+      "part-dup-alpha",
+      { scope: "global", substitutePartId: "part-dup-beta" },
+      "gerry@hardware"
+    );
+    assert.equal(sub2.status, "created");
+
+    const afterSub2 = await readPartEngineeringRecordsForPartFromDatabase("part-dup-alpha");
+    if (afterSub2.status !== "available") throw new Error("list unavailable");
+    const draft2 = afterSub2.response.proposed[0]!;
+
+    const dismissed = await decidePartEngineeringRecordDraftInDatabase("part-dup-alpha", draft2.id, "dismiss", "test-admin", { notes: "Not relevant to this part's memory." });
+    assert.equal(dismissed.status, "decided");
+    if (dismissed.status !== "decided") throw new Error("dismiss failed");
+    assert.equal(dismissed.response.record.draftStatus, "dismissed");
+    assert.equal(dismissed.response.record.resolvedBy, "test-admin");
+    assert.equal(dismissed.response.list.proposed.length, 0);
+    assert.equal(dismissed.response.list.open.length, 0, "a dismissed suggestion never becomes durable memory");
+    assert.equal(dismissed.response.list.resolved.length, 1, "dismissed rows are preserved for audit");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the read-side passive-capture payoff: confirmed "this bit us"/blocking engineering
+ * memory for a part this project confirmed surfaces on the overlap panel (the mistake interrupts
+ * at import/overlap time), while proposed and dismissed records never surface.
+ */
+test("overlap panel surfaces confirmed bit_us/blocking engineering memory for confirmed parts", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // project-alpha confirms the LDO so it is in scannedParts for overlap.
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-alpha-ldo', 'project-alpha', 'rev-alpha-a', NULL, 'part-memory-ldo', '{"U9"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`
+    );
+
+    const bitUs = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      detail: "Backed out of the harness after thermal cycling on Bravo.",
+      outcome: "bit_us",
+      recordKind: "outcome",
+      severity: "caution",
+      title: "Bit us: contact retention failure"
+    });
+    assert.equal(bitUs.status, "created");
+
+    const proposedOnly = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
+      outcome: "bit_us",
+      recordKind: "outcome",
+      title: "Unreviewed machine guess"
+    });
+    assert.equal(proposedOnly.status, "created");
+    if (proposedOnly.status === "created") {
+      // Force this row to proposed so we can prove proposed rows never surface as a warning.
+      await pool.query("UPDATE part_engineering_records SET draft_status = 'proposed' WHERE id = $1", [proposedOnly.response.record.id]);
+    }
+
+    const overlap = await readProjectOverlapPanelFromDatabase("project-alpha");
+    assert.equal(overlap.status, "available");
+    if (overlap.status !== "available") throw new Error("overlap unavailable");
+
+    const warnings = overlap.response.priorEngineeringMemoryWarnings;
+    assert.equal(warnings.length, 1, "only the confirmed bit_us record surfaces");
+    assert.equal(warnings[0]?.partId, "part-memory-ldo");
+    assert.equal(warnings[0]?.partMpn, "TPS7A02DBVR");
+    assert.equal(warnings[0]?.outcome, "bit_us");
+    assert.match(warnings[0]?.title ?? "", /contact retention/u);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the narrow BOM-match auto-draft: matching a row to a non-active part already used in a
+ * prior project drafts exactly one proposed lifecycle-risk record, idempotently per BOM import.
+ */
+test("BOM match passively drafts a lifecycle-risk record for a non-active part reused from a prior project", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // A prior project already confirmed the LDO, and it has since gone non-active.
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
+       VALUES ('usage-prior-ldo', 'project-prior-x', 'rev-prior-x', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+    );
+    await pool.query("UPDATE parts SET lifecycle_status = 'not_recommended' WHERE id = 'part-memory-ldo'");
+
+    const created = await createBomImportInDatabase(
+      "project-alpha",
+      {
+        columnMapping: { manufacturer: "Maker", mpn: "MPN", quantity: "Qty" },
+        projectRevisionId: "rev-alpha-a",
+        rawContent: ["MPN,Maker,Qty", "TPS7A02DBVR,Texas Instruments,1"].join("\n"),
+        sourceFilename: "lifecycle-risk.csv",
+        sourceFormat: "csv"
+      },
+      "test-admin"
+    );
+    assert.equal(created.status, "created");
+    if (created.status !== "created") throw new Error("bom import create failed");
+
+    const match = await matchBomImportRowsInDatabase(created.response.bomImport.id);
+    assert.equal(match.status, "matched");
+
+    const afterMatch = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    if (afterMatch.status !== "available") throw new Error("list unavailable");
+    const lifecycleDrafts = afterMatch.response.proposed.filter((record) => record.draftSource === "auto_bom_lifecycle");
+    assert.equal(lifecycleDrafts.length, 1, "one proposed lifecycle-risk draft from the match");
+    assert.equal(lifecycleDrafts[0]?.recordKind, "decision_blocked");
+    assert.match(lifecycleDrafts[0]?.title ?? "", /not active|not_recommended/u);
+
+    // Re-running the match must not duplicate the draft (idempotent per bom import + part).
+    const rerun = await matchBomImportRowsInDatabase(created.response.bomImport.id);
+    assert.equal(rerun.status, "matched");
+    const afterRerun = await readPartEngineeringRecordsForPartFromDatabase("part-memory-ldo");
+    if (afterRerun.status !== "available") throw new Error("list unavailable");
+    assert.equal(
+      afterRerun.response.proposed.filter((record) => record.draftSource === "auto_bom_lifecycle").length,
+      1,
+      "re-matching does not duplicate the lifecycle-risk draft"
+    );
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -2452,6 +2899,78 @@ test("createExportBundleInDatabase tags controlled assets in the manifest", asyn
 });
 
 /**
+ * Verifies the defensible signed provenance: the manifest embeds per-part approval (who/when),
+ * the datasheet revision designed from, the trusted file-backed assets, and confirmed
+ * engineering memory — the audit/customer-review artifact a public aggregator cannot produce.
+ */
+test("createExportBundleInDatabase embeds defensible per-part provenance in the signed manifest", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_sym'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'official'");
+    await pool.query(`
+      CREATE TABLE datasheet_revisions (
+        id TEXT PRIMARY KEY,
+        part_id TEXT NOT NULL,
+        revision_label TEXT,
+        revision_date TIMESTAMPTZ,
+        page_count INTEGER,
+        file_asset_id TEXT,
+        parse_confidence NUMERIC
+      )
+    `);
+
+    await pool.query(`UPDATE assets SET export_status = 'verified_for_export', storage_key = 'parts/ldo/symbol.kicad_sym', provenance = 'official' WHERE id = 'asset-memory-ldo-symbol-ref'`);
+    await pool.query(`UPDATE part_approvals SET approval_status = 'approved', summary = 'Approved for new designs', detail = 'Signed off after Bravo qual.', decided_by = 'gerry@hardware', decided_at = '2026-05-01T00:00:00.000Z', last_updated_at = '2026-05-01T00:00:00.000Z' WHERE part_id = 'part-memory-ldo'`);
+    await pool.query(`INSERT INTO datasheet_revisions (id, part_id, revision_label, revision_date) VALUES ('dsr-ldo-c', 'part-memory-ldo', 'Rev C', '2026-03-01T00:00:00.000Z')`);
+    await pool.query(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, severity, outcome, draft_status, recorded_by, recorded_at) VALUES ('perec-ldo-bit', 'part-memory-ldo', 'outcome', 'Bit us: cold-start droop on Bravo', 'caution', 'bit_us', 'confirmed', 'gerry@hardware', '2026-04-01T00:00:00.000Z')`);
+
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const provenance = result.response.bundle.manifest.partProvenance;
+    const ldo = provenance.find((entry) => entry.partId === "part-memory-ldo");
+
+    assert.ok(ldo, "expected provenance entry for the confirmed LDO part");
+    assert.equal(ldo.partMpn, "TPS7A02DBVR");
+    assert.equal(ldo.approval?.status, "approved");
+    assert.equal(ldo.approval?.decidedBy, "gerry@hardware");
+    assert.equal(ldo.datasheetRevision?.revisionLabel, "Rev C");
+    assert.equal(ldo.trustedAssets.some((asset) => asset.assetId === "asset-memory-ldo-symbol-ref"), true);
+    assert.equal(ldo.confirmedEngineeringMemory.length, 1);
+    assert.equal(ldo.confirmedEngineeringMemory[0]?.outcome, "bit_us");
+    assert.match(ldo.confirmedEngineeringMemory[0]?.title ?? "", /cold-start droop/u);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies bundles with no controlled revisions report an empty summary and no warning.
  */
 test("createExportBundleInDatabase reports empty control summary when no controlled revision exists", async () => {
@@ -2501,6 +3020,287 @@ test("createExportBundleInDatabase reports empty control summary when no control
 });
 
 /**
+ * Verifies the on-demand verification helper persists the new signature_status when an
+ * archive is tampered with after assembly, and returns a structured outcome the API can
+ * surface. This is the central honesty-discipline guarantee for the cryptographic provenance
+ * surface: a previously-`signed` bundle whose archive bytes have changed must transition to
+ * `verification_failed` with a structured reason -- never silently fall back to `unsigned`.
+ */
+test("verifyExportBundleInDatabase transitions a tampered signed bundle to verification_failed and persists the new status", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  await pool.query(`
+    CREATE TABLE export_bundles (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      revision_label TEXT,
+      bundle_format TEXT NOT NULL,
+      storage_key TEXT,
+      archive_storage_key TEXT,
+      manifest JSONB NOT NULL,
+      part_count INTEGER NOT NULL DEFAULT 0,
+      included_asset_count INTEGER NOT NULL DEFAULT 0,
+      omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+      warning_count INTEGER NOT NULL DEFAULT 0,
+      assembly_status TEXT NOT NULL DEFAULT 'not_required',
+      assembly_error JSONB,
+      assembly_completed_at TIMESTAMPTZ,
+      assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+      archive_sha256 TEXT,
+      manifest_sha256 TEXT,
+      signature_status TEXT NOT NULL DEFAULT 'unsigned',
+      signature_algorithm TEXT,
+      signature_public_key_fingerprint TEXT,
+      signature_storage_key TEXT,
+      signature_signed_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  const { generateKeyPairSync, createHash, sign: cryptoSign } = await import("node:crypto");
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const publicPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicDer = publicKey.export({ format: "der", type: "spki" });
+  const fingerprint = createHash("sha256").update(publicDer).digest("hex");
+
+  const honestArchiveBytes = Buffer.from("honest-archive-bytes");
+  const honestArchiveSha256 = createHash("sha256").update(honestArchiveBytes).digest("hex");
+  const honestSignature = cryptoSign(null, Buffer.from(honestArchiveSha256, "utf8"), privateKey);
+
+  const archiveKey = "export-bundles/project-alpha/ebundle-signed/bundle.tar.gz";
+  const signatureKey = "export-bundles/project-alpha/ebundle-signed/bundle.tar.gz.sig";
+
+  await pool.query(
+    `INSERT INTO export_bundles (id, project_id, bundle_format, storage_key, archive_storage_key, manifest,
+                                  part_count, included_asset_count, omitted_asset_count, warning_count,
+                                  assembly_status, archive_sha256, manifest_sha256,
+                                  signature_status, signature_algorithm, signature_public_key_fingerprint,
+                                  signature_storage_key, signature_signed_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+    [
+      "ebundle-signed",
+      "project-alpha",
+      "neutral",
+      "manifests/ebundle-signed.json",
+      archiveKey,
+      JSON.stringify({ includedAssets: [] }),
+      0,
+      0,
+      0,
+      0,
+      "assembled",
+      honestArchiveSha256,
+      "deadbeef",
+      "signed",
+      "ed25519",
+      fingerprint,
+      signatureKey,
+      "2026-05-13T10:00:00.000Z"
+    ]
+  );
+
+  const honestStorage: Record<string, Buffer> = {
+    [archiveKey]: honestArchiveBytes,
+    [signatureKey]: honestSignature
+  };
+  const honestStorageClient: FileStorageClient = {
+    backend: "local",
+    async exists(key) { return key in honestStorage; },
+    async getDownloadUrl() { return null; },
+    async read(key) {
+      const value = honestStorage[key];
+      if (!value) throw new Error(`storage key not found: ${key}`);
+      return value;
+    },
+    async write() { /* read-only fixture for the verifier */ }
+  };
+
+  process.env["EE_LIBRARY_BUNDLE_VERIFICATION_KEY"] = publicPem;
+
+  try {
+    const honestResult = await verifyExportBundleInDatabase("ebundle-signed", honestStorageClient);
+    assert.equal(honestResult.status, "available");
+    if (honestResult.status !== "available") return;
+    assert.equal(honestResult.response.outcome.status, "signed");
+    assert.equal(honestResult.response.outcome.reason, null);
+    assert.equal(honestResult.response.outcome.recomputedArchiveSha256, honestArchiveSha256);
+    assert.equal(honestResult.response.bundle.signatureStatus, "signed");
+
+    // Now: simulate tampering -- the archive bytes change. The verifier must transition the
+    // row to `verification_failed` with a structured reason and persist that new state.
+    honestStorage[archiveKey] = Buffer.from("tampered-bytes");
+    const tamperedResult = await verifyExportBundleInDatabase("ebundle-signed", honestStorageClient);
+    assert.equal(tamperedResult.status, "available");
+    if (tamperedResult.status !== "available") return;
+    assert.equal(tamperedResult.response.outcome.status, "verification_failed");
+    assert.equal(tamperedResult.response.outcome.reason, "archive_hash_mismatch");
+    assert.equal(tamperedResult.response.outcome.verifiedAt, null);
+    assert.notEqual(tamperedResult.response.outcome.recomputedArchiveSha256, honestArchiveSha256);
+    assert.equal(tamperedResult.response.bundle.signatureStatus, "verification_failed");
+
+    // The recorded archive_sha256 column is INTENTIONALLY NOT overwritten; it is the audit
+    // anchor. The recomputed value lives in the response only.
+    const persisted = await pool.query<{ signature_status: string; archive_sha256: string }>(
+      "SELECT signature_status, archive_sha256 FROM export_bundles WHERE id = $1",
+      ["ebundle-signed"]
+    );
+    assert.equal(persisted.rows[0]?.signature_status, "verification_failed");
+    assert.equal(persisted.rows[0]?.archive_sha256, honestArchiveSha256);
+  } finally {
+    delete process.env["EE_LIBRARY_BUNDLE_VERIFICATION_KEY"];
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the verify endpoint reports `verification_key_unavailable` -- not a 500 -- when an
+ * operator tries to verify a signed bundle without a verification key configured.
+ */
+test("verifyExportBundleInDatabase reports verification_key_unavailable when no key is configured for a signed bundle", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  await pool.query(`
+    CREATE TABLE export_bundles (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      revision_label TEXT,
+      bundle_format TEXT NOT NULL,
+      storage_key TEXT,
+      archive_storage_key TEXT,
+      manifest JSONB NOT NULL,
+      part_count INTEGER NOT NULL DEFAULT 0,
+      included_asset_count INTEGER NOT NULL DEFAULT 0,
+      omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+      warning_count INTEGER NOT NULL DEFAULT 0,
+      assembly_status TEXT NOT NULL DEFAULT 'not_required',
+      assembly_error JSONB,
+      assembly_completed_at TIMESTAMPTZ,
+      assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+      archive_sha256 TEXT,
+      manifest_sha256 TEXT,
+      signature_status TEXT NOT NULL DEFAULT 'unsigned',
+      signature_algorithm TEXT,
+      signature_public_key_fingerprint TEXT,
+      signature_storage_key TEXT,
+      signature_signed_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  const { createHash } = await import("node:crypto");
+  const archiveBytes = Buffer.from("archive-bytes");
+  const archiveSha256 = createHash("sha256").update(archiveBytes).digest("hex");
+  const archiveKey = "export-bundles/project-alpha/ebundle-keyless/bundle.tar.gz";
+  const signatureKey = `${archiveKey}.sig`;
+
+  await pool.query(
+    `INSERT INTO export_bundles (id, project_id, bundle_format, archive_storage_key, manifest,
+                                  assembly_status, archive_sha256,
+                                  signature_status, signature_algorithm, signature_public_key_fingerprint,
+                                  signature_storage_key, signature_signed_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      "ebundle-keyless",
+      "project-alpha",
+      "neutral",
+      archiveKey,
+      JSON.stringify({ includedAssets: [] }),
+      "assembled",
+      archiveSha256,
+      "signed",
+      "ed25519",
+      "fingerprint-recorded-at-sign-time",
+      signatureKey,
+      "2026-05-13T10:00:00.000Z"
+    ]
+  );
+
+  const storage: FileStorageClient = {
+    backend: "local",
+    async exists(key) { return key === archiveKey || key === signatureKey; },
+    async getDownloadUrl() { return null; },
+    async read(key) {
+      if (key === archiveKey) return archiveBytes;
+      if (key === signatureKey) return Buffer.from("dummy-sig");
+      throw new Error(`unexpected key: ${key}`);
+    },
+    async write() { /* unused */ }
+  };
+
+  delete process.env["EE_LIBRARY_BUNDLE_VERIFICATION_KEY"];
+
+  try {
+    const result = await verifyExportBundleInDatabase("ebundle-keyless", storage);
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+    assert.equal(result.response.outcome.status, "verification_failed");
+    assert.equal(result.response.outcome.reason, "verification_key_unavailable");
+    assert.equal(result.response.outcome.recomputedArchiveSha256, archiveSha256);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the helper returns `not_found` for an unknown bundle id without throwing.
+ */
+test("verifyExportBundleInDatabase returns not_found for an unknown bundle id", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  await pool.query(`
+    CREATE TABLE export_bundles (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      revision_label TEXT,
+      bundle_format TEXT NOT NULL,
+      storage_key TEXT,
+      archive_storage_key TEXT,
+      manifest JSONB NOT NULL,
+      part_count INTEGER NOT NULL DEFAULT 0,
+      included_asset_count INTEGER NOT NULL DEFAULT 0,
+      omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+      warning_count INTEGER NOT NULL DEFAULT 0,
+      assembly_status TEXT NOT NULL DEFAULT 'not_required',
+      assembly_error JSONB,
+      assembly_completed_at TIMESTAMPTZ,
+      assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+      archive_sha256 TEXT,
+      manifest_sha256 TEXT,
+      signature_status TEXT NOT NULL DEFAULT 'unsigned',
+      signature_algorithm TEXT,
+      signature_public_key_fingerprint TEXT,
+      signature_storage_key TEXT,
+      signature_signed_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  const storage: FileStorageClient = {
+    backend: "local",
+    async exists() { return false; },
+    async getDownloadUrl() { return null; },
+    async read() { throw new Error("unused"); },
+    async write() { /* unused */ }
+  };
+
+  try {
+    const result = await verifyExportBundleInDatabase("ebundle-missing", storage);
+    assert.equal(result.status, "not_found");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates a pg-mem project-memory database with optional fixture rows.
  */
 function createProjectMemoryPool(seedRows: boolean): TestPool {
@@ -2517,6 +3317,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       id TEXT PRIMARY KEY,
       mpn TEXT NOT NULL,
       manufacturer_id TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Other',
       lifecycle_status TEXT NOT NULL DEFAULT 'active',
       connector_family_id TEXT,
       last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -2788,6 +3589,33 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       confidence_score NUMERIC NOT NULL DEFAULT 1,
       source_revision_id TEXT,
       notes TEXT
+    );
+
+    CREATE TABLE part_engineering_records (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      record_kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      severity TEXT NOT NULL DEFAULT 'info',
+      outcome TEXT,
+      related_asset_id TEXT,
+      datasheet_revision_id TEXT,
+      related_mpn TEXT,
+      depended_on_by TEXT,
+      recorded_by TEXT,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
+      resolved_by TEXT,
+      resolution_notes TEXT,
+      evidence_url TEXT,
+      draft_status TEXT NOT NULL DEFAULT 'confirmed',
+      draft_source TEXT NOT NULL DEFAULT 'manual',
+      trigger_ref TEXT,
+      confirmed_by TEXT,
+      confirmed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 

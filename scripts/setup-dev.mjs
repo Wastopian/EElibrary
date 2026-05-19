@@ -12,7 +12,8 @@
  *      not only on a fresh Docker volume).
  *   6. Seed or preserve the local admin user.
  *   7. Import deterministic local-catalog sample parts.
- *   8. Print web/API/admin info and the recommended next commands.
+ *   8. Seed a compact demo project + BOM that exercise match states, usages, health, evidence, and follow-ups.
+ *   9. Print web/API/admin info and the recommended next commands.
  */
 
 import { spawn } from "node:child_process";
@@ -23,6 +24,7 @@ import { generateAuthSecret } from "./lib/auth.mjs";
 import { waitForPostgres } from "./lib/db.mjs";
 import { fromRepoRoot } from "./lib/paths.mjs";
 import { formatIssuesForStderr, validateLocalEnv } from "./lib/env-validate.mjs";
+import { buildDemoRouteGuide } from "./seed-demo-project.mjs";
 
 const ENV_PATH = fromRepoRoot(".env");
 const ENV_EXAMPLE_PATH = fromRepoRoot(".env.example");
@@ -37,11 +39,12 @@ async function main() {
   await step5RunMigrations();
   await step6SeedAdmin();
   await step7ImportSampleParts();
-  step8PrintReady();
+  await step8SeedDemoProject();
+  step9PrintReady();
 }
 
 async function step1CopyEnv() {
-  console.log("-> [1/8] ensure .env file");
+  console.log("-> [1/9] ensure .env file");
 
   if (!(await pathExists(ENV_EXAMPLE_PATH))) {
     throw new Error(".env.example not found; cannot bootstrap local environment.");
@@ -56,7 +59,7 @@ async function step1CopyEnv() {
 }
 
 async function step2EnsureAuthSecret() {
-  console.log("-> [2/8] ensure AUTH_SECRET (>=32 bytes)");
+  console.log("-> [2/9] ensure AUTH_SECRET (>=32 bytes)");
 
   const result = await ensureEnvKey(ENV_PATH, "AUTH_SECRET", () => generateAuthSecret());
   if (result.status === "added") {
@@ -76,7 +79,7 @@ function validateEnvOrFail() {
 }
 
 async function step3DockerCompose() {
-  console.log("-> [3/8] docker compose up -d");
+  console.log("-> [3/9] docker compose up -d");
 
   await ensureDockerAvailable();
 
@@ -140,33 +143,38 @@ async function ensureDockerAvailable() {
 }
 
 async function step4WaitForPostgres() {
-  console.log("-> [4/8] waiting for Postgres");
+  console.log("-> [4/9] waiting for Postgres");
   await waitForPostgres({ timeoutMs: 90_000, intervalMs: 1_000 });
   console.log("   Postgres is reachable");
 }
 
 async function step5RunMigrations() {
-  console.log("-> [5/8] applying migrations");
+  console.log("-> [5/9] applying migrations");
   await runNodeScript("scripts/db-migrate.mjs");
 }
 
 async function step6SeedAdmin() {
-  console.log("-> [6/8] seeding local admin");
+  console.log("-> [6/9] seeding local admin");
   await runNodeScript("scripts/seed-admin.mjs");
 }
 
 async function step7ImportSampleParts() {
-  console.log("-> [7/8] importing local-catalog sample parts");
+  console.log("-> [7/9] importing local-catalog sample parts");
   await runNpmScript("ingest:local");
 }
 
-function step8PrintReady() {
+async function step8SeedDemoProject() {
+  console.log("-> [8/9] seeding demo project + BOM walkthrough");
+  await runNodeScript("scripts/seed-demo-project.mjs");
+}
+
+function step9PrintReady() {
   const apiPort = process.env.API_PORT ?? "4000";
   const apiBase = process.env.EE_LIBRARY_API_BASE_URL ?? `http://127.0.0.1:${apiPort}`;
   const webPort = process.env.WEB_PORT ?? "3000";
 
   console.log("");
-  console.log("-> [8/8] ready");
+  console.log("-> [9/9] ready");
   console.log("");
   console.log("EE Library local environment");
   console.log("-----------------------------");
@@ -179,6 +187,11 @@ function step8PrintReady() {
   console.log("    password: localdev-admin");
   console.log("    rotate:   npm run seed:admin -- --reset-password");
   console.log("");
+  console.log("  Demo engineering walkthrough:");
+  for (const route of buildDemoRouteGuide().slice(0, 5)) {
+    console.log(`    ${route.label}: http://localhost:${webPort}${route.path}`);
+  }
+  console.log("");
   console.log("  Recommended next steps:");
   console.log("    npm run dev             # start api + web together");
   console.log("    npm run dev:worker      # run the worker daemon (heartbeats every ~10s)");
@@ -189,6 +202,7 @@ function step8PrintReady() {
   console.log("    npm run db:migrate      # apply new migrations");
   console.log("    npm run db:reset        # drop + re-apply schema (local only)");
   console.log("    npm run ingest:local    # re-import local-catalog sample parts");
+  console.log("    npm run seed:demo-project  # reset demo project + BOM (after ingest:local)");
   console.log("");
   console.log("  Tip: this script does NOT start `npm run dev`. Run it next, then `npm run smoke:local`.");
   console.log("");
@@ -199,9 +213,8 @@ function step8PrintReady() {
  */
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(resolveWindowsExecutable(command), args, {
       stdio: "inherit",
-      shell: process.platform === "win32",
       ...options
     });
 
@@ -221,10 +234,7 @@ function runCommand(command, args, options = {}) {
  */
 function runCommandWithOutput(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      shell: process.platform === "win32",
-      ...options
-    });
+    const child = spawn(resolveWindowsExecutable(command), args, options);
 
     let stdout = "";
     let stderr = "";
@@ -260,8 +270,7 @@ function runCommandWithOutput(command, args, options = {}) {
  */
 function runSilent(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      shell: process.platform === "win32",
+    const child = spawn(resolveWindowsExecutable(command), args, {
       stdio: "ignore"
     });
 
@@ -277,6 +286,27 @@ function runSilent(command, args) {
 }
 
 /**
+ * Resolves Windows command shims without enabling shell parsing.
+ * Shell parsing breaks quoted paths such as `C:\Program Files\nodejs\node.exe`.
+ */
+function resolveWindowsExecutable(command) {
+  if (process.platform !== "win32") {
+    return command;
+  }
+
+  if (command.endsWith(".cmd") || command.endsWith(".exe")) {
+    return command;
+  }
+
+  const commandShims = new Map([
+    ["npm", "npm.cmd"],
+    ["npx", "npx.cmd"]
+  ]);
+
+  return commandShims.get(command) ?? command;
+}
+
+/**
  * Runs a Node script from the repo root with inherited stdio.
  */
 function runNodeScript(relativePath) {
@@ -287,7 +317,10 @@ function runNodeScript(relativePath) {
  * Runs a package.json script from the repo root with inherited stdio.
  */
 function runNpmScript(scriptName) {
-  return runCommand("npm", ["run", scriptName], { cwd: fromRepoRoot() });
+  return runCommand("npm", ["run", scriptName], {
+    cwd: fromRepoRoot(),
+    shell: process.platform === "win32"
+  });
 }
 
 function extractCommandOutput(error) {

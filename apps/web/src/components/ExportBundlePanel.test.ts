@@ -7,7 +7,15 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BUNDLE_AUTO_REFRESH_INTERVAL_MS, buildBundleAssemblyTelemetryMessage, describeBundleAssemblyStatus, shouldAutoRefreshBundleAssembly } from "./ExportBundlePanel";
+import {
+  BUNDLE_AUTO_REFRESH_INTERVAL_MS,
+  buildBundleAssemblyTelemetryMessage,
+  describeBundleAssemblyStatus,
+  describeSignatureStatus,
+  describeVerificationReason,
+  shortHexHash,
+  shouldAutoRefreshBundleAssembly
+} from "./ExportBundlePanel";
 import type { ExportBundle, ExportBundleManifest } from "@ee-library/shared/types";
 
 /**
@@ -22,6 +30,7 @@ function buildStubBundle(overrides: Partial<ExportBundle> = {}): ExportBundle {
     generatedAt: "2026-05-07T10:00:00.000Z",
     includedAssets: [],
     omissions: [],
+    partProvenance: [],
     projectId: "project-test",
     revisionLabel: null,
     warnings: []
@@ -29,6 +38,7 @@ function buildStubBundle(overrides: Partial<ExportBundle> = {}): ExportBundle {
 
   return {
     archiveAvailability: "manifest_only",
+    archiveSha256: null,
     archiveStorageKey: null,
     assemblyAttemptCount: 0,
     assemblyCompletedAt: null,
@@ -41,10 +51,16 @@ function buildStubBundle(overrides: Partial<ExportBundle> = {}): ExportBundle {
     id: "ebundle-test",
     includedAssetCount: 0,
     manifest,
+    manifestSha256: null,
     omittedAssetCount: 0,
     partCount: 0,
     projectId: "project-test",
     revisionLabel: null,
+    signatureAlgorithm: null,
+    signaturePublicKeyFingerprint: null,
+    signatureSignedAt: null,
+    signatureStatus: "unsigned",
+    signatureStorageKey: null,
     storageKey: null,
     warningCount: 0,
     ...overrides
@@ -163,4 +179,60 @@ test("BUNDLE_AUTO_REFRESH_INTERVAL_MS is below the worker daemon assembly cadenc
     BUNDLE_AUTO_REFRESH_INTERVAL_MS < WORKER_DAEMON_ASSEMBLY_INTERVAL_MS,
     `expected ${BUNDLE_AUTO_REFRESH_INTERVAL_MS}ms < daemon cadence ${WORKER_DAEMON_ASSEMBLY_INTERVAL_MS}ms`
   );
+});
+
+/**
+ * Verifies the signature-status helper maps each documented status to a stable label and tone.
+ *
+ * The honest-rendering contract: `signed` is the only `verified` tone (the only audit-grade
+ * outcome). `verification_failed` is `danger` (loud, never silently accepted). `unsigned` is
+ * `info` (neutral; nothing claimed, nothing alarming).
+ */
+test("describeSignatureStatus maps each status to the documented label and tone", () => {
+  assert.deepEqual(describeSignatureStatus("signed"), { label: "Signed", tone: "verified" });
+  assert.deepEqual(describeSignatureStatus("verification_failed"), { label: "Verification failed", tone: "danger" });
+  assert.deepEqual(describeSignatureStatus("unsigned"), { label: "Unsigned", tone: "info" });
+});
+
+/**
+ * Verifies every documented `verification_failed` reason gets actionable plain-language copy.
+ *
+ * The structured reason is the entire point of the cell -- a single opaque red badge would let
+ * an operator stare at a broken bundle without knowing whether to regenerate it, rotate keys,
+ * or configure a verification key. Each branch is exercised so the helper does not silently
+ * fall back to a generic message for an enum value.
+ */
+test("describeVerificationReason returns actionable copy for every documented failure reason", () => {
+  const reasons = [
+    "archive_missing",
+    "archive_hash_mismatch",
+    "signature_missing",
+    "signature_unreadable",
+    "signature_algorithm_unsupported",
+    "verification_key_unavailable",
+    "verification_key_fingerprint_mismatch",
+    "signature_mismatch"
+  ] as const;
+  for (const reason of reasons) {
+    const copy = describeVerificationReason(reason);
+    assert.ok(copy.length > 8, `reason "${reason}" should produce non-trivial copy`);
+    assert.equal(/undefined|null/u.test(copy), false, `reason "${reason}" should not leak placeholder words`);
+  }
+  assert.match(describeVerificationReason("archive_hash_mismatch"), /altered|hash/iu);
+  assert.match(describeVerificationReason("verification_key_unavailable"), /EE_LIBRARY_BUNDLE_VERIFICATION_KEY/u);
+  assert.match(describeVerificationReason("verification_key_fingerprint_mismatch"), /signer|key/iu);
+});
+
+/**
+ * Verifies the hash-truncation helper keeps short hashes intact and elides long hashes in a
+ * way that preserves enough leading and trailing characters to distinguish two real hashes.
+ */
+test("shortHexHash leaves short hashes intact and elides long ones with leading + trailing context", () => {
+  assert.equal(shortHexHash("abc123"), "abc123");
+  assert.equal(shortHexHash("abcdef0123456"), "abcdef0123456");
+  const long = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const short = shortHexHash(long);
+  assert.match(short, /^01234567…/u);
+  assert.match(short, /…abcdef$/u);
+  assert.ok(short.length < long.length);
 });

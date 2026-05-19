@@ -17,8 +17,11 @@ export interface StatusBadgeProps {
 
 /** SectionPanelProps wraps a coherent block of detail content. */
 export interface SectionPanelProps {
-  /** Panel title. */
-  title: string;
+  /**
+   * Panel title. When omitted together with `description`, the header chrome is skipped so a
+   * parent `SectionHeading` can own the section identity without duplicate headings.
+   */
+  title?: string;
   /** Optional short description or provenance hint. */
   description?: string;
   /** Optional visual tone for default or technical surfaces. */
@@ -135,12 +138,16 @@ export function SectionHeading({ id, index, subtitle, title }: SectionHeadingPro
  * Renders a reusable panel with optional context copy.
  */
 export function SectionPanel({ children, description, title, tone = "default" }: SectionPanelProps) {
+  const hasHeader = Boolean(title) || Boolean(description);
+
   return (
     <section className={`ui-panel ui-panel--${tone}`}>
-      <div className="ui-panel__header">
-        <h2>{title}</h2>
-        {description ? <p>{description}</p> : null}
-      </div>
+      {hasHeader ? (
+        <div className="ui-panel__header">
+          {title ? <h2>{title}</h2> : null}
+          {description ? <p>{description}</p> : null}
+        </div>
+      ) : null}
       {children}
     </section>
   );

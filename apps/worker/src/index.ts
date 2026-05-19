@@ -5,12 +5,14 @@
 import { performance } from "node:perf_hooks";
 import { providerAdapters } from "./provider-adapters";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, emitHeartbeat, resolveWorkerId, shutdownHeartbeatPool } from "./heartbeat";
-import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts } from "./catalog-repository";
+import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts, replayLocalCatalogCrossPartRelations } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { getWorkerStorageClient } from "./file-storage";
+import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
+import { processFootprintGeometryValidations, processSymbolPinCountValidations } from "./asset-validation-jobs";
 import { runProviderPartImport } from "./provider-part-import";
 import { refreshStaleSupplyOfferSnapshots } from "./supply-offer-refresh";
 import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
@@ -85,6 +87,10 @@ async function ingestAvailableProviderRequests(adapterId: string): Promise<void>
 
     for (const request of requests) {
       summaries.push(await runProviderPartImport(adapter.id, request));
+    }
+
+    if (adapterId === "local-catalog") {
+      await timeWorkerOperation("repository.replay_local_catalog_cross_part_relations", () => replayLocalCatalogCrossPartRelations(adapter), timings);
     }
 
     console.log(JSON.stringify({ imported: summaries.length, imports: summaries, timings }, null, 2));
@@ -197,6 +203,9 @@ function buildUsageLines(): string[] {
     "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
     "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
     "npm run assemble-bundles -w @ee-library/worker -- [limit]",
+    "npm run generate-three-d-previews -w @ee-library/worker -- [limit]",
+    "npm run validate-footprints -w @ee-library/worker -- [limit]",
+    "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
@@ -357,6 +366,100 @@ async function assembleExportBundles(limitValue?: string): Promise<void> {
 }
 
 /**
+ * Generates derived 3D preview artifacts (glTF/glb) for stored STEP assets.
+ *
+ * Honest skip path: when no converter is configured (`EE_LIBRARY_STEP_TO_GLTF_CMD` unset), each
+ * candidate is reported as `skipped_converter_unavailable` so an operator immediately sees the
+ * "no converter wired" state instead of believing previews are being silently produced.
+ */
+async function generateThreeDPreviews(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const converter = buildThreeDPreviewConverterFromEnv();
+    setThreeDPreviewConverter(converter);
+    const storage = getWorkerStorageClient();
+
+    const summary = await timeWorkerOperation(
+      "worker.generate_three_d_previews",
+      () => processPendingThreeDPreviewJobs(Number.isFinite(limit) ? limit : 20, storage),
+      timings,
+      (value) => `${value.processed.length} candidate${value.processed.length === 1 ? "" : "s"}, ${value.processed.filter((row) => row.status === "converted").length} converted, ${value.processed.filter((row) => row.status === "conversion_failed").length} failed, ${value.processed.filter((row) => row.status === "skipped_converter_unavailable").length} skipped (no converter)`
+    );
+
+    console.log(JSON.stringify({ converterConfigured: converter !== null, ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.generate_three_d_previews", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Runs the file-grounded footprint geometry validator over a bounded batch of stored
+ * footprint assets. Each candidate produces an `asset_validation_records` row tagged
+ * `generated:footprint_geometry_v1`; the asset's review/export status is never moved.
+ */
+async function runFootprintGeometryValidationCommand(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const storage = getWorkerStorageClient();
+    const summary = await timeWorkerOperation(
+      "worker.validate_footprint_geometry",
+      () => processFootprintGeometryValidations(Number.isFinite(limit) ? limit : 20, storage),
+      timings,
+      (value) =>
+        `${value.processed.length} candidate${value.processed.length === 1 ? "" : "s"}, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "verified").length} verified, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "needs_review").length} needs_review, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "failed").length} failed`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.validate_footprint_geometry", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Runs the file-grounded symbol pin-count cross-check validator over a bounded batch of
+ * stored symbol assets. Each candidate produces an `asset_validation_records` row tagged
+ * `generated:symbol_pin_mapping_v1`; the asset's review/export status is never moved.
+ */
+async function runSymbolPinCountValidationCommand(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const storage = getWorkerStorageClient();
+    const summary = await timeWorkerOperation(
+      "worker.validate_symbol_pin_counts",
+      () => processSymbolPinCountValidations(Number.isFinite(limit) ? limit : 20, storage),
+      timings,
+      (value) =>
+        `${value.processed.length} candidate${value.processed.length === 1 ? "" : "s"}, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "verified").length} verified, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "needs_review").length} needs_review, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "failed").length} failed`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.validate_symbol_pin_counts", error, timings);
+    throw error;
+  }
+}
+
+/**
  * Refreshes stale active supply-offer snapshots by re-running exact provider imports.
  */
 async function refreshSupplyOffers(limitValue?: string): Promise<void> {
@@ -508,6 +611,21 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "generate-three-d-previews") {
+    await generateThreeDPreviews(process.argv[3]);
+    return;
+  }
+
+  if (command === "validate-footprints") {
+    await runFootprintGeometryValidationCommand(process.argv[3]);
+    return;
+  }
+
+  if (command === "validate-symbol-pin-counts") {
+    await runSymbolPinCountValidationCommand(process.argv[3]);
+    return;
+  }
+
   if (command === "refresh-supply-offers") {
     await refreshSupplyOffers(process.argv[3]);
     return;
@@ -579,14 +697,48 @@ const DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_SUPPLY_OFFER_REFRESH_BATCH_LIMIT = 5;
 
 /**
+ * DEFAULT_THREE_D_PREVIEW_INTERVAL_MS controls how often the daemon attempts STEP→glTF
+ * conversion. The cadence is similar to bundle assembly so a freshly downloaded STEP becomes
+ * visually previewable within a minute, but slower than the heartbeat to leave room for the
+ * (potentially expensive) converter to run without blocking liveness reporting.
+ */
+const DEFAULT_THREE_D_PREVIEW_INTERVAL_MS = 60_000;
+
+/**
+ * DEFAULT_THREE_D_PREVIEW_BATCH_LIMIT caps how many STEP assets one tick processes so a long
+ * preview backlog cannot starve heartbeats or bundle assembly.
+ */
+const DEFAULT_THREE_D_PREVIEW_BATCH_LIMIT = 3;
+
+/**
+ * DEFAULT_ASSET_VALIDATION_INTERVAL_MS controls how often the daemon runs the file-grounded
+ * asset validators (footprint geometry + symbol pin-count cross-check). Slower than 3D preview
+ * because the validators are cheap-but-useless to re-run constantly: an asset_validation_records
+ * row only gains value when the underlying file or its package metadata has actually changed.
+ */
+const DEFAULT_ASSET_VALIDATION_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * DEFAULT_ASSET_VALIDATION_BATCH_LIMIT caps validations per daemon tick so a one-time backlog
+ * (e.g. a fresh ingestion of 1000 footprints) does not starve heartbeats or bundle assembly.
+ */
+const DEFAULT_ASSET_VALIDATION_BATCH_LIMIT = 5;
+
+/**
  * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, drains
  * pending export-bundle asset-byte assemblies, and refreshes stale active supply-offer snapshots.
  *
  * Used by the local-dev `npm run dev:worker` script and the GET /system/health liveness check.
  */
 async function runDaemon(): Promise<void> {
+  // Bind the converter once at daemon startup so the env-driven configuration is read a single
+  // time. A misconfigured PEM-style env var (`EE_LIBRARY_STEP_TO_GLTF_FORMAT` outside glb/gltf)
+  // raises here so the operator sees the failure immediately instead of on the first tick.
+  const threeDPreviewConverter = buildThreeDPreviewConverterFromEnv();
+  setThreeDPreviewConverter(threeDPreviewConverter);
+
   console.log(
-    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms, supplyOfferRefresh=${DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS}ms).`
+    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms, supplyOfferRefresh=${DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS}ms, threeDPreview=${DEFAULT_THREE_D_PREVIEW_INTERVAL_MS}ms${threeDPreviewConverter ? "" : " (no converter configured)"}, assetValidation=${DEFAULT_ASSET_VALIDATION_INTERVAL_MS}ms).`
   );
 
   await safeEmitHeartbeat({ command: "daemon" });
@@ -603,16 +755,28 @@ async function runDaemon(): Promise<void> {
     void safeRefreshStaleSupplyOffers();
   }, DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS);
 
+  const threeDPreviewInterval = setInterval(() => {
+    void safeProcessPendingThreeDPreviews();
+  }, DEFAULT_THREE_D_PREVIEW_INTERVAL_MS);
+
+  const assetValidationInterval = setInterval(() => {
+    void safeRunAssetValidations();
+  }, DEFAULT_ASSET_VALIDATION_INTERVAL_MS);
+
   // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
   // not have to wait a full interval before the worker picks it up.
   void safeProcessPendingExportBundleAssembly();
   void safeRefreshStaleSupplyOffers();
+  void safeProcessPendingThreeDPreviews();
+  void safeRunAssetValidations();
 
   await new Promise<void>((resolve) => {
     const stop = () => {
       clearInterval(heartbeatInterval);
       clearInterval(bundleAssemblyInterval);
       clearInterval(supplyOfferRefreshInterval);
+      clearInterval(threeDPreviewInterval);
+      clearInterval(assetValidationInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -645,6 +809,63 @@ async function safeProcessPendingExportBundleAssembly(): Promise<void> {
     );
   } catch (error) {
     console.error("Bundle assembly tick failed.", error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Generates STEP→glTF preview artifacts without crashing the daemon on storage / DB failures.
+ *
+ * Logs only when the tick selected work, and only summarizes converter availability when the
+ * batch was non-empty -- otherwise an unconverted-by-design system would log noisily forever.
+ */
+async function safeProcessPendingThreeDPreviews(): Promise<void> {
+  try {
+    const storage = getWorkerStorageClient();
+    const summary = await processPendingThreeDPreviewJobs(DEFAULT_THREE_D_PREVIEW_BATCH_LIMIT, storage);
+
+    if (summary.processed.length === 0) {
+      return;
+    }
+
+    const converted = summary.processed.filter((row) => row.status === "converted").length;
+    const skipped = summary.processed.filter((row) => row.status === "skipped_converter_unavailable").length;
+    const failed = summary.processed.filter((row) => row.status === "conversion_failed" || row.status === "skipped_source_unreadable").length;
+    console.log(
+      `Worker daemon: 3D preview pass ${converted} converted` +
+        (skipped > 0 ? `, ${skipped} skipped (converter unavailable)` : "") +
+        (failed > 0 ? `, ${failed} failed` : "")
+    );
+  } catch (error) {
+    console.error("3D preview tick failed.", error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Runs both file-grounded asset validators (footprint + symbol) without crashing the daemon
+ * on storage / DB failures. Logs only when the tick produced new evidence so an idle system
+ * stays quiet, and keeps the two outcomes separate so an operator can see which validator
+ * surfaced which decisions.
+ */
+async function safeRunAssetValidations(): Promise<void> {
+  try {
+    const storage = getWorkerStorageClient();
+    const footprintSummary = await processFootprintGeometryValidations(DEFAULT_ASSET_VALIDATION_BATCH_LIMIT, storage);
+    const symbolSummary = await processSymbolPinCountValidations(DEFAULT_ASSET_VALIDATION_BATCH_LIMIT, storage);
+
+    if (footprintSummary.processed.length === 0 && symbolSummary.processed.length === 0) {
+      return;
+    }
+
+    const footprintFailed = footprintSummary.processed.filter((row) => row.recordedStatus === "failed").length;
+    const symbolFailed = symbolSummary.processed.filter((row) => row.recordedStatus === "failed").length;
+    console.log(
+      `Worker daemon: asset validation pass — footprints: ${footprintSummary.processed.length} candidates` +
+        (footprintFailed > 0 ? `, ${footprintFailed} failed` : "") +
+        `; symbols: ${symbolSummary.processed.length} candidates` +
+        (symbolFailed > 0 ? `, ${symbolFailed} failed` : "")
+    );
+  } catch (error) {
+    console.error("Asset validation tick failed.", error instanceof Error ? error.message : error);
   }
 }
 

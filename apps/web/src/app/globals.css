@@ -674,6 +674,15 @@ main > .workspace-jump-nav {
   max-width: 65ch;
 }
 
+.site-intro--compact {
+  gap: 8px;
+  padding: 16px 20px;
+}
+
+.site-intro--compact h1 {
+  font-size: 1.28rem;
+}
+
 .site-intro__paths {
   display: grid;
   gap: 12px;
@@ -3063,6 +3072,89 @@ details[open] .trust-breakdown__toggle::before {
   margin-top: 4px;
 }
 
+/*
+ * ProjectOverlapPanel adds compact usage clues inside a project table. The nested
+ * rows stay dense for desktop scanning while preserving links to the exact part,
+ * prior project usage section, and reusable circuit block.
+ */
+.project-overlap-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.project-overlap-panel__stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.project-overlap-panel__shared-list,
+.project-overlap-panel__role-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-overlap-panel__shared-list li,
+.project-overlap-panel__role-list li {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.project-overlap-panel__shared-part-main,
+.project-overlap-panel__role-main,
+.project-overlap-panel__role-meta {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.project-overlap-panel__usage-clue,
+.project-overlap-panel__part-id,
+.project-overlap-panel__usage-link,
+.project-overlap-panel__role-part,
+.project-overlap-panel__truncated-note {
+  margin: 0;
+}
+
+.project-overlap-panel__role-preview {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.project-overlap-panel__role-preview-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.project-overlap-panel__role-preview-heading p {
+  margin: 0;
+}
+
+.project-overlap-panel__role-meta span {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 3px 6px;
+}
+
+@media (max-width: 760px) {
+  .project-overlap-panel__stats {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Slim hero variant: shorter, no large stats grid; used on cleaned project pages. */
 .projects-hero--slim {
   padding-block: 18px 14px;
@@ -3234,6 +3326,241 @@ details[open] .trust-breakdown__toggle::before {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.project-reentry-brief {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.project-reentry-brief__header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.project-reentry-brief__header h3 {
+  font-size: 0.95rem;
+  margin: 0 0 4px;
+}
+
+.project-reentry-brief__header p {
+  margin: 0;
+}
+
+.project-reentry-brief__status {
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.project-reentry-brief__status--ready {
+  color: var(--color-status-success, #4f7f5f);
+}
+
+.project-reentry-brief__status--review {
+  color: var(--color-status-review, #b95141);
+}
+
+.project-reentry-brief__status--stale {
+  color: var(--color-status-danger, #9f3a38);
+}
+
+.project-reentry-brief__metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.project-reentry-brief__metric {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.project-reentry-brief__metric span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.project-reentry-brief__metric strong {
+  font-size: 0.88rem;
+  line-height: 1.25;
+}
+
+.project-reentry-brief__attention {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-reentry-brief__attention li {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.project-reentry-brief__attention li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.project-reentry-brief__attention strong {
+  font-size: 0.82rem;
+}
+
+.project-reentry-brief__attention span,
+.project-reentry-brief__clear {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.project-review-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.project-review-panel__header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.project-review-panel__header h3 {
+  font-size: 0.95rem;
+  margin: 0 0 4px;
+}
+
+.project-review-panel__header p {
+  margin: 0;
+}
+
+.project-review-panel__count {
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.project-review-panel__counts {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.project-review-panel__existing {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.project-review-panel__existing h4 {
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.project-review-panel__existing ul {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-review-panel__existing li {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.project-review-panel__existing span {
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+}
+
+.project-review-panel__empty {
+  font-size: 0.86rem;
+  margin: 0;
+}
+
+.project-review-panel__form {
+  display: grid;
+  gap: 10px;
+}
+
+.project-review-panel__row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.project-review-panel__field {
+  display: grid;
+  gap: 4px;
+}
+
+.project-review-panel__field span {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.project-review-panel__field input,
+.project-review-panel__field select,
+.project-review-panel__field textarea {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 6px 8px;
+}
+
+.project-review-panel__field textarea {
+  resize: vertical;
+}
+
+.project-review-panel__target {
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.project-review-panel__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .project-files-card {
@@ -3471,6 +3798,142 @@ details[open] .trust-breakdown__toggle::before {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+/*
+ * Custom design file-mirror table. This sits under the project file cards and keeps
+ * folder-backed records visually distinct from parts-list-only references.
+ */
+.custom-hardware-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.custom-hardware-panel__header {
+  align-items: flex-start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.8fr);
+}
+
+.custom-hardware-panel__header h3 {
+  font-size: 0.95rem;
+  margin: 0 0 4px;
+}
+
+.custom-hardware-panel__header p {
+  margin: 0;
+}
+
+.custom-hardware-panel__path {
+  min-width: 0;
+}
+
+.custom-hardware-panel__path code {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  display: inline-block;
+  font-size: 0.78rem;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 2px 6px;
+}
+
+.custom-hardware-panel__summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.custom-hardware-panel__summary-item {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.custom-hardware-panel__summary-item span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.custom-hardware-panel__summary-item strong {
+  color: var(--color-text);
+  font-size: 1.05rem;
+  line-height: 1.1;
+}
+
+.custom-hardware-panel__table-wrap {
+  margin: 0;
+}
+
+.custom-hardware-panel__table td {
+  vertical-align: top;
+}
+
+.custom-hardware-panel__state {
+  margin-top: 6px;
+}
+
+.custom-hardware-panel__notes {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+
+.custom-hardware-panel__source {
+  display: grid;
+  gap: 4px;
+}
+
+.custom-hardware-panel__doc {
+  display: grid;
+  gap: 4px;
+}
+
+.custom-hardware-panel__doc-status {
+  color: var(--color-status-success, #4f7f5f);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.custom-hardware-panel__doc-status--needs-work {
+  color: var(--color-status-review, #b95141);
+}
+
+.custom-hardware-panel__source span,
+.custom-hardware-panel__missing {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.custom-hardware-panel__source code {
+  font-size: 0.76rem;
+}
+
+@media (max-width: 760px) {
+  .project-reentry-brief__header {
+    display: grid;
+  }
+
+  .project-review-panel__header,
+  .project-review-panel__row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .custom-hardware-panel__header {
+    grid-template-columns: 1fr;
+  }
 }
 
 /*
@@ -4011,6 +4474,10 @@ details[open] .trust-breakdown__toggle::before {
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.projects-detail-grid--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .project-health-panel,
@@ -7025,7 +7492,7 @@ details[open] .trust-breakdown__toggle::before {
 .asset-review-card__snapshot {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .asset-review-card__snapshot > div {
@@ -7049,6 +7516,13 @@ details[open] .trust-breakdown__toggle::before {
   color: var(--color-text);
   font-size: 0.96rem;
   line-height: 1.35;
+}
+
+.asset-review-card__snapshot-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .asset-review-card__snapshot p {
@@ -7476,7 +7950,7 @@ details[open] .trust-breakdown__toggle::before {
   border-radius: var(--radius-md);
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   padding: 10px 14px;
 }
 
@@ -7497,6 +7971,12 @@ details[open] .trust-breakdown__toggle::before {
 
 .part-files-list__action {
   white-space: nowrap;
+}
+
+.part-files-list__trust-check {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 116px;
 }
 
 .part-substitution-panel__form {
@@ -7540,6 +8020,18 @@ details[open] .trust-breakdown__toggle::before {
 
 .form-textarea--notes {
   min-height: 148px;
+}
+
+.bundle-signature-cell {
+  align-items: flex-start;
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.bundle-signature-cell .ui-mono {
+  font-size: 0.74rem;
+  line-height: 1.35;
 }
 
 .document-control-panel {
@@ -8131,6 +8623,7 @@ details[open] .trust-breakdown__toggle::before {
   }
 
   .asset-review-card__snapshot,
+  .part-files-list__row,
   .ui-asset-card__status-grid,
   .detail-export-summary__grid,
   .document-control-form,
@@ -8738,6 +9231,25 @@ details[open] .trust-breakdown__toggle::before {
 .compare-table--metrics th:first-child,
 .compare-table--metrics td:first-child {
   min-width: 10rem;
+}
+
+.compare-table--preview th:not(:first-child),
+.compare-table--preview td:not(:first-child) {
+  min-width: 260px;
+  width: 32%;
+}
+
+.compare-preview-cell {
+  min-width: 260px;
+}
+
+.compare-preview-cell .asset-inline-preview__frame,
+.compare-preview-cell .asset-inline-preview__image {
+  max-height: 320px;
+}
+
+.compare-preview-cell__missing {
+  margin: 0;
 }
 
 /* System health workspace */

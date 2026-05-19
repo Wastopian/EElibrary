@@ -17,11 +17,12 @@ import { FollowUpPanel } from "../../../components/FollowUpPanel";
 import { OperatorChecklist } from "../../../components/OperatorChecklist";
 import { ProjectEditPanel } from "../../../components/ProjectEditPanel";
 import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
+import { ProjectOverlapPanel } from "../../../components/ProjectOverlapPanel";
 import { ProjectRevisionApprovalGatePanel } from "../../../components/ProjectRevisionApprovalGatePanel";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, isApiClientError } from "../../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, fetchProjectOverlapPanel, isApiClientError } from "../../../lib/api-client";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { ApiHealth } from "../../../lib/api-client";
 import type { AuditEvent } from "@ee-library/shared/types";
@@ -44,6 +45,7 @@ import type {
   ProjectFilesResponse,
   ProjectMemoryCapability,
   ProjectMemoryCapabilityState,
+  ProjectOverlapPanelResponse,
   ProjectRevision,
   ProjectRevisionStatus,
   ProjectStatus
@@ -67,6 +69,7 @@ type ProjectDetailState =
       files: ProjectFilesResponse | null;
       followUps: FollowUpListResponse;
       health: ApiHealth | null;
+      overlap: ProjectOverlapPanelResponse | null;
       response: ProjectDetailResponse;
       status: "ready";
     }
@@ -95,7 +98,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
     return <ProjectDetailSetupState detailState={detailState} />;
   }
 
-  const { bomHealth, evidence, exportBundles, files, followUps, health, response } = detailState;
+  const { bomHealth, evidence, exportBundles, files, followUps, health, overlap, response } = detailState;
   const { bomImports, capabilities, project, revisions, summary, usages } = response;
   const recentActivity = await loadRecentActivityForProject(project.id);
   const foundationCapabilities = capabilities.filter((capability) => capability.state === "foundation");
@@ -126,6 +129,11 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             <StatusBadge label={`${summary.bomImportCount} parts list upload${summary.bomImportCount === 1 ? "" : "s"}`} tone="info" />
           </div>
         </div>
+      </section>
+
+      <section className="detail-section" aria-labelledby="project-overlap-heading">
+        <SectionHeading id="project-overlap-heading" subtitle="Prior projects and reusable roles sharing confirmed parts." title="Prior project overlap" />
+        <ProjectOverlapPanel overlap={overlap} />
       </section>
 
       <section className="detail-section" aria-labelledby="project-usage-heading">
@@ -162,7 +170,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           title="Project files"
         />
         <SectionPanel
-          description="Each project has its own folder with subfolders for parts list source files, datasheets, and 3D models. The site reads what is on disk."
+          description="Each project has its own folder with subfolders for parts list source files, custom designs, datasheets, and 3D models. The site reads what is on disk."
           title="Folders on the API host"
         >
           <ProjectFilesPanel files={files} projectId={project.id} />
@@ -336,14 +344,24 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </section>
 
         <section className="detail-section" aria-labelledby="project-capabilities-heading">
-          <SectionHeading id="project-capabilities-heading" subtitle="What this page can do now and what is planned next." title="Capability state" />
-          <div className="projects-detail-grid">
+          <SectionHeading
+            id="project-capabilities-heading"
+            subtitle={
+              plannedCapabilities.length > 0
+                ? "What this page can do now and what is planned next."
+                : "What project memory can read and do for this project today."
+            }
+            title="Capability state"
+          />
+          <div className={`projects-detail-grid${plannedCapabilities.length === 0 ? " projects-detail-grid--single" : ""}`}>
             <SectionPanel title="Available now" description="Features you can use today.">
               <CapabilityList capabilities={foundationCapabilities} />
             </SectionPanel>
-            <SectionPanel title="Planned next" description="Features not shipped yet.">
-              <CapabilityList capabilities={plannedCapabilities} />
-            </SectionPanel>
+            {plannedCapabilities.length > 0 ? (
+              <SectionPanel title="Planned next" description="Features not shipped yet.">
+                <CapabilityList capabilities={plannedCapabilities} />
+              </SectionPanel>
+            ) : null}
           </div>
         </section>
       </details>
@@ -368,7 +386,7 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
   const healthPromise = fetchApiHealth();
 
   try {
-    const [health, response, bomHealth, evidence, followUps, exportBundles, files] = await Promise.all([
+    const [health, response, bomHealth, evidence, followUps, exportBundles, files, overlap] = await Promise.all([
       healthPromise,
       fetchProjectDetail(projectId),
       fetchProjectBomHealth(projectId),
@@ -378,7 +396,10 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
       // The file mirror is not critical to rendering the project workspace, so a failure
       // here must never break the page. Catch and downgrade to null so the panel renders
       // its own honest unavailable state without setup-blocking the rest of the route.
-      fetchProjectFiles(projectId).catch(() => null)
+      fetchProjectFiles(projectId).catch(() => null),
+      // Overlap is a helper signal, not the canonical project record. Keep the page
+      // usable if older APIs or setup issues cannot serve the panel payload yet.
+      fetchProjectOverlapPanel(projectId).catch(() => null)
     ]);
 
     if (!response || !bomHealth || !evidence || !followUps) {
@@ -392,6 +413,7 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
       files,
       followUps,
       health,
+      overlap,
       response,
       status: "ready"
     };
@@ -877,8 +899,8 @@ function ProjectRiskFindingCard({ finding }: { finding: ProjectBomRiskFinding })
         </div>
       </dl>
       <ul>
-        {finding.inputs.map((input) => (
-          <li key={input}>{input}</li>
+        {finding.inputs.map((input, index) => (
+          <li key={`${finding.id}-${index}-${input}`}>{input}</li>
         ))}
       </ul>
     </article>
@@ -951,7 +973,12 @@ function ProjectEvidenceTable({ attachments }: { attachments: EvidenceAttachment
  */
 function CapabilityList({ capabilities }: { capabilities: ProjectMemoryCapability[] }) {
   if (capabilities.length === 0) {
-    return <EmptyState title="No capabilities reported" body="We could not read capability information for this project." />;
+    return (
+      <EmptyState
+        title="Capability list came back empty"
+        body="The API returned no rows for this capability group. Open System checks and confirm the API is reading project detail correctly, or reload this page."
+      />
+    );
   }
 
   return (

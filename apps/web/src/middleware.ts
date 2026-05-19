@@ -1,5 +1,5 @@
 /**
- * File header: Protects admin routes with Edge-safe JWT role checks.
+ * File header: Protects authenticated workspace routes with Edge-safe JWT role checks.
  */
 
 import { getToken } from "next-auth/jwt";
@@ -15,9 +15,7 @@ export default async function middleware(request: NextRequest) {
   const token = await readSessionToken(request);
 
   if (!token) {
-    const signIn = new URL("/sign-in", request.url);
-    signIn.searchParams.set("callbackUrl", request.nextUrl.pathname);
-    return NextResponse.redirect(signIn);
+    return NextResponse.redirect(buildSignInRedirect(request));
   }
 
   if (request.nextUrl.pathname.startsWith("/admin") && readAppRole(token.role) !== "admin") {
@@ -25,6 +23,15 @@ export default async function middleware(request: NextRequest) {
   }
 
   return NextResponse.next();
+}
+
+/**
+ * Builds a sign-in URL that returns the operator to the workspace they tried to open.
+ */
+function buildSignInRedirect(request: NextRequest): URL {
+  const signIn = new URL("/sign-in", request.url);
+  signIn.searchParams.set("callbackUrl", `${request.nextUrl.pathname}${request.nextUrl.search}`);
+  return signIn;
 }
 
 /**
@@ -56,5 +63,18 @@ function readAppRole(value: unknown): AppRole | null {
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: [
+    "/",
+    "/admin/:path*",
+    "/catalog/:path*",
+    "/circuit-blocks/:path*",
+    "/compare/:path*",
+    "/connector-sets/:path*",
+    "/evidence/:path*",
+    "/parts/:path*",
+    "/projects/:path*",
+    "/system/:path*",
+    "/vendors/:path*",
+    "/where-used/:path*"
+  ],
 };

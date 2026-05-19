@@ -40,6 +40,26 @@ test("catalog results presentation renders dense table mode", () => {
 });
 
 /**
+ * Verifies the decision-point push: confirmed "bit us / blocked" memory interrupts in the
+ * results, in both list and table modes, as a warning (not a gate).
+ */
+test("catalog results presentation surfaces prior engineering-memory warnings", () => {
+  const row: CatalogResultRowViewModel = {
+    ...buildRow(),
+    memoryWarning: { blocking: false, count: 2, topTitle: "Bit us: contact backed out after thermal cycling" }
+  };
+
+  const listHtml = renderToStaticMarkup(<CatalogResultsPresentation rows={[row]} />);
+  assert.match(listHtml, /Bit us before/u);
+  assert.match(listHtml, /contact backed out after thermal cycling/u);
+  assert.match(listHtml, /\+1 more/u);
+
+  const tableHtml = renderToStaticMarkup(<CatalogResultsPresentation initialMode="table" rows={[row]} />);
+  assert.match(tableHtml, /Prior memory/u);
+  assert.match(tableHtml, /Bit us before \(2\)/u);
+});
+
+/**
  * Builds a deterministic row model for presentation tests.
  */
 function buildRow(): CatalogResultRowViewModel {
@@ -66,6 +86,7 @@ function buildRow(): CatalogResultRowViewModel {
     id: "part-1",
     lifecycleLabel: "Lifecycle: active",
     manufacturerName: "TE Connectivity",
+    memoryWarning: null,
     mpn: "215079-8",
     nextActionDetail: "Review generated footprint before export.",
     nextActionLabel: "Review CAD",

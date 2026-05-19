@@ -9,6 +9,7 @@ import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { OperatorChecklist } from "../../components/OperatorChecklist";
+import { ProviderLookupPanel } from "../../components/ProviderLookupPanel";
 import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../../lib/detail-view-model";
@@ -63,7 +64,7 @@ type QuickLookupState =
   | { status: "ambiguous"; query: string; records: PartSearchRecord[]; totalRecords: number }
   | { status: "matched"; record: PartSearchRecord };
 
-/** NoMatchProviderLookupState keeps no-match intake honest and limited to direct exact-MPN import, not live search. */
+/** NoMatchProviderLookupState keeps no-match intake honest and limited to explicit exact-match provider lookup. */
 type NoMatchProviderLookupState =
   | { status: "available"; initialQuery: string; refreshHref: string }
   | { status: "unavailable"; reason: string };
@@ -143,30 +144,40 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     readinessStatus,
     sort
   });
+  // Active context trims first-run framing so returning users can stay focused on search work.
+  const hasActiveCatalogContext = activeFilterPills.length > 0 || typeof page === "number";
 
   return (
     <main>
-      <section aria-label="What EE Library is" className="site-intro">
-        <p className="app-kicker">EE Library</p>
-        <h1>Find a part. Get its files. Trust what you ship.</h1>
-        <p className="site-intro__lede">
-          Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
-        </p>
-        <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
-          <Link className="site-intro__path" href="#quick-check">
-            <strong>Search a part</strong>
-            <span>Type an MPN to see specs, files, and what is missing.</span>
-          </Link>
-          <Link className="site-intro__path" href="/projects">
-            <strong>Open a project</strong>
-            <span>See the parts in a build, plus uploads and BOMs.</span>
-          </Link>
-          <Link className="site-intro__path" href="/vendors">
-            <strong>Browse vendors</strong>
-            <span>PCB shops, sheet metal, and the people you trust.</span>
-          </Link>
-        </div>
-      </section>
+      {hasActiveCatalogContext ? (
+        <section aria-label="Catalog context" className="site-intro site-intro--compact">
+          <p className="app-kicker">EE Library</p>
+          <h1>Catalog workbench</h1>
+          <p className="site-intro__lede">Active search context is ready below. Adjust filters, inspect readiness, or open the part record that best matches the current engineering task.</p>
+        </section>
+      ) : (
+        <section aria-label="What EE Library is" className="site-intro">
+          <p className="app-kicker">EE Library</p>
+          <h1>Find a part. Get its files. Trust what you ship.</h1>
+          <p className="site-intro__lede">
+            Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
+          </p>
+          <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
+            <Link className="site-intro__path" href="#quick-check">
+              <strong>Search a part</strong>
+              <span>Type an MPN to see specs, files, and what is missing.</span>
+            </Link>
+            <Link className="site-intro__path" href="/projects">
+              <strong>Open a project</strong>
+              <span>See the parts in a build, plus uploads and BOMs.</span>
+            </Link>
+            <Link className="site-intro__path" href="/vendors">
+              <strong>Browse vendors</strong>
+              <span>PCB shops, sheet metal, and the people you trust.</span>
+            </Link>
+          </div>
+        </section>
+      )}
 
       <section aria-label="Catalog workbench search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
         <div className="quick-check-workspace__layout">
@@ -240,7 +251,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </section>
 
-      <details className="catalog-getting-started" open>
+      <details className="catalog-getting-started">
         <summary>First time here? See 3 quick steps</summary>
         <OperatorChecklist
           primaryActionHref={primaryAction.href}
@@ -513,22 +524,17 @@ function QuickLookupPanel({ noMatchProviderLookup, state }: { noMatchProviderLoo
 }
 
 /**
- * Renders direct exact-MPN import from a no-match state without pretending the site is doing live global search.
+ * Renders explicit provider lookup from a no-match state without pretending the site is doing live global search.
  */
 function NoMatchProviderLookup({ lookup, providerLookup }: { lookup: string; providerLookup: NoMatchProviderLookupState }) {
   return (
-    <div className="quick-check-empty quick-check-empty--acquisition" role="status">
+    <div className="quick-check-empty quick-check-empty--acquisition" id="catalog-acquisition" role="status">
       <strong>Part not found</strong>
       <p>
-        Nothing matched <span className="ui-mono">{lookup}</span> yet. We will not invent a record. Try the import option below or refine the search.
+        Nothing matched <span className="ui-mono">{lookup}</span> yet. We will not invent a record. Search supported providers for exact candidates below or refine the search.
       </p>
       {providerLookup.status === "available" ? (
-        <ImportByMpnPanel
-          autoRedirectOnSuccess
-          compact
-          initialMpn={providerLookup.initialQuery}
-          refreshHref={providerLookup.refreshHref}
-        />
+        <ProviderLookupPanel importMode="direct" initialQuery={providerLookup.initialQuery} refreshHref={providerLookup.refreshHref} />
       ) : (
         <p className="quick-check-empty__note">
           <strong>{importUiCopy.unavailableLead}</strong> {providerLookup.reason}
@@ -1440,6 +1446,13 @@ function buildCatalogResultRows(records: PartSearchRecord[], compareParts: strin
       id: record.part.id,
       lifecycleLabel: formatLifecycleShort(record.part.lifecycleStatus),
       manufacturerName: record.manufacturer.name,
+      memoryWarning: record.engineeringMemoryWarning
+        ? {
+            blocking: record.engineeringMemoryWarning.blockingCount > 0,
+            count: record.engineeringMemoryWarning.warningCount,
+            topTitle: record.engineeringMemoryWarning.preview[0]?.title ?? "Recorded engineering memory"
+          }
+        : null,
       mpn: record.part.mpn,
       nextActionDetail: nextAction.detail,
       nextActionLabel: nextAction.label,
@@ -1688,9 +1701,9 @@ function buildCatalogPrimaryAction(state: QuickLookupState, providerLookup: NoMa
 
   if (state.status === "no_match" && providerLookup.status === "available") {
     return {
-      detail: "No match yet. Import this exact part number.",
-      href: "#import-by-mpn",
-      label: "Open import panel"
+      detail: "No match yet. Search supported providers for exact candidates.",
+      href: "#catalog-acquisition",
+      label: "Search supported providers"
     };
   }
 

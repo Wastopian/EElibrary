@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./export-bundle-verification": "./src/export-bundle-verification.ts",
     "./provider-acquisition-jobs": "./src/provider-acquisition-jobs.ts",
     "./provider-enrichment-jobs": "./src/provider-enrichment-jobs.ts",
     "./provider-part-import": "./src/provider-part-import.ts",
@@ -20,6 +21,7 @@
     "dev": "tsx src/index.ts daemon",
     "enrichment-jobs": "tsx src/index.ts enrichment-jobs",
     "generate:drafts": "tsx src/index.ts generate-drafts",
+    "generate-three-d-previews": "tsx src/index.ts generate-three-d-previews",
     "ingest": "tsx src/index.ts ingest",
     "ingest:jlcparts": "tsx src/index.ts ingest jlcparts",
     "ingest:octopart": "tsx src/index.ts ingest octopart",
@@ -30,6 +32,8 @@
     "refresh-supply-offers": "tsx src/index.ts refresh-supply-offers",
     "status": "tsx src/index.ts status",
     "test": "node ../../scripts/run-tests.mjs src",
+    "validate-footprints": "tsx src/index.ts validate-footprints",
+    "validate-symbol-pin-counts": "tsx src/index.ts validate-symbol-pin-counts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

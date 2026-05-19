@@ -25,6 +25,7 @@ import type {
   SourceRecord
 } from "./types";
 import { withCanonicalAssetTruth } from "./asset-state";
+import type { AssetTruthInput } from "./asset-state";
 
 /** LAST_UPDATED_AT keeps seed timestamps deterministic for repeatable local runs. */
 const LAST_UPDATED_AT = "2026-04-12T00:00:00.000Z";
@@ -857,7 +858,7 @@ const seedAssetRows = [
     storageKey: null,
     validationStatus: "failed"
   }
-] satisfies Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus">[];
+] satisfies AssetTruthInput[];
 
 /** assets keep provenance, availability, review, and export verification explicitly separate. */
 export const assets = seedAssetRows.map(withCanonicalAssetTruth) satisfies Asset[];

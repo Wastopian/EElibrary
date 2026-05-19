@@ -2,7 +2,7 @@
  * File header: Defines provider-neutral asset state helpers and export readiness rules.
  */
 
-import type { Asset, AssetAvailabilityStatus, AssetExportStatus, AssetReviewStatus, AssetState } from "./types";
+import type { Asset, AssetAvailabilityStatus, AssetExportStatus, AssetPreviewArtifactFormat, AssetPreviewArtifactSource, AssetReviewStatus, AssetState, FileFormat } from "./types";
 
 /** AssetStateInput contains the minimum evidence needed to derive an asset state. */
 export interface AssetStateInput {
@@ -81,15 +81,108 @@ export function deriveAssetExportStatus(input: Pick<Asset, "assetState" | "asset
 }
 
 /**
- * Adds canonical docs-aligned truth fields to an asset that still uses legacy mirrors.
+ * AssetTruthInput is the subset of Asset fields a caller supplies to `withCanonicalAssetTruth`.
+ *
+ * Three derived truth fields (`availabilityStatus`, `exportStatus`, `reviewStatus`) are computed
+ * by the helper. The four preview-artifact fields are **optional** so existing call sites that
+ * pre-date the artifact channel keep compiling; missing values default to null inside the
+ * helper, which is the correct "no derived rendering target recorded" state. Other Asset fields
+ * stay required so the truth boundary cannot drift.
+ *
+ * Exported so seed fixtures and unit tests can `satisfies AssetTruthInput` without restating
+ * the omitted fields per call site.
  */
-export function withCanonicalAssetTruth<TAsset extends Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus">>(asset: TAsset): TAsset & Pick<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus"> {
+export type AssetTruthInput = Omit<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus" | "previewArtifactStorageKey" | "previewArtifactFormat" | "previewArtifactGeneratedAt" | "previewArtifactSource"> & {
+  previewArtifactStorageKey?: string | null;
+  previewArtifactFormat?: AssetPreviewArtifactFormat | null;
+  previewArtifactGeneratedAt?: string | null;
+  previewArtifactSource?: AssetPreviewArtifactSource | null;
+};
+
+/**
+ * Adds canonical docs-aligned truth fields to an asset that still uses legacy mirrors.
+ *
+ * Also backfills the preview-artifact channel: if a caller provides no explicit artifact key but
+ * the source `fileFormat` is itself directly embeddable (PDF / image / glb / gltf), the derived
+ * artifact mirrors `storageKey` so the inline previewer can render the source bytes without a
+ * separate conversion step. Non-embeddable source formats (STEP / kicad_mod / kicad_sym / dxf)
+ * stay null so the previewer correctly falls back to "Preview generation queued" instead of
+ * silently rendering nothing.
+ */
+export function withCanonicalAssetTruth<TAsset extends AssetTruthInput>(
+  asset: TAsset
+): TAsset & Pick<Asset, "availabilityStatus" | "exportStatus" | "reviewStatus" | "previewArtifactStorageKey" | "previewArtifactFormat" | "previewArtifactGeneratedAt" | "previewArtifactSource"> {
+  const previewArtifactDefaults = derivePreviewArtifactDefaults(asset);
   return {
     ...asset,
     availabilityStatus: deriveAssetAvailabilityStatus(asset.assetState),
     exportStatus: deriveAssetExportStatus(asset),
+    previewArtifactFormat: asset.previewArtifactFormat ?? previewArtifactDefaults.previewArtifactFormat,
+    previewArtifactGeneratedAt: asset.previewArtifactGeneratedAt ?? null,
+    previewArtifactSource: asset.previewArtifactSource ?? previewArtifactDefaults.previewArtifactSource,
+    previewArtifactStorageKey: asset.previewArtifactStorageKey ?? previewArtifactDefaults.previewArtifactStorageKey,
     reviewStatus: deriveAssetReviewStatus(asset)
   };
+}
+
+/**
+ * Derives the default preview-artifact fields from a source asset.
+ *
+ * The rule mirrors the inline-preview honesty matrix: if the source file is itself a format the
+ * browser can render and the file is locally stored, the artifact channel reuses the source key
+ * (`source_native`). Otherwise the channel stays empty so the worker conversion job has a clear
+ * signal that derived bytes still need to be produced.
+ */
+function derivePreviewArtifactDefaults(asset: Pick<Asset, "fileFormat" | "storageKey" | "previewStatus" | "assetState">): {
+  previewArtifactStorageKey: string | null;
+  previewArtifactFormat: AssetPreviewArtifactFormat | null;
+  previewArtifactSource: AssetPreviewArtifactSource | null;
+} {
+  if (!asset.storageKey) {
+    return { previewArtifactFormat: null, previewArtifactSource: null, previewArtifactStorageKey: null };
+  }
+
+  if (asset.assetState !== "downloaded" && asset.assetState !== "validated") {
+    return { previewArtifactFormat: null, previewArtifactSource: null, previewArtifactStorageKey: null };
+  }
+
+  const sourceNativeFormat = mapFileFormatToPreviewArtifactFormat(asset.fileFormat);
+  if (sourceNativeFormat === null) {
+    return { previewArtifactFormat: null, previewArtifactSource: null, previewArtifactStorageKey: null };
+  }
+
+  return {
+    previewArtifactFormat: sourceNativeFormat,
+    previewArtifactSource: "source_native",
+    previewArtifactStorageKey: asset.storageKey
+  };
+}
+
+/**
+ * Maps a source file format to the matching preview-artifact format when the source is itself
+ * directly embeddable. Returns null for source formats that need a converter step (STEP /
+ * kicad_mod / kicad_sym / dxf / unknown) so the artifact channel stays empty until real bytes
+ * exist.
+ */
+function mapFileFormatToPreviewArtifactFormat(fileFormat: FileFormat): AssetPreviewArtifactFormat | null {
+  switch (fileFormat) {
+    case "pdf":
+      return "pdf";
+    case "png":
+      return "png";
+    case "jpg":
+      return "jpg";
+    case "jpeg":
+      return "jpeg";
+    case "webp":
+      return "webp";
+    case "glb":
+      return "glb";
+    case "gltf":
+      return "gltf";
+    default:
+      return null;
+  }
 }
 
 /**

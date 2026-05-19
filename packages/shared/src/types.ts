@@ -15,7 +15,22 @@ export type AssetType = "datasheet" | "footprint" | "symbol" | "three_d_model" |
 export type EngineeringAssetClass = AssetType;
 
 /** File formats describe storage content without implying availability. */
-export type FileFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "step" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
+export type FileFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "step" | "glb" | "gltf" | "kicad_mod" | "kicad_sym" | "dxf" | "unknown";
+
+/**
+ * AssetPreviewArtifactFormat names the formats the inline previewer knows how to render in a
+ * browser. Kept narrower than FileFormat so the preview channel cannot silently smuggle a
+ * non-embeddable format past the conversion gate.
+ */
+export type AssetPreviewArtifactFormat = "glb" | "gltf" | "png" | "jpg" | "jpeg" | "webp" | "pdf";
+
+/**
+ * AssetPreviewArtifactSource records where the rendering bytes came from. `source_native`
+ * mirrors `storage_key` for assets whose source format is already embeddable (PDF, PNG/JPG/etc).
+ * `converter_step_to_gltf` marks bytes produced by a worker conversion job. `manual_upload`
+ * leaves room for a future operator-uploaded preview without conflating it with the source.
+ */
+export type AssetPreviewArtifactSource = "source_native" | "converter_step_to_gltf" | "manual_upload";
 
 /** License modes prevent the UI from promising redistribution when it is not known. */
 export type LicenseMode = "metadata_only" | "redistribution_allowed" | "unknown";
@@ -732,10 +747,10 @@ export interface ProjectListResponse {
 
 /**
  * ProjectFolderCategory enumerates the first-class subfolders the project file mirror
- * creates per project. Categories are the only directories the API exposes; any other
- * on-disk content is surfaced as an "extra" entry so engineers can audit drift.
+ * creates per project. Categories are the only top-level directories the API exposes;
+ * deeper folders are shown as entries instead of traversed blindly.
  */
-export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "notes";
+export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "hardware" | "notes";
 
 /**
  * ProjectFolderEntry describes one file persisted inside a project folder category.
@@ -767,6 +782,54 @@ export interface ProjectFolderListing {
   entries: ProjectFolderEntry[];
 }
 
+/** ProjectCustomHardwareFolderState separates real design folders from BOM-only references. */
+export type ProjectCustomHardwareFolderState = "folder_backed" | "parts_list_reference_only";
+
+/**
+ * ProjectCustomHardwareRecord describes one internally-designed custom item found
+ * through project file reads. Note fields stay nullable so the UI never presents an
+ * undocumented connection, test intent, or project attachment as known.
+ */
+export interface ProjectCustomHardwareRecord {
+  /** Canonical internal hardware part number such as PTA-1001, PCA-2042, or ICD-17. */
+  partNumber: string;
+  /** Folder name on disk when a design folder exists; null for parts-list-only references. */
+  folderName: string | null;
+  /** Absolute design folder path on the API host when one exists. */
+  absolutePath: string | null;
+  /** What this hardware connects to, copied from metadata when recorded. */
+  connectsTo: string | null;
+  /** What this hardware tests, copied from metadata when recorded. */
+  tests: string | null;
+  /** Project or program attachment copied from custom design metadata when recorded. */
+  attachedProject: string | null;
+  /** Extra note text copied from custom design metadata when recorded. */
+  notes: string | null;
+  /** Metadata filename that supplied the note fields, or null when none was found. */
+  metadataSource: string | null;
+  /** Parts-list files where this hardware part number was observed. */
+  mentionedInPartsListFiles: string[];
+  /** Latest filesystem mtime for the design folder or metadata source, when available. */
+  modifiedAt: string | null;
+  /** Whether the record came from a design folder or only from a parts-list mention. */
+  folderState: ProjectCustomHardwareFolderState;
+}
+
+/**
+ * ProjectCustomHardwareListing groups custom design reads for one project. The boundary
+ * is explicit because filesystem notes are provenance, not validation or release approval.
+ */
+export interface ProjectCustomHardwareListing {
+  /** Absolute path to the custom design folder for this project. */
+  hardwareFolderPath: string;
+  /** Uppercase configured or folder-discovered prefixes recognized during this read. */
+  recognizedPrefixes: string[];
+  /** Design folder and parts-list reference records, sorted by part number. */
+  records: ProjectCustomHardwareRecord[];
+  /** Short honesty reminder for UI surfaces. */
+  boundary: string;
+}
+
 /**
  * ProjectFilesAvailability tracks whether the file mirror is reachable. "configured"
  * means the API can read and write the project root; "not_configured" means the env
@@ -786,6 +849,8 @@ export interface ProjectFilesResponse {
   projectKey: string;
   /** Per-category listings; empty when availability is not_configured. */
   folders: ProjectFolderListing[];
+  /** Custom internal designs found under the custom design folder and parts-list files. */
+  customHardware: ProjectCustomHardwareListing | null;
   /** Human-readable detail when availability is "error". */
   message: string | null;
 }
@@ -1043,6 +1108,110 @@ export interface PartCircuitBlockDependencyRecord {
   summary: CircuitBlockSummary;
   /** Role rows inside this block that point at the inspected part. */
   blockParts: CircuitBlockPart[];
+}
+
+export interface ProjectOverlapSharedPartPreview {
+  partId: string;
+  /** Catalog MPN when the part row exists; falls back to `partId` if missing. */
+  mpn: string;
+  /** Number of confirmed usage rows in the prior project that point at this shared part. */
+  usageCount: number;
+  /** Sum of known quantities across the matching usage rows; null means no usage row carried quantity. */
+  quantityTotal: number | null;
+  /** First few designators from the matching prior-project usage rows. */
+  designatorsPreview: string[];
+  /** Usage status from the newest matching usage row in the prior project. */
+  usageStatus: ProjectPartUsageStatus | null;
+  /** Revision label from the newest matching usage row, if that revision still exists. */
+  projectRevisionLabel: string | null;
+}
+
+/** ProjectOverlapCircuitBlockRolePreview shows which reusable block role matched this BOM. */
+export interface ProjectOverlapCircuitBlockRolePreview {
+  circuitBlockId: string;
+  blockPartId: string;
+  blockKey: string;
+  blockName: string;
+  blockStatus: CircuitBlockStatus;
+  partId: string;
+  /** Catalog MPN when the part row exists; falls back to `partId` if missing. */
+  mpn: string;
+  role: string;
+  quantity: number | null;
+  isRequired: boolean;
+  substitutionPolicy: CircuitBlockPartSubstitutionPolicy;
+}
+
+/**
+ * ProjectOverlapPriorProject ranks one prior project against the current one by shared
+ * confirmed-usage parts. The `sharedPartIds` array is bounded so the UI can render a
+ * scannable list; the underlying count `sharedPartCount` is always the full overlap so a
+ * "+N more" affordance can describe what was truncated honestly.
+ *
+ * Reuse honesty: shared MPN count is a *signal*, never a guarantee. Two projects sharing
+ * 12 confirmed parts does not mean either project's assets are approved or verified for
+ * export, and no copy in the UI should pretend otherwise.
+ */
+export interface ProjectOverlapPriorProject {
+  project: Project;
+  sharedPartCount: number;
+  sharedPartIds: string[];
+  /** Parallel to `sharedPartIds`: readable MPN labels for the same preview slice. */
+  sharedPartsPreview: ProjectOverlapSharedPartPreview[];
+}
+
+/**
+ * ProjectOverlapMemoryWarning surfaces durable "this bit us / this is blocked" engineering
+ * memory for a part this project's BOM confirmed, so the mistake interrupts at import/overlap
+ * time instead of waiting for someone to open the part. Only confirmed, unresolved records with
+ * a `bit_us` outcome or `blocking` severity are surfaced; this is a reuse warning, never a gate.
+ */
+export interface ProjectOverlapMemoryWarning {
+  partId: string;
+  partMpn: string;
+  recordId: string;
+  recordKind: PartEngineeringRecordKind;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  title: string;
+  detail: string;
+  relatedMpn: string | null;
+  recordedBy: string | null;
+  recordedAt: string;
+}
+
+/**
+ * ProjectOverlapPanelResponse is the read-only payload that drives the day-zero overlap
+ * panel on a project's detail page. The panel surfaces these things, each derived from
+ * existing project-memory tables (no new schema):
+ *  - the top prior projects ranked by shared confirmed-usage parts,
+ *  - the count of connector-class parts present in this project's confirmed usage that
+ *    also appear in prior project usages (the "this BOM uses a connector someone has
+ *    wired before" hint),
+ *  - the count of circuit-block roles that point at parts confirmed in this project
+ *    (the "this BOM uses a part already proven in a reusable block" hint).
+ *
+ * Empty values are explicit so the UI can render an honest empty state rather than
+ * hiding the panel and giving the impression that the data was never computed.
+ */
+export interface ProjectOverlapPanelResponse {
+  state: ProjectMemoryReadState;
+  projectId: string;
+  /** Number of distinct confirmed-usage part ids that drove the overlap search. */
+  scannedPartCount: number;
+  /** Top prior projects ranked by shared confirmed-usage parts, descending. */
+  priorProjects: ProjectOverlapPriorProject[];
+  /** Distinct connector-class parts confirmed in this project (informational only). */
+  connectorWhereUsedHitCount: number;
+  /** Distinct circuit-block roles depending on parts confirmed in this project. */
+  circuitBlockWhereUsedHitCount: number;
+  /** Bounded preview of the circuit-block roles that depend on this project's confirmed parts. */
+  circuitBlockRoleHitsPreview: ProjectOverlapCircuitBlockRolePreview[];
+  /**
+   * Confirmed "this bit us / this is blocked" engineering memory for parts this BOM confirmed —
+   * the past mistake about to be repeated, surfaced at import time. Empty when none exist.
+   */
+  priorEngineeringMemoryWarnings: ProjectOverlapMemoryWarning[];
 }
 
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
@@ -1485,6 +1654,167 @@ export interface CircuitBlockDetailResponse {
   boundary: string;
 }
 
+/**
+ * PartEngineeringRecordKind classifies one piece of private engineering memory about a part.
+ * These are the questions a public component aggregator structurally cannot answer:
+ *   - `outcome`               — did this part work in real designs, or did it bite us?
+ *   - `harness_mate_verified` — a connector that actually mated correctly in a real harness.
+ *   - `cad_physical_verified` — a CAD/footprint/3D asset checked against the physical part.
+ *   - `dependency`            — a test fixture, board, cable, or program that depended on it.
+ *   - `decision_blocked`      — why this part was restricted/blocked; the mistake not to repeat.
+ *   - `note`                  — free-form tribal knowledge for the next engineer.
+ */
+export type PartEngineeringRecordKind =
+  | "outcome"
+  | "harness_mate_verified"
+  | "cad_physical_verified"
+  | "dependency"
+  | "decision_blocked"
+  | "note";
+
+/** PartEngineeringRecordSeverity reuses the known-risk severity ladder; only the engineer sets it. */
+export type PartEngineeringRecordSeverity = CircuitBlockKnownRiskSeverity;
+
+/**
+ * PartEngineeringRecordOutcome is the recording engineer's verdict for outcome/verification
+ * records. `not_verified` explicitly preserves "we tried to verify and could not", which is
+ * itself engineering memory worth keeping.
+ */
+export type PartEngineeringRecordOutcome = "worked" | "worked_with_caveats" | "bit_us" | "not_verified";
+
+/**
+ * PartEngineeringRecord is one durable, provenance-bearing observation or decision about a part.
+ *
+ * Provenance is first-class. `recordedBy`/`recordedAt` document who saw what, when; `resolvedAt`
+ * preserves the original observation even after the underlying issue is addressed. Recording or
+ * resolving a record never approves the part, validates an asset, or unlocks export.
+ */
+export interface PartEngineeringRecord {
+  id: string;
+  partId: string;
+  recordKind: PartEngineeringRecordKind;
+  title: string;
+  detail: string;
+  severity: PartEngineeringRecordSeverity;
+  /** Engineer verdict for outcome/verification kinds; null for note/dependency/decision rows. */
+  outcome: PartEngineeringRecordOutcome | null;
+  /** Trusted footprint/symbol/3D asset this record is about (Q5/Q8), null when not asset-scoped. */
+  relatedAssetId: string | null;
+  /** Datasheet revision the team designed from (Q6), null when not revision-scoped. */
+  datasheetRevisionId: string | null;
+  /** Counterpart connector MPN actually mated in the real harness (Q7). */
+  relatedMpn: string | null;
+  /** Test fixture / board / cable / program that depended on this part (Q9). */
+  dependedOnBy: string | null;
+  recordedBy: string | null;
+  recordedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNotes: string | null;
+  evidenceUrl: string | null;
+  /**
+   * Draft lifecycle. `confirmed` is durable engineering memory (all manual records, and
+   * auto-drafts a human accepted). `proposed` is a machine suggestion awaiting review — it never
+   * counts toward any gate. `dismissed` is a rejected suggestion, preserved for audit.
+   */
+  draftStatus: PartEngineeringRecordDraftStatus;
+  /** How the row originated; `manual` for hand-entered, `auto_*` for passive capture. */
+  draftSource: PartEngineeringRecordDraftSource;
+  /** Originating substitution/bundle id for an auto-draft, used for idempotent dedup. */
+  triggerRef: string | null;
+  /** Who accepted a proposed auto-draft into durable memory, and when. */
+  confirmedBy: string | null;
+  confirmedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** PartEngineeringRecordDraftStatus is the review lifecycle of one record. */
+export type PartEngineeringRecordDraftStatus = "proposed" | "confirmed" | "dismissed";
+
+/** PartEngineeringRecordDraftSource records whether a row was hand-entered or passively captured. */
+export type PartEngineeringRecordDraftSource = "manual" | "auto_substitution" | "auto_export" | "auto_bom_lifecycle";
+
+/** PartEngineeringRecordCreateInput defines the body of a create request. */
+export interface PartEngineeringRecordCreateInput {
+  recordKind: PartEngineeringRecordKind;
+  title: string;
+  detail?: string | null;
+  severity?: PartEngineeringRecordSeverity;
+  outcome?: PartEngineeringRecordOutcome | null;
+  relatedAssetId?: string | null;
+  datasheetRevisionId?: string | null;
+  relatedMpn?: string | null;
+  dependedOnBy?: string | null;
+  recordedBy?: string | null;
+  evidenceUrl?: string | null;
+}
+
+/** PartEngineeringRecordResolveInput defines the body of a resolve request. */
+export interface PartEngineeringRecordResolveInput {
+  resolvedBy?: string | null;
+  resolutionNotes?: string | null;
+}
+
+/**
+ * PartEngineeringRecordDraftDecisionInput is the body of a confirm/dismiss request on a proposed
+ * auto-draft. The acting user comes from the session; notes are optional dismissal context.
+ */
+export interface PartEngineeringRecordDraftDecisionInput {
+  notes?: string | null;
+}
+
+/**
+ * PartEngineeringRecordListResponse buckets records for the UI:
+ *   - `proposed`: machine suggestions from passive capture awaiting human review (never a gate)
+ *   - `open`: confirmed, durable, unresolved engineering memory
+ *   - `resolved`: resolved or dismissed rows, retained for audit
+ * The boundary copy repeats the honesty contract.
+ */
+export interface PartEngineeringRecordListResponse {
+  partId: string;
+  proposed: PartEngineeringRecord[];
+  open: PartEngineeringRecord[];
+  resolved: PartEngineeringRecord[];
+  boundary: string;
+}
+
+/**
+ * PartEngineeringRecordMutationResponse returns the affected record plus the rebuilt list so the
+ * UI can refresh in one round-trip without a follow-up read.
+ */
+export interface PartEngineeringRecordMutationResponse {
+  record: PartEngineeringRecord;
+  list: PartEngineeringRecordListResponse;
+  boundary: string;
+}
+
+/**
+ * PartEngineeringMemoryWarningPreview is one scan-time line of durable "this bit us / blocking"
+ * memory, used to interrupt at part-selection surfaces (catalog search, part detail, BOM match).
+ */
+export interface PartEngineeringMemoryWarningPreview {
+  recordId: string;
+  recordKind: PartEngineeringRecordKind;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  title: string;
+}
+
+/**
+ * PartEngineeringMemoryWarningSummary is a read-only per-part projection of confirmed, unresolved
+ * `bit_us`/`blocking` engineering memory. It is a reuse warning surfaced where engineers choose a
+ * part; it never changes approval, validation, readiness, or export state.
+ */
+export interface PartEngineeringMemoryWarningSummary {
+  /** Confirmed, unresolved records with a `bit_us` outcome or `blocking` severity. */
+  warningCount: number;
+  /** Subset of `warningCount` whose severity is `blocking`. */
+  blockingCount: number;
+  /** Newest-first, severity-first bounded preview for scan-time context. */
+  preview: PartEngineeringMemoryWarningPreview[];
+}
+
 /** CircuitBlockInstantiationHistoryRecord pairs one instantiation event with its project, revision, and BOM import context. */
 export interface CircuitBlockInstantiationHistoryRecord {
   instantiation: CircuitBlockInstantiation;
@@ -1636,6 +1966,21 @@ export interface Asset {
   generationSourceAssetId: string | null;
   validationStatus: ValidationStatus;
   previewStatus: PreviewStatus;
+  /**
+   * Storage key for the derived bytes the inline previewer should render. Null when the
+   * preview channel has no rendering target -- either because the source format is non-
+   * embeddable and no converter has produced an artifact yet, or because the asset has no
+   * preview at all. A null artifact key combined with a `previewStatus` of `ready` is only
+   * valid when the source `fileFormat` is itself directly embeddable (pdf / png / jpg / jpeg /
+   * webp / glb / gltf); the worker normalization helper enforces this discipline at write time.
+   */
+  previewArtifactStorageKey: string | null;
+  /** Format of the bytes at `previewArtifactStorageKey`; null mirrors a null artifact key. */
+  previewArtifactFormat: AssetPreviewArtifactFormat | null;
+  /** ISO timestamp when the preview artifact was generated; null when no artifact exists. */
+  previewArtifactGeneratedAt: string | null;
+  /** Where the preview artifact bytes came from; null when no artifact exists. */
+  previewArtifactSource: AssetPreviewArtifactSource | null;
   sourceUrl: string | null;
   sourceRecordId: string | null;
   lastUpdatedAt: string;
@@ -2285,6 +2630,12 @@ export interface PartSearchRecord {
   promotionAudits: AssetPromotionAuditRecord[];
   /** Optional export-bundle readiness projection when a search API precomputes it. */
   bundleReadiness?: BundleReadinessSummary;
+  /**
+   * Optional read-only "this part bit us / is blocked" projection from confirmed engineering
+   * memory, surfaced at part-selection time. Null/absent when none or when not computed. Never a
+   * gate — it does not change readiness, approval, validation, or export state.
+   */
+  engineeringMemoryWarning?: PartEngineeringMemoryWarningSummary | null;
   readinessSummary: PartReadinessSummary;
   approval: PartApproval;
   duplicateCandidates: PartDuplicateCandidate[];
@@ -2745,6 +3096,59 @@ export interface ExportBundleControlSummary {
   highestAccessLevel: DocumentAccessLevel | null;
 }
 
+/** ExportBundleProvenanceApproval is the part-approval decision captured at bundle generation. */
+export interface ExportBundleProvenanceApproval {
+  status: PartApprovalStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  summary: string;
+}
+
+/** ExportBundleProvenanceDatasheet records which datasheet revision the team designed from. */
+export interface ExportBundleProvenanceDatasheet {
+  datasheetRevisionId: string;
+  revisionLabel: string | null;
+  revisionDate: string | null;
+}
+
+/** ExportBundleProvenanceTrustedAsset is one verified file-backed asset the team stood behind. */
+export interface ExportBundleProvenanceTrustedAsset {
+  assetId: string;
+  assetType: AssetType;
+  fileFormat: FileFormat;
+  fileHash: string | null;
+  provenance: AssetProvenance;
+}
+
+/** ExportBundleProvenanceMemoryRecord is one confirmed engineering-memory record for the part. */
+export interface ExportBundleProvenanceMemoryRecord {
+  recordId: string;
+  recordKind: PartEngineeringRecordKind;
+  severity: PartEngineeringRecordSeverity;
+  outcome: PartEngineeringRecordOutcome | null;
+  title: string;
+  recordedBy: string | null;
+  recordedAt: string;
+}
+
+/**
+ * ExportBundlePartProvenance is the defensible per-part provenance record embedded in the
+ * signed manifest: who approved the part and when, the datasheet revision designed from, the
+ * verified footprint/symbol/3D assets the team stood behind, and the confirmed engineering
+ * memory around it. Because the manifest is serialized into the signed, hashed archive, this
+ * provenance is tamper-evident — an auditor or customer can verify it was not altered. It is a
+ * point-in-time record, never a re-derived trust gate.
+ */
+export interface ExportBundlePartProvenance {
+  partId: string;
+  partMpn: string;
+  manufacturerName: string;
+  approval: ExportBundleProvenanceApproval | null;
+  datasheetRevision: ExportBundleProvenanceDatasheet | null;
+  trustedAssets: ExportBundleProvenanceTrustedAsset[];
+  confirmedEngineeringMemory: ExportBundleProvenanceMemoryRecord[];
+}
+
 /** ExportBundleManifest is the deterministic record of what is and is not in a bundle. */
 export interface ExportBundleManifest {
   bundleId: string;
@@ -2766,6 +3170,12 @@ export interface ExportBundleManifest {
    * bundles default to all-zero with `highestAccessLevel: null` on read.
    */
   controlSummary: ExportBundleControlSummary;
+  /**
+   * Defensible per-part provenance (approval, datasheet revision, trusted assets, confirmed
+   * engineering memory) captured at generation time and covered by the bundle signature. Older
+   * bundles generated before this field existed default to an empty array on read.
+   */
+  partProvenance: ExportBundlePartProvenance[];
 }
 
 /**
@@ -2857,8 +3267,93 @@ export interface ExportBundle {
   assemblyCompletedAt: string | null;
   /** Number of assembly attempts the worker has executed for this bundle. */
   assemblyAttemptCount: number;
+  /**
+   * Hex SHA-256 of the assembled `.tar.gz` archive bytes, computed by the worker after the
+   * deterministic gzip step so identical inputs produce identical recorded hashes. Null until
+   * the archive has been assembled successfully (or for legacy bundles persisted before
+   * migration 039).
+   */
+  archiveSha256: string | null;
+  /**
+   * Hex SHA-256 of the embedded `manifest.json` body inside the assembled archive. Distinct
+   * from `archiveSha256` because the manifest is also persisted as the standalone audit-readable
+   * record; surfacing both lets an auditor confirm the manifest content matches the archive
+   * even when only one of the two files is downloaded.
+   */
+  manifestSha256: string | null;
+  /**
+   * Honest signature state for the assembled archive.
+   * - `unsigned` — no signing key configured at assembly time, or assembly predates migration 039.
+   * - `signed` — a configured Ed25519 key signed the archive's SHA-256 hex string at assembly.
+   * - `verification_failed` — a previously-signed bundle's signature could not be re-verified at
+   *   read time (key rotated out of the trust set, signature file missing, archive hash mismatch).
+   */
+  signatureStatus: ExportBundleSignatureStatus;
+  /** Signature algorithm identifier (e.g. `ed25519`); null when the bundle is unsigned. */
+  signatureAlgorithm: string | null;
+  /**
+   * Hex SHA-256 of the public-verification key. Recorded at signing time so the UI can identify
+   * which signer produced the bundle without exposing or trusting the public key itself.
+   */
+  signaturePublicKeyFingerprint: string | null;
+  /** Storage key for the detached `.sig` payload; null when the bundle is unsigned. */
+  signatureStorageKey: string | null;
+  /** ISO timestamp the bundle was signed at; null when the bundle is unsigned. */
+  signatureSignedAt: string | null;
   createdBy: string | null;
   createdAt: string;
+}
+
+/**
+ * ExportBundleSignatureStatus distinguishes the three honest states a bundle's cryptographic
+ * provenance can be in. A bundle without a configured signing key is `unsigned`, not
+ * `verified`. A signature that fails verification becomes `verification_failed` instead of
+ * being silently suppressed.
+ */
+export type ExportBundleSignatureStatus = "unsigned" | "signed" | "verification_failed";
+
+/**
+ * ExportBundleVerificationReason names the structured cause behind a `verification_failed`
+ * outcome so the UI can render targeted recovery copy instead of a single opaque red badge.
+ *
+ * - `archive_missing`                      — the archive file could not be read from storage.
+ * - `archive_hash_mismatch`                — the recomputed SHA-256 differs from the recorded one.
+ * - `signature_missing`                    — the bundle was signed but the .sig file is gone.
+ * - `signature_unreadable`                 — the .sig payload could not be parsed (corrupted).
+ * - `signature_algorithm_unsupported`      — the recorded algorithm is not one we can verify.
+ * - `verification_key_unavailable`         — no verification key is configured on this deployment.
+ * - `verification_key_fingerprint_mismatch`— the configured key does not match the recorded fingerprint.
+ * - `signature_mismatch`                   — Ed25519 verify returned false against the archive hash.
+ */
+export type ExportBundleVerificationReason =
+  | "archive_missing"
+  | "archive_hash_mismatch"
+  | "signature_missing"
+  | "signature_unreadable"
+  | "signature_algorithm_unsupported"
+  | "verification_key_unavailable"
+  | "verification_key_fingerprint_mismatch"
+  | "signature_mismatch";
+
+/**
+ * ExportBundleVerifyResponse is the envelope returned by the on-demand verify endpoint. It
+ * carries the freshly-mapped bundle row (with the new `signatureStatus` already persisted),
+ * plus the structured outcome so the UI can render "verified at <when>" or
+ * "<reason>: <recommended fix>" without having to re-derive intent from the row alone.
+ */
+export interface ExportBundleVerifyResponse {
+  bundle: ExportBundle;
+  outcome: {
+    status: ExportBundleSignatureStatus;
+    reason: ExportBundleVerificationReason | null;
+    recomputedArchiveSha256: string | null;
+    verifiedAt: string | null;
+  };
+  /**
+   * Human-readable boundary copy to render alongside the outcome. Verification is an evidence
+   * check on the archive; it is never a substitute for review/approval/export-readiness gates.
+   */
+  boundary: string;
 }
 
 /** ExportBundleCreateInput specifies the format and optional revision scope for a new bundle. */

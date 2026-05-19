@@ -9,6 +9,7 @@ import { getPartDetail } from "@ee-library/shared/search";
 import type { PartMetric, PartSearchRecord } from "@ee-library/shared/types";
 import {
   buildCompareAssetClassRows,
+  buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
   collectCompareMetricKeys,
@@ -176,6 +177,59 @@ test("buildCompareAssetTrustRows emits explicit per-asset trust-stage cells", ()
   assert.ok(symbolRow);
   assert.equal(symbolRow.values.length, 2);
   assert.ok(symbolRow.values.every((value) => value.text.length > 0));
+});
+
+/**
+ * Verifies the side-by-side CAD preview rows render exactly the three CAD asset classes
+ * (symbol / footprint / 3D model) in stable order, with one cell per compared part. A
+ * missing asset class must surface a null `bestAsset` rather than a fabricated
+ * placeholder so the renderer can show the gap honestly.
+ */
+test("buildCompareAssetPreviewRows emits one row per CAD class with stable cells per part", () => {
+  const connector = getSeedRecord("part-te-215079-8");
+  const regulator = getSeedRecord("part-tps7a02dbvr");
+  const rows = buildCompareAssetPreviewRows([connector, regulator]);
+
+  assert.deepEqual(
+    rows.map((row) => row.rowKey),
+    ["asset_preview:symbol", "asset_preview:footprint", "asset_preview:three_d_model"]
+  );
+
+  assert.deepEqual(
+    rows.map((row) => row.assetType),
+    ["symbol", "footprint", "three_d_model"]
+  );
+
+  for (const row of rows) {
+    assert.equal(row.cells.length, 2, `expected one cell per record on row ${row.rowKey}`);
+    assert.deepEqual(
+      row.cells.map((cell) => cell.partId),
+      [connector.part.id, regulator.part.id]
+    );
+
+    for (const cell of row.cells) {
+      if (cell.bestAsset === null) {
+        assert.equal(cell.previewState, null, `expected null preview state when no best asset on ${row.rowKey}`);
+      } else {
+        assert.ok(cell.previewState, `expected a preview state when a best asset exists on ${row.rowKey}`);
+        assert.equal(cell.bestAsset.assetType, row.assetType, `cell asset type must match row asset type on ${row.rowKey}`);
+      }
+    }
+  }
+});
+
+/**
+ * Verifies the preview band is empty-safe: when called with no records it returns rows
+ * with empty cell arrays, so the renderer can rely on a stable shape and choose to hide
+ * the section using its own emptiness check rather than relying on a thrown error.
+ */
+test("buildCompareAssetPreviewRows returns empty cells when called with no records", () => {
+  const rows = buildCompareAssetPreviewRows([]);
+
+  assert.equal(rows.length, 3);
+  for (const row of rows) {
+    assert.equal(row.cells.length, 0);
+  }
 });
 
 function getSeedRecord(partId: string): PartSearchRecord {

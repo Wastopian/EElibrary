@@ -63,10 +63,111 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Files and models/u);
     assert.match(html, /Class state/u);
     assert.match(html, /Review lane/u);
+    assert.match(html, /Trust check/u);
     assert.match(html, /Ready bundles/u);
     assert.match(html, /Blocked bundles/u);
     assert.match(html, /Export lane/u);
     assert.doesNotMatch(html, /approved part/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies the decision-point push: confirmed "this bit us" memory interrupts at the top of the
+ * part-detail hero as a warning (not a gate) before the use decision.
+ */
+test("part detail surfaces a prior engineering-memory warning banner near the use decision", async () => {
+  const records = getAllPartRecords();
+  const baseRecord = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(baseRecord, "expected seed part detail record");
+
+  const record = {
+    ...baseRecord,
+    engineeringMemoryWarning: {
+      blockingCount: 0,
+      preview: [
+        { outcome: "bit_us" as const, recordId: "perec-1", recordKind: "outcome" as const, severity: "caution" as const, title: "Bit us: contact retention failure on Bravo" }
+      ],
+      warningCount: 1
+    }
+  };
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /This part bit your team before/u);
+    assert.match(html, /contact retention failure on Bravo/u);
+    assert.match(html, /reuse warning, not a gate/u);
+    assert.match(html, /Review the full engineering memory/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies the top files panel does not label reference-only URLs as downloads
+ * and does not duplicate the datasheet row.
+ */
+test("part detail files panel separates stored downloads from source references", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-te-215079-8");
+
+  assert.ok(record, "expected connector seed part detail record");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const filesPanelHtml = extractPanelHtml(html, "Files and downloads");
+
+    assert.match(filesPanelHtml, /Download file/u);
+    assert.match(filesPanelHtml, /View source/u);
+    assert.doesNotMatch(filesPanelHtml, />Download</u);
+    assert.equal(countPanelLabel(filesPanelHtml, "Datasheet"), 1);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies seed fallback pages do not offer database-backed storage downloads that
+ * cannot work without the real catalog store.
+ */
+test("part detail files panel disables sample storage downloads in seed fallback", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-te-215079-8");
+
+  assert.ok(record, "expected connector seed part detail record");
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "seed_fallback"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const filesPanelHtml = extractPanelHtml(html, "Files and downloads");
+
+    assert.match(filesPanelHtml, /Sample file not available/u);
+    assert.match(filesPanelHtml, /View source/u);
+    assert.doesNotMatch(filesPanelHtml, /Download file/u);
+    assert.doesNotMatch(html, /class="asset-download-link"[^>]*>Download file</u);
   } finally {
     restoreFetch();
   }
@@ -616,6 +717,25 @@ function buildEmptySupplyOffersResponse(partId: string): PartSupplyOffersRespons
       staleOfferCount: 0
     }
   };
+}
+
+/**
+ * Extracts one SectionPanel by its heading so tests can make scoped assertions.
+ */
+function extractPanelHtml(html: string, title: string): string {
+  const heading = `<h2>${title}</h2>`;
+  const start = html.indexOf(heading);
+  assert.notEqual(start, -1, `expected panel heading ${title}`);
+  const end = html.indexOf("</section>", start);
+  assert.notEqual(end, -1, `expected panel closing tag after ${title}`);
+  return html.slice(start, end);
+}
+
+/**
+ * Counts the strong row labels inside a scoped panel without matching later sections.
+ */
+function countPanelLabel(panelHtml: string, label: string): number {
+  return panelHtml.split(`<strong>${label}</strong>`).length - 1;
 }
 
 /**

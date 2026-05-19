@@ -377,6 +377,32 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
 });
 
 /**
+ * Verifies SQL-backed free-text search handles engineering shorthand that differs from stored metadata.
+ */
+test("DB-backed search matches compact package names and LDO shorthand", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await seedSearchRows(pool);
+    await seedSearchLdoRows(pool);
+
+    const shorthandSearch = await readPartSearchRecordsFromDatabase({ query: "SOT23 LDO" });
+
+    assert.equal(shorthandSearch.status, "available");
+
+    if (shorthandSearch.status !== "available") {
+      throw new Error("expected DB-backed shorthand search records");
+    }
+
+    assert.deepEqual(shorthandSearch.records.map((record) => record.part.mpn), ["TPS7A02DBVR"]);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies SQL-backed search facets are grouped in-database and stay consistent with active filters.
  */
 test("DB-backed search facets are correct, filter-consistent, and timed", async () => {
@@ -545,6 +571,21 @@ function createProviderImportPool(options: ProviderImportPoolOptions = {}): Test
  * `npm run migrations` + integration testing, not by this in-memory shim.
  */
 function registerPgTrgmShims(db: ReturnType<typeof newDb>): void {
+  // Search relevance uses replace() to compact common MPN separators; pg-mem needs a shim.
+  db.public.registerFunction({
+    name: "replace",
+    args: ["text", "text", "text"] as never,
+    returns: "text" as never,
+    allowNullArguments: true,
+    implementation: (value: string | null, searchValue: string | null, replaceValue: string | null): string | null => {
+      if (value === null || searchValue === null || replaceValue === null) {
+        return null;
+      }
+
+      return value.split(searchValue).join(replaceValue);
+    }
+  });
+
   db.public.registerFunction({
     name: "similarity",
     args: ["text", "text"] as never,
@@ -658,7 +699,7 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE parts (id TEXT, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_extraction_signals (id TEXT, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE assets (id TEXT, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE assets (id TEXT, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE mate_relations (id TEXT, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
@@ -696,7 +737,7 @@ function buildProviderImportRowsSql(
     INSERT INTO packages VALUES ('pkg-jlcparts-0402', '0402', 2, NULL, NULL, NULL, NULL);
     INSERT INTO parts VALUES ('part-jlcparts-c1091', 'RC-02W300JT', 'Resistors 30Ω (0402)', 'mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Resistors / Chip Resistor - Surface Mount', 'active', 'pkg-jlcparts-0402', NULL, 0.62, '2026-04-12T06:57:40.000Z');
     INSERT INTO source_records VALUES ('source-jlcparts-c1091', 'jlcparts', 'C1091', 'part-jlcparts-c1091', 'https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html', '2026-04-12T06:57:40.000Z', '{"component":{"lcsc":"C1091","mfr":"RC-02W300JT"},"indexCreatedAt":"2026-04-12T06:57:40+00:00"}'::jsonb, '2026-04-12T06:57:40.000Z', '2026-04-12T06:57:40.000Z', '2026-04-12T06:57:40.000Z', 'imported', NULL, '2026-04-12T06:57:40.000Z');
-    INSERT INTO assets VALUES ('asset-jlcparts-c1091-datasheet', 'part-jlcparts-c1091', 'datasheet', 'pdf', NULL, NULL, 'jlcparts', 'metadata_only', 'trusted_external', 'referenced', 'not_reviewed', 'not_exportable', 'referenced', NULL, NULL, 'not_validated', 'not_available', 'referenced', 'https://www.lcsc.com/datasheet/lcsc_datasheet_2411121005_FH--Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.pdf', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
+    INSERT INTO assets VALUES ('asset-jlcparts-c1091-datasheet', 'part-jlcparts-c1091', 'datasheet', 'pdf', NULL, NULL, 'jlcparts', 'metadata_only', 'trusted_external', 'referenced', 'not_reviewed', 'not_exportable', 'referenced', NULL, NULL, 'not_validated', 'not_available', NULL, NULL, NULL, NULL, 'referenced', 'https://www.lcsc.com/datasheet/lcsc_datasheet_2411121005_FH--Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.pdf', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
     INSERT INTO datasheet_revisions VALUES ('dsr-jlcparts-c1091', 'part-jlcparts-c1091', 'Provider datasheet reference', NULL, NULL, 'asset-jlcparts-c1091-datasheet', 0, 'not_available', 'source-jlcparts-c1091', '2026-04-12T06:57:40.000Z');
     INSERT INTO source_extraction_signals VALUES ('sig-jlcparts-c1091-package', 'part-jlcparts-c1091', 'source-jlcparts-c1091', 'dsr-jlcparts-c1091', 'asset-jlcparts-c1091-datasheet', 'package_mechanical_dimensions', 'needs_review', 0.35, 'provider_structured_metadata', 'Only provider package code and pin count were mapped; body and pitch dimensions were not extracted.', '2026-04-12T06:57:40.000Z');
     INSERT INTO source_extraction_signals VALUES ('sig-jlcparts-c1091-pin-table', 'part-jlcparts-c1091', 'source-jlcparts-c1091', 'dsr-jlcparts-c1091', 'asset-jlcparts-c1091-datasheet', 'pin_table', 'not_available', 0, 'provider_structured_metadata', 'No reviewed pin table was extracted from the structured provider metadata.', '2026-04-12T06:57:40.000Z');
@@ -734,6 +775,23 @@ async function seedSearchRows(pool: TestPool): Promise<void> {
 }
 
 /**
+ * Inserts one package/description mismatch row to exercise human-entered shorthand queries.
+ */
+async function seedSearchLdoRows(pool: TestPool): Promise<void> {
+  const client = await pool.connect();
+
+  try {
+    await client.query(`
+      INSERT INTO parts VALUES ('part-search-ldo', 'TPS7A02DBVR', '200 mA low-IQ linear regulator with SOT-23-5 package evidence.', 'mfr-search-alpha', 'Power', 'active', 'pkg-search-sot23', NULL, 0.88, '2026-04-13T00:00:00.000Z');
+      INSERT INTO part_readiness_summaries VALUES ('part-search-ldo', 'needs_attention', 'confirmed', 'non_connector', 1, ARRAY['CAD evidence is not verified for export.'], ARRAY['Attach or review CAD assets before export.'], 'CAD evidence is not verified for export.', '2026-04-13T00:00:00.000Z');
+      INSERT INTO part_approvals VALUES ('part-search-ldo', 'pending_review', 'Pending engineering approval', 'Review is still active, so the part should not be treated as approved yet.', ARRAY['Approval decision is pending.'], NULL, NULL, '2026-04-13T00:00:00.000Z');
+    `);
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Inserts identity rows with deliberate MPN and trust-score ordering ties.
  */
 async function insertSearchIdentityRows(client: PoolClient): Promise<void> {
@@ -753,10 +811,10 @@ async function insertSearchIdentityRows(client: PoolClient): Promise<void> {
  */
 async function insertSearchAssetRows(client: PoolClient): Promise<void> {
   await client.query(`
-    INSERT INTO assets VALUES ('asset-search-a-footprint', 'part-search-a', 'footprint', 'kicad_mod', 'cad/aaa-100.kicad_mod', 'sha256:aaa-footprint', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
-    INSERT INTO assets VALUES ('asset-search-a-symbol', 'part-search-a', 'symbol', 'kicad_sym', 'cad/aaa-100.kicad_sym', 'sha256:aaa-symbol', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
-    INSERT INTO assets VALUES ('asset-search-a-step', 'part-search-a', 'three_d_model', 'step', 'cad/aaa-100.step', 'sha256:aaa-step', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
-    INSERT INTO assets VALUES ('asset-search-c-symbol-draft', 'part-search-c', 'symbol', 'kicad_sym', 'generated/drafts/ccc-300.kicad_sym', 'sha256:ccc-symbol', NULL, 'redistribution_allowed', 'generated', 'downloaded', 'review_required', 'not_exportable', 'downloaded', 'draft_symbol_from_extraction_signal', NULL, 'needs_review', 'pending', 'downloaded', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-a-footprint', 'part-search-a', 'footprint', 'kicad_mod', 'cad/aaa-100.kicad_mod', 'sha256:aaa-footprint', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', NULL, NULL, NULL, NULL, 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-a-symbol', 'part-search-a', 'symbol', 'kicad_sym', 'cad/aaa-100.kicad_sym', 'sha256:aaa-symbol', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', NULL, NULL, NULL, NULL, 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-a-step', 'part-search-a', 'three_d_model', 'step', 'cad/aaa-100.step', 'sha256:aaa-step', NULL, 'redistribution_allowed', 'manual_internal', 'validated', 'approved', 'verified_for_export', 'verified_for_export', NULL, NULL, 'verified', 'ready', NULL, NULL, NULL, NULL, 'validated', NULL, NULL, '2026-04-12T00:00:00.000Z');
+    INSERT INTO assets VALUES ('asset-search-c-symbol-draft', 'part-search-c', 'symbol', 'kicad_sym', 'generated/drafts/ccc-300.kicad_sym', 'sha256:ccc-symbol', NULL, 'redistribution_allowed', 'generated', 'downloaded', 'review_required', 'not_exportable', 'downloaded', 'draft_symbol_from_extraction_signal', NULL, 'needs_review', 'pending', NULL, NULL, NULL, NULL, 'downloaded', NULL, NULL, '2026-04-12T00:00:00.000Z');
   `);
 }
 
@@ -810,6 +868,10 @@ async function seedGeneratedDraftRows(pool: TestPool): Promise<void> {
           'asset-jlcparts-c1091-datasheet',
           'needs_review',
           'pending',
+          NULL,
+          NULL,
+          NULL,
+          NULL,
           'downloaded',
           NULL,
           'source-jlcparts-c1091',

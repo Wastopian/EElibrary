@@ -95,10 +95,14 @@ test("admin workspace renders review, promotion, import, validation, and audit s
     assert.match(html, /Approval does not unlock export/u);
     assert.match(html, /Queues only appear when records exist/u);
     assert.match(html, /Operations queues/u);
-    assert.match(html, /Grouped by real review, promotion, approval, issue, import, and validation state/u);
+    assert.match(html, /Grouped by assistant triage prep, real review, promotion, approval, issue, import, and validation state/u);
     assert.match(html, /Grouped/u);
     assert.match(html, /Table/u);
     assert.match(html, /Navigate/u);
+    assert.match(html, /Assistant triage prep/u);
+    assert.match(html, /No assistant output is trusted automatically/u);
+    assert.match(html, /Source evidence needs reconciliation after import failure/u);
+    assert.match(html, /Human review required; assistant notes cannot approve, normalize, or promote records/u);
     assert.match(html, /Imports and validation/u);
     assert.match(html, /Promotion audit history/u);
     assert.match(html, /Pending approval/u);
@@ -111,6 +115,8 @@ test("admin workspace renders review, promotion, import, validation, and audit s
     assert.match(html, /Promotion queue/u);
     assert.match(html, /Recent imports/u);
     assert.match(html, /Validation evidence summary/u);
+    assert.match(html, /CAD trust checks needing attention/u);
+    assert.match(html, /Open the part files area and finish engineering review/u);
     assert.match(html, /Promotion audit history/u);
     assert.match(html, /User action audit trail/u);
     assert.match(html, /project.update/u);
@@ -206,7 +212,7 @@ test("admin workspace renders lifecycle and source-conflict queues from DB-backe
 });
 
 async function renderAdminPage(): Promise<string> {
-  return renderToStaticMarkup(await AdminPage());
+  return renderToStaticMarkup(await AdminPage({}));
 }
 
 function mockFetch(handler: (url: URL) => Response): () => void {
@@ -385,7 +391,7 @@ function createAdminDbBackedPool(): TestPool {
     CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_extraction_signals (id TEXT PRIMARY KEY, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE mate_relations (id TEXT PRIMARY KEY, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
