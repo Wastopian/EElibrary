@@ -1837,11 +1837,12 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
       const updatedUsages: ProjectPartUsage[] = [];
       const importCandidates: BomLineImportCandidate[] = [];
       const matchedPartIds = new Set<string>();
+      const candidatesByMpn = await prefetchPartMatchCandidatesByMpn(client, sourceLines.map((line) => line.rawMpn));
 
       for (const line of sourceLines) {
         const outcome = line.matchStatus === "ignored"
           ? ({ matchConfidenceScore: line.matchConfidenceScore, matchedPartId: line.matchedPartId, matchStatus: "ignored" } satisfies BomLineMatchOutcome)
-          : await resolveBomLineMatch(client, line);
+          : resolveBomLineMatch(line, candidatesByMpn);
         const updatedLine = await updateBomLineMatch(client, line, outcome, now);
 
         updatedLines.push(updatedLine);
@@ -5351,7 +5352,7 @@ function mapCircuitBlockKnownRiskRow(row: DatabaseCircuitBlockKnownRiskRow): Cir
 /**
  * Resolves one BOM line into a conservative internal-catalog match outcome.
  */
-async function resolveBomLineMatch(client: PoolClient, line: BomLine): Promise<BomLineMatchOutcome> {
+function resolveBomLineMatch(line: BomLine, candidatesByMpn: Map<string, DatabasePartMatchCandidateRow[]>): BomLineMatchOutcome {
   const rawMpn = normalizeOptionalText(line.rawMpn);
 
   if (!rawMpn) {
@@ -5362,7 +5363,7 @@ async function resolveBomLineMatch(client: PoolClient, line: BomLine): Promise<B
     };
   }
 
-  const candidates = await readInternalPartCandidatesByExactMpn(client, rawMpn);
+  const candidates = candidatesByMpn.get(rawMpn.toLowerCase()) ?? [];
 
   if (candidates.length === 0) {
     return {
@@ -5408,9 +5409,33 @@ async function resolveBomLineMatch(client: PoolClient, line: BomLine): Promise<B
 }
 
 /**
- * Reads internal part identity candidates by exact case-insensitive MPN.
+ * Prefetches every exact-MPN part candidate for a whole BOM import in one query, grouped by
+ * lowercased MPN. This replaces a per-line `WHERE lower(p.mpn) = lower($1)` SELECT — a 5k-line
+ * BOM previously issued ~5k serial candidate reads inside the match transaction; now it issues
+ * one. Match semantics are unchanged: each line's candidate set and ordering are identical to
+ * the old per-line query (`lower(p.mpn) ASC` only groups buckets; `m.name ASC, p.id ASC`
+ * preserves the original within-MPN order).
  */
-async function readInternalPartCandidatesByExactMpn(client: PoolClient, mpn: string): Promise<DatabasePartMatchCandidateRow[]> {
+async function prefetchPartMatchCandidatesByMpn(
+  client: PoolClient,
+  rawMpns: Array<string | null>
+): Promise<Map<string, DatabasePartMatchCandidateRow[]>> {
+  const byMpn = new Map<string, DatabasePartMatchCandidateRow[]>();
+  const distinctLowerMpns = [
+    ...new Set(
+      rawMpns
+        .map((value) => normalizeOptionalText(value)?.toLowerCase())
+        .filter((value): value is string => Boolean(value))
+    )
+  ];
+
+  if (distinctLowerMpns.length === 0) {
+    return byMpn;
+  }
+
+  // Dynamic placeholder IN-list (not `= ANY($1::text[])`) for pg-mem planner parity, consistent
+  // with the rest of this module.
+  const placeholders = distinctLowerMpns.map((_, index) => `$${index + 1}`).join(", ");
   const result = await client.query<DatabasePartMatchCandidateRow>(
     `
       SELECT
@@ -5421,13 +5446,24 @@ async function readInternalPartCandidatesByExactMpn(client: PoolClient, mpn: str
         m.aliases AS manufacturer_aliases
       FROM parts p
       JOIN manufacturers m ON m.id = p.manufacturer_id
-      WHERE lower(p.mpn) = lower($1)
-      ORDER BY m.name ASC, p.id ASC
+      WHERE lower(p.mpn) IN (${placeholders})
+      ORDER BY lower(p.mpn) ASC, m.name ASC, p.id ASC
     `,
-    [mpn]
+    distinctLowerMpns
   );
 
-  return result.rows;
+  for (const row of result.rows) {
+    const key = row.mpn.toLowerCase();
+    const bucket = byMpn.get(key);
+
+    if (bucket) {
+      bucket.push(row);
+    } else {
+      byMpn.set(key, [row]);
+    }
+  }
+
+  return byMpn;
 }
 
 /**
