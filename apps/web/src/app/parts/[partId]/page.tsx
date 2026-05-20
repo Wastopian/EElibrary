@@ -323,7 +323,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             <div className="signal-strip" role="group" aria-label="Engineering signals">
               <div className="signal-strip__primary">
                 <div className="signal-strip__cell">
-                  <span className="signal-strip__cell-label">Readiness</span>
+                  <span className="signal-strip__cell-label">Ready to use</span>
                   <StatusBadge label={record.readinessSummary.label} tone={readinessStatusTone(record.readinessSummary.status)} />
                 </div>
                 <div className="signal-strip__cell">
@@ -331,15 +331,15 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                   <StatusBadge label={record.approval.summary} tone={approvalStatusTone(record.approval.status)} />
                 </div>
                 <div className="signal-strip__cell">
-                  <span className="signal-strip__cell-label">Export bundle</span>
+                  <span className="signal-strip__cell-label">Ready for export</span>
                   <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
                 </div>
                 <div className="signal-strip__cell">
-                  <span className="signal-strip__cell-label">Files</span>
+                  <span className="signal-strip__cell-label">CAD files</span>
                   <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
                 </div>
                 <div className="signal-strip__cell">
-                  <span className="signal-strip__cell-label">{connectorSummary ? "Connector" : "Recovery"}</span>
+                  <span className="signal-strip__cell-label">{connectorSummary ? "Connector info" : "CAD recovery"}</span>
                   <StatusBadge label={connectorSummary?.label ?? recoverySummary.label} tone={mapViewToneToBadge(connectorSummary?.tone ?? recoverySummary.tone)} />
                 </div>
               </div>

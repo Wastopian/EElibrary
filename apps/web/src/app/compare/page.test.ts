@@ -150,12 +150,12 @@ test("compare loader skips ambiguous exact MPN matches", async () => {
  */
 test("compare page mounts the CAD preview band beside trust-stage rows", () => {
   const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
-  const trustStageIndex = source.indexOf('title="Per-asset trust-stage diff"');
+  const trustStageIndex = source.indexOf('title="Verification status per file"');
   const previewIndex = source.indexOf("<CompareAssetPreviewBand rows={assetPreviewRows} />");
 
   assert.notEqual(trustStageIndex, -1);
   assert.notEqual(previewIndex, -1);
-  assert.ok(previewIndex > trustStageIndex, "CAD preview should render directly after the per-asset trust-stage diff");
+  assert.ok(previewIndex > trustStageIndex, "CAD preview should render directly after the verification-status-per-file section");
 });
 
 /**

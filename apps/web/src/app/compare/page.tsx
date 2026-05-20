@@ -65,7 +65,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
     <main className="compare-layout">
       <header className="compare-hero">
         <div>
-          <p className="app-kicker">Compare workspace</p>
+          <p className="app-kicker">Compare parts</p>
           <h1>Part comparison</h1>
           <p className="compare-hero__lede">
             Look at up to {MAX_PARTS} parts side by side. Add parts from the catalog, from a part page, or in the box below. A blank cell means that metric is not recorded for that part.
@@ -92,7 +92,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             </p>
           ) : null}
 
-          <SectionPanel description="Identity and lifecycle from the current catalog. Always confirm against the manufacturer datasheet before final use." title="Summary">
+          <SectionPanel description="Basic info: package, category, lifecycle, trust, and approval. Always confirm against the manufacturer datasheet before deciding." title="Summary">
             <div className="admin-table-wrap compare-table-wrap">
               <table className="admin-table compare-table">
                 <thead>
@@ -138,7 +138,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                     ))}
                   </tr>
                   <tr>
-                    <th scope="row">Readiness</th>
+                    <th scope="row">Ready to use</th>
                     {records.map((record) => (
                       <td key={record.part.id}>
                         <StatusBadge label={record.readinessSummary.label} tone="info" />
@@ -154,7 +154,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                     ))}
                   </tr>
                   <tr>
-                    <th scope="row">Export bundle gate</th>
+                    <th scope="row">Ready for export</th>
                     {details.map((detail) => (
                       <td key={detail.record.part.id}>
                         <StatusBadge label={detail.bundleReadiness.label} tone={bundleTone(detail.bundleReadiness.state)} />
@@ -166,9 +166,9 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             </div>
           </SectionPanel>
 
-          <SectionPanel description="Values use the same normalization as part detail. Confidence is per-metric, not a whole-part guarantee." title="Normalized metrics">
+          <SectionPanel description="Specs use the same units as the part page. Confidence is shown per metric — high confidence on one number does not mean the whole part is verified." title="Specs">
             {metricKeys.length === 0 ? (
-              <EmptyState body="None of these parts have normalized metrics yet." title="No shared metrics" />
+              <EmptyState body="None of these parts have spec data yet." title="No shared specs" />
             ) : (
               <div className="admin-table-wrap compare-table-wrap">
                 <table className="admin-table compare-table compare-table--metrics">
@@ -199,20 +199,20 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             )}
           </SectionPanel>
 
-          <SectionPanel description="Per-class readiness from current asset rows—file-backed and verified-for-export remain different states." title="Asset class readiness">
+          <SectionPanel description="Where each CAD file type stands for each part. A stored file is not the same as a verified file." title="CAD file status">
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetClassRows} />
           </SectionPanel>
 
-          <SectionPanel description="Trust-stage diff per asset class (generated draft, approved draft, verified-for-export). Stages remain explicit and never collapse into one approval label." title="Per-asset trust-stage diff">
+          <SectionPanel description="Each row shows where one type of CAD file is in review: generated draft, approved draft, or verified for export. A draft is not the same as verified — they stay separate." title="Verification status per file">
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetTrustRows} />
           </SectionPanel>
 
-          <SectionPanel description="Side-by-side symbol, footprint, and 3D preview cells. Preview availability is visual evidence only; trust and export state stay in the row above." title="CAD preview">
+          <SectionPanel description="Side-by-side symbol, footprint, and 3D previews. These are just visual evidence — the verification status above is what controls export." title="CAD preview">
             <CompareAssetPreviewBand rows={assetPreviewRows} />
           </SectionPanel>
 
           {showConnectorRows ? (
-            <SectionPanel description="Connector-only depth: best mate, accessories, family conflicts, and the saved mating-confidence score. Non-connector parts show a dash." title="Connector depth">
+            <SectionPanel description="For connectors only: best mating partner, accessories, family conflicts, and our mating-confidence score. Non-connector parts show a dash." title="Connector details">
               <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={connectorRows} />
             </SectionPanel>
           ) : null}
