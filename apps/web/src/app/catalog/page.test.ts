@@ -222,7 +222,7 @@ test("catalog page shows no-match state with provider lookup panel for concrete 
     assert.match(html, /Part not found/u);
     assert.match(html, /TPS7A02DBVR/u);
     assert.match(html, /Search supported providers/u);
-    assert.match(html, /Search supported suppliers for exact matches/u);
+    assert.match(html, /Check supported suppliers for this exact part number/u);
     assert.doesNotMatch(html, /Import exact part number/u);
   } finally {
     restoreFetch();
@@ -248,7 +248,7 @@ test("catalog page shows no-match state without provider lookup for generic keyw
     );
 
     assert.match(html, /Part not found/u);
-    assert.match(html, /Catalog acquisition is unavailable here/u);
+    assert.match(html, /Importing a new part is not available here/u);
     assert.doesNotMatch(html, /Import exact part number/u);
   } finally {
     restoreFetch();

@@ -151,7 +151,7 @@ test("provider acquisition request failures keep unavailable states explicit", (
   );
 
   assert.equal(unavailable.kind, "unavailable");
-  assert.match(unavailable.message, /admin session/i);
+  assert.match(unavailable.message, /admin sign-in/i);
 });
 
 test("requestProviderAcquisitionJob posts to the acquisition job route instead of the sync import route", async () => {

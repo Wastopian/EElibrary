@@ -485,7 +485,7 @@ test("homepage keeps catalog acquisition unavailable for package-style no-match 
 
     assert.match(html, /Part not found/u);
     assert.match(html, new RegExp(importUiCopy.unavailableLead, "u"));
-    assert.match(html, /does not run live supplier search for broad keywords/u);
+    assert.match(html, /Broad keyword searches are not sent to suppliers/u);
     assert.doesNotMatch(html, new RegExp(importUiCopy.buttonAcquireNoMatch, "u"));
   } finally {
     restoreFetch();
