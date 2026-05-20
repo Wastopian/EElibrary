@@ -67,13 +67,13 @@ export default async function ProjectsPage() {
         <SectionHeading
           id="projects-list-heading"
           subtitle="Search by name, key, or owner. Click a project to see its parts."
-          title="Project records"
+          title="All projects"
         />
         <SectionPanel
           description={response.projects.length > 0
             ? "Click any project to open its parts and uploads."
             : "No projects yet. Create one below to start tracking parts and uploads."}
-          title={response.projects.length > 0 ? `${response.projects.length} project records` : "No projects yet"}
+          title={response.projects.length > 0 ? `${response.projects.length} project${response.projects.length === 1 ? "" : "s"}` : "No projects yet"}
         >
           {response.projects.length > 0 ? <ProjectsBrowser projects={response.projects} /> : <ProjectsEmptyState />}
         </SectionPanel>
@@ -111,8 +111,8 @@ export default async function ProjectsPage() {
           <section className="detail-section" aria-labelledby="projects-fleet-risk-heading">
             <SectionHeading
               id="projects-fleet-risk-heading"
-              subtitle="Risk and gap counts across every project, drawn from saved BOMs, lifecycle, CAD, and follow-up state."
-              title="Fleet risk dashboard"
+              subtitle="How many risks and gaps each project has — from saved BOMs, part lifecycle, CAD files, and open follow-ups."
+              title="Risk across your projects"
             />
             <SectionPanel
               description={fleetRisk?.boundary ?? "Counts are explainable inputs only. They do not approve parts, validate assets, or make export available."}
@@ -314,8 +314,8 @@ function ProjectFleetRiskTable({ rows }: { rows: ProjectFleetRiskRow[] }) {
           <tr>
             <th>Project</th>
             <th>Total risk</th>
-            <th>Unmatched</th>
-            <th>Weak/ambiguous</th>
+            <th>Unmatched BOM rows</th>
+            <th>Needs review</th>
             <th>Approval gaps</th>
             <th>Lifecycle risk</th>
             <th>Missing verified CAD</th>
@@ -385,7 +385,7 @@ function fleetTotalTone(total: number): BadgeTone {
 function ProjectsEmptyState() {
   return (
     <EmptyState
-      title="No project records yet"
+      title="Start your first project"
       body="The database is reachable, but no projects have been created yet. Create a project first, then upload a CSV BOM from the project page."
     />
   );
