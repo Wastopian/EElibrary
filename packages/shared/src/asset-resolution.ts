@@ -65,7 +65,7 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
       exportActions,
       fileBackedCadAssetCount,
       label: "bundle ready",
-      reason: readyBundleCount === 1 ? "One export bundle has all required verified file-backed assets." : `${readyBundleCount} export bundles have all required verified file-backed assets.`,
+      reason: readyBundleCount === 1 ? "One export bundle has all required stored and verified files." : `${readyBundleCount} export bundles have all required stored and verified files.`,
       referencedAssetCount,
       state: "bundle_ready",
       verifiedCadAssetCount
@@ -89,7 +89,7 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
       exportActions,
       fileBackedCadAssetCount,
       label: "references only",
-      reason: "Only referenced metadata is available; no file-backed CAD assets are ready for export.",
+      reason: "Only referenced metadata is available; no stored CAD files are ready for export.",
       referencedAssetCount,
       state: "references_only",
       verifiedCadAssetCount
@@ -300,7 +300,7 @@ function generationOptionReason(workflowStatus: GenerationWorkflowState, sourceR
   }
 
   const statusReasons: Record<GenerationWorkflowState, string> = {
-    approved: "The generated asset has been approved, but export still requires a separate verified file-backed asset.",
+    approved: "The generated asset has been approved, but export still requires a separate stored, verified file.",
     available_to_request: sourceReadiness.reasons.join(" "),
     failed: "The latest generation workflow failed; review the failure before requesting more work.",
     generated: "A generated output is recorded and still needs review before it can be trusted.",

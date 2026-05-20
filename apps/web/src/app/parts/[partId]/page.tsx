@@ -317,7 +317,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             <details className="detail-trust-callout" id="how-verification-works">
               <summary>How verification works</summary>
               <p>
-                <strong>Approved drafts are not verified for export.</strong> Generated CAD stays labeled as generated until review, validation evidence, and an explicit promotion step complete. Export buttons stay tied to file-backed, verified assets only.
+                <strong>Approved drafts are not yet verified for export.</strong> Generated CAD stays labeled as a generated draft until it has been reviewed, has validation evidence on file, and is explicitly marked verified. Export buttons stay disabled until then.
               </p>
             </details>
             <div className="signal-strip" role="group" aria-label="Engineering signals">
@@ -1776,7 +1776,7 @@ function PartFilesPanel({
 
   return (
     <SectionPanel
-      description="Datasheet PDF, 3D model, footprint, and symbol. Stored files are downloads; reference-only rows open their source. Only verified files unlock export."
+      description="Datasheet PDF, 3D model, footprint, and symbol. If we have a stored file you can download it; if we only have a link, you can open the source. Only verified files can be used for export."
       title="Files and downloads"
     >
       <ul className="part-files-list">
@@ -2728,7 +2728,7 @@ function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: BundleReadi
           <div className="detail-export-summary__badges">
             <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
             <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
-            <StatusBadge label={`${bundleReadiness.fileBackedCadAssetCount} file-backed CAD`} tone={bundleReadiness.fileBackedCadAssetCount > 0 ? "info" : "neutral"} />
+            <StatusBadge label={`${bundleReadiness.fileBackedCadAssetCount} stored CAD file${bundleReadiness.fileBackedCadAssetCount === 1 ? "" : "s"}`} tone={bundleReadiness.fileBackedCadAssetCount > 0 ? "info" : "neutral"} />
             <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
           </div>
         </div>
@@ -2736,7 +2736,7 @@ function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: BundleReadi
           <div>
             <span>Ready bundles</span>
             <strong>{availableBundleCount}</strong>
-            <p>{availableBundleCount > 0 ? "These bundles have every required verified file-backed asset." : "No bundle has all required verified file-backed assets yet."}</p>
+            <p>{availableBundleCount > 0 ? "These bundles have every required stored and verified file." : "No bundle has every required stored and verified file yet."}</p>
           </div>
           <div>
             <span>Blocked bundles</span>
@@ -2949,12 +2949,12 @@ function formatAssetClassReadinessLabel(readiness: AssetClassReadiness): string 
 function formatAssetClassReadinessDetail(readiness: AssetClassReadiness, assetCount: number): string {
   const coverageLabel = assetCount === 1 ? "1 candidate row is stored." : `${assetCount} candidate rows are stored.`;
   const detailByReadiness: Record<AssetClassReadiness, string> = {
-    downloaded_file: "A file-backed asset exists, but it still needs stronger validation or export promotion before bundles can rely on it.",
+    downloaded_file: "A stored file exists, but it still needs stronger validation or final verification before bundles can rely on it.",
     export_ready: "The best-ranked asset already carries the strongest review, validation, and export evidence available in this class.",
     failed: "The best-ranked row is currently a failed asset record and does not support export work.",
     missing: "No asset rows are stored for this class yet.",
     reference_only: "Only URL-level provenance exists for this class, so engineers can inspect provenance without treating it as a usable file.",
-    validated_file: "A validated file is present, but explicit verified-for-export promotion still remains separate."
+    validated_file: "A validated file is present, but it still needs a final verification step before export."
   };
 
   return `${detailByReadiness[readiness]} ${coverageLabel}`;

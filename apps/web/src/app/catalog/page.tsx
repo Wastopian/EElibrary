@@ -183,14 +183,14 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <div className="quick-check-workspace__layout">
           <div className="hero-editorial__inner quick-check-workspace__main">
             <form className="quick-check-form" action="/catalog" method="get">
-              <input name="manufacturerId" type="hidden" value={manufacturerId} />
-              <input name="category" type="hidden" value={category} />
-              <input name="packageId" type="hidden" value={packageId} />
-              <input name="lifecycleStatus" type="hidden" value={lifecycleStatus} />
+              <input name="manufacturerId" type="hidden" value={manufacturerId ?? ""} />
+              <input name="category" type="hidden" value={category ?? ""} />
+              <input name="packageId" type="hidden" value={packageId ?? ""} />
+              <input name="lifecycleStatus" type="hidden" value={lifecycleStatus ?? ""} />
               <input name="cad" type="hidden" value={cadAvailability} />
-              <input name="readinessStatus" type="hidden" value={readinessStatus} />
-              <input name="approvalStatus" type="hidden" value={approvalStatus} />
-              <input name="connectorClass" type="hidden" value={connectorClass} />
+              <input name="readinessStatus" type="hidden" value={readinessStatus ?? ""} />
+              <input name="approvalStatus" type="hidden" value={approvalStatus ?? ""} />
+              <input name="connectorClass" type="hidden" value={connectorClass ?? ""} />
               <input name="sort" type="hidden" value={sort} />
               <input name="pageSize" type="hidden" value={pageSize?.toString() ?? ""} />
               <label className="quick-check-form__field" htmlFor="q">
@@ -282,10 +282,10 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               <p className="app-kicker">Filters</p>
               <strong>Refine results</strong>
             </div>
-            <input name="q" type="hidden" value={query} />
-            <input name="providerPartId" type="hidden" value={providerPartId} />
-            <input name="providerUrl" type="hidden" value={providerUrl} />
-            <input name="datasheetUrl" type="hidden" value={datasheetUrl} />
+            <input name="q" type="hidden" value={query ?? ""} />
+            <input name="providerPartId" type="hidden" value={providerPartId ?? ""} />
+            <input name="providerUrl" type="hidden" value={providerUrl ?? ""} />
+            <input name="datasheetUrl" type="hidden" value={datasheetUrl ?? ""} />
             <label>
               Manufacturer
               <select defaultValue={manufacturerId} name="manufacturerId">
@@ -790,7 +790,7 @@ function EmptyActionsMessage({
   if (record.readinessSummary.status === "ready_for_export_review" && exportReadiness.tone === "verified") {
     return (
       <div className="quick-actions-empty quick-actions-empty--ready">
-        <p>No blocking actions. This part has verified file-backed CAD and is ready for export review.</p>
+        <p>No blocking actions. This part has stored, verified CAD files and is ready for export review.</p>
         <Link className="button-link button-link--quiet quick-actions-empty__link" href={`/parts/${record.part.id}`}>
           Open full record to promote
         </Link>
@@ -1645,7 +1645,7 @@ function buildActiveFilterPills({
   }
 
   if (cadAvailability === "available") {
-    pills.push("CAD: verified file-backed only");
+    pills.push("CAD: stored and verified only");
   }
 
   if (cadAvailability === "unavailable") {

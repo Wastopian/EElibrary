@@ -171,7 +171,7 @@ export function PartEngineeringMemoryPanel({ partId, partMpn }: PartEngineeringM
   return (
     <div className="part-engineering-memory-panel">
       <p className="form-hint">
-        Private engineering memory only this team can record. It preserves what was learned the hard way; it does not approve the part, validate assets, or unlock export.
+        Private engineering memory only this team can record. It preserves what was learned the hard way; it does not approve the part, validate assets, or make export available.
       </p>
 
       <div className="part-engineering-memory-panel__form">

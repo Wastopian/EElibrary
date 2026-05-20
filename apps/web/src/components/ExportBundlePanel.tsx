@@ -538,7 +538,7 @@ function collectInlineBundleWarnings(bundle: ExportBundle): string[] {
     messages.push(`${missingCount} missing asset${missingCount === 1 ? "" : "s"} excluded - no source URL or storage key.`);
   }
   if (unverifiedCount > 0) {
-    messages.push(`${unverifiedCount} unverified asset${unverifiedCount === 1 ? "" : "s"} excluded - awaiting verified-for-export promotion.`);
+    messages.push(`${unverifiedCount} unverified asset${unverifiedCount === 1 ? "" : "s"} excluded - awaiting final verification.`);
   }
 
   if (bundle.fileAvailability === "file_missing") {

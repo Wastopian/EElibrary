@@ -281,7 +281,7 @@ function buildApprovedStage(record: PartSearchRecord): TrustLineageStageSummary 
   if (approval.status === "approved") {
     return {
       badgeLabel: "Approved",
-      detail: approval.detail || "Whole-part approval has been recorded. Approved does not unlock export by itself.",
+      detail: approval.detail || "Whole-part approval has been recorded. Approved does not make export available by itself.",
       label: "Approved",
       stage: "approved",
       state: "passed",
@@ -360,7 +360,7 @@ function buildVerifiedForExportStage(
   if (bundleReadiness.state === "partial_bundle" || bundleReadiness.state === "references_only") {
     return {
       badgeLabel: "Export blocked",
-      detail: bundleReadiness.reason || "Some assets exist but are not verified-for-export. Bundle generation stays blocked.",
+      detail: bundleReadiness.reason || "Some files exist but are not yet verified for export. Bundle generation stays blocked.",
       label: "Verified for export",
       stage: "verified_for_export",
       state: "blocked",
@@ -370,7 +370,7 @@ function buildVerifiedForExportStage(
 
   return {
     badgeLabel: "Not verified",
-    detail: bundleReadiness.reason || "No verified-for-export assets are recorded for this part.",
+    detail: bundleReadiness.reason || "No verified files are recorded for this part.",
     label: "Verified for export",
     stage: "verified_for_export",
     state: "pending",

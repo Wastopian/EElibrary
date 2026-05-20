@@ -325,7 +325,7 @@ export function getAssetTruthSummary(record: PartSearchRecord): WorkflowSignalLa
 
   if (verifiedCadCount > 0) {
     return {
-      detail: `${fileBackedCadCount} file-backed CAD ${pluralize("asset", fileBackedCadCount)} recorded; only verified assets count toward export readiness.`,
+      detail: `${fileBackedCadCount} stored CAD ${pluralize("file", fileBackedCadCount)} recorded; only verified files count toward export readiness.`,
       label: `${verifiedCadCount} verified CAD ${pluralize("asset", verifiedCadCount)}`,
       tone: "verified"
     };
@@ -341,7 +341,7 @@ export function getAssetTruthSummary(record: PartSearchRecord): WorkflowSignalLa
 
   if (fileBackedCadCount > 0) {
     return {
-      detail: `${fileBackedCadCount} file-backed CAD ${pluralize("asset", fileBackedCadCount)} exist but are not verified for export.`,
+      detail: `${fileBackedCadCount} stored CAD ${pluralize("file", fileBackedCadCount)} exist but are not yet verified for export.`,
       label: "CAD files need verification",
       tone: "review"
     };
@@ -356,7 +356,7 @@ export function getAssetTruthSummary(record: PartSearchRecord): WorkflowSignalLa
   }
 
   return {
-    detail: "No file-backed CAD assets or CAD references are attached to this record.",
+    detail: "No stored CAD files or CAD references are attached to this record.",
     label: "no usable CAD files",
     tone: "neutral"
   };
@@ -834,7 +834,7 @@ function buildDatasheetChecklistItem(record: PartSearchRecord, assetGroups: Asse
       "Datasheet availability",
       "available",
       "Stored file",
-      "Revision metadata and a file-backed datasheet asset are attached to this part."
+      "Revision metadata and a stored datasheet file are attached to this part."
     );
   }
 
@@ -932,7 +932,7 @@ function buildCadChecklistItem(
   const generationOption = generationOptions.find((option) => option.targetAssetType === assetType);
 
   if (assetGroup?.readiness === "export_ready") {
-    return createChecklistItem(assetType, label, "available", "Verified", "A file-backed asset for this class is verified for export.");
+    return createChecklistItem(assetType, label, "available", "Verified", "A stored file for this class is verified for export.");
   }
 
   if (generationOption?.workflowStatus === "review_required" || generationOption?.workflowStatus === "generated") {
@@ -944,7 +944,7 @@ function buildCadChecklistItem(
   }
 
   if (assetGroup?.readiness === "validated_file") {
-    return createChecklistItem(assetType, label, "review", "File-backed", "A file-backed asset exists, but it is not yet verified for export.");
+    return createChecklistItem(assetType, label, "review", "Stored file", "A stored file exists, but it is not yet verified for export.");
   }
 
   if (assetGroup?.readiness === "downloaded_file") {
@@ -1143,7 +1143,7 @@ function describePartEnrichmentJob(
  */
 function exportReadinessToSignal(exportReadiness: ExportReadinessLabel): WorkflowSignalLabel {
   return {
-    detail: exportReadiness.label === "bundle ready" ? "At least one export bundle has every required verified file-backed CAD asset." : "Export actions stay disabled until required CAD assets are file-backed and verified for export.",
+    detail: exportReadiness.label === "bundle ready" ? "At least one export bundle has every required stored and verified CAD file." : "Export actions stay disabled until required CAD files are stored and verified for export.",
     label: exportReadiness.label,
     tone: exportReadiness.tone
   };
@@ -1186,7 +1186,7 @@ function buildQuickReadinessActions(exportReadiness: ExportReadinessLabel, asset
   if (assetTruth.tone === "generated") {
     actions.push({ label: "Review generated CAD drafts before approval or promotion.", priority: "high" });
   } else if (assetTruth.tone === "review") {
-    actions.push({ label: "Verify file-backed CAD assets before export.", priority: "high" });
+    actions.push({ label: "Verify stored CAD files before export.", priority: "high" });
   } else if (assetTruth.tone === "neutral") {
     actions.push({ label: "Recover missing CAD only when source evidence is sufficient.", priority: "medium" });
   }
@@ -1284,7 +1284,7 @@ const issueActionMetadata: Record<PartIssueCode, Omit<PartNextAction, "detail" |
   },
   missing_verified_cad: {
     available: true,
-    detail: "Inspect asset coverage, then request generation or promote verified file-backed CAD.",
+    detail: "Inspect file coverage, then request generation or promote a stored CAD file to verified.",
     href: "#files-heading",
     label: "Resolve CAD/export assets",
     tone: "danger"

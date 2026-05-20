@@ -70,7 +70,7 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     assert.equal(datasheetGroup?.bestAsset?.availabilityStatus, "referenced");
     assert.equal(datasheetGroup?.bestAsset?.exportStatus, "not_exportable");
     assert.equal(detailResponse.bundleReadiness.state, "references_only");
-    assert.match(detailResponse.bundleReadiness.reason, /no file-backed CAD assets/u);
+    assert.match(detailResponse.bundleReadiness.reason, /no stored CAD files/u);
     assert.equal(detailResponse.generationOptions.find((option) => option.targetAssetType === "symbol")?.canRequest, false);
     assert.match(detailResponse.generationOptions.find((option) => option.targetAssetType === "footprint")?.reason ?? "", /Package\/mechanical dimensions extraction/u);
   } finally {

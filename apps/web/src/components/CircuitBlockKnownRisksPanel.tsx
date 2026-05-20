@@ -106,7 +106,7 @@ export function CircuitBlockKnownRisksPanel({ circuitBlockId, knownRisks }: Circ
   return (
     <div className="known-risks-panel">
       <p className="known-risks-panel__boundary">
-        <strong>Engineering memory only.</strong> Recording or resolving a known risk does not approve linked parts, validate assets, or unlock export. Only <em>unresolved</em> <code>blocking</code> rows gate the reusable-stage verdict.
+        <strong>Engineering memory only.</strong> Recording or resolving a known risk does not approve linked parts, validate assets, or make export available. Only <em>unresolved</em> <code>blocking</code> rows gate the reusable-stage verdict.
       </p>
 
       <CircuitBlockKnownRisksList

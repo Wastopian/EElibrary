@@ -399,7 +399,7 @@ export default async function AdminPage(props: AdminPageProps) {
           title="Issue operations"
         />
         <SectionPanel
-          description="Editing an issue here does not change part readiness or unlock export. It only updates the issue itself."
+          description="Editing an issue here does not change part readiness or make export available. It only updates the issue itself."
           title={`${issueWorkflowRows.length} issue workflow items`}
         >
           {issueWorkflowRows.length > 0 ? (
@@ -584,7 +584,7 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="promotion-queue-heading">
-        <SectionHeading id="promotion-queue-heading" index="04" title="Promotion queue" subtitle="Approved assets eligible or blocked for explicit verified-for-export promotion." />
+        <SectionHeading id="promotion-queue-heading" index="04" title="Promotion queue" subtitle="Approved assets that are ready or blocked for the final verification step." />
         <SectionPanel description="Promotion remains separate from review. Blocker reasons are shown before action." title={`${promotionQueue.length} promotion candidates`}>
           {promotionQueue.length > 0 ? (
             <div className="admin-table-wrap">
@@ -1122,7 +1122,7 @@ function buildAdminOverviewGroups(
     tone: "review"
   });
   pushAdminOverviewGroup(groups, promotionQueue.length, {
-    description: "Approved assets that still require explicit verified-for-export promotion or blocker review.",
+    description: "Approved assets that still need the final verification step or a blocker review.",
     id: "promotion",
     label: "Promotion blockers and candidates",
     tone: "info"
@@ -1140,7 +1140,7 @@ function buildAdminOverviewGroups(
     tone: "review"
   });
   pushAdminOverviewGroup(groups, countQueueRows(issueQueueRows, "cad_gaps"), {
-    description: "Export-capable, file-backed CAD is still missing or incomplete for these parts.",
+    description: "Stored CAD files are missing or incomplete for these parts.",
     id: "cad_gaps",
     label: "Missing verified CAD",
     tone: "review"
@@ -1754,8 +1754,8 @@ function AdminTruthRail() {
     <section aria-label="Admin guidance" className="admin-truth-rail">
       <div>
         <span>Review</span>
-        <strong>Approval does not unlock export.</strong>
-        <p>Approved or reviewed outputs still need file-backed validation evidence and an explicit promotion before export.</p>
+        <strong>Approval does not make export available.</strong>
+        <p>Approved or reviewed outputs still need stored validation files and a final verification step before export.</p>
       </div>
       <div>
         <span>Promotion</span>

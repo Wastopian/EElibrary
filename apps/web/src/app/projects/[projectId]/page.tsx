@@ -526,7 +526,7 @@ function buildProjectWorkspaceActions(response: ProjectDetailResponse): Workspac
       signal: "BOM helper"
     },
     {
-      body: "Create or inspect bundles that include verified file-backed assets only.",
+      body: "Create or inspect bundles that use stored and verified files only.",
       href: "#project-export-bundles-heading",
       label: "Install/export files",
       signal: "Verified only"
@@ -618,7 +618,7 @@ function buildProjectNextStepActions({
         }
       : {
           body: evidenceAttachmentCount > 0
-            ? "Generate a first bundle when verified file-backed assets are available."
+            ? "Generate a first bundle when stored and verified files are available."
             : "Attach evidence and verify assets, then generate the first bundle.",
           href: "#project-export-bundles-heading",
           label: "Generate first export bundle",
@@ -921,7 +921,7 @@ function ProjectEvidencePanel({ attachments, projectId }: { attachments: Evidenc
   return (
     <div className="project-evidence-panel">
       <div className="project-evidence-panel__boundary">
-        <strong>Evidence is provenance.</strong> It does not validate assets, approve parts, or unlock export bundles by itself.
+        <strong>Evidence is provenance.</strong> It does not validate assets, approve parts, or make export bundles available by itself.
       </div>
       <EvidenceAttachmentPanel submitLabel="Attach project evidence" targetId={projectId} targetType="project" />
       {attachments.length > 0 ? (

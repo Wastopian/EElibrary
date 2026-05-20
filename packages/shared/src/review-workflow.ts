@@ -205,7 +205,7 @@ export function getAssetPromotionBlockers(asset: Asset, validationRecords: Asset
   }
 
   if (!isFileBackedAsset(asset)) {
-    blockers.push("Promotion requires file-backed storage and hash evidence.");
+    blockers.push("Promotion requires the file to be stored locally with a hash on record.");
   }
 
   if (asset.availabilityStatus !== "downloaded" && asset.availabilityStatus !== "validated") {

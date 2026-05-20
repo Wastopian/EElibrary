@@ -176,7 +176,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
           title="Reuse history"
         />
         <SectionPanel
-          description="Instantiation rows record where this pattern was used. They do not approve linked parts, validate assets, or unlock export — they preserve the decision trail."
+          description="Instantiation rows record where this pattern was used. They do not approve linked parts, validate assets, or make export available — they preserve the decision trail."
           title={detail.instantiations.length > 0 ? `${detail.instantiations.length} instantiation${detail.instantiations.length === 1 ? "" : "s"}` : "No instantiations yet"}
         >
           {detail.instantiations.length > 0
@@ -204,7 +204,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
 
       <section className="detail-section" aria-labelledby="circuit-block-deps-heading">
         <SectionHeading id="circuit-block-deps-heading" index="07" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
-        <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or unlock export." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
+        <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or make export available." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
           {detail.projectDependencies.length > 0
             ? <CircuitBlockProjectDependencyTable dependencies={detail.projectDependencies} />
             : <EmptyState title="No project dependencies yet" body="Projects become dependent when their confirmed BOM usages overlap with this block's part roles." />}
@@ -220,7 +220,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
 
       <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
         <SectionHeading id="circuit-block-evidence-heading" index="09" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
-        <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or unlock export." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
+        <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or make export available." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
           <div className="project-evidence-panel">
             <div className="project-evidence-panel__boundary">
               <strong>Evidence is provenance.</strong> It supports future review without changing part approval, validation, or export readiness.
@@ -600,7 +600,7 @@ function CircuitBlockNextWorkspaces({
           <h3>Every project that touched this block</h3>
         </header>
         <p>
-          Search confirmed BOM usages, circuit-block dependencies, and exported-asset trails. Past usage does not approve linked parts or unlock exports.
+          Search confirmed BOM usages, circuit-block dependencies, and exported-asset trails. Past usage does not approve linked parts or make exports available.
         </p>
         <Link className="button-primary" href={whereUsedHref}>
           Open where-used for {circuitBlock.blockKey}

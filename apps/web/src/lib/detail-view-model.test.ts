@@ -182,14 +182,14 @@ test("search and detail workflow summaries preserve asset and recovery truth", (
   const microcontrollerRecord = getSeedRecord("part-stm32g031k8t6");
 
   assert.equal(getAssetTruthSummary(connectorRecord).label, "2 verified CAD assets");
-  assert.match(getAssetTruthSummary(connectorRecord).detail, /only verified assets count/u);
+  assert.match(getAssetTruthSummary(connectorRecord).detail, /only verified files count/u);
   assert.equal(getConnectorWorkflowSummary(connectorRecord)?.label, "connector review needed");
   assert.equal(getConnectorWorkflowSummary(connectorRecord)?.tone, "review");
   assert.match(getConnectorWorkflowSummary(connectorRecord)?.detail ?? "", /assumption/u);
   assert.equal(getRecoveryWorkflowSummary(regulatorRecord).label, "draft output in review");
   assert.match(getRecoveryWorkflowSummary(regulatorRecord).detail, /remain outside export readiness/u);
   assert.equal(getAssetTruthSummary(microcontrollerRecord).label, "no usable CAD files");
-  assert.match(getAssetTruthSummary(microcontrollerRecord).detail, /No file-backed CAD assets/u);
+  assert.match(getAssetTruthSummary(microcontrollerRecord).detail, /No stored CAD files/u);
 });
 
 /**
@@ -247,7 +247,7 @@ test("quick readiness summary explains blockers without inventing approval state
   assert.match(connectorSummary.detail, /Export bundle: bundle ready/u);
   assert.doesNotMatch(connectorSummary.detail, /approved part/u);
   assert.equal(regulatorSummary.headline, "Blocked");
-  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("file-backed CAD before export")));
+  assert.ok(regulatorSummary.actions.some((action) => action.label.includes("stored CAD file before export")));
   assert.ok(regulatorSummary.actions.some((action) => action.label.includes("review and approval")));
 });
 
