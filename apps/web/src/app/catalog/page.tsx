@@ -202,11 +202,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 <div className="quick-check-form__advanced-fields">
                   <label className="quick-check-form__field quick-check-form__field--provider-ref" htmlFor="provider-part-reference">
                     <span>Supplier part reference</span>
-                    <input defaultValue={providerPartId} id="provider-part-reference" name="providerPartId" placeholder="LCSC code or provider part id" />
+                    <input defaultValue={providerPartId} id="provider-part-reference" name="providerPartId" placeholder="LCSC code or supplier part id" />
                   </label>
                   <label className="quick-check-form__field quick-check-form__field--provider-url" htmlFor="provider-url">
-                    <span>Provider URL</span>
-                    <input defaultValue={providerUrl} id="provider-url" name="providerUrl" placeholder="Provider product URL" />
+                    <span>Supplier URL</span>
+                    <input defaultValue={providerUrl} id="provider-url" name="providerUrl" placeholder="Supplier product URL" />
                   </label>
                   <label className="quick-check-form__field quick-check-form__field--datasheet">
                     <span>Datasheet URL</span>
@@ -1609,7 +1609,7 @@ function buildActiveFilterPills({
   }
 
   if (providerUrl && providerUrl.trim().length > 0) {
-    pills.push("Provider URL lookup");
+    pills.push("Supplier URL lookup");
   }
 
   if (datasheetUrl && datasheetUrl.trim().length > 0) {

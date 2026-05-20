@@ -259,13 +259,13 @@ export function ImportByMpnPanel({
   const advancedLookupFields = (
     <>
       <label className="import-by-mpn-panel__field">
-        <span>Provider part id (optional)</span>
+        <span>Supplier part id (optional)</span>
         <input autoComplete="off" disabled={status.kind === "submitting"} onChange={(event) => setProviderPartId(event.target.value)} placeholder="e.g. LCSC C code when known" value={providerPartId} />
       </label>
 
       <label className="import-by-mpn-panel__field">
-        <span>Provider URL (optional)</span>
-        <input autoComplete="off" disabled={status.kind === "submitting"} onChange={(event) => setProviderUrl(event.target.value)} placeholder="Provider product URL when you have it" value={providerUrl} />
+        <span>Supplier URL (optional)</span>
+        <input autoComplete="off" disabled={status.kind === "submitting"} onChange={(event) => setProviderUrl(event.target.value)} placeholder="Supplier product URL when you have it" value={providerUrl} />
       </label>
 
       <label className="import-by-mpn-panel__field">
@@ -290,7 +290,7 @@ export function ImportByMpnPanel({
 
       <form className="import-by-mpn-panel__form" onSubmit={onSubmit}>
         <label className="import-by-mpn-panel__field">
-          <span>Provider</span>
+          <span>Supplier</span>
           <select disabled={status.kind === "submitting"} onChange={(event) => setProviderId(event.target.value)} value={providerId}>
             <option value="jlcparts">JLCPCB / LCSC (jlcparts) — free</option>
             <option value="digikey">DigiKey (digikey) — free API</option>
