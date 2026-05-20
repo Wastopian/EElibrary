@@ -95,7 +95,7 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     assert.match(html, /Local sample data/u);
 
     // Core quick-check workspace surfaces stay visible even when DB is missing.
-    assert.match(html, /Catalog workbench/u);
+    assert.match(html, /Catalog search/u);
     assert.match(html, /Search by part number/u);
     assert.match(html, /Advanced supplier and datasheet fields/u);
     assert.match(html, /Supplier part reference/u);
@@ -386,7 +386,7 @@ test("homepage renders exact provider lookup CTA for DB-backed concrete no-match
     const html = await renderHomepage({ q: "TPS7A02DBVR-999" });
 
     assert.match(html, /Part not found/u);
-    assert.match(html, /We will not invent a record/u);
+    assert.match(html, /We could not find/u);
     assert.match(html, new RegExp(importUiCopy.providerLookupLead, "u"));
     assert.match(html, new RegExp(importUiCopy.catalogAcquisitionNote, "u"));
     assert.match(html, new RegExp(importUiCopy.buttonSearchProviders, "u"));

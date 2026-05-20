@@ -152,8 +152,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       {hasActiveCatalogContext ? (
         <section aria-label="Catalog context" className="site-intro site-intro--compact">
           <p className="app-kicker">EE Library</p>
-          <h1>Catalog workbench</h1>
-          <p className="site-intro__lede">Active search context is ready below. Adjust filters, inspect readiness, or open the part record that best matches the current engineering task.</p>
+          <h1>Parts catalog</h1>
+          <p className="site-intro__lede">Use the filters to narrow the list, or open a part to see its full record.</p>
         </section>
       ) : (
         <section aria-label="What EE Library is" className="site-intro">
@@ -179,7 +179,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </section>
       )}
 
-      <section aria-label="Catalog workbench search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
+      <section aria-label="Catalog search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
         <div className="quick-check-workspace__layout">
           <div className="hero-editorial__inner quick-check-workspace__main">
             <form className="quick-check-form" action="/catalog" method="get">
@@ -337,8 +337,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                   CAD files for export
                   <select defaultValue={cadAvailability} name="cad">
                     <option value="any">{formatFacetOptionLabel("Any", facets.counts?.cadAvailability.any)}</option>
-                    <option value="available">{formatFacetOptionLabel("Has verified file-backed CAD", facets.counts?.cadAvailability.available)}</option>
-                    <option value="unavailable">{formatFacetOptionLabel("Missing verified CAD", facets.counts?.cadAvailability.unavailable)}</option>
+                    <option value="available">{formatFacetOptionLabel("Has CAD files", facets.counts?.cadAvailability.available)}</option>
+                    <option value="unavailable">{formatFacetOptionLabel("No CAD files", facets.counts?.cadAvailability.unavailable)}</option>
                   </select>
                 </label>
                 <label>
@@ -432,7 +432,14 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           {results.length > 0 ? (
             <CatalogResultsPresentation initialMode="list" rows={catalogResultRows} />
           ) : (
-            <EmptyState body="Try a broader MPN, manufacturer, category, package, or CAD filter." title="No matching parts" />
+            <EmptyState
+              body={
+                activeFilterPills.length > 0
+                  ? "Nothing matched. Try a shorter or different part number, or clear the filters above to widen the search."
+                  : "Nothing matched. Try a shorter or different part number."
+              }
+              title="No matching parts"
+            />
           )}
           <SearchPaginationControls filters={filters} pagination={pagination} />
         </section>
@@ -531,7 +538,7 @@ function NoMatchProviderLookup({ lookup, providerLookup }: { lookup: string; pro
     <div className="quick-check-empty quick-check-empty--acquisition" id="catalog-acquisition" role="status">
       <strong>Part not found</strong>
       <p>
-        Nothing matched <span className="ui-mono">{lookup}</span> yet. We will not invent a record. Search supported providers for exact candidates below or refine the search.
+        We could not find <span className="ui-mono">{lookup}</span> in the catalog. Check suppliers for this exact part number below, or try a different search.
       </p>
       {providerLookup.status === "available" ? (
         <ProviderLookupPanel importMode="direct" initialQuery={providerLookup.initialQuery} refreshHref={providerLookup.refreshHref} />
@@ -1701,9 +1708,9 @@ function buildCatalogPrimaryAction(state: QuickLookupState, providerLookup: NoMa
 
   if (state.status === "no_match" && providerLookup.status === "available") {
     return {
-      detail: "No match yet. Search supported providers for exact candidates.",
+      detail: "No match yet. Check suppliers for this exact part number.",
       href: "#catalog-acquisition",
-      label: "Search supported providers"
+      label: "Check suppliers"
     };
   }
 
