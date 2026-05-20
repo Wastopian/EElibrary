@@ -4,6 +4,7 @@
 
 "use client";
 
+import { useRouter } from "next/navigation";
 import React, { useCallback, useMemo, useState } from "react";
 import { createBomImport, isApiClientError, previewBomImport } from "../lib/api-client";
 import type { BomColumnMapping, BomImportCreateResponse, BomImportPreviewResponse, ProjectRevision } from "@ee-library/shared/types";
@@ -31,6 +32,7 @@ const maxBomFileBytes = 4 * 1024 * 1024;
  * Renders a real CSV upload and mapping workflow while keeping matching as a separate action.
  */
 export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): React.ReactElement {
+  const router = useRouter();
   const firstRevisionId = revisions[0]?.id ?? newRevisionValue;
   const [sourceFilename, setSourceFilename] = useState("");
   const [rawContent, setRawContent] = useState("");
@@ -129,12 +131,12 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
         });
 
         setStatus({ kind: "success", response });
-        refreshProjectDetail();
+        router.refresh();
       } catch (error) {
         setStatus({ kind: "failed", message: resolveBomImportFailure(error, "BOM import failed. Check the mapping and try again.") });
       }
     },
-    [mapping, preview, projectId, rawContent, revisionLabel, selectedRevisionId, sourceFilename, sourceFormat]
+    [mapping, preview, projectId, rawContent, revisionLabel, router, selectedRevisionId, sourceFilename, sourceFormat]
   );
 
   /**
@@ -298,7 +300,7 @@ function BomImportStatusMessage({ status }: { status: BomImportStatus }) {
   if (status.kind === "success") {
     return (
       <p className="bom-import-panel__status bom-import-panel__status--success">
-        Saved {status.response.lineCount} rows. Open the BOM imports table below to match them to known parts when you are ready.
+        Saved {status.response.lineCount} rows. Next step: scroll down to &ldquo;Match uploaded parts list&rdquo; and click Match rows to link them to known parts.
       </p>
     );
   }
@@ -327,13 +329,4 @@ function resolveBomImportFailure(error: unknown, fallbackMessage: string): strin
   }
 
   return error.message.replace(/^BOM import (preview|create) failed \([^)]+\):\s*/u, "");
-}
-
-/**
- * Refreshes the current project detail route after a saved BOM when running in the browser.
- */
-function refreshProjectDetail(): void {
-  if (typeof window !== "undefined") {
-    window.location.reload();
-  }
 }

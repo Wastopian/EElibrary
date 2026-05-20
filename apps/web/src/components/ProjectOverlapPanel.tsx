@@ -55,7 +55,7 @@ export function ProjectOverlapPanel({ overlap }: ProjectOverlapPanelProps) {
         <p className="muted-copy project-overlap-panel__recover-hint">
           <Link href="#project-bom-upload-heading">Upload a parts list</Link>
           {" | "}
-          <Link href="#advanced-project-tools">Match rows under Advanced project tools</Link>
+          <Link href="#project-bom-imports-heading">Match uploaded parts list</Link>
         </p>
       </SectionPanel>
     );

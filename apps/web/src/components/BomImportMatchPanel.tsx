@@ -5,6 +5,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import React, { useCallback, useState } from "react";
 import { StatusBadge } from "@ee-library/ui";
 import { isApiClientError, matchBomImportRows } from "../lib/api-client";
@@ -29,6 +30,7 @@ type BomImportMatchStatus =
  * Renders a scoped matching button and the most important post-match evidence.
  */
 export function BomImportMatchPanel({ bomImportId, projectId }: BomImportMatchPanelProps): React.ReactElement {
+  const router = useRouter();
   const [status, setStatus] = useState<BomImportMatchStatus>({ kind: "idle" });
 
   /**
@@ -41,12 +43,12 @@ export function BomImportMatchPanel({ bomImportId, projectId }: BomImportMatchPa
       const response = await matchBomImportRows(bomImportId);
       setStatus({ kind: "success", response });
       if (response.summary.usageCreatedOrUpdatedCount > 0) {
-        refreshProjectDetail();
+        router.refresh();
       }
     } catch (error) {
       setStatus({ kind: "failed", message: resolveBomMatchFailure(error) });
     }
-  }, [bomImportId]);
+  }, [bomImportId, router]);
 
   return (
     <div className="bom-match-panel">
@@ -152,13 +154,4 @@ function resolveBomMatchFailure(error: unknown): string {
   }
 
   return error.message.replace(/^BOM import match failed \([^)]+?\):\s*/u, "");
-}
-
-/**
- * Refreshes the current project workspace after a client-only matching action updates usage rows.
- */
-function refreshProjectDetail(): void {
-  if (typeof window !== "undefined") {
-    window.location.reload();
-  }
 }

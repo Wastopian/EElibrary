@@ -163,6 +163,27 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </SectionPanel>
       </section>
 
+      <section className="detail-section" aria-labelledby="project-bom-imports-heading">
+        <SectionHeading
+          id="project-bom-imports-heading"
+          subtitle="Step 2: match the rows you uploaded so the app links them to known parts."
+          title="Match uploaded parts list"
+        />
+        <SectionPanel
+          description="Each saved upload appears here. Click Match rows to link the list to known parts. Nothing is linked to your project until you do this step."
+          title={bomImports.length > 0 ? `${bomImports.length} saved upload${bomImports.length === 1 ? "" : "s"}` : "Nothing uploaded yet"}
+        >
+          {bomImports.length > 0 ? (
+            <BomImportTable bomImports={bomImports} />
+          ) : (
+            <EmptyState
+              title="No uploads to match yet"
+              body="Upload a parts list above first. After you save it, it appears here so you can match the rows to known parts."
+            />
+          )}
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="project-files-heading">
         <SectionHeading
           id="project-files-heading"
@@ -242,20 +263,6 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           <SectionHeading id="project-revisions-heading" subtitle="Saved revision history for this project." title="Revisions" />
           <SectionPanel description="These are the revisions saved for this project." title={revisions.length > 0 ? `${revisions.length} revisions` : "No revisions saved yet"}>
             {revisions.length > 0 ? <ProjectRevisionTable revisions={revisions} /> : <EmptyState title="No revisions yet" body="No revisions have been saved for this project yet." />}
-          </SectionPanel>
-        </section>
-
-        <section className="detail-section" aria-labelledby="project-bom-imports-heading">
-          <SectionHeading id="project-bom-imports-heading" subtitle="Saved parts list uploads." title="BOM imports" />
-          <SectionPanel
-            description="Each upload appears here after it is saved. Use Match rows to link parts list lines to known parts."
-            title={bomImports.length > 0 ? `${bomImports.length} BOM import records` : "No persisted BOM imports"}
-          >
-            {bomImports.length > 0 ? (
-              <BomImportTable bomImports={bomImports} />
-            ) : (
-              <EmptyState title="No BOM imports yet" body="No parts list import metadata is persisted for this project. Use the CSV intake panel above to preview and save mapped rows." />
-            )}
           </SectionPanel>
         </section>
 

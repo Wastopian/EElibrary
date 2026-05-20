@@ -4,7 +4,9 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement, type ContextType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import ProjectDetailPage from "./page";
 import type { FollowUpListResponse, ProjectBomHealthResponse, ProjectDetailResponse, ProjectEvidenceAttachmentsResponse, ProjectMemoryCapability, ProjectOverlapPanelResponse, ProjectSummary } from "@ee-library/shared/types";
 
@@ -175,8 +177,8 @@ test("project detail renders empty child sections honestly", async () => {
     assert.match(html, /Actionable next steps/u);
     assert.match(html, /Upload first BOM/u);
     assert.match(html, /Match imported BOM rows/u);
-    assert.match(html, /No BOM imports yet/u);
-    assert.match(html, /Use the CSV intake panel above/u);
+    assert.match(html, /No uploads to match yet/u);
+    assert.match(html, /Upload a parts list above first/u);
     assert.match(html, /No confirmed part usage yet/u);
     assert.match(html, /No parts list to check/u);
     assert.match(html, /No follow-ups yet/u);
@@ -223,8 +225,22 @@ test("project detail returns not found when the API returns 404", async () => {
  * Renders a project detail server component to static markup.
  */
 async function renderProjectDetailPage(projectId: string): Promise<string> {
-  return renderToStaticMarkup(await ProjectDetailPage({ params: Promise.resolve({ projectId }) }));
+  const page = await ProjectDetailPage({ params: Promise.resolve({ projectId }) });
+
+  // Client components in this page (BOM upload/match) call useRouter(); real Next SSR
+  // provides the App Router context, so the static-markup harness must mirror that.
+  return renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: mockAppRouter }, page));
 }
+
+/** Minimal App Router stand-in so client components can call useRouter() under static markup. */
+const mockAppRouter = {
+  back: () => undefined,
+  forward: () => undefined,
+  prefetch: () => undefined,
+  push: () => undefined,
+  refresh: () => undefined,
+  replace: () => undefined
+} as unknown as ContextType<typeof AppRouterContext>;
 
 /**
  * Replaces global fetch with a project detail API handler.
