@@ -82,11 +82,11 @@ export default async function ProjectsPage() {
       <section className="detail-section" aria-labelledby="project-create-heading">
         <SectionHeading
           id="project-create-heading"
-          subtitle="A project gives parts uploads a home."
+          subtitle="A project is where your parts list uploads, files, and decisions live."
           title="Create project"
         />
         <SectionPanel
-          description="Create a project first. You can upload a parts list from the project page once it exists."
+          description="Create the project first. Once it exists, you can upload a parts list from the project page."
           title="New project"
         >
           <ProjectCreatePanel />
