@@ -65,11 +65,15 @@ export function BomImportMatchPanel({ bomImportId, projectId }: BomImportMatchPa
  */
 function BomMatchStatusMessage({ projectId, status }: { projectId: string; status: BomImportMatchStatus }): React.ReactElement | null {
   if (status.kind === "idle") {
-    return <p className="bom-match-panel__status muted-copy">Exact MPN plus manufacturer creates usage; weak and ambiguous rows stay line evidence.</p>;
+    return (
+      <p className="bom-match-panel__status muted-copy">
+        Click <strong>Match rows</strong> to link this upload to known parts. Rows that are not a clear match get flagged for review instead of linked, so nothing wrong is added by accident.
+      </p>
+    );
   }
 
   if (status.kind === "matching") {
-    return <p className="bom-match-panel__status muted-copy">Matching internal catalog rows...</p>;
+    return <p className="bom-match-panel__status muted-copy">Looking for matches in the catalog...</p>;
   }
 
   if (status.kind === "failed") {
@@ -77,32 +81,42 @@ function BomMatchStatusMessage({ projectId, status }: { projectId: string; statu
   }
 
   const { importCandidates, summary } = status.response;
+  const reviewCount = summary.weakMatchLineCount + summary.ambiguousLineCount;
+  const projectHref = `/projects/${encodeURIComponent(projectId)}`;
 
   return (
     <div className="bom-match-panel__result">
       <div className="bom-match-panel__badges">
         <StatusBadge label={`${summary.matchedLineCount} matched`} tone={summary.matchedLineCount > 0 ? "verified" : "neutral"} />
-        <StatusBadge label={`${summary.weakMatchLineCount} weak`} tone={summary.weakMatchLineCount > 0 ? "review" : "neutral"} />
-        <StatusBadge label={`${summary.ambiguousLineCount} ambiguous`} tone={summary.ambiguousLineCount > 0 ? "review" : "neutral"} />
-        <StatusBadge label={`${summary.unmatchedLineCount} unmatched`} tone={summary.unmatchedLineCount > 0 ? "danger" : "neutral"} />
+        <StatusBadge label={`${summary.weakMatchLineCount} close match`} tone={summary.weakMatchLineCount > 0 ? "review" : "neutral"} />
+        <StatusBadge label={`${summary.ambiguousLineCount} more than one match`} tone={summary.ambiguousLineCount > 0 ? "review" : "neutral"} />
+        <StatusBadge label={`${summary.unmatchedLineCount} not found`} tone={summary.unmatchedLineCount > 0 ? "danger" : "neutral"} />
       </div>
       <p className="bom-match-panel__status">
         {summary.usageCreatedOrUpdatedCount > 0 ? (
           <>
-            {summary.usageCreatedOrUpdatedCount} usage row{summary.usageCreatedOrUpdatedCount === 1 ? "" : "s"} updated — confirmed usage and overlap refresh automatically.
+            {summary.usageCreatedOrUpdatedCount} part{summary.usageCreatedOrUpdatedCount === 1 ? "" : "s"} linked to this project.
             {" "}
-            <Link href={`/projects/${encodeURIComponent(projectId)}#project-overlap-heading`}>Jump to overlap</Link>
+            <Link href={`${projectHref}#project-usage-heading`}>See linked parts</Link>
             {" · "}
-            <Link href={`/projects/${encodeURIComponent(projectId)}#project-usage-heading`}>Confirmed parts</Link>
+            <Link href={`${projectHref}#project-overlap-heading`}>See overlap with other projects</Link>
           </>
         ) : (
-          <>
-            No new confirmed usage from this pass — weak or ambiguous rows stay unmatched until you fix source data or import missing parts.
-            {" "}
-            <Link href={`/projects/${encodeURIComponent(projectId)}`}>Reload project</Link>
-          </>
+          <>No new parts were linked from this pass.</>
         )}
       </p>
+      {reviewCount > 0 ? (
+        <p className="bom-match-panel__status">
+          {reviewCount} row{reviewCount === 1 ? "" : "s"} need a closer look (close to a known part, or could match more than one).
+          {" "}
+          <Link href={`${projectHref}#project-bom-diagnostics-heading`}>Review in diagnostics</Link>
+        </p>
+      ) : null}
+      {summary.unmatchedLineCount > 0 && importCandidates.length === 0 ? (
+        <p className="bom-match-panel__status">
+          {summary.unmatchedLineCount} row{summary.unmatchedLineCount === 1 ? "" : "s"} could not be matched. Check the MPN and manufacturer in your source file, or import the missing part from a supplier.
+        </p>
+      ) : null}
       {importCandidates.length > 0 ? <BomImportCandidateList candidates={importCandidates} /> : null}
     </div>
   );
@@ -114,7 +128,7 @@ function BomMatchStatusMessage({ projectId, status }: { projectId: string; statu
 function BomImportCandidateList({ candidates }: { candidates: BomLineImportCandidate[] }): React.ReactElement {
   return (
     <details className="bom-match-panel__candidates">
-      <summary>{candidates.length} unmatched exact MPN rows can be imported</summary>
+      <summary>{candidates.length} part{candidates.length === 1 ? "" : "s"} not in the catalog — import each from a supplier</summary>
       <ul>
         {candidates.slice(0, 8).map((candidate) => (
           <li key={candidate.bomLineId}>
@@ -122,7 +136,7 @@ function BomImportCandidateList({ candidates }: { candidates: BomLineImportCandi
               Row {candidate.rowNumber}: <span className="ui-mono">{candidate.mpn}</span>
               {candidate.manufacturerName ? ` / ${candidate.manufacturerName}` : ""}
             </span>
-            <Link href={buildCatalogImportHref(candidate)}>Open exact import</Link>
+            <Link href={buildCatalogImportHref(candidate)}>Import this part</Link>
           </li>
         ))}
       </ul>

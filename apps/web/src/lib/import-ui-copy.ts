@@ -2,20 +2,20 @@
  * File header: Stable user-facing strings for the provider import workflow (used in tests).
  */
 
-/** importUiCopy holds calm, explicit wording for the import-by-MPN panel. */
+/** importUiCopy holds calm, plain-language wording for the import-by-MPN panel. */
 export const importUiCopy = {
   /** Shown while the import request is in flight. */
-  submitting: "Import in progress. This may take a short while.",
+  submitting: "Importing the part. This can take a moment.",
   /** Shown after a successful import without implying CAD or export readiness. */
-  successLead: "Import finished. The catalog record is ready to inspect. CAD and export readiness are unchanged until evidence exists.",
+  successLead: "Import finished. The part is in the catalog and ready to open. CAD and export readiness are unchanged until evidence exists.",
   /** Shown after a successful import when the client must rerun the current search instead of guessing a part route. */
-  successRefreshLead: "Import finished. Refreshing the current catalog search because no canonical part route target was returned.",
+  successRefreshLead: "Import finished. Refreshing the current search so you can find the new part.",
   /** Shown when the import attempt fails. */
-  failureLead: "Import did not complete.",
+  failureLead: "Import did not finish.",
   /** Shown when the current page context cannot safely offer catalog acquisition. */
-  unavailableLead: "Catalog acquisition is unavailable here.",
+  unavailableLead: "Importing a new part is not available here.",
   /** Shown when the compact no-match acquisition flow is ready to try one exact provider import. */
-  catalogAcquisitionLead: "Import this exact part number from a configured supplier.",
+  catalogAcquisitionLead: "Import this exact part number from a supplier.",
   /** Client-side validation when both fields are empty. */
   validationNeedLookup: "Enter a part number or supplier part id.",
   /** Primary submit action label. */
@@ -23,11 +23,11 @@ export const importUiCopy = {
   /** Primary no-match acquisition action label. */
   buttonAcquireNoMatch: "Import exact part number",
   /** Explicit action that runs supported-provider exact lookup from a catalog no-match state. */
-  buttonSearchProviders: "Search supported providers",
+  buttonSearchProviders: "Check suppliers for this part",
   /** Action that starts import from one selected provider candidate. */
-  buttonImportCandidate: "Import candidate",
+  buttonImportCandidate: "Import this one",
   /** Action that queues one selected provider candidate for admin-gated acquisition. */
-  buttonQueueAcquisition: "Queue acquisition",
+  buttonQueueAcquisition: "Queue for import",
   /** Primary next-step link after success. */
   linkOpenPart: "Open part detail",
   /** Link to operational admin after success. */
@@ -35,47 +35,47 @@ export const importUiCopy = {
   /** Link used when search results must be rerun after a successful import. */
   linkRefreshSearch: "Refresh search results",
   /** Clarifies that no-match acquisition is still catalog ingestion, not a global live search. */
-  catalogAcquisitionNote: "Exact part-number import only. Free sources are JLC/LCSC, DigiKey, Mouser, the local KiCad CAD index, and Local Catalog. Octopart/Nexar is an optional paid aggregator and only appears when Nexar credentials are configured.",
+  catalogAcquisitionNote: "Exact part-number import only. Free sources are JLC/LCSC, DigiKey, Mouser, the local KiCad CAD index, and Local Catalog. Octopart/Nexar is an optional paid source and only appears when Nexar credentials are set up.",
   /** Introduces the explicit provider lookup step from a DB-backed no-match state. */
-  providerLookupLead: "Search supported suppliers for exact matches before deciding whether to import.",
+  providerLookupLead: "Check supported suppliers for this exact part number before deciding to import.",
   /** Clarifies that provider lookup remains explicit and exact-match only. */
-  providerLookupExactNote: "This only checks currently supported suppliers for exact part-number or supplier-id matches.",
+  providerLookupExactNote: "This only finds exact part-number or supplier-id matches from the suppliers we support.",
   /** Shown while the explicit provider lookup request is in flight. */
-  providerLookupSearching: "Searching supported suppliers for exact matches.",
+  providerLookupSearching: "Checking suppliers for this exact part number...",
   /** Shown when supported providers have no exact candidate rows for the lookup. */
-  providerLookupNoMatch: "No exact-match supplier candidates were found for this lookup.",
+  providerLookupNoMatch: "No supplier has this exact part number.",
   /** Shown when explicit provider lookup fails before candidates can be listed. */
-  providerLookupFailure: "Provider lookup did not complete.",
+  providerLookupFailure: "Supplier check did not finish.",
   /** Shown while the selected provider candidate import is starting. */
-  providerAcquisitionCreating: "Starting import.",
+  providerAcquisitionCreating: "Starting the import...",
   /** Shown when one visible candidate currently owns the in-flight import lock for this result set. */
-  providerAcquisitionActiveLead: "Import in progress for",
+  providerAcquisitionActiveLead: "Currently importing",
   /** Badge shown on the currently active candidate row. */
-  providerAcquisitionActiveBadge: "Import running",
+  providerAcquisitionActiveBadge: "Importing now",
   /** Explains why the other candidate buttons stay disabled while one job is still pending. */
   providerAcquisitionLocked: "Wait for this import to finish before starting another one.",
   /** Shown while a queued job is waiting for the worker to claim it. */
-  providerAcquisitionQueued: "Import is waiting in line and will start soon.",
+  providerAcquisitionQueued: "Waiting in line. The import will start soon.",
   /** Shown while the worker is running the existing provider import flow for the queued job. */
-  providerAcquisitionRunning: "Import is in progress.",
+  providerAcquisitionRunning: "Importing now...",
   /** Shown after a queued job succeeds with a usable part detail route target. */
-  providerAcquisitionSucceeded: "Acquisition finished. Opening the imported part detail record.",
+  providerAcquisitionSucceeded: "Import finished. Opening the new part record.",
   /** Shown after a queued job succeeds but no safe route target is available yet. */
-  providerAcquisitionSucceededRefresh: "Acquisition finished. Refresh the current catalog search to look for the imported part.",
+  providerAcquisitionSucceededRefresh: "Import finished. Refresh the search to find the new part.",
   /** Shown when a queued acquisition job fails. */
-  providerAcquisitionFailed: "Acquisition did not complete.",
+  providerAcquisitionFailed: "Import did not finish.",
   /** Explains why candidates may be visible while import remains unavailable to the current request context. */
-  providerLookupImportUnavailable: "Candidate import still requires an admin session and connected catalog data.",
+  providerLookupImportUnavailable: "Importing one of these still needs an admin sign-in and a connected catalog.",
   /** Explains why no-match acquisition is hidden in local seed mode. */
-  catalogAcquisitionUnavailableSeed: "Catalog import is unavailable while this page is using local sample data.",
+  catalogAcquisitionUnavailableSeed: "Importing new parts is off while this page is showing sample data.",
   /** Explains why generic keyword misses do not become live provider lookups. */
-  catalogAcquisitionUnavailableLookup: "Exact import works for specific part-number searches only. It does not run live supplier search for broad keywords.",
+  catalogAcquisitionUnavailableLookup: "Import only works when you type an exact part number. Broad keyword searches are not sent to suppliers.",
   /** Explains why an unauthenticated or non-admin session cannot run the import path. */
-  catalogAcquisitionUnavailableSession: "Catalog acquisition is unavailable for this session. An admin session is required for provider import.",
+  catalogAcquisitionUnavailableSession: "Importing new parts needs an admin sign-in.",
   /** Explains why import cannot continue when the backing catalog database is absent. */
-  catalogAcquisitionUnavailableDatabase: "Catalog import requires connected catalog data before a part record can be saved.",
+  catalogAcquisitionUnavailableDatabase: "Importing new parts needs the catalog database to be connected.",
   /** Explains why setup mode cannot offer the inline catalog acquisition flow. */
-  catalogAcquisitionUnavailableSetup: "Catalog import is unavailable until the app can reach catalog data.",
+  catalogAcquisitionUnavailableSetup: "Importing new parts is off until the catalog is reachable.",
   /** Explains why the currently selected provider cannot be used for acquisition. */
-  catalogAcquisitionUnavailableProvider: "Catalog acquisition is unavailable for the selected provider."
+  catalogAcquisitionUnavailableProvider: "Importing from the selected supplier is not available."
 } as const;

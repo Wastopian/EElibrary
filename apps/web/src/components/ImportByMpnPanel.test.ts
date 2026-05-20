@@ -70,11 +70,11 @@ test("catalog acquisition import failures distinguish unavailable import from no
   const failed = resolveImportFailureState(new ApiClientError("Provider import", 422, "PROVIDER_IMPORT_FAILED", "No matching catalog entry was found for that lookup."));
 
   assert.equal(unauthorized.kind, "unavailable");
-  assert.match(unauthorized.message, /admin session/i);
+  assert.match(unauthorized.message, /admin sign-in/i);
   assert.equal(forbidden.kind, "unavailable");
-  assert.match(forbidden.message, /admin session/i);
+  assert.match(forbidden.message, /admin sign-in/i);
   assert.equal(dbUnavailable.kind, "unavailable");
-  assert.match(dbUnavailable.message, /connected catalog data/i);
+  assert.match(dbUnavailable.message, /catalog database to be connected/i);
   assert.equal(failed.kind, "failed");
   assert.match(failed.message, /No matching catalog entry/u);
 });
@@ -87,7 +87,7 @@ test("compact panel renders unavailable status markup for mocked 401 and 403 fai
     const html = renderToStaticMarkup(React.createElement(ImportByMpnPanelStatus, { status: resolveImportFailureState(error) }));
 
     assert.match(html, /import-by-mpn-panel__status--unavailable/u);
-    assert.match(html, /admin session/i);
+    assert.match(html, /admin sign-in/i);
   }
 });
 
