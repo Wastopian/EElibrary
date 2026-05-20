@@ -31,7 +31,7 @@ export function DetailSectionNav({ tabs }: { tabs: DetailSectionTab[] }) {
   }, [tabs]);
 
   return (
-    <nav aria-label="Readiness record sections" className="detail-tabbar">
+    <nav aria-label="Part page sections" className="detail-tabbar">
       {tabs.map((tab) => (
         <a aria-current={activeHash === tab.href ? "true" : undefined} href={tab.href} key={tab.href}>
           <span>{tab.label}</span>
