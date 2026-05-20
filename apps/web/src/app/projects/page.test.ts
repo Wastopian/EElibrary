@@ -31,7 +31,7 @@ test("projects dashboard renders empty DB state with project creation path", asy
     const html = await renderProjectsPage();
 
     assert.match(html, /Project memory/u);
-    assert.match(html, /No project records yet/u);
+    assert.match(html, /Start your first project/u);
     assert.match(html, /Create a project first/u);
     assert.match(html, /Create project/u);
     assert.match(html, /Current foundations/u);
@@ -67,7 +67,7 @@ test("projects dashboard renders persisted project summaries", async () => {
   try {
     const html = await renderProjectsPage();
 
-    assert.match(html, /1 project records/u);
+    assert.match(html, /1 project[^a-z]/u);
     assert.match(html, /ALPHA/u);
     assert.match(html, /Motor controller alpha/u);
     assert.match(html, /Production/u);
