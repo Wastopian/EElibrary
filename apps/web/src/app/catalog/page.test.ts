@@ -50,7 +50,7 @@ test("catalog page renders compact filter bar and explanation-first list results
     assert.match(html, /Search results/u);
     assert.match(html, /1 matches/u);
     assert.match(html, /Live catalog/u);
-    assert.match(html, /Catalog workbench/u);
+    assert.match(html, /Catalog search/u);
     assert.match(html, /File status/u);
     assert.match(html, /Verification steps/u);
     assert.match(html, /Connector intelligence/u);
@@ -76,7 +76,7 @@ test("catalog page collapses first-run guidance when active search context exist
       await SearchPage({ searchParams: Promise.resolve({ q: record.part.mpn }) })
     );
 
-    assert.match(html, /Catalog workbench/u);
+    assert.match(html, /Catalog search/u);
     assert.match(html, /Current filters/u);
     assert.match(html, /Query: TPS7A02DBVR/u);
     assert.doesNotMatch(html, /Your engineering memory for parts/u);
@@ -221,7 +221,7 @@ test("catalog page shows no-match state with provider lookup panel for concrete 
 
     assert.match(html, /Part not found/u);
     assert.match(html, /TPS7A02DBVR/u);
-    assert.match(html, /Search supported providers/u);
+    assert.match(html, /Check suppliers/u);
     assert.match(html, /Check supported suppliers for this exact part number/u);
     assert.doesNotMatch(html, /Import exact part number/u);
   } finally {
