@@ -99,7 +99,7 @@ test("homepage renders seed-mode catalog without implying DB-backed data", async
     assert.match(html, /Search by part number/u);
     assert.match(html, /Advanced supplier and datasheet fields/u);
     assert.match(html, /Supplier part reference/u);
-    assert.match(html, /Provider URL/u);
+    assert.match(html, /Supplier URL/u);
     assert.match(html, /0430250200/u);
 
     // Filter rail, results panel, and catalog presentation modes render in seed mode.

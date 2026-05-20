@@ -1952,11 +1952,11 @@ function DetailAcquisitionSummary({
 
       <dl className="detail-acquisition-grid">
         <div>
-          <dt>Provider</dt>
+          <dt>Supplier</dt>
           <dd>{acquisitionSummary.providerId ?? "Not recorded"}</dd>
         </div>
         <div>
-          <dt>Provider part key</dt>
+          <dt>Supplier part key</dt>
           <dd className="ui-mono">{acquisitionSummary.providerPartKey ?? "Not recorded"}</dd>
         </div>
         <div>

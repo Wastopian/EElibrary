@@ -116,8 +116,8 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
           </div>
           <div>
             <span>Target links</span>
-            <strong>Ids must stay explicit.</strong>
-            <p>The vault attaches evidence to concrete targets and does not infer hidden project or circuit approval.</p>
+            <strong>Each piece of evidence points to one specific thing.</strong>
+            <p>The vault attaches evidence to one concrete target at a time and does not infer hidden project or circuit approval.</p>
           </div>
         </div>
       </section>

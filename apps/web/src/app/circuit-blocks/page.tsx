@@ -169,7 +169,7 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
         <SectionHeading
           id="circuit-block-create-heading"
           index="03"
-          subtitle="Create a reusable circuit record before adding internal part roles."
+          subtitle="Create the pattern first. You can add the parts it uses on its detail page."
           title="Create circuit block"
         />
         <SectionPanel
@@ -184,25 +184,25 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
         <SectionHeading
           id="circuit-block-boundaries-heading"
           index="04"
-          subtitle="Reusable circuit knowledge stays separate from trust and export gates."
-          title="Trust boundaries"
+          subtitle="A block's status describes the circuit pattern. The parts it uses keep their own status."
+          title="How blocks relate to parts"
         />
-        <SectionPanel description="Circuit block status is a design-memory state. Linked parts keep their own approval, lifecycle, readiness, validation, and export state." title="Reuse truth">
+        <SectionPanel description="A block's status describes the circuit pattern itself. The parts it uses keep their own approval, lifecycle, readiness, validation, and export status." title="How block status and part status interact">
           <div className="projects-truth-rail projects-truth-rail--compact">
             <div>
               <span>Block state</span>
-              <strong>Reusable knowledge, not export permission.</strong>
+              <strong>An approved block does not unlock its parts.</strong>
               <p>Approved blocks can still contain parts with readiness gaps or missing verified CAD.</p>
             </div>
             <div>
               <span>Part roles</span>
-              <strong>Required and optional are distinct.</strong>
+              <strong>Required and optional are kept separate.</strong>
               <p>Substitution policy is recorded per role so reuse constraints stay visible.</p>
             </div>
             <div>
               <span>Reuse readiness</span>
-              <strong>Library badge mirrors the detail strip.</strong>
-              <p>The headline always reports the worst stage so the library never advertises a block as ready when a later gate is blocked.</p>
+              <strong>The library shows the worst stage.</strong>
+              <p>If any of the four reuse stages is blocked, the library shows the block as blocked too — so a block is never advertised as ready when a later stage is held up.</p>
             </div>
           </div>
         </SectionPanel>
