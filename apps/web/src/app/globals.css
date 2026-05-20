@@ -166,6 +166,115 @@ select {
   width: 100%;
 }
 
+/* Auth pages: compact workstation access panels with clear form rhythm and recovery messages. */
+.auth-page {
+  align-items: start;
+  display: grid;
+  justify-items: start;
+  min-height: calc(100vh - 36px);
+  padding: 48px 0;
+}
+
+.auth-card {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 18px;
+  max-width: 520px;
+  padding: 28px 30px;
+  width: min(100%, 520px);
+}
+
+.auth-card__header {
+  display: grid;
+  gap: 6px;
+}
+
+.auth-card__header h2,
+.auth-card__header p {
+  margin: 0;
+}
+
+.auth-card__header h2 {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.auth-card__header p:not(.app-kicker) {
+  color: var(--color-text-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.auth-form {
+  display: grid;
+  gap: 9px;
+}
+
+.auth-form label {
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-form__primary-action {
+  justify-self: start;
+  margin-top: 10px;
+}
+
+.auth-feedback {
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.auth-feedback strong,
+.auth-feedback p {
+  margin: 0;
+}
+
+.auth-feedback strong {
+  font-size: 0.9rem;
+}
+
+.auth-feedback p {
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.auth-feedback--error {
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.auth-feedback--success {
+  background: var(--color-plum-soft);
+  border: 1px solid var(--color-plum-border);
+  color: var(--color-text);
+}
+
+.auth-switch {
+  align-items: center;
+  border-top: 1px solid var(--color-border-light);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 16px;
+}
+
+.auth-switch span {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+}
+
 .skip-link {
   background: var(--color-accent);
   border-radius: var(--radius-sm);

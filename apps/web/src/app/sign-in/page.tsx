@@ -2,13 +2,24 @@
  * File header: Renders the credentials sign-in form and returns users to their requested workspace.
  */
 
-import { signIn } from "@/auth";
+import { auth, signIn } from "@/auth";
+import {
+  buildAuthRoutePath,
+  readPasswordFormString,
+  readSignInRedirectError,
+  readTrimmedFormString,
+  resolveSafeCallbackUrl,
+  resolveSignInNotice
+} from "@/lib/auth-form-state";
+import { AuthError } from "next-auth";
+import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
 
 /** SignInSearchParams carries the middleware-provided return target after authentication. */
 type SignInSearchParams = {
   callbackUrl?: string | string[];
+  error?: string | string[];
+  notice?: string | string[];
 };
 
 /** SignInPageProps describes optional App Router search params for the login route. */
@@ -22,21 +33,29 @@ interface SignInPageProps {
 export default async function SignInPage({ searchParams }: SignInPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const callbackUrl = resolveSafeCallbackUrl(resolvedSearchParams.callbackUrl);
+  const notice = resolveSignInNotice(resolvedSearchParams.error, resolvedSearchParams.notice);
   const session = await auth();
   if (session) redirect(callbackUrl);
 
   return (
-    <main className="sign-in-page">
-      <div className="sign-in-card">
-        <h2>Sign in to EE Library</h2>
+    <main className="auth-page sign-in-page">
+      <div className="auth-card sign-in-card">
+        <div className="auth-card__header">
+          <p className="app-kicker">EE Library access</p>
+          <h2>Sign in to EE Library</h2>
+          <p>Use your workstation account, or create one before opening the engineering workspace.</p>
+        </div>
+        {notice ? (
+          <div className={`auth-feedback auth-feedback--${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>
+            <strong>{notice.title}</strong>
+            <p>{notice.body}</p>
+          </div>
+        ) : null}
         <form
+          className="auth-form"
           action={async (formData: FormData) => {
             "use server";
-            await signIn("credentials", {
-              email: formData.get("email"),
-              password: formData.get("password"),
-              redirectTo: callbackUrl,
-            });
+            await submitSignInForm(formData, callbackUrl);
           }}
         >
           <label htmlFor="email">Email</label>
@@ -56,26 +75,51 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
             required
             type="password"
           />
-          <button type="submit">Sign in</button>
+          <button className="auth-form__primary-action" type="submit">Sign in</button>
         </form>
+        <div className="auth-switch">
+          <span>Need a new account?</span>
+          <Link className="button-link button-link--quiet" href={buildAuthRoutePath("/sign-up", callbackUrl)}>
+            Sign up
+          </Link>
+        </div>
       </div>
     </main>
   );
 }
 
 /**
- * Accepts only app-local callback paths so sign-in cannot become an open redirect.
+ * Submits credentials through Auth.js and converts provider failures into page-local feedback.
  */
-function resolveSafeCallbackUrl(value: string | string[] | undefined): string {
-  const candidate = Array.isArray(value) ? value[0] : value;
+async function submitSignInForm(formData: FormData, callbackUrl: string): Promise<void> {
+  const email = readTrimmedFormString(formData.get("email"));
+  const password = readPasswordFormString(formData.get("password"));
 
-  if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
-    return "/";
+  if (!email || !password) {
+    redirect(buildAuthRoutePath("/sign-in", callbackUrl, { error: "invalid_credentials" }));
   }
 
-  if (candidate.startsWith("/api/") || candidate === "/sign-in") {
-    return "/";
+  try {
+    const result = await signIn("credentials", {
+      email,
+      password,
+      redirect: false,
+      redirectTo: callbackUrl
+    });
+    const redirectError = readSignInRedirectError(result);
+
+    if (redirectError) {
+      redirect(buildAuthRoutePath("/sign-in", callbackUrl, { error: redirectError }));
+    }
+  } catch (error) {
+    if (error instanceof AuthError) {
+      const errorKey = error.type === "CredentialsSignin" ? "invalid_credentials" : "service_unavailable";
+
+      redirect(buildAuthRoutePath("/sign-in", callbackUrl, { error: errorKey }));
+    }
+
+    throw error;
   }
 
-  return candidate;
+  redirect(callbackUrl);
 }
