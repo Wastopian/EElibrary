@@ -139,7 +139,7 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
           title="Find a circuit block"
         />
         <SectionPanel
-          description="Filters are applied on the server. Each request echoes the filters it actually used so the UI never disagrees with what was returned."
+          description="Use filters to narrow the library by name, type, status, owner, or reuse readiness. The list updates to show only blocks that match."
           title={filtersApplied ? "Filtered library" : "All circuit blocks"}
         >
           <CircuitBlockLibraryFilterBar appliedFilters={appliedFilters} />
@@ -150,11 +150,11 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
         <SectionHeading
           id="circuit-block-list-heading"
           index="02"
-          subtitle="Structured reusable circuits with linked part roles and readiness signals."
+          subtitle="Saved circuit patterns with their part roles and reuse status."
           title="Circuit block library"
         />
         <SectionPanel
-          description="Reuse readiness collapses the four-stage reuse strip into one row verdict. It does not approve linked parts or make exports available."
+          description="The reuse-readiness column gives one quick verdict per block, based on the worst of four stages. It does not approve linked parts or make exports available."
           title={response.circuitBlocks.length > 0
             ? `${response.circuitBlocks.length} ${response.circuitBlocks.length === 1 ? "circuit block" : "circuit blocks"}`
             : filtersApplied ? "No blocks match these filters" : "No circuit blocks"}

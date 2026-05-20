@@ -64,7 +64,7 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
         <div className="projects-hero__layout">
           <div className="projects-hero__copy">
             <p className="app-kicker">Evidence vault</p>
-            <h1>Evidence provenance and review</h1>
+            <h1>Supporting evidence</h1>
             <p className="projects-hero__lede">
               Add and review supporting links, notes, and files. Evidence is reference material — it does not approve a part or make export available on its own.
             </p>
@@ -81,7 +81,7 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
       <WorkspaceJumpNav ariaLabel="Evidence vault sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="evidence-filters-heading">
-        <SectionHeading id="evidence-filters-heading" index="01" subtitle="Filter by target, evidence kind, review state, source system, storage state, or text." title="Vault filters" />
+        <SectionHeading id="evidence-filters-heading" index="01" subtitle="Filter by what the evidence is attached to, type, review state, source, storage, or any text." title="Vault filters" />
         <SectionPanel description="Filters shape the evidence list only. They do not imply evidence has been accepted or validated." title="Search evidence">
           <EvidenceFilterForm filters={filters} />
         </SectionPanel>

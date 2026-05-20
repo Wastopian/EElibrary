@@ -38,7 +38,7 @@ test("evidence vault renders filters and review rows without trust overclaims", 
   try {
     const html = renderToStaticMarkup(await EvidencePage({ searchParams: Promise.resolve({ storageState: "file_backed" }) }));
 
-    assert.match(html, /Evidence provenance and review/u);
+    assert.match(html, /Supporting evidence/u);
     assert.match(html, /Vault filters/u);
     assert.match(html, /Attach evidence/u);
     assert.match(html, /Find target/u);
