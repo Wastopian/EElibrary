@@ -154,7 +154,7 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
           title="Circuit block library"
         />
         <SectionPanel
-          description="Reuse readiness collapses the four-stage reuse strip into one row verdict. It does not approve linked parts or unlock exports."
+          description="Reuse readiness collapses the four-stage reuse strip into one row verdict. It does not approve linked parts or make exports available."
           title={response.circuitBlocks.length > 0
             ? `${response.circuitBlocks.length} ${response.circuitBlocks.length === 1 ? "circuit block" : "circuit blocks"}`
             : filtersApplied ? "No blocks match these filters" : "No circuit blocks"}

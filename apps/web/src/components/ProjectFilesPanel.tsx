@@ -387,7 +387,7 @@ function ProjectReentryBrief({ files }: { files: ProjectFilesResponse }) {
           ))}
         </ul>
       ) : (
-        <p className="project-reentry-brief__clear muted-copy">No file-backed re-entry gaps detected.</p>
+        <p className="project-reentry-brief__clear muted-copy">No stored-file re-entry gaps detected.</p>
       )}
     </section>
   );

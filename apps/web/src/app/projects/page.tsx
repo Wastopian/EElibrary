@@ -115,7 +115,7 @@ export default async function ProjectsPage() {
               title="Fleet risk dashboard"
             />
             <SectionPanel
-              description={fleetRisk?.boundary ?? "Counts are explainable inputs only. They do not approve parts, validate assets, or unlock export."}
+              description={fleetRisk?.boundary ?? "Counts are explainable inputs only. They do not approve parts, validate assets, or make export available."}
               title={`${fleetRows.length} project${fleetRows.length === 1 ? "" : "s"} ranked by total risk count`}
             >
               <ProjectFleetRiskTable rows={fleetRows} />
@@ -297,7 +297,7 @@ function ProjectMemoryTruthRail() {
       <div>
         <span>Readiness truth</span>
         <strong>Approved does not mean export-ready.</strong>
-        <p>Review approval, validation evidence, and verified-for-export promotion remain separate states.</p>
+        <p>Review approval, validation evidence, and final verification stay separate steps.</p>
       </div>
     </section>
   );

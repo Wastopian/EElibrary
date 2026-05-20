@@ -461,7 +461,7 @@ function buildPartApproval(
     return {
       decidedAt: evidenceSource.lastEvaluatedAt,
       decidedBy: "system",
-      detail: "Identity is confirmed, no open review work remains, and verified file-backed export evidence exists.",
+      detail: "Identity is confirmed, no open review work remains, and stored, verified export evidence exists.",
       evidence,
       lastUpdatedAt: evidenceSource.lastEvaluatedAt,
       partId,
@@ -624,7 +624,7 @@ function buildMissingCadSummary(fileBackedCadCount: number, referencedAssetCount
     return "Only URL-backed references exist for CAD-related evidence.";
   }
 
-  return "Verified file-backed CAD is missing.";
+  return "Stored, verified CAD is missing.";
 }
 
 /**
@@ -643,7 +643,7 @@ function buildMissingCadDetail(fileBackedCadCount: number, referencedAssetCount:
     return "CAD-related references exist, but referenced URLs do not count as verified downloadable export assets.";
   }
 
-  return "No file-backed CAD evidence is attached for export or downstream design handoff.";
+  return "No stored CAD file is attached for export or downstream design handoff.";
 }
 
 /**
@@ -729,7 +729,7 @@ function issueAction(code: PartIssueCode): string {
     missing_connector_accessories: "Map required or optional accessories before procurement handoff.",
     missing_connector_mate: "Resolve the prioritized mating part before layout decisions.",
     missing_datasheet: "Attach or reference a datasheet before trusting the full record.",
-    missing_verified_cad: "Verify or generate file-backed CAD before export.",
+    missing_verified_cad: "Verify or generate a stored CAD file before export.",
     pending_approval: "Complete review and approval before treating this part as engineer-ready.",
     source_conflict: "Investigate mixed provider/source health before relying on this record."
   }[code];

@@ -92,7 +92,7 @@ test("admin workspace renders review, promotion, import, validation, and audit s
 
     assert.match(html, /Import by MPN/u);
     assert.match(html, /Operator import/u);
-    assert.match(html, /Approval does not unlock export/u);
+    assert.match(html, /Approval does not make export available/u);
     assert.match(html, /Queues only appear when records exist/u);
     assert.match(html, /Operations queues/u);
     assert.match(html, /Grouped by assistant triage prep, real review, promotion, approval, issue, import, and validation state/u);

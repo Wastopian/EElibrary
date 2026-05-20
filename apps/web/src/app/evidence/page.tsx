@@ -66,7 +66,7 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
             <p className="app-kicker">Evidence vault</p>
             <h1>Evidence provenance and review</h1>
             <p className="projects-hero__lede">
-              Add and review supporting links, notes, and files. Evidence is reference material — it does not approve a part or unlock export on its own.
+              Add and review supporting links, notes, and files. Evidence is reference material — it does not approve a part or make export available on its own.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label="Evidence is provenance" tone="review" />
@@ -105,9 +105,9 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
         <SectionHeading id="evidence-boundaries-heading" index="04" subtitle="Evidence supports a decision. It does not replace validation or approval." title="What evidence does and does not do" />
         <div className="projects-truth-rail projects-truth-rail--compact">
           <div>
-            <span>File-backed</span>
+            <span>Stored file</span>
             <strong>Stored is not export-ready.</strong>
-            <p>A file-backed evidence row preserves bytes and hash, but export bundles still require verified asset records.</p>
+            <p>A stored evidence file preserves the bytes and hash, but export bundles still need verified asset records.</p>
           </div>
           <div>
             <span>Review status</span>

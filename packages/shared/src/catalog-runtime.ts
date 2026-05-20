@@ -332,19 +332,19 @@ export function getExportAvailability(record: PartSearchRecord): ExportAvailabil
       available: hasFootprint && hasSymbol,
       id: "altium",
       label: "Altium bundle",
-      reason: hasFootprint && hasSymbol ? "Verified file-backed footprint and symbol are available." : "Requires file-backed footprint and symbol assets verified for export."
+      reason: hasFootprint && hasSymbol ? "Stored, verified footprint and symbol are available." : "Requires stored footprint and symbol files verified for export."
     },
     {
       available: hasThreeDModel,
       id: "solidworks",
       label: "SolidWorks bundle",
-      reason: hasThreeDModel ? "A verified file-backed 3D model is available." : "Requires a file-backed 3D model asset verified for export."
+      reason: hasThreeDModel ? "A stored, verified 3D model is available." : "Requires a stored 3D model file verified for export."
     },
     {
       available: hasStepModel,
       id: "neutral_cad",
       label: "Neutral CAD package",
-      reason: hasStepModel ? "A verified file-backed STEP model is available." : "Requires a file-backed STEP model asset verified for export."
+      reason: hasStepModel ? "A stored, verified STEP model is available." : "Requires a stored STEP model file verified for export."
     }
   ];
 }

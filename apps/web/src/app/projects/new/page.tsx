@@ -179,7 +179,7 @@ export default async function ProjectFromCsvPage({
               <strong>Unmatched rows do not invent parts.</strong> They surface as import candidates so you can decide whether to add the part to the catalog, intake from a provider, or correct the BOM.
             </li>
             <li>
-              <strong>Saving and matching is not approval.</strong> Approval, validation, and verified-for-export remain separate states elsewhere in the project workspace.
+              <strong>Saving and matching is not approval.</strong> Approval, validation, and final verification stay separate steps elsewhere in the project workspace.
             </li>
           </ul>
         </SectionPanel>

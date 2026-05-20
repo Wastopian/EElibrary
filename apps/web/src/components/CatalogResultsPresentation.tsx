@@ -230,7 +230,7 @@ function CatalogResultListRow({ row }: { row: CatalogResultRowViewModel }) {
             <div>
               <span>Export bundle</span>
               <strong>{row.exportLabel}</strong>
-              <small>Bundle export follows verified file-backed CAD, not single-file luck.</small>
+              <small>Bundle export follows stored, verified CAD files — not single-file luck.</small>
             </div>
             <div>
               <span>Approval</span>
