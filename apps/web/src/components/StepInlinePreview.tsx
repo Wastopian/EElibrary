@@ -4,9 +4,14 @@
  * STEP is not a browser-renderable format, so we parse it with OpenCascade compiled to
  * WASM (occt-import-js) and render the resulting mesh with three.js. This needs no
  * server-side converter and no derived glTF/glb artifact — it reads the stored STEP bytes
- * directly. The ~7MB WASM module and three.js are dynamically imported only when this
- * component mounts, so engineers viewing PDFs, images, or parts without a 3D model never
- * pay for them.
+ * directly.
+ *
+ * The viewer stays behind an explicit "Show 3D model" button: the ~7MB WASM module and
+ * three.js are dynamically imported only after the engineer asks for the model, so a normal
+ * part-page visit never downloads or renders anything heavy. The one exception is an explicit
+ * deep-link to this asset card (the project part-kit "View 3D preview" link, or the in-page
+ * "3D preview" button): arriving via that anchor auto-opens the viewer so the request lands
+ * on a working model rather than a second button.
  *
  * Honesty rules (mirroring ThreeDInlinePreview):
  *  - An explicit "Loading 3D model" caption stays visible until geometry is on screen, so a
@@ -30,6 +35,8 @@ type StepInlinePreviewProps = {
   /** URL used for the explicit download fallback link. */
   downloadUrl: string;
   altText: string;
+  /** When the page hash equals `#${revealAnchorId}`, the viewer auto-opens (deep-link). */
+  revealAnchorId?: string;
 };
 
 type LoadState = "loading" | "ready" | "failed";
@@ -62,11 +69,38 @@ function loadOcctModule(): Promise<OcctModule> {
   return occtModulePromise;
 }
 
-export function StepInlinePreview({ sourceUrl, downloadUrl, altText }: StepInlinePreviewProps) {
+export function StepInlinePreview({ sourceUrl, downloadUrl, altText, revealAnchorId }: StepInlinePreviewProps) {
+  const [started, setStarted] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const mountRef = useRef<HTMLDivElement | null>(null);
 
+  // Auto-open when the page is deep-linked to this asset's card so an explicit request to see
+  // the model (project "View 3D preview" link, in-page "3D preview" button) opens the viewer
+  // without a second click. Normal part-page visits keep the viewer gated behind the button.
   useEffect(() => {
+    if (!revealAnchorId) {
+      return;
+    }
+
+    const matchesHash = () => window.location.hash === `#${revealAnchorId}`;
+    if (matchesHash()) {
+      setStarted(true);
+    }
+
+    const onHashChange = () => {
+      if (matchesHash()) {
+        setStarted(true);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [revealAnchorId]);
+
+  useEffect(() => {
+    if (!started) {
+      return;
+    }
+
     let cancelled = false;
     const mount = mountRef.current;
     if (!mount) {
@@ -221,7 +255,25 @@ export function StepInlinePreview({ sourceUrl, downloadUrl, altText }: StepInlin
         renderer.domElement.remove();
       }
     };
-  }, [sourceUrl]);
+  }, [started, sourceUrl]);
+
+  if (!started) {
+    return (
+      <div className="asset-inline-preview">
+        <div className="step-inline-preview__prompt">
+          <button className="button-link--quiet" onClick={() => setStarted(true)} type="button">
+            Show 3D model
+          </button>
+          <span className="muted-copy">
+            Opens an interactive viewer in your browser.{" "}
+            <a href={downloadUrl} download>
+              Download STEP
+            </a>
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="asset-inline-preview">

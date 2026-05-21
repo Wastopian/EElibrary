@@ -9772,6 +9772,18 @@ details[open] .trust-breakdown__toggle::before {
   padding: 0.5rem 0 0 0;
 }
 
+.step-inline-preview__prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.step-inline-preview__prompt .muted-copy {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
 .step-inline-preview__stage {
   position: relative;
   width: 100%;

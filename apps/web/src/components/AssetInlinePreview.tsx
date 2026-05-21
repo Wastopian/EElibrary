@@ -193,6 +193,7 @@ export function AssetInlinePreview({ asset, partId }: AssetInlinePreviewProps) {
         <StepInlinePreview
           altText={`${asset.assetType} 3D model preview`}
           downloadUrl={buildAssetDownloadUrl(partId, asset.id)}
+          revealAnchorId={`part-asset-${asset.assetType}`}
           sourceUrl={buildAssetOpenUrl(partId, asset.id)}
         />
       );
