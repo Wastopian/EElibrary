@@ -42,11 +42,12 @@ function stubAsset(overrides: Partial<Asset>): Asset {
 }
 
 /**
- * Verifies the inline-embed gate stays on stored PDFs, stored images, and 3D models with
- * a derived viewer artifact — no false positives. STEP without a derived artifact must
- * stay download-only so we never claim an inline 3D preview that does not exist.
+ * Verifies the inline-embed gate covers stored PDFs, stored images, 3D models with a derived
+ * viewer artifact, and STEP source files on disk (rendered in-browser). A reference-only STEP
+ * with no stored bytes and no artifact must stay download-only so we never claim an inline 3D
+ * preview that does not exist.
  */
-test("canEmbedAssetPreview only allows stored PDFs, stored images, and 3D with derived artifact", () => {
+test("canEmbedAssetPreview allows stored PDFs, images, derived 3D artifacts, and stored STEP source", () => {
   assert.equal(canEmbedAssetPreview(stubAsset({})), true);
   assert.equal(canEmbedAssetPreview(stubAsset({ availabilityStatus: "validated" })), true);
   assert.equal(canEmbedAssetPreview(stubAsset({ fileFormat: "png" })), true);
@@ -55,7 +56,9 @@ test("canEmbedAssetPreview only allows stored PDFs, stored images, and 3D with d
   assert.equal(canEmbedAssetPreview(stubAsset({ availabilityStatus: "missing" })), false);
   assert.equal(canEmbedAssetPreview(stubAsset({ fileFormat: "jpg", availabilityStatus: "referenced" })), false);
 
-  assert.equal(canEmbedAssetPreview(stubAsset({ fileFormat: "step" })), false);
+  // A STEP source on disk embeds via the in-browser viewer, with or without a derived artifact.
+  assert.equal(canEmbedAssetPreview(stubAsset({ fileFormat: "step" })), true);
+  assert.equal(canEmbedAssetPreview(stubAsset({ fileFormat: "step", availabilityStatus: "validated" })), true);
   assert.equal(
     canEmbedAssetPreview(
       stubAsset({
@@ -67,6 +70,8 @@ test("canEmbedAssetPreview only allows stored PDFs, stored images, and 3D with d
     ),
     true
   );
+  // Reference-only STEP (no stored bytes, no artifact) stays download-only.
+  assert.equal(canEmbedAssetPreview(stubAsset({ fileFormat: "step", availabilityStatus: "referenced" })), false);
   assert.equal(canEmbedAssetPreview(stubAsset({ previewStatus: "pending" })), false);
 });
 
@@ -118,25 +123,64 @@ test("getAssetPreviewState marks non-PDF, non-3D preview-ready assets unsupporte
 });
 
 /**
- * Verifies a STEP asset that is preview-ready *but* has no derived viewer artifact
- * recorded surfaces the explicit "preview pending artifact" branch — never the inline
- * 3D viewer (which would silently render nothing) and never `ready_unsupported_format`
- * (which would hide the fact that conversion is the missing step).
+ * Verifies a STEP source file on disk renders inline via the in-browser viewer even when no
+ * derived glb/gltf artifact exists — the common case when no server-side converter is
+ * configured. The source bytes are always current when stored, so the viewer does not depend
+ * on the derived-artifact pipeline.
  */
-test("getAssetPreviewState reports STEP without a derived artifact as three_d_preview_pending_artifact", () => {
+test("getAssetPreviewState renders a stored STEP source inline even without a derived artifact", () => {
+  for (const availabilityStatus of ["downloaded", "validated"] as AssetAvailabilityStatus[]) {
+    const state = getAssetPreviewState(
+      stubAsset({
+        availabilityStatus,
+        fileFormat: "step",
+        previewArtifactFormat: null,
+        previewArtifactStorageKey: null,
+        previewArtifactSource: null
+      })
+    );
+    assert.equal(state.kind, "stored_step_source_inline", `expected source viewer for ${availabilityStatus}`);
+  }
+});
+
+/**
+ * Verifies the stored STEP source viewer is independent of the derived-artifact `previewStatus`.
+ * previewStatus tracks the conversion pipeline, not the source bytes, so a pending or
+ * not_available pipeline must not hide a STEP we already have on disk.
+ */
+test("getAssetPreviewState renders stored STEP source regardless of the derived-artifact previewStatus", () => {
+  for (const previewStatus of ["pending", "not_available", "ready"] as PreviewStatus[]) {
+    const state = getAssetPreviewState(
+      stubAsset({
+        availabilityStatus: "downloaded",
+        fileFormat: "step",
+        previewArtifactFormat: null,
+        previewArtifactStorageKey: null,
+        previewArtifactSource: null,
+        previewStatus
+      })
+    );
+    assert.equal(state.kind, "stored_step_source_inline", `expected source viewer for previewStatus ${previewStatus}`);
+  }
+});
+
+/**
+ * Verifies a reference-only STEP (no stored bytes) with no embeddable artifact surfaces the
+ * explicit "preview pending artifact" branch — never the in-browser viewer (no bytes to read)
+ * and never `ready_unsupported_format` (which would hide that conversion is the missing step).
+ * Malformed artifact metadata must not route to the model-viewer either.
+ */
+test("getAssetPreviewState reports a reference-only STEP with no usable artifact as three_d_preview_pending_artifact", () => {
+  const base: Partial<Asset> = { availabilityStatus: "referenced", fileFormat: "step" };
+
   const noArtifactKey = getAssetPreviewState(
-    stubAsset({
-      fileFormat: "step",
-      previewArtifactFormat: null,
-      previewArtifactStorageKey: null,
-      previewArtifactSource: null
-    })
+    stubAsset({ ...base, previewArtifactFormat: null, previewArtifactStorageKey: null, previewArtifactSource: null })
   );
   assert.equal(noArtifactKey.kind, "three_d_preview_pending_artifact");
 
   const artifactKeyWithoutFormat = getAssetPreviewState(
     stubAsset({
-      fileFormat: "step",
+      ...base,
       previewArtifactFormat: null,
       previewArtifactStorageKey: "cad/step/part-test/preview.glb",
       previewArtifactSource: "converter_step_to_gltf"
@@ -146,7 +190,7 @@ test("getAssetPreviewState reports STEP without a derived artifact as three_d_pr
 
   const formatButNoKey = getAssetPreviewState(
     stubAsset({
-      fileFormat: "step",
+      ...base,
       previewArtifactFormat: "glb",
       previewArtifactStorageKey: null,
       previewArtifactSource: "converter_step_to_gltf"
@@ -200,14 +244,15 @@ test("getAssetPreviewState routes STEP with a glb/gltf artifact to stored_three_
 });
 
 /**
- * Verifies the inline 3D path stays gated by `previewStatus`. A STEP with a derived
- * artifact recorded but `previewStatus = pending` must surface the pending state, never
- * the viewer — otherwise we would render a stale artifact while the worker is still
- * iterating on the source.
+ * Verifies the *derived artifact* (model-viewer) path stays gated by `previewStatus`: a stored
+ * STEP with a glb artifact recorded but `previewStatus = pending` must not use that artifact
+ * (it could be stale while the worker iterates). It gracefully falls back to the in-browser
+ * source viewer instead, and only promotes to the derived artifact once previewStatus is ready.
  */
-test("getAssetPreviewState gates the inline 3D viewer behind previewStatus", () => {
-  const pendingState = getAssetPreviewState(
+test("getAssetPreviewState does not use a derived artifact until previewStatus is ready", () => {
+  const pending = getAssetPreviewState(
     stubAsset({
+      availabilityStatus: "downloaded",
       fileFormat: "step",
       previewArtifactFormat: "glb",
       previewArtifactStorageKey: "cad/step/part-test/preview.glb",
@@ -215,18 +260,19 @@ test("getAssetPreviewState gates the inline 3D viewer behind previewStatus", () 
       previewStatus: "pending"
     })
   );
-  assert.equal(pendingState.kind, "preview_pending");
+  assert.equal(pending.kind, "stored_step_source_inline");
 
-  const notAvailableState = getAssetPreviewState(
+  const ready = getAssetPreviewState(
     stubAsset({
+      availabilityStatus: "downloaded",
       fileFormat: "step",
       previewArtifactFormat: "glb",
       previewArtifactStorageKey: "cad/step/part-test/preview.glb",
       previewArtifactSource: "converter_step_to_gltf",
-      previewStatus: "not_available"
+      previewStatus: "ready"
     })
   );
-  assert.equal(notAvailableState.kind, "preview_not_available");
+  assert.equal(ready.kind, "stored_three_d_inline");
 });
 
 /**

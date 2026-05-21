@@ -11,7 +11,8 @@
  */
 
 import React from "react";
-import { buildAssetDownloadUrl, buildAssetPreviewArtifactDownloadUrl } from "../lib/api-client";
+import { buildAssetDownloadUrl, buildAssetOpenUrl, buildAssetPreviewArtifactDownloadUrl } from "../lib/api-client";
+import { StepInlinePreview } from "./StepInlinePreview";
 import { ThreeDInlinePreview } from "./ThreeDInlinePreview";
 import type { Asset, AssetAvailabilityStatus, AssetPreviewArtifactFormat } from "@ee-library/shared/types";
 
@@ -23,6 +24,7 @@ export type AssetPreviewState =
   | { kind: "stored_pdf_inline" }
   | { kind: "stored_image_inline" }
   | { kind: "stored_three_d_inline"; previewArtifactFormat: Extract<AssetPreviewArtifactFormat, "glb" | "gltf"> }
+  | { kind: "stored_step_source_inline" }
   | { kind: "three_d_preview_pending_artifact" }
   | { kind: "pdf_reference_only" }
   | { kind: "image_reference_only" }
@@ -36,6 +38,27 @@ export type AssetPreviewState =
  * Exported so we can test the matrix without rendering React.
  */
 export function getAssetPreviewState(asset: Asset): AssetPreviewState {
+  // Preferred 3D path: a worker-derived glb/gltf artifact is lighter than parsing STEP in the
+  // browser, but it is only trustworthy once the preview pipeline marks the channel ready.
+  if (
+    asset.previewStatus === "ready"
+    && isThreeDViewerFormat(asset.fileFormat)
+    && hasEmbeddableThreeDPreviewArtifact(asset)
+  ) {
+    return {
+      kind: "stored_three_d_inline",
+      previewArtifactFormat: asset.previewArtifactFormat
+    };
+  }
+
+  // STEP source bytes render directly in the browser (OpenCascade WASM) with no server-side
+  // converter and no derived artifact. This depends only on the source file being in local
+  // storage, so it is evaluated before the previewStatus gate — previewStatus tracks the derived
+  // artifact pipeline, not the source bytes, which are always current when stored.
+  if (asset.fileFormat === "step" && isStoredFileAvailability(asset.availabilityStatus)) {
+    return { kind: "stored_step_source_inline" };
+  }
+
   if (asset.previewStatus === "pending") {
     return { kind: "preview_pending" };
   }
@@ -45,13 +68,7 @@ export function getAssetPreviewState(asset: Asset): AssetPreviewState {
   }
 
   if (isThreeDViewerFormat(asset.fileFormat)) {
-    if (hasEmbeddableThreeDPreviewArtifact(asset)) {
-      return {
-        kind: "stored_three_d_inline",
-        previewArtifactFormat: asset.previewArtifactFormat
-      };
-    }
-
+    // glb/gltf source (or a reference-only STEP) marked ready but with no embeddable artifact.
     return { kind: "three_d_preview_pending_artifact" };
   }
 
@@ -79,7 +96,12 @@ export function getAssetPreviewState(asset: Asset): AssetPreviewState {
  */
 export function canEmbedAssetPreview(asset: Asset): boolean {
   const kind = getAssetPreviewState(asset).kind;
-  return kind === "stored_pdf_inline" || kind === "stored_image_inline" || kind === "stored_three_d_inline";
+  return (
+    kind === "stored_pdf_inline"
+    || kind === "stored_image_inline"
+    || kind === "stored_three_d_inline"
+    || kind === "stored_step_source_inline"
+  );
 }
 
 /**
@@ -142,7 +164,7 @@ export function AssetInlinePreview({ asset, partId }: AssetInlinePreviewProps) {
     }
 
     case "stored_image_inline": {
-      const src = buildAssetDownloadUrl(partId, asset.id);
+      const src = buildAssetOpenUrl(partId, asset.id);
 
       return (
         <div className="asset-inline-preview">
@@ -165,6 +187,15 @@ export function AssetInlinePreview({ asset, partId }: AssetInlinePreviewProps) {
         />
       );
     }
+
+    case "stored_step_source_inline":
+      return (
+        <StepInlinePreview
+          altText={`${asset.assetType} 3D model preview`}
+          downloadUrl={buildAssetDownloadUrl(partId, asset.id)}
+          sourceUrl={buildAssetOpenUrl(partId, asset.id)}
+        />
+      );
 
     case "three_d_preview_pending_artifact":
       return (
