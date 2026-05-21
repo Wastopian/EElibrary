@@ -37,7 +37,7 @@ interface PartDetailFilesWorkspaceProps {
   assetGroups: AssetClassSummary[];
   partId: string;
   partMpn: string;
-  projectId?: string;
+  projectId?: string | undefined;
   projectKit?: ProjectPartKit | null;
   source: CatalogDataSource | undefined;
   supplierUrl: string | null;
@@ -109,7 +109,7 @@ interface PartDetailFileRowProps {
   group: AssetClassSummary | null;
   partId: string;
   partMpn: string;
-  projectId?: string;
+  projectId?: string | undefined;
   source: CatalogDataSource | undefined;
   validationSummaries: AssetValidationSummary[];
 }
@@ -152,6 +152,9 @@ function PartDetailFileRow({ assetType, group, partId, partMpn, projectId, sourc
             {assetType === "three_d_model" ? "3D preview" : "PDF preview"}
           </Link>
         ) : null}
+        {best && actions.length === 0 && source === "seed_fallback" ? (
+          <span className="muted-copy part-files-list__action">Sample file not available</span>
+        ) : null}
         {!best && projectId && uploadSlot ? (
           <PartDetailFileUpload projectId={projectId} slot={uploadSlot} suggestedMpn={partMpn} />
         ) : null}
@@ -168,8 +171,10 @@ interface FileAction {
 }
 
 function buildPartDetailFileActions(asset: Asset, partId: string, source: CatalogDataSource | undefined, assetType: AssetType): FileAction[] {
-  if (source === "seed_fallback" && asset.sourceUrl) {
-    return [{ external: true, href: asset.sourceUrl, label: "View source" }];
+  if (source === "seed_fallback") {
+    // Seed fallback data has no real catalog store behind it, so database-backed download
+    // links would 404. Offer the external source link when present, otherwise nothing.
+    return asset.sourceUrl ? [{ external: true, href: asset.sourceUrl, label: "View source" }] : [];
   }
 
   if (isFileBackedAsset(asset)) {

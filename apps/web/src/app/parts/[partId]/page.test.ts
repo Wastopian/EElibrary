@@ -60,7 +60,7 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /No controlled revisions/u);
     assert.match(html, /draft CAD needs review/u);
     assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
-    assert.match(html, /Files and models/u);
+    assert.match(html, /Files and downloads/u);
     assert.match(html, /Class state/u);
     assert.match(html, /Review lane/u);
     assert.match(html, /Trust check/u);

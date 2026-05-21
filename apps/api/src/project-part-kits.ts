@@ -991,8 +991,8 @@ function buildCatalogKitFileRef(
   return {
     assetId,
     category,
-    downloadUrl: downloadUrl ?? undefined,
-    fileFormat: fileFormat ?? undefined,
+    ...(downloadUrl ? { downloadUrl } : {}),
+    ...(fileFormat ? { fileFormat: fileFormat as NonNullable<ProjectPartKitFileRef["fileFormat"]> } : {}),
     name,
     relativePath: storageKey ?? sourceUrl ?? `catalog/${assetId}`,
     source: "catalog"

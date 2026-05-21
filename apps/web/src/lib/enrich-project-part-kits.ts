@@ -119,7 +119,7 @@ function buildCatalogKitFileRefFromAsset(partId: string, asset: Asset): ProjectP
   return {
     assetId: asset.id,
     category,
-    downloadUrl,
+    ...(downloadUrl !== undefined ? { downloadUrl } : {}),
     name,
     relativePath: asset.storageKey ?? asset.sourceUrl ?? `catalog/${asset.id}`,
     source: "catalog"

@@ -51,7 +51,7 @@ type ProjectsDashboardState =
 /**
  * Renders the project-memory dashboard (fleet risk, BOM import/match, revision compare, export bundles, etc.).
  */
-export default async function ProjectsPage(props: ProjectsPageProps = {}) {
+export default async function ProjectsPage(props: ProjectsPageProps) {
   const resolvedSearchParams = props.searchParams ? await props.searchParams : {};
   const syncNotice = readProjectFolderSyncNotice(resolvedSearchParams);
   const dashboardState = await loadProjectsDashboard();

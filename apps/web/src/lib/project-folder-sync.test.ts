@@ -8,11 +8,9 @@ import test from "node:test";
 test("syncProjectsFromFolderThroughWebProxy posts to the same-origin API proxy", async () => {
   const previousFetch = globalThis.fetch;
   const previousNextAuthUrl = process.env["NEXTAUTH_URL"];
-  const previousNodeEnv = process.env.NODE_ENV;
   const requestedUrls: string[] = [];
 
   process.env["NEXTAUTH_URL"] = "http://localhost:3333";
-  process.env.NODE_ENV = "test";
 
   globalThis.fetch = async (input, init) => {
     requestedUrls.push(String(input));
@@ -49,17 +47,14 @@ test("syncProjectsFromFolderThroughWebProxy posts to the same-origin API proxy",
   } finally {
     globalThis.fetch = previousFetch;
     restoreOptionalEnv("NEXTAUTH_URL", previousNextAuthUrl);
-    restoreOptionalEnv("NODE_ENV", previousNodeEnv);
   }
 });
 
 test("syncProjectsFromFolderThroughWebProxy surfaces HTTP 405 from the proxy as an API error", async () => {
   const previousFetch = globalThis.fetch;
   const previousNextAuthUrl = process.env["NEXTAUTH_URL"];
-  const previousNodeEnv = process.env.NODE_ENV;
 
   process.env["NEXTAUTH_URL"] = "http://localhost:3333";
-  process.env.NODE_ENV = "test";
 
   globalThis.fetch = async () =>
     new Response(
@@ -91,7 +86,6 @@ test("syncProjectsFromFolderThroughWebProxy surfaces HTTP 405 from the proxy as 
   } finally {
     globalThis.fetch = previousFetch;
     restoreOptionalEnv("NEXTAUTH_URL", previousNextAuthUrl);
-    restoreOptionalEnv("NODE_ENV", previousNodeEnv);
   }
 });
 

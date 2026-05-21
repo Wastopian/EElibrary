@@ -119,7 +119,7 @@ test("projects dashboard renders setup guidance when project memory is not confi
  * Renders the project dashboard server component to static markup.
  */
 async function renderProjectsPage(): Promise<string> {
-  return renderToStaticMarkup(await ProjectsPage());
+  return renderToStaticMarkup(await ProjectsPage({}));
 }
 
 /**

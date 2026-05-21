@@ -61,7 +61,7 @@ import { getCircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-r
 import type { CircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartKit, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetType, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartKit, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -978,7 +978,7 @@ async function loadProjectPartKitForPart(projectId: string, partId: string): Pro
 
     const [enriched] = await enrichPartKitsWithCatalogDetail([kit]);
 
-    return enriched;
+    return enriched ?? null;
   } catch {
     return null;
   }
@@ -1585,7 +1585,7 @@ function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; stal
  * confirmed in two projects but not yet promoted into a reusable block). Neither row count
  * implies the part is approved, validated, or export-ready — the panel boundary repeats that.
  */
-function PartWhereUsedPanel({ highlightProjectId, state }: { highlightProjectId?: string; state: PartWhereUsedState }) {
+function PartWhereUsedPanel({ highlightProjectId, state }: { highlightProjectId?: string | undefined; state: PartWhereUsedState }) {
   if (state.status === "unavailable") {
     return (
       <EmptyState
