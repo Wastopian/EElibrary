@@ -11,6 +11,11 @@ import { performance } from "node:perf_hooks";
 import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
+import {
+  buildFileContentDisposition,
+  resolveStoredFileContentType,
+  shouldServeFileInline
+} from "@ee-library/shared/file-display";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
 import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
@@ -21,16 +26,26 @@ import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
-import { buildProjectFilesResponse, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import { listProjectPartKitsInDatabase, updateProjectPartKitInDatabase } from "./project-part-kits";
+import {
+  buildProjectFilesResponse,
+  buildProjectMirrorContentDisposition,
+  shouldPreferInlineMirrorContent,
+  readProjectFilesRootSettings,
+  resolveProjectFolderCategory,
+  resolveProjectMirrorFileDownload,
+  saveProjectFile,
+  updateProjectFilesRootSettings
+} from "./project-files";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
-import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin } from "./auth";
+import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin, requireAuth } from "./auth";
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
 import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
-import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
+import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsWithCatalogPreflightInDatabase, ingestProjectMirrorForProjectInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, syncProjectsFromFolderMirror, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type {
   ApiEnvelope,
@@ -98,7 +113,9 @@ import type {
   PartSubstitutionCreateInput,
   ProjectCreateInput,
   ProjectFileUploadInput,
+  ProjectPartKitUpdateInput,
   ProjectFromCsvInput,
+  ProjectFilesRootSettingsUpdateInput,
   ProjectRevisionApprovalGateRequest,
   VendorCreateInput,
   VendorFileUploadInput,
@@ -180,76 +197,92 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "OPTIONS") {
+    response.writeHead(204, {
+      ...buildLocalDevCorsHeaders(request),
+      ...buildTelemetryHeaders(response, 204)
+    });
+    response.end();
+    return;
+  }
+
   const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
-  beginRouteTelemetry(response, request.method ?? "UNKNOWN", url.pathname);
+  const pathname = normalizeApiPathname(url.pathname);
+  rememberCorsRequest(response, request);
+  beginRouteTelemetry(response, request.method ?? "UNKNOWN", pathname);
   beginRequestAuditContext(response, request);
-  const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(url.pathname);
-  const providerAcquisitionJobMatch = /^\/provider-acquisition-jobs\/([^/]+)$/u.exec(url.pathname);
-  const auditEventsMatch = /^\/audit-events$/u.exec(url.pathname);
-  const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(url.pathname);
-  const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(url.pathname);
-  const partDocumentRevisionsMatch = /^\/parts\/([^/]+)\/document-revisions$/u.exec(url.pathname);
-  const documentRevisionRedlinesMatch = /^\/document-revisions\/([^/]+)\/redlines$/u.exec(url.pathname);
-  const documentRedlineDetailMatch = /^\/document-redlines\/([^/]+)$/u.exec(url.pathname);
-  const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(url.pathname);
-  const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(url.pathname);
-  const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(url.pathname);
-  const assetPreviewArtifactDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/preview-artifact\/download$/u.exec(url.pathname);
-  const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(url.pathname);
-  const projectRevisionCompareMatch = /^\/projects\/([^/]+)\/revisions\/compare$/u.exec(url.pathname);
-  const projectRevisionApprovalGatesMatch = /^\/projects\/([^/]+)\/revision-approval-gates$/u.exec(url.pathname);
-  const projectRevisionDetailMatch = /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u.exec(url.pathname);
-  const projectBomImportsMatch = /^\/projects\/([^/]+)\/bom-imports$/u.exec(url.pathname);
-  const projectUsagesMatch = /^\/projects\/([^/]+)\/usages$/u.exec(url.pathname);
-  const projectBomHealthMatch = /^\/projects\/([^/]+)\/bom-health$/u.exec(url.pathname);
-  const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(url.pathname);
-  const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(url.pathname);
-  const projectOverlapMatch = /^\/projects\/([^/]+)\/overlap$/u.exec(url.pathname);
-  const projectFilesMatch = /^\/projects\/([^/]+)\/files$/u.exec(url.pathname);
-  const projectFileUploadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
-  const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
-  const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(url.pathname);
-  const circuitBlockPartUpdateMatch = /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u.exec(url.pathname);
-  const circuitBlockKnownRiskCreateMatch = /^\/circuit-blocks\/([^/]+)\/known-risks$/u.exec(url.pathname);
-  const circuitBlockKnownRiskResolveMatch = /^\/circuit-blocks\/([^/]+)\/known-risks\/([^/]+)\/resolve$/u.exec(url.pathname);
-  const circuitBlockFollowUpsMatch = /^\/circuit-blocks\/([^/]+)\/follow-ups$/u.exec(url.pathname);
-  const circuitBlockProjectDepsMatch = /^\/circuit-blocks\/([^/]+)\/project-dependencies$/u.exec(url.pathname);
-  const circuitBlockDetailMatch = /^\/circuit-blocks\/([^/]+)$/u.exec(url.pathname);
-  const evidenceAttachmentDetailMatch = /^\/evidence-attachments\/([^/]+)$/u.exec(url.pathname);
-  const followUpDetailMatch = /^\/follow-ups\/([^/]+)$/u.exec(url.pathname);
-  const bomImportLinesMatch = /^\/bom-imports\/([^/]+)\/lines$/u.exec(url.pathname);
-  const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(url.pathname);
-  const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(url.pathname);
-  const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
-  const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
-  const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(url.pathname);
-  const partEngineeringRecordsMatch = /^\/parts\/([^/]+)\/engineering-records$/u.exec(url.pathname);
-  const partEngineeringRecordResolveMatch = /^\/parts\/([^/]+)\/engineering-records\/([^/]+)\/resolve$/u.exec(url.pathname);
-  const partEngineeringRecordDecisionMatch = /^\/parts\/([^/]+)\/engineering-records\/([^/]+)\/(confirm|dismiss)$/u.exec(url.pathname);
-  const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(url.pathname);
-  const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(url.pathname);
-  const exportBundleVerifyMatch = /^\/export-bundles\/([^/]+)\/verify$/u.exec(url.pathname);
-  const projectCircuitBlockInstantiationsMatch = /^\/projects\/([^/]+)\/circuit-block-instantiations$/u.exec(url.pathname);
-  const projectApprovalBatchMatch = /^\/projects\/([^/]+)\/approval-batch$/u.exec(url.pathname);
-  const projectApprovalCandidatesMatch = /^\/projects\/([^/]+)\/approval-candidates$/u.exec(url.pathname);
-  const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
-  const vendorDetailMatch = /^\/vendors\/([^/]+)$/u.exec(url.pathname);
-  const vendorFileUploadMatch = /^\/vendors\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
+  const generationRequestMatch = /^\/parts\/([^/]+)\/generation-requests$/u.exec(pathname);
+  const providerAcquisitionJobMatch = /^\/provider-acquisition-jobs\/([^/]+)$/u.exec(pathname);
+  const adminProjectFilesRootPath = "/admin/project-files-root";
+  const auditEventsMatch = /^\/audit-events$/u.exec(pathname);
+  const promotionActionMatch = /^\/parts\/([^/]+)\/asset-promotions$/u.exec(pathname);
+  const reviewActionMatch = /^\/parts\/([^/]+)\/reviews$/u.exec(pathname);
+  const partDocumentRevisionsMatch = /^\/parts\/([^/]+)\/document-revisions$/u.exec(pathname);
+  const documentRevisionRedlinesMatch = /^\/document-revisions\/([^/]+)\/redlines$/u.exec(pathname);
+  const documentRedlineDetailMatch = /^\/document-redlines\/([^/]+)$/u.exec(pathname);
+  const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(pathname);
+  const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(pathname);
+  const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(pathname);
+  const assetPreviewArtifactDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/preview-artifact\/download$/u.exec(pathname);
+  const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(pathname);
+  const projectRevisionCompareMatch = /^\/projects\/([^/]+)\/revisions\/compare$/u.exec(pathname);
+  const projectRevisionApprovalGatesMatch = /^\/projects\/([^/]+)\/revision-approval-gates$/u.exec(pathname);
+  const projectRevisionDetailMatch = /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u.exec(pathname);
+  const projectBomImportsMatch = /^\/projects\/([^/]+)\/bom-imports$/u.exec(pathname);
+  const projectUsagesMatch = /^\/projects\/([^/]+)\/usages$/u.exec(pathname);
+  const projectBomHealthMatch = /^\/projects\/([^/]+)\/bom-health$/u.exec(pathname);
+  const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(pathname);
+  const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(pathname);
+  const projectOverlapMatch = /^\/projects\/([^/]+)\/overlap$/u.exec(pathname);
+  const projectFilesMatch = /^\/projects\/([^/]+)\/files$/u.exec(pathname);
+  const projectFileDownloadMatch = /^\/projects\/([^/]+)\/files\/download$/u.exec(pathname);
+  const projectMirrorIngestMatch = /^\/projects\/([^/]+)\/mirror-ingest$/u.exec(pathname);
+  const projectPartKitsMatch = /^\/projects\/([^/]+)\/part-kits$/u.exec(pathname);
+  const projectPartKitUpdateMatch = /^\/projects\/([^/]+)\/part-kits\/([^/]+)$/u.exec(pathname);
+  const projectFileUploadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)$/u.exec(pathname);
+  const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(pathname);
+  const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(pathname);
+  const circuitBlockPartUpdateMatch = /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u.exec(pathname);
+  const circuitBlockKnownRiskCreateMatch = /^\/circuit-blocks\/([^/]+)\/known-risks$/u.exec(pathname);
+  const circuitBlockKnownRiskResolveMatch = /^\/circuit-blocks\/([^/]+)\/known-risks\/([^/]+)\/resolve$/u.exec(pathname);
+  const circuitBlockFollowUpsMatch = /^\/circuit-blocks\/([^/]+)\/follow-ups$/u.exec(pathname);
+  const circuitBlockProjectDepsMatch = /^\/circuit-blocks\/([^/]+)\/project-dependencies$/u.exec(pathname);
+  const circuitBlockDetailMatch = /^\/circuit-blocks\/([^/]+)$/u.exec(pathname);
+  const evidenceAttachmentDetailMatch = /^\/evidence-attachments\/([^/]+)$/u.exec(pathname);
+  const followUpDetailMatch = /^\/follow-ups\/([^/]+)$/u.exec(pathname);
+  const bomImportLinesMatch = /^\/bom-imports\/([^/]+)\/lines$/u.exec(pathname);
+  const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(pathname);
+  const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(pathname);
+  const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(pathname);
+  const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(pathname);
+  const partSubstitutionsMatch = /^\/parts\/([^/]+)\/substitutions$/u.exec(pathname);
+  const partEngineeringRecordsMatch = /^\/parts\/([^/]+)\/engineering-records$/u.exec(pathname);
+  const partEngineeringRecordResolveMatch = /^\/parts\/([^/]+)\/engineering-records\/([^/]+)\/resolve$/u.exec(pathname);
+  const partEngineeringRecordDecisionMatch = /^\/parts\/([^/]+)\/engineering-records\/([^/]+)\/(confirm|dismiss)$/u.exec(pathname);
+  const substitutionRevokeMatch = /^\/substitutions\/([^/]+)\/revoke$/u.exec(pathname);
+  const projectExportBundlesMatch = /^\/projects\/([^/]+)\/export-bundles$/u.exec(pathname);
+  const exportBundleVerifyMatch = /^\/export-bundles\/([^/]+)\/verify$/u.exec(pathname);
+  const projectCircuitBlockInstantiationsMatch = /^\/projects\/([^/]+)\/circuit-block-instantiations$/u.exec(pathname);
+  const projectApprovalBatchMatch = /^\/projects\/([^/]+)\/approval-batch$/u.exec(pathname);
+  const projectApprovalCandidatesMatch = /^\/projects\/([^/]+)\/approval-candidates$/u.exec(pathname);
+  const storageServeMatch = /^\/storage\/(.+)$/u.exec(pathname);
+  const vendorDetailMatch = /^\/vendors\/([^/]+)$/u.exec(pathname);
+  const vendorFileUploadMatch = /^\/vendors\/([^/]+)\/files\/([^/]+)$/u.exec(pathname);
 
   try {
-  if (request.method === "POST" && url.pathname === "/provider-lookups") {
+  if (request.method === "POST" && pathname === "/provider-lookups") {
     await handleProviderLookupCreate(request, response);
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/projects/from-csv") {
+  if (request.method === "POST" && pathname === "/projects/from-csv") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProjectFromCsvCreate(request, response, session.sub);
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/projects") {
+  if (request.method === "POST" && pathname === "/projects") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProjectCreate(request, response);
@@ -270,7 +303,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/bom-imports/preview") {
+  if (request.method === "POST" && pathname === "/bom-imports/preview") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleBomImportPreview(request, response);
@@ -284,6 +317,26 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && projectMirrorIngestMatch?.[1]) {
+    const session = await requireAuth(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectMirrorIngest(response, decodeURIComponent(projectMirrorIngestMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "PATCH" && projectPartKitUpdateMatch?.[1] && projectPartKitUpdateMatch[2]) {
+    const session = await requireAuth(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectPartKitUpdate(
+      request,
+      response,
+      decodeURIComponent(projectPartKitUpdateMatch[1]),
+      decodeURIComponent(projectPartKitUpdateMatch[2]),
+      session.sub
+    );
+    return;
+  }
+
   if (request.method === "POST" && bomImportMatchMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -291,14 +344,14 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/evidence-attachments") {
+  if (request.method === "POST" && pathname === "/evidence-attachments") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleEvidenceAttachmentCreate(request, response, session.sub);
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/evidence-attachments/files") {
+  if (request.method === "POST" && pathname === "/evidence-attachments/files") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleEvidenceAttachmentFileUpload(request, response, session.sub);
@@ -331,7 +384,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/vendors") {
+  if (request.method === "POST" && pathname === "/vendors") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleVendorCreate(request, response);
@@ -364,7 +417,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/circuit-blocks") {
+  if (request.method === "POST" && pathname === "/circuit-blocks") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleCircuitBlockCreate(request, response);
@@ -411,14 +464,14 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/imports/provider") {
+  if (request.method === "POST" && pathname === "/imports/provider") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProviderImportCreate(request, response);
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/provider-acquisition-jobs") {
+  if (request.method === "POST" && pathname === "/provider-acquisition-jobs") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProviderAcquisitionJobCreate(request, response, session.sub);
@@ -429,6 +482,20 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProviderAcquisitionJobRead(response, decodeURIComponent(providerAcquisitionJobMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && pathname === adminProjectFilesRootPath) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFilesRootSettingsRead(response);
+    return;
+  }
+
+  if (request.method === "PATCH" && pathname === adminProjectFilesRootPath) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFilesRootSettingsUpdate(request, response);
     return;
   }
 
@@ -565,19 +632,30 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/connector-sets/resolve") {
+  if (request.method === "POST" && pathname === "/connector-sets/resolve") {
     await handleConnectorSetIntentResolve(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/projects/sync-from-folder") {
+    const session = await requireAuth(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFolderSync(response);
     return;
   }
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message:
+          "This POST route is not enabled on the catalog API. Project folder sync uses POST /projects/sync-from-folder on the API service (port 4000 by default), not the Next.js web app."
+      }
     });
     return;
   }
 
-  if (url.pathname === "/health") {
+  if (pathname === "/health") {
     const database = await timeRouteOperation(response, "catalog-status", () => getCatalogStoreStatus(), (status) => status.label);
 
     sendJson(response, 200, {
@@ -592,7 +670,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (url.pathname === "/system/health") {
+  if (pathname === "/system/health") {
     const health = await timeRouteOperation(
       response,
       "system-health",
@@ -611,32 +689,32 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (url.pathname === "/where-used") {
+  if (pathname === "/where-used") {
     await handleWhereUsedSearchRead(response, url);
     return;
   }
 
-  if (url.pathname === "/connector-sets") {
+  if (pathname === "/connector-sets") {
     await handleConnectorSetCatalogRead(response, url);
     return;
   }
 
-  if (url.pathname === "/evidence-attachments") {
+  if (pathname === "/evidence-attachments") {
     await handleEvidenceAttachmentsRead(response, url);
     return;
   }
 
-  if (url.pathname === "/projects") {
+  if (pathname === "/projects") {
     await handleProjectListRead(response);
     return;
   }
 
-  if (url.pathname === "/projects/health-summary") {
+  if (pathname === "/projects/health-summary") {
     await handleProjectFleetRiskRead(response);
     return;
   }
 
-  if (url.pathname === "/circuit-blocks") {
+  if (pathname === "/circuit-blocks") {
     await handleCircuitBlockListRead(response, url);
     return;
   }
@@ -701,12 +779,22 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (projectFileDownloadMatch?.[1]) {
+    await handleProjectMirrorFileDownload(request, response, decodeURIComponent(projectFileDownloadMatch[1]), url);
+    return;
+  }
+
   if (projectFilesMatch?.[1]) {
     await handleProjectFilesRead(response, decodeURIComponent(projectFilesMatch[1]));
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/vendors") {
+  if (projectPartKitsMatch?.[1]) {
+    await handleProjectPartKitsRead(response, decodeURIComponent(projectPartKitsMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && pathname === "/vendors") {
     await handleVendorListRead(response);
     return;
   }
@@ -741,15 +829,15 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (url.pathname === "/bom-compare") {
+  if (pathname === "/bom-compare") {
     await handleBomRevisionCompareRead(response, url);
     return;
   }
 
   if (storageServeMatch?.[1]) {
-    const session = await requireAdmin(request);
+    const session = await requireAuth(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleStorageFileServe(response, storageServeMatch[1]);
+    await handleStorageFileServe(request, response, storageServeMatch[1]);
     return;
   }
 
@@ -778,7 +866,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (url.pathname === "/parts") {
+  if (pathname === "/parts") {
     const filters = readSearchFilters(url);
     const catalog = await timeRouteOperation(
       response,
@@ -796,7 +884,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  if (url.pathname === "/parts/facets") {
+  if (pathname === "/parts/facets") {
     const filters = readSearchFilters(url);
     const catalog = await timeRouteOperation(
       response,
@@ -822,6 +910,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (assetPreviewArtifactDownloadMatch?.[1] && assetPreviewArtifactDownloadMatch[2]) {
     await handleAssetPreviewArtifactDownload(
+      request,
       response,
       decodeURIComponent(assetPreviewArtifactDownloadMatch[1]),
       decodeURIComponent(assetPreviewArtifactDownloadMatch[2])
@@ -829,7 +918,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
-  const partMatch = /^\/parts\/([^/]+)$/u.exec(url.pathname);
+  const partMatch = /^\/parts\/([^/]+)$/u.exec(pathname);
 
   if (partMatch?.[1]) {
     const partId = partMatch[1];
@@ -1431,6 +1520,128 @@ async function handleProjectBomImportCreate(request: IncomingMessage, response: 
 }
 
 /**
+ * Imports parts-list and mirror assets for one project and registers missing catalog parts from the BOM.
+ */
+/**
+ * Lists engineer-facing part kits for one project.
+ */
+async function handleProjectPartKitsRead(response: ServerResponse, projectId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-part-kits-read",
+      () => listProjectPartKitsInDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Updates BOM-linked part kit metadata and optionally syncs mirror assets to the catalog.
+ */
+async function handleProjectPartKitUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string,
+  partId: string,
+  actorId: string
+): Promise<void> {
+  const body = await readJsonBody<ProjectPartKitUpdateInput>(request);
+
+  if (!body || typeof body !== "object") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PART_KIT_UPDATE",
+        message: "Part kit update requires a JSON body."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-part-kit-update",
+      () => updateProjectPartKitInDatabase(projectId, partId, body, actorId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, {
+        error: {
+          code: result.code,
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+async function handleProjectMirrorIngest(response: ServerResponse, projectId: string, actorId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-mirror-ingest",
+      () => ingestProjectMirrorForProjectInDatabase(projectId, actorId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    if (result.status === "mirror_unavailable") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_MIRROR_UNAVAILABLE",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles internal BOM row matching and confirmed usage creation for one persisted import.
  */
 async function handleBomImportMatch(response: ServerResponse, bomImportId: string): Promise<void> {
@@ -1438,7 +1649,7 @@ async function handleBomImportMatch(response: ServerResponse, bomImportId: strin
     const result = await timeRouteOperation(
       response,
       "bom-import-match",
-      () => matchBomImportRowsInDatabase(bomImportId),
+      () => matchBomImportRowsWithCatalogPreflightInDatabase(bomImportId),
       (value) => value.status
     );
 
@@ -2019,6 +2230,29 @@ async function handleCircuitBlockKnownRiskResolve(
 }
 
 /**
+ * Registers projects from the on-disk folder mirror and ensures folders exist for DB projects.
+ */
+async function handleProjectFolderSync(response: ServerResponse): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-folder-sync",
+      () => syncProjectsFromFolderMirror(),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only project-memory list requests.
  */
 async function handleProjectListRead(response: ServerResponse): Promise<void> {
@@ -2182,7 +2416,7 @@ async function handleProjectFileUpload(
     sendJson(response, 404, {
       error: {
         code: "PROJECT_FILE_CATEGORY_UNKNOWN",
-        message: "Project file category must be parts_list, datasheets, models, hardware, or notes."
+        message: "Project file category must be parts_list, datasheets, models, footprints, hardware, or notes."
       }
     });
     return;
@@ -2239,7 +2473,7 @@ async function handleProjectFileUpload(
       sendJson(response, 404, {
         error: {
           code: "PROJECT_FILE_CATEGORY_UNKNOWN",
-          message: "Project file category must be parts_list, datasheets, models, hardware, or notes."
+          message: "Project file category must be parts_list, datasheets, models, footprints, hardware, or notes."
         }
       });
       return;
@@ -2516,6 +2750,106 @@ async function handleVendorFileUpload(
  * are mapped to the same envelope shape as the rest of the project memory routes so the
  * web client treats them consistently.
  */
+/**
+ * Streams one on-disk project mirror file to the browser (datasheets, models, footprints).
+ */
+async function handleProjectMirrorFileDownload(
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string,
+  url: URL
+): Promise<void> {
+  const session = await requireAuth(request);
+
+  if (isAuthError(session)) {
+    sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } });
+    return;
+  }
+
+  const relativePath = url.searchParams.get("relativePath")?.trim() ?? "";
+
+  if (!relativePath) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FILE_PATH",
+        message: "Project file download requires a relativePath query parameter."
+      }
+    });
+    return;
+  }
+
+  try {
+    const detail = await readProjectDetailFromDatabase(projectId);
+
+    if (detail.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (detail.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = detail.response.project;
+    const resolved = await resolveProjectMirrorFileDownload(
+      { id: project.id, projectKey: project.projectKey },
+      relativePath
+    );
+
+    if (resolved.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_FILES_NOT_CONFIGURED",
+          message: "Project file mirror is not configured."
+        }
+      });
+      return;
+    }
+
+    if (resolved.status === "invalid_path") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_PROJECT_FILE_PATH",
+          message: resolved.message
+        }
+      });
+      return;
+    }
+
+    if (resolved.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "PROJECT_FILE_NOT_FOUND",
+          message: resolved.message
+        }
+      });
+      return;
+    }
+
+    response.writeHead(200, {
+      "Content-Disposition": buildProjectMirrorContentDisposition(
+        resolved.contentType,
+        resolved.filename,
+        shouldPreferInlineMirrorContent(url, resolved.contentType, relativePath, resolved.formatHint),
+        resolved.formatHint
+      ),
+      "Content-Type": resolved.contentType,
+      ...buildTelemetryHeaders(response, 200)
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const readable = createReadStream(resolved.absolutePath);
+      readable.on("error", reject);
+      response.on("error", reject);
+      response.on("finish", resolve);
+      readable.pipe(response);
+    });
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
 async function handleProjectFilesRead(response: ServerResponse, projectId: string): Promise<void> {
   try {
     const result = await timeRouteOperation(
@@ -2546,6 +2880,64 @@ async function handleProjectFilesRead(response: ServerResponse, projectId: strin
     sendCatalogJson(response, filesResponse, "database");
   } catch (error) {
     sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-only reads of the effective project file mirror root setting.
+ */
+async function handleProjectFilesRootSettingsRead(response: ServerResponse): Promise<void> {
+  try {
+    const settings = await timeRouteOperation(
+      response,
+      "admin-project-files-root-read",
+      () => Promise.resolve(readProjectFilesRootSettings()),
+      (value) => value.source
+    );
+
+    sendCatalogJson(response, settings, "database");
+  } catch (error) {
+    sendJson(response, 500, {
+      error: {
+        code: "PROJECT_FILES_ROOT_READ_FAILED",
+        message: error instanceof Error ? error.message : "Project file root setting could not be read."
+      }
+    });
+  }
+}
+
+/**
+ * Handles admin-only updates to the project file mirror root setting.
+ */
+async function handleProjectFilesRootSettingsUpdate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<ProjectFilesRootSettingsUpdateInput>(request);
+
+  if (!body || !isValidProjectFilesRootSettingsUpdateInput(body)) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FILES_ROOT_SETTING",
+        message: "Project file root updates require rootPath as a string/null or resetToDefault as true."
+      }
+    });
+    return;
+  }
+
+  try {
+    const settings = await timeRouteOperation(
+      response,
+      "admin-project-files-root-update",
+      () => updateProjectFilesRootSettings(body),
+      (value) => value.source
+    );
+
+    sendCatalogJson(response, settings, "database");
+  } catch (error) {
+    sendJson(response, 422, {
+      error: {
+        code: "PROJECT_FILES_ROOT_UPDATE_FAILED",
+        message: error instanceof Error ? error.message : "Project file root setting could not be updated."
+      }
+    });
   }
 }
 
@@ -3543,8 +3935,23 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
 /**
  * Streams a stored asset file from local storage after validating the key against path traversal.
  */
-async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: string): Promise<void> {
+async function handleStorageFileServe(request: IncomingMessage, response: ServerResponse, rawEncodedKey: string): Promise<void> {
   const storageKey = decodeURIComponent(rawEncodedKey);
+  const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+
+  await streamStorageFileToResponse(response, storageKey, {
+    searchParams: requestUrl.searchParams
+  });
+}
+
+/**
+ * Writes one local storage object to the HTTP response with safe inline/attachment headers.
+ */
+async function streamStorageFileToResponse(
+  response: ServerResponse,
+  storageKey: string,
+  options: { formatHint?: string | null; searchParams?: URLSearchParams } = {}
+): Promise<void> {
   const localBasePath = process.env["STORAGE_LOCAL_PATH"] ?? "./storage";
   const fullPath = resolveStorageKey(localBasePath, storageKey);
 
@@ -3570,13 +3977,13 @@ async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: s
     return;
   }
 
-  const ext = extname(fullPath).toLowerCase();
-  const contentType = inferStorageContentType(ext);
-  const isInline = contentType === "application/pdf" || contentType.startsWith("image/");
   const filename = basename(fullPath);
+  const contentType = resolveStoredFileContentType(filename, options.formatHint);
+  const searchParams = options.searchParams ?? new URLSearchParams();
+  const inline = shouldServeFileInline(searchParams, options.formatHint, contentType);
 
   response.writeHead(200, {
-    "Content-Disposition": isInline ? "inline" : `attachment; filename="${filename}"`,
+    "Content-Disposition": buildFileContentDisposition(filename, inline),
     "Content-Type": contentType,
     ...buildTelemetryHeaders(response, 200)
   });
@@ -3588,28 +3995,6 @@ async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: s
     response.on("finish", resolve);
     readable.pipe(response);
   });
-}
-
-/**
- * Maps a file extension to a Content-Type for stored asset files.
- */
-function inferStorageContentType(ext: string): string {
-  const types: Record<string, string> = {
-    ".dxf": "application/octet-stream",
-    ".glb": "model/gltf-binary",
-    ".gltf": "model/gltf+json",
-    ".jpeg": "image/jpeg",
-    ".jpg": "image/jpeg",
-    ".kicad_mod": "application/octet-stream",
-    ".kicad_sym": "application/octet-stream",
-    ".pdf": "application/pdf",
-    ".png": "image/png",
-    ".step": "application/octet-stream",
-    ".stp": "application/octet-stream",
-    ".webp": "image/webp"
-  };
-
-  return types[ext] ?? "application/octet-stream";
 }
 
 /**
@@ -3626,6 +4011,13 @@ function inferStorageContentType(ext: string): string {
  * with grant or override context recorded in the audit metadata.
  */
 async function handleAssetDownload(request: IncomingMessage, response: ServerResponse, partId: string, assetId: string, url: URL): Promise<void> {
+  const session = await requireAuth(request);
+
+  if (isAuthError(session)) {
+    sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } });
+    return;
+  }
+
   try {
     const result = await timeRouteOperation(response, "asset-download-read", () => readAssetDownloadTargetFromDatabase(partId, assetId), (value) => value.status);
 
@@ -3703,19 +4095,10 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
       return;
     }
 
-    const fileUrl = await getStorageClient().getDownloadUrl(result.storageKey);
-
-    if (!fileUrl) {
-      sendJson(response, 503, {
-        error: {
-          code: "STORAGE_BACKEND_NOT_CONFIGURED",
-          message: "This file has a local storage key but the storage backend could not produce a download URL."
-        }
-      });
-      return;
-    }
-
-    sendRedirect(response, fileUrl);
+    await streamStorageFileToResponse(response, result.storageKey, {
+      formatHint: result.fileFormat,
+      searchParams: url.searchParams
+    });
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -3731,10 +4114,18 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
  *    setup_required state instead of a silent broken viewer.
  */
 async function handleAssetPreviewArtifactDownload(
+  request: IncomingMessage,
   response: ServerResponse,
   partId: string,
   assetId: string
 ): Promise<void> {
+  const session = await requireAuth(request);
+
+  if (isAuthError(session)) {
+    sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } });
+    return;
+  }
+
   try {
     const result = await timeRouteOperation(
       response,
@@ -3773,19 +4164,10 @@ async function handleAssetPreviewArtifactDownload(
       return;
     }
 
-    const fileUrl = await getStorageClient().getDownloadUrl(result.storageKey);
-
-    if (!fileUrl) {
-      sendJson(response, 503, {
-        error: {
-          code: "STORAGE_BACKEND_NOT_CONFIGURED",
-          message: "Preview artifact has a local storage key but the storage backend could not produce a download URL."
-        }
-      });
-      return;
-    }
-
-    sendRedirect(response, fileUrl);
+    await streamStorageFileToResponse(response, result.storageKey, {
+      formatHint: result.previewArtifactFormat,
+      searchParams: new URLSearchParams("attachment=1")
+    });
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -4768,6 +5150,21 @@ function normalizeOptionalBodyString(value: string | null | undefined): string |
 }
 
 /**
+ * Narrows admin project-folder update bodies before filesystem writes are attempted.
+ */
+function isValidProjectFilesRootSettingsUpdateInput(value: unknown): value is ProjectFilesRootSettingsUpdateInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as ProjectFilesRootSettingsUpdateInput;
+  const rootPathIsValid = candidate.rootPath === undefined || candidate.rootPath === null || typeof candidate.rootPath === "string";
+  const resetIsValid = candidate.resetToDefault === undefined || typeof candidate.resetToDefault === "boolean";
+
+  return rootPathIsValid && resetIsValid;
+}
+
+/**
  * Reads the audit event limit query parameter with conservative bounds for admin tables.
  */
 function readAuditEventLimit(value: string | null): number {
@@ -4809,7 +5206,8 @@ async function flushRequestAuditEvent(request: IncomingMessage, response: Server
 
   const session = readSessionFromRequest(request);
   const statusCode = response.headersSent ? response.statusCode : 500;
-  const operation = classifyRouteOperation(method, url.pathname);
+  const normalizedPath = normalizeApiPathname(url.pathname);
+  const operation = classifyRouteOperation(method, normalizedPath);
 
   try {
     await createAuditEventInDatabase({
@@ -4820,7 +5218,7 @@ async function flushRequestAuditEvent(request: IncomingMessage, response: Server
       method,
       operation,
       outcome: classifyAuditOutcome(statusCode),
-      path: url.pathname,
+      path: normalizedPath,
       requestId: context.requestId,
       requestIpHash: hashAuditHeader(readRequestSource(request)),
       statusCode,
@@ -4843,15 +5241,16 @@ function describeAuditableRequest(method: string, url: URL): AuditRouteDescripto
   // Asset downloads are audited on GET too so we record every attempt against
   // restricted or ITAR-controlled documents, including denials and acknowledged
   // successes. The gate logic itself lives in handleAssetDownload.
-  const isAuditableGet = method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(url.pathname);
+  const normalizedPath = normalizeApiPathname(url.pathname);
+  const isAuditableGet = method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(normalizedPath);
 
   if (!isMutation && !isAuditableGet) {
     return null;
   }
 
-  const operation = classifyRouteOperation(method, url.pathname);
+  const operation = classifyRouteOperation(method, normalizedPath);
   const action = operation.replace(/^api-/u, "").replace(/-/gu, ".");
-  const target = classifyAuditTarget(url.pathname);
+  const target = classifyAuditTarget(normalizedPath);
 
   return {
     action,
@@ -4898,6 +5297,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
 
   if (pathname === "/projects") return { targetId: null, targetType: "project" };
   if (pathname === "/evidence-attachments" || pathname === "/evidence-attachments/files") return { targetId: null, targetType: "evidence_attachment" };
+  if (pathname === "/admin/project-files-root") return { targetId: "project-files-root", targetType: "api_route" };
   if (pathname === "/circuit-blocks") return { targetId: null, targetType: "circuit_block" };
   if (pathname === "/imports/provider") return { targetId: null, targetType: "provider_import" };
   if (pathname === "/provider-acquisition-jobs") return { targetId: null, targetType: "provider_acquisition_job" };
@@ -5107,6 +5507,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/projects") return "api-project-list";
   if (method === "GET" && pathname === "/projects/health-summary") return "api-project-fleet-risk";
   if (method === "POST" && pathname === "/projects/from-csv") return "api-project-from-csv-create";
+  if (method === "POST" && pathname === "/projects/sync-from-folder") return "api-project-folder-sync";
   if (method === "POST" && pathname === "/projects") return "api-project-create";
   if (method === "PATCH" && /^\/projects\/[^/]+$/u.test(pathname)) return "api-project-update";
   if (method === "GET" && /^\/projects\/[^/]+\/revisions$/u.test(pathname)) return "api-project-revisions";
@@ -5121,6 +5522,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/projects\/[^/]+\/evidence$/u.test(pathname)) return "api-project-evidence";
   if (method === "GET" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups";
   if (method === "POST" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups-sync";
+  if (method === "GET" && /^\/projects\/[^/]+\/files\/download$/u.test(pathname)) return "api-project-file-download";
   if (method === "GET" && /^\/projects\/[^/]+\/files$/u.test(pathname)) return "api-project-files";
   if (method === "POST" && /^\/projects\/[^/]+\/files\/[^/]+$/u.test(pathname)) return "api-project-file-upload";
   if (method === "GET" && pathname === "/vendors") return "api-vendor-list";
@@ -5169,6 +5571,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && pathname === "/provider-lookups") return "api-provider-lookup";
   if (method === "POST" && pathname === "/provider-acquisition-jobs") return "api-provider-acquisition-job-create";
   if (method === "GET" && /^\/provider-acquisition-jobs\/[^/]+$/u.test(pathname)) return "api-provider-acquisition-job-read";
+  if (method === "GET" && pathname === "/admin/project-files-root") return "api-admin-project-files-root-read";
+  if (method === "PATCH" && pathname === "/admin/project-files-root") return "api-admin-project-files-root-update";
   if (method === "POST" && /^\/parts\/[^/]+\/generation-requests$/u.test(pathname)) return "api-generation-request";
   if (method === "POST" && /^\/parts\/[^/]+\/reviews$/u.test(pathname)) return "api-review-action";
   if (method === "POST" && /^\/parts\/[^/]+\/asset-promotions$/u.test(pathname)) return "api-promotion-action";
@@ -5195,15 +5599,79 @@ function roundDuration(value: number): number {
 }
 
 /**
+ * Normalizes request pathnames so `/projects/foo/` and `/projects/foo` resolve the same route.
+ */
+function normalizeApiPathname(pathname: string): string {
+  let normalized = pathname;
+
+  if (normalized.length > 1 && normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1);
+  }
+
+  if (normalized === "/api") {
+    return "/";
+  }
+
+  if (normalized.startsWith("/api/")) {
+    return normalized.slice(4);
+  }
+
+  return normalized;
+}
+
+/**
  * Sends a JSON response with a stable content type.
  */
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
+    ...buildLocalDevCorsHeaders(readCorsRequest(response)),
     ...buildAuditHeaders(response),
     ...buildTelemetryHeaders(response, statusCode)
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+/** corsRequestKey stores the inbound request on the response for CORS header generation. */
+const corsRequestKey = Symbol.for("ee-library.api.cors-request");
+
+/**
+ * Remembers the inbound request so JSON responses can include local dev CORS headers.
+ */
+function rememberCorsRequest(response: ServerResponse, request: IncomingMessage): void {
+  (response as ServerResponse & { [corsRequestKey]?: IncomingMessage })[corsRequestKey] = request;
+}
+
+/**
+ * Reads the inbound request previously attached to the response.
+ */
+function readCorsRequest(response: ServerResponse): IncomingMessage | undefined {
+  return (response as ServerResponse & { [corsRequestKey]?: IncomingMessage })[corsRequestKey];
+}
+
+/**
+ * Allows browser clients on local Next.js dev hosts to call the API directly when needed.
+ */
+function buildLocalDevCorsHeaders(request: IncomingMessage | undefined): Record<string, string> {
+  const origin = request?.headers.origin;
+
+  if (typeof origin !== "string") {
+    return {};
+  }
+
+  const allowed =
+    /^http:\/\/localhost:\d+$/u.test(origin) ||
+    /^http:\/\/127\.0\.0\.1:\d+$/u.test(origin);
+
+  if (!allowed) {
+    return {};
+  }
+
+  return {
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+    "Access-Control-Allow-Origin": origin
+  };
 }
 
 /**
@@ -5329,12 +5797,36 @@ function sendCatalogStoreError(response: ServerResponse, error: unknown): void {
     return;
   }
 
+  const detail = formatCatalogStoreErrorDetail(error);
+
   sendJson(response, 500, {
     error: {
       code: "QUERY_FAILED",
-      message: "Catalog write persistence failed."
+      message: detail ? `Catalog write persistence failed: ${detail}` : "Catalog write persistence failed."
     }
   });
+}
+
+/**
+ * Extracts a safe Postgres error detail for operator-facing API responses.
+ */
+function formatCatalogStoreErrorDetail(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  const pgError = error as Error & { detail?: string; constraint?: string };
+
+  if (typeof pgError.detail === "string" && pgError.detail.trim().length > 0) {
+    return pgError.detail.trim();
+  }
+
+  if (typeof pgError.constraint === "string" && pgError.constraint.trim().length > 0) {
+    return pgError.constraint.trim();
+  }
+
+  const message = pgError.message.trim();
+  return message.length > 0 ? message : null;
 }
 
 /**

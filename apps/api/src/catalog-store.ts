@@ -951,6 +951,13 @@ interface DatabaseAssetPreviewArtifactDownloadRow {
 }
 
 /**
+ * Returns true when a source URL can be opened directly in the browser.
+ */
+function isBrowserAccessibleSourceUrl(sourceUrl: string): boolean {
+  return /^https?:\/\//iu.test(sourceUrl.trim());
+}
+
+/**
  * Reads the minimum asset fields needed to resolve a download redirect or file-serve path.
  */
 export async function readAssetDownloadTargetFromDatabase(partId: string, assetId: string): Promise<AssetDownloadTargetResult> {
@@ -985,12 +992,19 @@ export async function readAssetDownloadTargetFromDatabase(partId: string, assetI
       return { status: "not_accessible", reason: "This asset's last download or validation attempt failed." };
     }
 
-    if (row.source_url) {
+    if (row.storage_key) {
+      return { status: "file_only", storageKey: row.storage_key, assetType: row.asset_type, fileFormat: row.file_format };
+    }
+
+    if (row.source_url && isBrowserAccessibleSourceUrl(row.source_url)) {
       return { status: "redirect", url: row.source_url, assetType: row.asset_type, fileFormat: row.file_format };
     }
 
-    if (row.storage_key) {
-      return { status: "file_only", storageKey: row.storage_key, assetType: row.asset_type, fileFormat: row.file_format };
+    if (row.source_url) {
+      return {
+        status: "not_accessible",
+        reason: "This asset is recorded from a local project folder path only. Register the project folder again so the file is copied into catalog storage."
+      };
     }
 
     return { status: "not_accessible", reason: "This asset has no accessible URL or stored file." };

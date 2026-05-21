@@ -72,6 +72,14 @@ export function resolveSignInNotice(error: AuthQueryValue, notice: AuthQueryValu
     };
   }
 
+  if (noticeKey === "signed_out") {
+    return {
+      body: "Sign in again with the account you want to use. Use an admin account to open Admin and project-folder settings.",
+      tone: "success",
+      title: "Signed out"
+    };
+  }
+
   const errorKey = normalizeAuthErrorKey(readFirstQueryValue(error));
 
   if (errorKey === "invalid_credentials") {

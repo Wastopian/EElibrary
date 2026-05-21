@@ -8,18 +8,23 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
   buildProjectFilesResponse,
+  ensureProjectMirrorForKey,
   getCustomHardwarePrefixes,
+  getProjectFilesSettingsPath,
   getProjectFilesRoot,
+  listDiscoveredProjectFolders,
+  readProjectFilesRootSettings,
   resolveProjectFolderCategory,
   sanitizeProjectKey,
   sanitizeUploadFilename,
   saveProjectFile,
+  updateProjectFilesRootSettings,
   PROJECT_FOLDER_DEFINITIONS
 } from "./project-files";
 
@@ -29,8 +34,10 @@ import {
  */
 async function withSandboxRoot(): Promise<{ root: string; restore: () => Promise<void> }> {
   const previous = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const previousSettingsPath = process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
   const root = await mkdtemp(path.join(tmpdir(), "ee-project-files-"));
   process.env.EE_LIBRARY_PROJECT_FILES_ROOT = root;
+  process.env.EE_LIBRARY_SITE_SETTINGS_PATH = path.join(root, "site-settings.json");
 
   return {
     root,
@@ -40,14 +47,22 @@ async function withSandboxRoot(): Promise<{ root: string; restore: () => Promise
       } else {
         process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previous;
       }
+      if (previousSettingsPath === undefined) {
+        delete process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+      } else {
+        process.env.EE_LIBRARY_SITE_SETTINGS_PATH = previousSettingsPath;
+      }
       await rm(root, { recursive: true, force: true });
     }
   };
 }
 
-test("getProjectFilesRoot uses the default folder for empty values and off disables it", () => {
+test("getProjectFilesRoot uses the default folder for empty values and off disables it", async () => {
   const previous = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const previousSettingsPath = process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+  const settingsRoot = await mkdtemp(path.join(tmpdir(), "ee-project-files-settings-"));
   try {
+    process.env.EE_LIBRARY_SITE_SETTINGS_PATH = path.join(settingsRoot, "site-settings.json");
     process.env.EE_LIBRARY_PROJECT_FILES_ROOT = "";
     assert.ok(getProjectFilesRoot()?.endsWith(path.join("EE-Library", "projects")));
 
@@ -59,6 +74,38 @@ test("getProjectFilesRoot uses the default folder for empty values and off disab
     } else {
       process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previous;
     }
+    if (previousSettingsPath === undefined) {
+      delete process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+    } else {
+      process.env.EE_LIBRARY_SITE_SETTINGS_PATH = previousSettingsPath;
+    }
+    await rm(settingsRoot, { recursive: true, force: true });
+  }
+});
+
+test("project file root settings persist an admin-selected folder before env/default roots", async () => {
+  const sandbox = await withSandboxRoot();
+  const siteRoot = path.join(sandbox.root, "admin-selected-projects");
+
+  try {
+    const initial = readProjectFilesRootSettings();
+    assert.equal(initial.source, "environment");
+    assert.equal(initial.environmentRootPath, sandbox.root);
+
+    const updated = await updateProjectFilesRootSettings({ rootPath: siteRoot });
+    assert.equal(updated.source, "site_setting");
+    assert.equal(updated.currentRootPath, siteRoot);
+    assert.equal(getProjectFilesRoot(), siteRoot);
+    assert.equal(getProjectFilesSettingsPath(), path.join(sandbox.root, "site-settings.json"));
+
+    const persisted = JSON.parse(await readFile(path.join(sandbox.root, "site-settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(persisted.projectFilesRoot, siteRoot);
+
+    const reset = await updateProjectFilesRootSettings({ resetToDefault: true });
+    assert.equal(reset.source, "environment");
+    assert.equal(reset.currentRootPath, sandbox.root);
+  } finally {
+    await sandbox.restore();
   }
 });
 
@@ -95,7 +142,10 @@ test("sanitizeProjectKey strips traversal-prone characters and preserves dashes"
 
 test("buildProjectFilesResponse returns not_configured when env var is off", async () => {
   const previous = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const previousSettingsPath = process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+  const settingsRoot = await mkdtemp(path.join(tmpdir(), "ee-project-files-settings-"));
   process.env.EE_LIBRARY_PROJECT_FILES_ROOT = "off";
+  process.env.EE_LIBRARY_SITE_SETTINGS_PATH = path.join(settingsRoot, "site-settings.json");
 
   try {
     const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
@@ -110,6 +160,48 @@ test("buildProjectFilesResponse returns not_configured when env var is off", asy
     } else {
       process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previous;
     }
+    if (previousSettingsPath === undefined) {
+      delete process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+    } else {
+      process.env.EE_LIBRARY_SITE_SETTINGS_PATH = previousSettingsPath;
+    }
+    await rm(settingsRoot, { recursive: true, force: true });
+  }
+});
+
+test("listDiscoveredProjectFolders returns top-level directories from the mirror root", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    await mkdir(path.join(sandbox.root, "trialProject1", "parts-list"), { recursive: true });
+    await mkdir(path.join(sandbox.root, ".hidden"), { recursive: true });
+    await writeFile(path.join(sandbox.root, "readme.txt"), "not a project");
+
+    const discovery = await listDiscoveredProjectFolders();
+
+    assert.equal(discovery.availability, "configured");
+    assert.equal(discovery.folders.length, 1);
+    assert.equal(discovery.folders[0]?.folderName, "trialProject1");
+    assert.equal(discovery.folders[0]?.projectKey, "trialProject1");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("ensureProjectMirrorForKey reuses an existing folder when only the casing differs", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const existingPath = path.join(sandbox.root, "trialProject1");
+    await mkdir(path.join(existingPath, "datasheets"), { recursive: true });
+
+    const ensured = await ensureProjectMirrorForKey("TRIALPROJECT1");
+
+    assert.equal(ensured.availability, "configured");
+    assert.equal(ensured.projectRoot, existingPath);
+    await access(path.join(existingPath, "parts-list"));
+  } finally {
+    await sandbox.restore();
   }
 });
 
@@ -342,13 +434,14 @@ test("buildProjectFilesResponse falls back to project when projectKey is whitesp
 
 test("PROJECT_FOLDER_DEFINITIONS includes the hardware and notes categories", () => {
   const categories = PROJECT_FOLDER_DEFINITIONS.map((folder) => folder.category);
-  assert.deepEqual(categories, ["parts_list", "hardware", "datasheets", "models", "notes"]);
+  assert.deepEqual(categories, ["parts_list", "hardware", "datasheets", "models", "footprints", "notes"]);
 });
 
 test("resolveProjectFolderCategory rejects unknown categories", () => {
   assert.equal(resolveProjectFolderCategory("notes"), "notes");
   assert.equal(resolveProjectFolderCategory("hardware"), "hardware");
   assert.equal(resolveProjectFolderCategory("datasheets"), "datasheets");
+  assert.equal(resolveProjectFolderCategory("footprints"), "footprints");
   assert.equal(resolveProjectFolderCategory("evidence"), null);
   assert.equal(resolveProjectFolderCategory(""), null);
   assert.equal(resolveProjectFolderCategory("../../etc"), null);
@@ -490,7 +583,10 @@ test("saveProjectFile rejects malformed base64", async () => {
 
 test("saveProjectFile returns not_configured when the env var is off", async () => {
   const previous = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const previousSettingsPath = process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+  const settingsRoot = await mkdtemp(path.join(tmpdir(), "ee-project-files-settings-"));
   process.env.EE_LIBRARY_PROJECT_FILES_ROOT = "off";
+  process.env.EE_LIBRARY_SITE_SETTINGS_PATH = path.join(settingsRoot, "site-settings.json");
 
   try {
     const result = await saveProjectFile(
@@ -505,6 +601,12 @@ test("saveProjectFile returns not_configured when the env var is off", async () 
     } else {
       process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previous;
     }
+    if (previousSettingsPath === undefined) {
+      delete process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+    } else {
+      process.env.EE_LIBRARY_SITE_SETTINGS_PATH = previousSettingsPath;
+    }
+    await rm(settingsRoot, { recursive: true, force: true });
   }
 });
 

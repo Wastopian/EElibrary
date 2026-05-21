@@ -9,16 +9,26 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AppNavigationLinks } from "./AppNavigation";
 
 /**
- * Verifies the catalog route is marked active when operators are on the homepage workspace.
+ * Verifies the projects workspace is marked active when operators land on the site root.
  */
-test("app navigation marks the catalog workspace as active on the homepage", () => {
+test("app navigation marks the projects workspace as active on the homepage", () => {
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/" />);
 
+  assert.match(html, /Projects/u);
+  assert.match(html, /Start here/u);
+  assert.match(html, /aria-current="page"[^>]*href="\/projects"/u);
+  assert.doesNotMatch(html, /aria-current="page"[^>]*href="\/catalog"/u);
+});
+
+/**
+ * Verifies the catalog route is marked active on the dedicated catalog workspace.
+ */
+test("app navigation marks the catalog workspace as active on /catalog", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/catalog" />);
+
   assert.match(html, /Catalog/u);
-  assert.match(html, /app-nav__link--active/u);
-  assert.match(html, /Connectors/u);
-  assert.match(html, /Missing CAD/u);
-  assert.match(html, /Pending review/u);
+  assert.match(html, /aria-current="page"[^>]*href="\/catalog"/u);
+  assert.match(html, /Catalog shortcuts/u);
 });
 
 /**
@@ -38,7 +48,7 @@ test("app navigation marks the projects route as active inside project memory pa
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/projects/project-alpha" />);
 
   assert.match(html, /Projects/u);
-  assert.match(html, /Open your project list and BOM history/u);
+  assert.match(html, /Your BOMs, files on disk/u);
   assert.match(html, /aria-current="page"/u);
 });
 
@@ -49,8 +59,7 @@ test("app navigation does not mark catalog active on part detail pages", () => {
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/parts/part-tps7a02dbvr" />);
 
   assert.match(html, /Catalog/u);
-  assert.doesNotMatch(html, /href="\/catalog"[^>]*aria-current="page"/u);
-  assert.doesNotMatch(html, /href="\/"[^>]*aria-current="page"/u);
+  assert.doesNotMatch(html, /aria-current="page"[^>]*href="\/catalog"/u);
 });
 
 /**
@@ -76,10 +85,10 @@ test("app navigation marks the system route as active inside system health pages
 });
 
 /**
- * Verifies saved-view query links can mark active state on the homepage.
+ * Verifies saved-view query links mark active state on the catalog route only.
  */
-test("app navigation marks the pending approval view as active when its filter is applied", () => {
-  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/?approvalStatus=pending_review" />);
+test("app navigation marks the pending approval view as active when its catalog filter is applied", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/catalog?approvalStatus=pending_review" />);
 
   assert.match(html, /Pending review/u);
   assert.match(html, /aria-current="page"/u);

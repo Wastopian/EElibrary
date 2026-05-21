@@ -9,12 +9,15 @@
  *    no artifact key/format), so the UI can render an explicit "preview pending" state,
  *  - 503 when storage is misconfigured, so the UI can render an explicit "setup_required"
  *    state instead of a silently broken viewer,
- *  - 302 redirect to the storage-backed file URL on the happy path.
+ *  - 200 stream from local storage on the happy path.
  */
 
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { setCatalogStorePoolForTests } from "./catalog-store";
 import { setStorageClientForTests } from "./file-storage";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
@@ -134,9 +137,15 @@ test("GET /assets/:assetId/preview-artifact/download returns 409 when ready but 
   }
 });
 
-test("GET /assets/:assetId/preview-artifact/download returns 503 when storage backend is unconfigured", async () => {
+test("GET /assets/:assetId/preview-artifact/download returns 404 when the preview artifact file is missing on disk", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-preview-missing-"));
+
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(
     createPreviewArtifactPoolStub({
       id: "asset-unconfigured-storage",
@@ -148,7 +157,6 @@ test("GET /assets/:assetId/preview-artifact/download returns 503 when storage ba
       preview_artifact_format: "glb"
     })
   );
-  setStorageClientForTests(createStorageClientStub(null));
 
   try {
     const { handleRequest } = await import("./index");
@@ -157,18 +165,34 @@ test("GET /assets/:assetId/preview-artifact/download returns 503 when storage ba
       handleRequest
     );
 
-    assert.equal(result.statusCode, 503);
-    assert.equal(result.body.error.code, "STORAGE_BACKEND_NOT_CONFIGURED");
+    assert.equal(result.statusCode, 404);
+    assert.equal(result.body.error.code, "FILE_NOT_FOUND");
   } finally {
     setCatalogStorePoolForTests(null);
-    setStorageClientForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
-test("GET /assets/:assetId/preview-artifact/download redirects to the storage URL on the happy path", async () => {
+test("GET /assets/:assetId/preview-artifact/download streams the preview artifact on the happy path", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-preview-artifact-"));
+  const previewDir = join(tempDir, "cad", "three-d-previews", "part-ok");
+  const testContent = "glTF preview bytes";
+  await mkdir(previewDir, { recursive: true });
+  await writeFile(join(previewDir, "asset-ok.glb"), testContent, "utf8");
+
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(
     createPreviewArtifactPoolStub({
       id: "asset-ok",
@@ -180,22 +204,28 @@ test("GET /assets/:assetId/preview-artifact/download redirects to the storage UR
       preview_artifact_format: "glb"
     })
   );
-  setStorageClientForTests(createStorageClientStub("https://storage.local/cad/three-d-previews/part-ok/asset-ok.glb"));
 
   try {
     const { handleRequest } = await import("./index");
-    const result = await invokeApiGet(
+    const result = await invokeApiGetStreaming(
       "/parts/part-ok/assets/asset-ok/preview-artifact/download",
       handleRequest
     );
 
-    assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "https://storage.local/cad/three-d-previews/part-ok/asset-ok.glb");
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.headers["Content-Type"], "model/gltf-binary");
+    assert.equal(result.body, testContent);
     assert.equal(result.headers["X-EE-Operation"], "api-asset-preview-artifact-download");
   } finally {
     setCatalogStorePoolForTests(null);
-    setStorageClientForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
@@ -306,4 +336,53 @@ async function invokeApiGet(
   }
 
   return { statusCode, body: parsedBody, headers: responseHeaders };
+}
+
+async function invokeApiGetStreaming(
+  url: string,
+  handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>
+): Promise<{ statusCode: number; body: string; headers: Record<string, string> }> {
+  const request = Readable.from([]) as IncomingMessage;
+  const chunks: Buffer[] = [];
+  let statusCode = 0;
+  let responseHeaders: Record<string, string> = {};
+
+  const responseStream = new PassThrough();
+  responseStream.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+
+  const response = responseStream as unknown as ServerResponse;
+  (response as { writeHead: (code: number, headers?: Record<string, string>) => ServerResponse }).writeHead = (code, headers) => {
+    statusCode = code;
+    responseHeaders = headers ?? {};
+    return response;
+  };
+
+  const origEnd = responseStream.end.bind(responseStream);
+  (response as { end: (payload?: string | Buffer) => void }).end = (payload) => {
+    if (payload !== undefined) {
+      responseStream.write(payload);
+    }
+
+    origEnd();
+  };
+
+  request.url = url;
+  request.method = "GET";
+  request.headers = { host: "localhost" };
+
+  await handleRequest(request, response);
+
+  return {
+    body: Buffer.concat(chunks).toString("utf8"),
+    headers: responseHeaders,
+    statusCode
+  };
+}
+
+function restoreOptionalEnv(key: string, previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = previous;
+  }
 }

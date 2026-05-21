@@ -18,10 +18,6 @@ export default async function middleware(request: NextRequest) {
     return NextResponse.redirect(buildSignInRedirect(request));
   }
 
-  if (request.nextUrl.pathname.startsWith("/admin") && readAppRole(token.role) !== "admin") {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
-
   return NextResponse.next();
 }
 

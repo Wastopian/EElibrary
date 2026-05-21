@@ -3,7 +3,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -40,9 +40,18 @@ test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a 
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a downloaded asset that still has source_url", async () => {
+test("GET /parts/:partId/assets/:assetId/download prefers stored files over external source_url", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-asset-download-prefer-"));
+  const testContent = "KiCad footprint bytes";
+  await mkdir(join(tempDir, "cad"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "part-b.kicad_mod"), testContent, "utf8");
+
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createAssetPoolStub({
     id: "asset-b",
     part_id: "part-b",
@@ -55,19 +64,58 @@ test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a 
 
   try {
     const { handleRequest } = await import("./index");
-    const result = await invokeApiGet("/parts/part-b/assets/asset-b/download", handleRequest);
+    const result = await invokeApiGetStreaming("/parts/part-b/assets/asset-b/download", handleRequest);
 
-    assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "https://example.com/footprint.kicad_mod");
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body, testContent);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
+    restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
+  }
+});
+
+test("GET /parts/:partId/assets/:assetId/download returns 404 for file:// mirror references without storage", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "test";
+  setCatalogStorePoolForTests(createAssetPoolStub({
+    id: "asset-mirror",
+    part_id: "part-mirror",
+    asset_type: "three_d_model",
+    file_format: "step",
+    availability_status: "downloaded",
+    source_url: "file:///C:/projects/trialproject1/models/part.stp",
+    storage_key: null
+  }));
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGet("/parts/part-mirror/assets/asset-mirror/download", handleRequest);
+
+    assert.equal(result.statusCode, 404);
+    assert.equal(result.body.error.code, "ASSET_NOT_ACCESSIBLE");
+    assert.match(result.body.error.message, /local project folder path only/i);
   } finally {
     setCatalogStorePoolForTests(null);
     restoreEnv(previousNodeEnv);
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download returns 503 when asset is file_only and storage is not configured", async () => {
+test("GET /parts/:partId/assets/:assetId/download returns 404 when the stored file is missing on disk", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-asset-download-missing-"));
+
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createAssetPoolStub({
     id: "asset-c",
     part_id: "part-c",
@@ -77,18 +125,23 @@ test("GET /parts/:partId/assets/:assetId/download returns 503 when asset is file
     source_url: null,
     storage_key: "cad/part-c.kicad_sym"
   }));
-  setStorageClientForTests(createStorageClientStub(null));
 
   try {
     const { handleRequest } = await import("./index");
     const result = await invokeApiGet("/parts/part-c/assets/asset-c/download", handleRequest);
 
-    assert.equal(result.statusCode, 503);
-    assert.equal(result.body.error.code, "STORAGE_BACKEND_NOT_CONFIGURED");
+    assert.equal(result.statusCode, 404);
+    assert.equal(result.body.error.code, "FILE_NOT_FOUND");
   } finally {
     setCatalogStorePoolForTests(null);
-    setStorageClientForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
@@ -200,36 +253,127 @@ test("GET /parts/:partId/assets/:assetId/download returns 503 when database is n
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download redirects via storage client for a file_only asset", async () => {
+test("GET /parts/:partId/assets/:assetId/download streams cbj3157-pdf inline without a file extension", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-asset-download-pdf-stem-"));
+  const testContent = "%PDF-1.4 cbj3157 inline test";
+  await mkdir(join(tempDir, "cad"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "cbj3157-pdf"), testContent, "utf8");
+
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createAssetPoolStub({
-    id: "asset-local",
-    part_id: "part-local",
-    asset_type: "symbol",
-    file_format: "kicad",
+    id: "asset-pdf-stem",
+    part_id: "part-pdf-stem",
+    asset_type: "datasheet",
+    file_format: "pdf",
     availability_status: "validated",
     source_url: null,
-    storage_key: "cad/part-local.kicad_sym"
+    storage_key: "cad/cbj3157-pdf"
   }));
-  setStorageClientForTests(createStorageClientStub("http://127.0.0.1:4000/storage/cad%2Fpart-local.kicad_sym"));
 
   try {
     const { handleRequest } = await import("./index");
-    const result = await invokeApiGet("/parts/part-local/assets/asset-local/download", handleRequest);
+    const open = await invokeApiGetStreaming("/parts/part-pdf-stem/assets/asset-pdf-stem/download", handleRequest);
+    const download = await invokeApiGetStreaming("/parts/part-pdf-stem/assets/asset-pdf-stem/download?attachment=1", handleRequest);
 
-    assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "http://127.0.0.1:4000/storage/cad%2Fpart-local.kicad_sym");
+    assert.equal(open.statusCode, 200);
+    assert.equal(open.headers["Content-Type"], "application/pdf");
+    assert.match(open.headers["Content-Disposition"] ?? "", /inline/u);
+    assert.equal(download.headers["Content-Disposition"] ?? "", 'attachment; filename="cbj3157-pdf"');
   } finally {
     setCatalogStorePoolForTests(null);
-    setStorageClientForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
+    restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
+  }
+});
+
+test("GET /parts/:partId/assets/:assetId/download streams a file_only asset from local storage", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-asset-download-"));
+  const testContent = "%PDF-1.4 asset download stream test";
+  await mkdir(join(tempDir, "cad"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "part-local.pdf"), testContent, "utf8");
+
+  process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
+  setCatalogStorePoolForTests(createAssetPoolStub({
+    id: "asset-local",
+    part_id: "part-local",
+    asset_type: "datasheet",
+    file_format: "pdf",
+    availability_status: "validated",
+    source_url: null,
+    storage_key: "cad/part-local.pdf"
+  }));
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGetStreaming("/parts/part-local/assets/asset-local/download", handleRequest);
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.headers["Content-Type"], "application/pdf");
+    assert.match(result.headers["Content-Disposition"] ?? "", /inline/u);
+    assert.equal(result.body, testContent);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
+    restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
+  }
+});
+
+test("GET /api/parts/:partId/assets/:assetId/download resolves the same route as /parts", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "test";
+  setCatalogStorePoolForTests(createAssetPoolStub({
+    id: "asset-a",
+    part_id: "part-a",
+    asset_type: "datasheet",
+    file_format: "pdf",
+    availability_status: "referenced",
+    source_url: "https://example.com/datasheet.pdf",
+    storage_key: null
+  }));
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGet("/api/parts/part-a/assets/asset-a/download", handleRequest);
+
+    assert.equal(result.statusCode, 302);
+    assert.equal(result.headers["Location"], "https://example.com/datasheet.pdf");
+  } finally {
+    setCatalogStorePoolForTests(null);
     restoreEnv(previousNodeEnv);
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download returns 503 when storage client returns null for file_only asset", async () => {
+test("GET /parts/:partId/assets/:assetId/download returns 404 when storage_key points at a missing local file", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-asset-download-missing-key-"));
+
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createAssetPoolStub({
     id: "asset-unconfigured",
     part_id: "part-unconfigured",
@@ -239,18 +383,23 @@ test("GET /parts/:partId/assets/:assetId/download returns 503 when storage clien
     source_url: null,
     storage_key: "cad/part.kicad_mod"
   }));
-  setStorageClientForTests(createStorageClientStub(null));
 
   try {
     const { handleRequest } = await import("./index");
     const result = await invokeApiGet("/parts/part-unconfigured/assets/asset-unconfigured/download", handleRequest);
 
-    assert.equal(result.statusCode, 503);
-    assert.equal(result.body.error.code, "STORAGE_BACKEND_NOT_CONFIGURED");
+    assert.equal(result.statusCode, 404);
+    assert.equal(result.body.error.code, "FILE_NOT_FOUND");
   } finally {
     setCatalogStorePoolForTests(null);
-    setStorageClientForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
@@ -274,7 +423,7 @@ test("GET /storage/:encodedKey returns 400 for a path traversal key", async () =
   }
 });
 
-test("GET /storage/:encodedKey returns 401 when admin auth is missing", async () => {
+test("GET /storage/:encodedKey returns 401 when auth is missing", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   process.env.NODE_ENV = "test";
@@ -374,7 +523,7 @@ test("GET /storage/:encodedKey serves a PDF with inline Content-Disposition", as
 
     assert.equal(result.statusCode, 200);
     assert.equal(result.headers["Content-Type"], "application/pdf");
-    assert.match(result.headers["Content-Disposition"] ?? "", /^inline$/u);
+    assert.match(result.headers["Content-Disposition"] ?? "", /inline/u);
     assert.equal(result.body, pdfContent);
   } finally {
     setCatalogStorePoolForTests(null);

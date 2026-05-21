@@ -74,6 +74,74 @@ test("part detail renders readiness record summary from detail response", async 
 });
 
 /**
+ * Verifies project query context uses the full catalog part page with project navigation.
+ */
+test("part detail keeps full catalog layout when opened from a project", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed part detail record");
+
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/projects/project-alpha") {
+      return jsonResponse({
+        data: {
+          bomImports: [],
+          capabilities: [],
+          project: {
+            createdAt: "2026-04-30T10:00:00.000Z",
+            description: "Trial project",
+            id: "project-alpha",
+            name: "Trial project 1",
+            owner: "Hardware",
+            projectKey: "TRIAL1",
+            status: "active",
+            updatedAt: "2026-04-30T16:30:00.000Z"
+          },
+          revisions: [],
+          state: "available",
+          summary: {
+            approvalGapCount: 0,
+            bomImportCount: 0,
+            latestActivityAt: "2026-04-30T16:30:00.000Z",
+            readinessGapCount: 0,
+            revisionCount: 0,
+            riskFindingCount: 0,
+            usageCount: 1
+          },
+          usages: []
+        },
+        source: "database"
+      });
+    }
+
+    return jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    });
+  });
+
+  try {
+    const html = renderToStaticMarkup(
+      await PartDetailPage({
+        params: Promise.resolve({ partId: record.part.id }),
+        searchParams: Promise.resolve({ project: "project-alpha" })
+      })
+    );
+
+    assert.match(html, /detail-layout/u);
+    assert.doesNotMatch(html, /detail-layout--project-focus/u);
+    assert.match(html, /Back to Trial project 1/u);
+    assert.match(html, /Edit part kit/u);
+    assert.match(html, /How verification works/u);
+    assert.match(html, /Next workspaces/u);
+    assert.match(html, /Completeness checklist/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies the decision-point push: confirmed "this bit us" memory interrupts at the top of the
  * part-detail hero as a warning (not a gate) before the use decision.
  */

@@ -69,8 +69,7 @@ export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) 
     return (
       <div className="project-files-panel project-files-panel--unavailable">
         <p>
-          The project file mirror is turned off. Set <code>EE_LIBRARY_PROJECT_FILES_ROOT</code> on the API host
-          to a folder you control and reload this page.
+          The project file mirror is turned off. Ask an admin to set a project file folder in the admin workspace, then reload this page.
         </p>
       </div>
     );

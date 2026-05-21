@@ -67,7 +67,7 @@ function BomMatchStatusMessage({ projectId, status }: { projectId: string; statu
   if (status.kind === "idle") {
     return (
       <p className="bom-match-panel__status muted-copy">
-        Click <strong>Match rows</strong> to link this upload to known parts. Rows that are not a clear match get flagged for review instead of linked, so nothing wrong is added by accident.
+        Click <strong>Register missing parts from folder</strong> above if rows are not in the catalog yet, then <strong>Match rows</strong> to link this upload. Rows that are not a clear match get flagged for review instead of linked.
       </p>
     );
   }

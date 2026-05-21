@@ -3,6 +3,9 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { newDb } from "pg-mem";
@@ -48,6 +51,7 @@ import {
   setProjectMemoryStorePoolForTests,
   syncCircuitBlockFollowUpsFromReadinessInDatabase,
   syncProjectFollowUpsFromBomHealthInDatabase,
+  syncProjectsFromFolderMirror,
   updateCircuitBlockInDatabase,
   updateCircuitBlockPartInDatabase,
   updateEvidenceAttachmentInDatabase,
@@ -1294,6 +1298,61 @@ test("project memory store updates project and circuit metadata without altering
 /**
  * Verifies project creation writes a project and initial revision for site workflows.
  */
+test("syncProjectsFromFolderMirror registers folders dropped into the mirror root", async () => {
+  const previousProjectRoot = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const sandboxRoot = await mkdtemp(path.join(tmpdir(), "ee-folder-sync-store-"));
+  process.env.EE_LIBRARY_PROJECT_FILES_ROOT = sandboxRoot;
+  const pool = createProjectMemoryPool(false);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const projectRoot = path.join(sandboxRoot, "trialProject1");
+    await mkdir(path.join(projectRoot, "parts-list"), { recursive: true });
+    await mkdir(path.join(projectRoot, "datasheets", "NEW-FOLDER-PART-1"), { recursive: true });
+    await mkdir(path.join(projectRoot, "models"), { recursive: true });
+    await mkdir(path.join(projectRoot, "footprints"), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, "parts-list", "trial-pl.csv"),
+      "Designator,MPN,Manufacturer,Qty\nU1,NEW-FOLDER-PART-1,Acme Semi,1\n",
+      "utf8"
+    );
+    await writeFile(path.join(projectRoot, "datasheets", "NEW-FOLDER-PART-1", "datasheet.pdf"), "%PDF-1.4", "utf8");
+    await writeFile(path.join(projectRoot, "models", "NEW-FOLDER-PART-1.stp"), "STEP", "utf8");
+    await writeFile(path.join(projectRoot, "footprints", "NEW-FOLDER-PART-1.kicad_mod"), "(module)", "utf8");
+
+    const result = await syncProjectsFromFolderMirror();
+
+    assert.equal(result.status, "available");
+    assert.equal(result.response.availability, "configured");
+    assert.equal(result.response.createdCount, 1);
+    assert.equal(result.response.entries[0]?.projectKey, "trialProject1");
+    assert.equal(result.response.entries[0]?.outcome, "created");
+    assert.match(result.response.entries[0]?.message ?? "", /imported trial-pl\.csv/u);
+    assert.match(result.response.entries[0]?.message ?? "", /registered 1 catalog part/u);
+    assert.match(result.response.entries[0]?.message ?? "", /ingested \d+ catalog assets?/u);
+
+    const imports = await pool.query<{ source_filename: string }>("SELECT source_filename FROM bom_imports");
+    const part = await pool.query<{ id: string; mpn: string }>("SELECT id, mpn FROM parts WHERE lower(mpn) = lower('NEW-FOLDER-PART-1')");
+    const usage = await pool.query<{ part_id: string }>("SELECT part_id FROM project_part_usages WHERE project_id = 'project-trialproject1'");
+    const assets = await pool.query<{ asset_type: string }>("SELECT asset_type FROM assets WHERE part_id = $1", [part.rows[0]?.id ?? ""]);
+
+    assert.equal(imports.rows[0]?.source_filename, "trial-pl.csv");
+    assert.equal(part.rows[0]?.mpn, "NEW-FOLDER-PART-1");
+    assert.equal(usage.rows[0]?.part_id, part.rows[0]?.id);
+    assert.equal(assets.rows.some((row) => row.asset_type === "datasheet"), true);
+    assert.equal(assets.rows.some((row) => row.asset_type === "footprint"), true);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+    if (previousProjectRoot === undefined) {
+      delete process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+    } else {
+      process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previousProjectRoot;
+    }
+    await rm(sandboxRoot, { recursive: true, force: true });
+  }
+});
+
 test("project memory store creates a project and first revision", async () => {
   const pool = createProjectMemoryPool(false);
   setProjectMemoryStorePoolForTests(pool);
@@ -1431,8 +1490,11 @@ test("project memory store matches BOM rows and creates usage only for confirmed
  */
 test("project memory routes return project, BOM line, and usage read contracts", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousProjectRoot = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const sandboxRoot = await mkdtemp(path.join(tmpdir(), "ee-project-routes-"));
   const pool = createProjectMemoryPool(true);
   process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_PROJECT_FILES_ROOT = sandboxRoot;
   setProjectMemoryStorePoolForTests(pool);
 
   try {
@@ -1527,10 +1589,21 @@ test("project memory routes return project, BOM line, and usage read contracts",
 
     assert.equal(missing.statusCode, 404);
     assert.equal(missing.body.error.code, "PROJECT_NOT_FOUND");
+
+    const folderSync = await invokeApiPost("/projects/sync-from-folder", {}, handleRequest);
+
+    assert.notEqual(folderSync.statusCode, 405);
+    assert.equal(folderSync.headers["X-EE-Operation"], "api-project-folder-sync");
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
     restoreNodeEnv(previousNodeEnv);
+    if (previousProjectRoot === undefined) {
+      delete process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+    } else {
+      process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previousProjectRoot;
+    }
+    await rm(sandboxRoot, { recursive: true, force: true });
   }
 });
 
@@ -2763,8 +2836,6 @@ test("createExportBundleInDatabase writes archive content when storage is availa
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
-    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
-    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
     const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin", storage);
     assert.equal(result.status, "created");
     if (result.status !== "created") return;
@@ -2823,8 +2894,6 @@ test("createExportBundleInDatabase surfaces archive write failures as bundle war
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
-    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
-    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
     const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin", storage);
     assert.equal(result.status, "created");
     if (result.status !== "created") return;
@@ -2869,8 +2938,6 @@ test("createExportBundleInDatabase tags controlled assets in the manifest", asyn
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
-    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
-    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
 
     // Promote one already-seeded asset to verified-for-export so the bundle picks it up,
     // then attach an ITAR-controlled document revision to that asset.
@@ -2929,23 +2996,9 @@ test("createExportBundleInDatabase embeds defensible per-part provenance in the 
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
-    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_sym'");
-    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'official'");
-    await pool.query(`
-      CREATE TABLE datasheet_revisions (
-        id TEXT PRIMARY KEY,
-        part_id TEXT NOT NULL,
-        revision_label TEXT,
-        revision_date TIMESTAMPTZ,
-        page_count INTEGER,
-        file_asset_id TEXT,
-        parse_confidence NUMERIC
-      )
-    `);
-
     await pool.query(`UPDATE assets SET export_status = 'verified_for_export', storage_key = 'parts/ldo/symbol.kicad_sym', provenance = 'official' WHERE id = 'asset-memory-ldo-symbol-ref'`);
     await pool.query(`UPDATE part_approvals SET approval_status = 'approved', summary = 'Approved for new designs', detail = 'Signed off after Bravo qual.', decided_by = 'gerry@hardware', decided_at = '2026-05-01T00:00:00.000Z', last_updated_at = '2026-05-01T00:00:00.000Z' WHERE part_id = 'part-memory-ldo'`);
-    await pool.query(`INSERT INTO datasheet_revisions (id, part_id, revision_label, revision_date) VALUES ('dsr-ldo-c', 'part-memory-ldo', 'Rev C', '2026-03-01T00:00:00.000Z')`);
+    await pool.query(`INSERT INTO datasheet_revisions (id, part_id, revision_label, revision_date, parse_confidence) VALUES ('dsr-ldo-c', 'part-memory-ldo', 'Rev C', '2026-03-01T00:00:00.000Z', 0.5)`);
     await pool.query(`INSERT INTO part_engineering_records (id, part_id, record_kind, title, severity, outcome, draft_status, recorded_by, recorded_at) VALUES ('perec-ldo-bit', 'part-memory-ldo', 'outcome', 'Bit us: cold-start droop on Bravo', 'caution', 'bit_us', 'confirmed', 'gerry@hardware', '2026-04-01T00:00:00.000Z')`);
 
     const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
@@ -2999,8 +3052,6 @@ test("createExportBundleInDatabase reports empty control summary when no control
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
-    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
-    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'generated'");
     await pool.query(`UPDATE assets SET export_status = 'verified_for_export', storage_key = 'parts/ldo/symbol.kicad_sym' WHERE id = 'asset-memory-ldo-symbol-ref'`);
 
     const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
@@ -3313,25 +3364,70 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       aliases TEXT[] NOT NULL DEFAULT '{}'
     );
 
+    CREATE TABLE packages (
+      id TEXT PRIMARY KEY,
+      package_name TEXT NOT NULL
+    );
+
+    CREATE TABLE source_records (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      provider_part_key TEXT NOT NULL,
+      part_id TEXT,
+      source_url TEXT,
+      fetched_at TIMESTAMPTZ,
+      raw_payload JSONB,
+      normalized_at TIMESTAMPTZ,
+      source_last_seen_at TIMESTAMPTZ,
+      source_last_imported_at TIMESTAMPTZ,
+      import_status TEXT NOT NULL,
+      import_error_details TEXT,
+      last_updated_at TIMESTAMPTZ NOT NULL
+    );
+
     CREATE TABLE parts (
       id TEXT PRIMARY KEY,
       mpn TEXT NOT NULL,
+      description TEXT,
       manufacturer_id TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'Other',
       lifecycle_status TEXT NOT NULL DEFAULT 'active',
+      package_id TEXT,
       connector_family_id TEXT,
-      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      trust_score NUMERIC NOT NULL DEFAULT 0.25,
+      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (manufacturer_id, mpn)
+    );
+
+    CREATE TABLE datasheet_revisions (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      revision_label TEXT NOT NULL,
+      revision_date TIMESTAMPTZ,
+      page_count INTEGER,
+      file_asset_id TEXT,
+      parse_confidence NUMERIC NOT NULL DEFAULT 0.25,
+      pin_table_status TEXT NOT NULL DEFAULT 'not_available'
     );
 
     CREATE TABLE assets (
       id TEXT PRIMARY KEY,
       part_id TEXT NOT NULL,
       asset_type TEXT NOT NULL,
+      file_format TEXT NOT NULL DEFAULT 'unknown',
       storage_key TEXT,
       file_hash TEXT,
-      source_url TEXT,
+      provider_id TEXT,
+      license_mode TEXT NOT NULL DEFAULT 'metadata_only',
+      provenance TEXT NOT NULL DEFAULT 'manual_internal',
+      availability_status TEXT NOT NULL DEFAULT 'referenced',
+      review_status TEXT NOT NULL DEFAULT 'review_required',
       export_status TEXT NOT NULL DEFAULT 'not_exportable',
+      asset_status TEXT NOT NULL DEFAULT 'referenced',
       validation_status TEXT NOT NULL DEFAULT 'not_validated',
+      preview_status TEXT NOT NULL DEFAULT 'not_available',
+      asset_state TEXT NOT NULL DEFAULT 'referenced',
+      source_url TEXT,
       last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 

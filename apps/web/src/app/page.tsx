@@ -1,15 +1,15 @@
 /**
- * File header: Root route that opens the practical catalog workbench instead of a
- * separate landing page, keeping the first screen focused on search and import.
+ * File header: Root route opens the project dashboard so engineers land on active work first.
+ * Catalog search remains at /catalog with the same sidebar search form.
  */
 
-import SearchPage from "./catalog/page";
+import ProjectsPage from "./projects/page";
 
-type RootPageProps = Parameters<typeof SearchPage>[0];
+type RootPageProps = Parameters<typeof ProjectsPage>[0];
 
 /**
- * Renders the same workbench used by /catalog so opening the site starts the core loop.
+ * Renders the projects dashboard at / so opening the site starts in project memory.
  */
 export default async function RootPage(props: RootPageProps) {
-  return SearchPage(props);
+  return ProjectsPage(props);
 }

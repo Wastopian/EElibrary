@@ -34,6 +34,7 @@ test("projects dashboard renders empty DB state with project creation path", asy
     assert.match(html, /Start your first project/u);
     assert.match(html, /Create a project first/u);
     assert.match(html, /Create project/u);
+    assert.match(html, /Update from project folder/u);
     assert.match(html, /Current foundations/u);
     assert.match(html, /Where-used/u);
     assert.match(html, /Circuit blocks/u);

@@ -2,6 +2,10 @@
 
 /**
  * File header: Renders the shared workstation navigation for EE Library.
+ *
+ * Primary links stay visible for everyday work (projects, catalog search, compare).
+ * Secondary workspaces and catalog filter shortcuts live in collapsible sections so
+ * the sidebar stays calm for first-time engineers.
  */
 
 import { usePathname, useSearchParams } from "next/navigation";
@@ -33,6 +37,96 @@ type NavigationGroup = {
   label: string;
 };
 
+/** PRIMARY_NAVIGATION_ITEMS are the everyday engineer entry points. */
+const PRIMARY_NAVIGATION_ITEMS: NavigationItem[] = [
+  {
+    description: "Your BOMs, files on disk, and parts in each design.",
+    href: "/projects",
+    label: "Projects",
+    match: { path: "/projects", type: "path" }
+  },
+  {
+    description: "Search the library when you need a part outside a project.",
+    href: "/catalog",
+    label: "Catalog",
+    match: { path: "/catalog", type: "path" }
+  },
+  {
+    description: "Compare up to four parts side-by-side.",
+    href: "/compare",
+    label: "Compare",
+    match: { path: "/compare", type: "path" }
+  },
+  {
+    description: "See where a part or file is used across projects.",
+    href: "/where-used",
+    label: "Where-used",
+    match: { path: "/where-used", type: "path" }
+  }
+];
+
+/** MORE_NAVIGATION_ITEMS are useful but less frequent workspaces. */
+const MORE_NAVIGATION_ITEMS: NavigationItem[] = [
+  {
+    description: "Remember PCB shops, sheet metal, and who you trust.",
+    href: "/vendors",
+    label: "Vendors",
+    match: { path: "/vendors", type: "path" }
+  },
+  {
+    description: "Add and review supporting notes and files.",
+    href: "/evidence",
+    label: "Evidence",
+    match: { path: "/evidence", type: "path" }
+  },
+  {
+    description: "Save reusable circuit patterns.",
+    href: "/circuit-blocks",
+    label: "Circuit blocks",
+    match: { path: "/circuit-blocks", type: "path" }
+  },
+  {
+    description: "Browse connector families and matching mates.",
+    href: "/connector-sets",
+    label: "Connector sets",
+    match: { path: "/connector-sets", type: "path" }
+  },
+  {
+    description: "Handle review queues and blocked items.",
+    href: "/admin",
+    label: "Admin",
+    match: { path: "/admin", type: "path" }
+  },
+  {
+    description: "Check service status and health.",
+    href: "/system",
+    label: "System",
+    match: { path: "/system", type: "path" }
+  }
+];
+
+/** CATALOG_FILTER_ITEMS are saved catalog views; they always open /catalog with a filter. */
+const CATALOG_FILTER_ITEMS: NavigationItem[] = [
+  {
+    description: "Open the catalog filtered to connectors.",
+    href: "/catalog?category=Connector",
+    label: "Connectors",
+    match: { name: "category", type: "query", value: "Connector" }
+  },
+  {
+    description: "Open the catalog filtered to parts missing CAD.",
+    href: "/catalog?cad=unavailable",
+    label: "Missing CAD",
+    match: { name: "cad", type: "query", value: "unavailable" }
+  },
+  {
+    description: "Open the catalog filtered to parts waiting for review.",
+    href: "/catalog?approvalStatus=pending_review",
+    label: "Pending review",
+    match: { name: "approvalStatus", type: "query", value: "pending_review" }
+  }
+];
+
 /**
  * Renders the primary workstation navigation and keeps active state visible for operators.
  */
@@ -49,122 +143,56 @@ export function AppNavigation() {
  * Renders the actual workstation links from a supplied location for runtime and test usage.
  */
 export function AppNavigationLinks({ currentLocation }: { currentLocation: string }) {
-  const groups: NavigationGroup[] = [
-    {
-      items: [
-        {
-          description: "Find a part, then open its full record.",
-          href: "/catalog",
-          label: "Catalog",
-          match: { path: "/catalog", type: "path" }
-        },
-        {
-          description: "Compare up to four parts side-by-side.",
-          href: "/compare",
-          label: "Compare",
-          match: { path: "/compare", type: "path" }
-        },
-        {
-          description: "Open your project list and BOM history.",
-          href: "/projects",
-          label: "Projects",
-          match: { path: "/projects", type: "path" }
-        },
-        {
-          description: "Remember PCB shops, sheet metal, and who you trust.",
-          href: "/vendors",
-          label: "Vendors",
-          match: { path: "/vendors", type: "path" }
-        },
-        {
-          description: "See where a part or file is used.",
-          href: "/where-used",
-          label: "Where-used",
-          match: { path: "/where-used", type: "path" }
-        },
-        {
-          description: "Add and review supporting notes and files.",
-          href: "/evidence",
-          label: "Evidence",
-          match: { path: "/evidence", type: "path" }
-        },
-        {
-          description: "Save reusable circuit patterns.",
-          href: "/circuit-blocks",
-          label: "Circuit blocks",
-          match: { path: "/circuit-blocks", type: "path" }
-        },
-        {
-          description: "Browse connector families and matching mates.",
-          href: "/connector-sets",
-          label: "Connector sets",
-          match: { path: "/connector-sets", type: "path" }
-        },
-        {
-          description: "Handle review queues and blocked items.",
-          href: "/admin",
-          label: "Admin",
-          match: { path: "/admin", type: "path" }
-        },
-        {
-          description: "Check service status and health.",
-          href: "/system",
-          label: "System",
-          match: { path: "/system", type: "path" }
-        }
-      ],
-      label: "Workspaces"
-    },
-    {
-      items: [
-        {
-          description: "Open the catalog filtered to connectors.",
-          href: "/catalog?category=Connector",
-          label: "Connectors",
-          match: { name: "category", type: "query", value: "Connector" }
-        },
-        {
-          description: "Open the catalog filtered to parts missing CAD.",
-          href: "/catalog?cad=unavailable",
-          label: "Missing CAD",
-          match: { name: "cad", type: "query", value: "unavailable" }
-        },
-        {
-          description: "Open the catalog filtered to parts waiting for review.",
-          href: "/catalog?approvalStatus=pending_review",
-          label: "Pending review",
-          match: { name: "approvalStatus", type: "query", value: "pending_review" }
-        }
-      ],
-      label: "Catalog filters"
-    }
-  ];
+  const moreWorkspaceOpen = MORE_NAVIGATION_ITEMS.some((item) => isNavigationItemActive(item, currentLocation));
+  const catalogShortcutsOpen =
+    CATALOG_FILTER_ITEMS.some((item) => isNavigationItemActive(item, currentLocation)) || parseCurrentLocation(currentLocation).pathname === "/catalog";
 
   return (
     <nav aria-label="Primary navigation" className="app-nav">
-      {groups.map((group) => {
-        const isFilterGroup = group.label === "Catalog filters";
+      <NavigationGroupSection currentLocation={currentLocation} group={{ items: PRIMARY_NAVIGATION_ITEMS, label: "Start here" }} />
 
-        return (
-          <section className={isFilterGroup ? "app-nav__group app-nav__group--filters" : "app-nav__group"} key={group.label}>
-            <p className="app-nav__group-label">{group.label}</p>
-            <div className="app-nav__group-links">
-              {group.items.map((item) => {
-                const isActive = isNavigationItemActive(item, currentLocation);
-                const className = `${isActive ? "app-nav__link app-nav__link--active" : "app-nav__link"}${isFilterGroup ? " app-nav__link--filter" : ""}`;
+      <details className="app-nav__more" open={moreWorkspaceOpen || undefined}>
+        <summary className="app-nav__more-summary">More workspaces</summary>
+        <NavigationGroupSection currentLocation={currentLocation} group={{ items: MORE_NAVIGATION_ITEMS, label: "More" }} />
+      </details>
 
-                return (
-                  <a aria-current={isActive ? "page" : undefined} aria-label={`${item.label}: ${item.description}`} className={className} href={item.href} key={item.href}>
-                    <span className="app-nav__link-label">{item.label}</span>
-                    <span className="app-nav__link-description">{item.description}</span>
-                  </a>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
+      <details className="app-nav__more app-nav__more--filters" open={catalogShortcutsOpen || undefined}>
+        <summary className="app-nav__more-summary">Catalog shortcuts</summary>
+        <NavigationGroupSection currentLocation={currentLocation} filterLinks group={{ items: CATALOG_FILTER_ITEMS, label: "Catalog filters" }} />
+      </details>
     </nav>
+  );
+}
+
+/**
+ * Renders one labeled navigation group with optional filter-link styling.
+ */
+function NavigationGroupSection({
+  currentLocation,
+  filterLinks = false,
+  group
+}: {
+  currentLocation: string;
+  filterLinks?: boolean;
+  group: NavigationGroup;
+}) {
+  return (
+    <section className={filterLinks ? "app-nav__group app-nav__group--filters" : "app-nav__group"}>
+      <p className="app-nav__group-label">{group.label}</p>
+      <div className="app-nav__group-links">
+        {group.items.map((item) => {
+          const isActive = isNavigationItemActive(item, currentLocation);
+          const className = `${isActive ? "app-nav__link app-nav__link--active" : "app-nav__link"}${filterLinks ? " app-nav__link--filter" : ""}`;
+
+          return (
+            <a aria-current={isActive ? "page" : undefined} aria-label={`${item.label}: ${item.description}`} className={className} href={item.href} key={item.href}>
+              <span className="app-nav__link-label">{item.label}</span>
+              <span className="app-nav__link-description">{item.description}</span>
+            </a>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -175,11 +203,15 @@ function isNavigationItemActive(item: NavigationItem, currentLocation: string): 
   const { pathname, searchParams } = parseCurrentLocation(currentLocation);
 
   if (item.match.type === "path") {
-    if (item.match.path === "/catalog") {
-      return pathname === "/" || pathname === "/catalog";
+    if (item.match.path === "/projects") {
+      return pathname === "/" || pathname === "/projects" || pathname.startsWith("/projects/");
     }
 
-    return pathname.startsWith(item.match.path);
+    if (item.match.path === "/catalog") {
+      return pathname === "/catalog";
+    }
+
+    return pathname === item.match.path || pathname.startsWith(`${item.match.path}/`);
   }
 
   return pathname === "/catalog" && searchParams.get(item.match.name) === item.match.value;
@@ -199,7 +231,7 @@ function parseCurrentLocation(currentLocation: string): { pathname: string; sear
   } catch {
     return {
       pathname: currentLocation.split("?")[0] || "/",
-      searchParams: new URLSearchParams()
+      searchParams: new URLSearchParams(currentLocation.includes("?") ? currentLocation.split("?")[1] : "")
     };
   }
 }

@@ -6,8 +6,9 @@
  * subfolders for parts lists, datasheets, 3D models, internal hardware, and notes.
  *
  * The root resolves in this order:
- *   1. The `EE_LIBRARY_PROJECT_FILES_ROOT` environment variable (absolute or relative).
- *   2. The default `<user-home>/EE-Library/projects` location (per the operator's
+ *   1. The local admin site setting saved from `/admin`.
+ *   2. The `EE_LIBRARY_PROJECT_FILES_ROOT` environment variable (absolute or relative).
+ *   3. The default `<user-home>/EE-Library/projects` location (per the operator's
  *      preference for keeping shared assets outside the source tree).
  *
  * Path safety: project keys are sanitized before they are joined to the root and the
@@ -15,13 +16,22 @@
  * traversal regardless of how a project key was persisted upstream.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import {
+  buildFileContentDisposition,
+  inferMirrorPathFormat,
+  resolveStoredFileContentType,
+  shouldServeFileInline
+} from "@ee-library/shared/file-display";
 import type {
   ProjectCustomHardwareListing,
   ProjectCustomHardwareRecord,
   ProjectFilesAvailability,
+  ProjectFilesRootSettingsResponse,
+  ProjectFilesRootSettingsUpdateInput,
   ProjectFilesResponse,
   ProjectFileUploadInput,
   ProjectFolderCategory,
@@ -70,6 +80,12 @@ export const PROJECT_FOLDER_DEFINITIONS: readonly ProjectFolderDefinition[] = [
     description: "Mechanical CAD, STEP/STL exports, and 3D viewer assets."
   },
   {
+    category: "footprints",
+    folderName: "footprints",
+    label: "Footprints",
+    description: "PCB footprints and land-pattern libraries for Altium and other layout tools."
+  },
+  {
     category: "notes",
     folderName: "notes",
     label: "Notes",
@@ -83,6 +99,12 @@ export const PROJECT_FOLDER_DEFINITIONS: readonly ProjectFolderDefinition[] = [
  * project memory surface.
  */
 export const MAX_PROJECT_FILE_BYTES = 25 * 1024 * 1024;
+
+/** SITE_SETTINGS_FILE_NAME is the default JSON filename for operator-managed local settings. */
+const SITE_SETTINGS_FILE_NAME = "site-settings.json";
+
+/** PROJECT_FILES_ROOT_SETTING_KEY is the JSON key used to persist the admin-selected project root. */
+const PROJECT_FILES_ROOT_SETTING_KEY = "projectFilesRoot";
 
 /** ProjectFilesProjectInput minimally identifies a project for file mirror operations. */
 export interface ProjectFilesProjectInput {
@@ -100,6 +122,12 @@ export interface ProjectFilesProjectInput {
  * default folder.
  */
 export function getProjectFilesRoot(): string | null {
+  const siteRoot = readSiteProjectFilesRootSetting();
+
+  if (siteRoot) {
+    return path.resolve(siteRoot);
+  }
+
   const raw = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
   if (typeof raw === "string") {
     const trimmed = raw.trim();
@@ -107,12 +135,183 @@ export function getProjectFilesRoot(): string | null {
       return null;
     }
     if (trimmed.length === 0) {
-      return path.resolve(homedir(), "EE-Library", "projects");
+      return getDefaultProjectFilesRoot();
     }
     return path.resolve(trimmed);
   }
 
+  return getDefaultProjectFilesRoot();
+}
+
+/**
+ * Returns the admin-visible project folder setting, including which source currently wins.
+ */
+export function readProjectFilesRootSettings(): ProjectFilesRootSettingsResponse {
+  const settingsPath = getProjectFilesSettingsPath();
+  const siteRootPath = readSiteProjectFilesRootSetting();
+  const environmentRootPath = readEnvironmentProjectFilesRoot();
+  const environmentValue = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  const environmentIsDisabled = typeof environmentValue === "string" && environmentValue.trim().toLowerCase() === "off";
+  const defaultRootPath = getDefaultProjectFilesRoot();
+
+  if (siteRootPath) {
+    return {
+      currentRootPath: path.resolve(siteRootPath),
+      defaultRootPath,
+      environmentRootPath,
+      message: "Project file folders are controlled by the admin site setting.",
+      settingsPath,
+      siteRootPath: path.resolve(siteRootPath),
+      source: "site_setting"
+    };
+  }
+
+  if (environmentIsDisabled) {
+    return {
+      currentRootPath: null,
+      defaultRootPath,
+      environmentRootPath: null,
+      message: "Project file folders are disabled by EE_LIBRARY_PROJECT_FILES_ROOT=off.",
+      settingsPath,
+      siteRootPath: null,
+      source: "disabled"
+    };
+  }
+
+  if (environmentRootPath) {
+    return {
+      currentRootPath: environmentRootPath,
+      defaultRootPath,
+      environmentRootPath,
+      message: "Project file folders are controlled by EE_LIBRARY_PROJECT_FILES_ROOT until an admin site setting is saved.",
+      settingsPath,
+      siteRootPath: null,
+      source: "environment"
+    };
+  }
+
+  return {
+    currentRootPath: defaultRootPath,
+    defaultRootPath,
+    environmentRootPath: null,
+    message: "Project file folders are using the default local EE Library folder.",
+    settingsPath,
+    siteRootPath: null,
+    source: "default"
+  };
+}
+
+/**
+ * Persists or clears the admin-selected project folder root, creating the folder when a root is supplied.
+ */
+export async function updateProjectFilesRootSettings(input: ProjectFilesRootSettingsUpdateInput): Promise<ProjectFilesRootSettingsResponse> {
+  const settingsPath = getProjectFilesSettingsPath();
+  const resetToDefault = input.resetToDefault === true || input.rootPath === null;
+
+  if (resetToDefault) {
+    await writeSiteSettingsFile(settingsPath, { [PROJECT_FILES_ROOT_SETTING_KEY]: null });
+    return readProjectFilesRootSettings();
+  }
+
+  if (typeof input.rootPath !== "string" || input.rootPath.trim().length === 0) {
+    throw new Error("Project folder path is required unless resetToDefault is true.");
+  }
+
+  const trimmed = input.rootPath.trim();
+
+  if (trimmed.toLowerCase() === "off") {
+    throw new Error("Use a concrete folder path. The admin form does not disable the project file mirror.");
+  }
+
+  if (trimmed.includes("\0")) {
+    throw new Error("Project folder path contains an invalid null character.");
+  }
+
+  const resolvedRoot = path.resolve(trimmed);
+  await mkdir(resolvedRoot, { recursive: true });
+  await writeSiteSettingsFile(settingsPath, { [PROJECT_FILES_ROOT_SETTING_KEY]: resolvedRoot });
+
+  return readProjectFilesRootSettings();
+}
+
+/**
+ * Returns the JSON settings file path used for local admin-controlled site settings.
+ */
+export function getProjectFilesSettingsPath(): string {
+  const raw = process.env.EE_LIBRARY_SITE_SETTINGS_PATH;
+  const defaultPath = path.resolve(homedir(), "EE-Library", SITE_SETTINGS_FILE_NAME);
+
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return defaultPath;
+  }
+
+  return path.resolve(raw.trim());
+}
+
+/**
+ * Returns the default local folder used when no site or environment setting exists.
+ */
+function getDefaultProjectFilesRoot(): string {
   return path.resolve(homedir(), "EE-Library", "projects");
+}
+
+/**
+ * Reads the admin-selected project root from the local settings file, ignoring missing or malformed settings.
+ */
+function readSiteProjectFilesRootSetting(): string | null {
+  const settings = readSiteSettingsFile(getProjectFilesSettingsPath());
+  const value = settings[PROJECT_FILES_ROOT_SETTING_KEY];
+
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
+ * Reads EE_LIBRARY_PROJECT_FILES_ROOT as an absolute path when it is present and not disabled.
+ */
+function readEnvironmentProjectFilesRoot(): string | null {
+  const raw = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+
+  if (typeof raw !== "string") {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+
+  if (trimmed.length === 0 || trimmed.toLowerCase() === "off") {
+    return null;
+  }
+
+  return path.resolve(trimmed);
+}
+
+/**
+ * Reads the small local JSON settings file while treating absence or malformed content as empty settings.
+ */
+function readSiteSettingsFile(settingsPath: string): Record<string, unknown> {
+  if (!existsSync(settingsPath)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(settingsPath, "utf8")) as unknown;
+
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merges local site settings and writes them with stable formatting for operator inspection.
+ */
+async function writeSiteSettingsFile(settingsPath: string, updates: Record<string, unknown>): Promise<void> {
+  const nextSettings = {
+    ...readSiteSettingsFile(settingsPath),
+    ...updates
+  };
+
+  await mkdir(path.dirname(settingsPath), { recursive: true });
+  await writeFile(settingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
 }
 
 /**
@@ -139,9 +338,10 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
     };
   }
 
-  const projectRoot = resolveProjectRoot(root, safeKey);
+  let projectRoot: string | null = null;
 
   try {
+    projectRoot = await resolveProjectRootForKey(root, safeKey);
     await ensureProjectFolderTree(projectRoot);
     const folders = await readFolderListings(projectRoot);
     const customHardware = await readCustomHardwareListing(projectRoot);
@@ -201,6 +401,97 @@ function resolveProjectRoot(root: string, sanitizedKey: string): string {
   }
 
   return candidate;
+}
+
+/** DiscoveredProjectFolder is one top-level project directory under the mirror root. */
+export interface DiscoveredProjectFolder {
+  /** Raw directory name as it appears on disk. */
+  folderName: string;
+  /** Sanitized key used for database ids and mirror paths. */
+  projectKey: string;
+  /** Absolute path to the project folder. */
+  absolutePath: string;
+}
+
+/**
+ * Lists top-level project directories in the configured mirror root.
+ *
+ * Hidden directories and non-folders are skipped. Each name is sanitized into a stable
+ * project key so dropped folders such as `trialProject1` can be registered in project memory.
+ */
+export async function listDiscoveredProjectFolders(): Promise<{
+  availability: "configured" | "not_configured";
+  rootPath: string | null;
+  folders: DiscoveredProjectFolder[];
+}> {
+  const root = getProjectFilesRoot();
+
+  if (!root) {
+    return { availability: "not_configured", folders: [], rootPath: null };
+  }
+
+  const entries = await readdir(root, { withFileTypes: true });
+  const folders: DiscoveredProjectFolder[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+
+    const projectKey = sanitizeProjectKey(entry.name);
+    folders.push({
+      absolutePath: resolveProjectRoot(root, entry.name),
+      folderName: entry.name,
+      projectKey
+    });
+  }
+
+  folders.sort((left, right) => left.projectKey.localeCompare(right.projectKey, undefined, { sensitivity: "base" }));
+
+  return { availability: "configured", folders, rootPath: root };
+}
+
+/**
+ * Ensures the canonical subfolder tree exists for one project key.
+ *
+ * When a matching folder already exists with different casing (for example `trialProject1`
+ * vs `TRIALPROJECT1`), the existing directory is preserved instead of creating a duplicate.
+ */
+export async function ensureProjectMirrorForKey(projectKey: string): Promise<{
+  availability: "configured" | "not_configured";
+  projectRoot: string | null;
+}> {
+  const root = getProjectFilesRoot();
+
+  if (!root) {
+    return { availability: "not_configured", projectRoot: null };
+  }
+
+  const projectRoot = await resolveProjectRootForKey(root, projectKey);
+  await ensureProjectFolderTree(projectRoot);
+
+  return { availability: "configured", projectRoot };
+}
+
+/**
+ * Resolves the on-disk project folder for a key, preferring an existing directory that
+ * matches case-insensitively before creating a new sanitized path.
+ */
+async function resolveProjectRootForKey(root: string, projectKey: string): Promise<string> {
+  const sanitizedKey = sanitizeProjectKey(projectKey);
+  const entries = await readdir(root, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+
+    if (entry.name.toLowerCase() === sanitizedKey.toLowerCase()) {
+      return resolveProjectRoot(root, entry.name);
+    }
+  }
+
+  return resolveProjectRoot(root, sanitizedKey);
 }
 
 /**
@@ -799,7 +1090,7 @@ export async function saveProjectFile(
 
   try {
     const safeKey = sanitizeProjectKey(project.projectKey);
-    const projectRoot = resolveProjectRoot(root, safeKey);
+    const projectRoot = await resolveProjectRootForKey(root, safeKey);
     const categoryRoot = path.join(projectRoot, folder.folderName);
     await mkdir(categoryRoot, { recursive: true });
 
@@ -961,4 +1252,113 @@ function isPathInside(parent: string, child: string): boolean {
  * Re-exports the type so api/index.ts can keep its imports tidy without reaching into
  * @ee-library/shared for what is logically owned by this module.
  */
+/** ReadProjectMirrorFileResult is the outcome of resolving one mirror file for download. */
+export type ReadProjectMirrorFileResult =
+  | { status: "not_configured" }
+  | { status: "not_found"; message: string }
+  | { status: "invalid_path"; message: string }
+  | { status: "ok"; absolutePath: string; contentType: string; filename: string; formatHint: string | null };
+
+/**
+ * Resolves one on-disk project mirror file for streaming to the browser.
+ */
+export async function resolveProjectMirrorFileDownload(
+  project: ProjectFilesProjectInput,
+  relativePath: string
+): Promise<ReadProjectMirrorFileResult> {
+  const root = getProjectFilesRoot();
+
+  if (!root) {
+    return { status: "not_configured" };
+  }
+
+  const normalized = relativePath.replace(/\\/gu, "/").trim();
+
+  if (!normalized || normalized.includes("..")) {
+    return {
+      status: "invalid_path",
+      message: "Invalid file path."
+    };
+  }
+
+  try {
+    const safeKey = sanitizeProjectKey(project.projectKey);
+    const projectRoot = await resolveProjectRootForKey(root, safeKey);
+    const absolutePath = path.resolve(projectRoot, ...normalized.split("/"));
+
+    if (!isPathInside(projectRoot, absolutePath)) {
+      return {
+        status: "invalid_path",
+        message: "File path is outside the project folder."
+      };
+    }
+
+    const info = await stat(absolutePath);
+
+    if (!info.isFile()) {
+      return {
+        status: "not_found",
+        message: "File not found."
+      };
+    }
+
+    const filename = path.basename(absolutePath);
+    const formatHint = inferMirrorPathFormat(normalized);
+
+    return {
+      absolutePath,
+      contentType: resolveStoredFileContentType(filename, formatHint),
+      filename,
+      formatHint,
+      status: "ok"
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        status: "not_found",
+        message: "File not found."
+      };
+    }
+
+    return {
+      status: "not_found",
+      message: error instanceof Error ? error.message : "File not found."
+    };
+  }
+}
+
+/**
+ * Builds a Content-Disposition header for one mirror file download.
+ */
+export function buildProjectMirrorContentDisposition(
+  contentType: string,
+  filename: string,
+  preferInline: boolean,
+  formatHint?: string | null
+): string {
+  const inline =
+    preferInline
+    && (contentType === "application/pdf"
+      || contentType.startsWith("image/")
+      || formatHint === "pdf"
+      || formatHint === "png"
+      || formatHint === "jpg"
+      || formatHint === "jpeg"
+      || formatHint === "webp");
+
+  return buildFileContentDisposition(filename, inline);
+}
+
+/**
+ * Returns true when a mirror file should open in the browser instead of downloading.
+ */
+export function shouldPreferInlineMirrorContent(
+  url: URL,
+  contentType: string,
+  relativePath: string,
+  formatHint?: string | null
+): boolean {
+  return shouldServeFileInline(url.searchParams, formatHint ?? inferMirrorPathFormat(relativePath), contentType);
+}
+
 export type { ProjectFilesAvailability };

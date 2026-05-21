@@ -23,6 +23,10 @@ type TestPool = Pool & {
  */
 test("admin workspace renders setup guidance when DB-backed catalog is unavailable", async () => {
   const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/api/token") {
+      return jsonResponse({ token: "test-admin-token" });
+    }
+
     if (url.pathname === "/health") {
       return jsonResponse({
         dependencies: {
@@ -33,6 +37,10 @@ test("admin workspace renders setup guidance when DB-backed catalog is unavailab
         service: "api",
         status: "ok"
       });
+    }
+
+    if (url.pathname === "/admin/project-files-root") {
+      return jsonResponse(buildProjectFilesRootSettingsEnvelope());
     }
 
     return jsonResponse(
@@ -64,6 +72,10 @@ test("admin workspace renders setup guidance when DB-backed catalog is unavailab
 test("admin workspace renders review, promotion, import, validation, and audit sections", async () => {
   const records = buildAdminFixtureRecords();
   const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/api/token") {
+      return jsonResponse({ token: "test-admin-token" });
+    }
+
     if (url.pathname === "/health") {
       return jsonResponse({
         dependencies: {
@@ -80,6 +92,10 @@ test("admin workspace renders review, promotion, import, validation, and audit s
       return jsonResponse(buildAuditEventEnvelope());
     }
 
+    if (url.pathname === "/admin/project-files-root") {
+      return jsonResponse(buildProjectFilesRootSettingsEnvelope());
+    }
+
     return jsonResponse({
       data: records,
       source: "database",
@@ -91,6 +107,8 @@ test("admin workspace renders review, promotion, import, validation, and audit s
     const html = await renderAdminPage();
 
     assert.match(html, /Import by MPN/u);
+    assert.match(html, /Project file folder/u);
+    assert.match(html, /C:\\EE-Library\\projects/u);
     assert.match(html, /Operator import/u);
     assert.match(html, /Approval does not make export available/u);
     assert.match(html, /Queues only appear when records exist/u);
@@ -170,6 +188,10 @@ test("admin workspace renders lifecycle and source-conflict queues from DB-backe
     assert.equal(catalogResult.records.some((record) => record.issues.some((issue) => issue.code === "source_conflict")), true);
 
     const restoreFetch = mockFetch((url) => {
+      if (url.pathname === "/api/token") {
+        return jsonResponse({ token: "test-admin-token" });
+      }
+
       if (url.pathname === "/health") {
         return jsonResponse({
           dependencies: {
@@ -184,6 +206,10 @@ test("admin workspace renders lifecycle and source-conflict queues from DB-backe
 
       if (url.pathname === "/audit-events") {
         return jsonResponse(buildAuditEventEnvelope());
+      }
+
+      if (url.pathname === "/admin/project-files-root") {
+        return jsonResponse(buildProjectFilesRootSettingsEnvelope());
       }
 
       return jsonResponse({
@@ -253,6 +279,21 @@ function buildAuditEventEnvelope(): Record<string, unknown> {
         }
       ],
       state: "available"
+    },
+    source: "database"
+  };
+}
+
+function buildProjectFilesRootSettingsEnvelope(): Record<string, unknown> {
+  return {
+    data: {
+      currentRootPath: "C:\\EE-Library\\projects",
+      defaultRootPath: "C:\\Users\\might\\EE-Library\\projects",
+      environmentRootPath: null,
+      message: "Project file folders are controlled by the admin site setting.",
+      settingsPath: "C:\\EE-Library\\site-settings.json",
+      siteRootPath: "C:\\EE-Library\\projects",
+      source: "site_setting"
     },
     source: "database"
   };

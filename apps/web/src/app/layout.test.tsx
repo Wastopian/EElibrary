@@ -13,22 +13,20 @@ import { RootLayoutShell } from "./RootLayoutShell";
  */
 test("root layout renders the engineering memory workspace shell", () => {
   const html = renderToStaticMarkup(
-    <RootLayoutShell>
+    <RootLayoutShell showAccount={false}>
       <main>Child content</main>
     </RootLayoutShell>
   );
 
   assert.match(html, /Engineering memory/u);
-  assert.match(html, /Find parts\. Open projects\. Ship verified files\./u);
+  assert.match(html, /Open projects\. Find parts\. Ship verified files\./u);
   assert.match(html, /Skip to main content/u);
-  assert.match(html, /Catalog/u);
+  assert.match(html, /Start here/u);
   assert.match(html, /Projects/u);
+  assert.match(html, /Catalog/u);
   assert.match(html, /Where-used/u);
-  assert.match(html, /Circuit blocks/u);
-  assert.match(html, /Admin/u);
-  assert.match(html, /Catalog filters/u);
-  assert.match(html, /Connectors/u);
-  assert.match(html, /Pending review/u);
+  assert.match(html, /More workspaces/u);
+  assert.match(html, /Catalog shortcuts/u);
   assert.match(html, /app-nav__link/u);
   assert.match(html, /app-sidebar/u);
   assert.doesNotMatch(html, /app-main-header/u);

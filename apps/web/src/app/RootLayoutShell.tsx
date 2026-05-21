@@ -6,6 +6,7 @@ import React from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { AppNavigation } from "../components/AppNavigation";
+import { AppSidebarAccount } from "../components/AppSidebarAccount";
 
 /** RootLayoutShellProps carries page content and optional font class names from the Next layout. */
 export interface RootLayoutShellProps {
@@ -13,12 +14,14 @@ export interface RootLayoutShellProps {
   children: ReactNode;
   /** Font CSS variable classes supplied by next/font in the real layout. */
   fontClassName?: string;
+  /** When false, skips the async account block (used by static markup tests). */
+  showAccount?: boolean;
 }
 
 /**
  * Renders the desktop-first application shell around every route.
  */
-export function RootLayoutShell({ children, fontClassName = "" }: RootLayoutShellProps) {
+export function RootLayoutShell({ children, fontClassName = "", showAccount = true }: RootLayoutShellProps) {
   return (
     <html className={fontClassName} lang="en">
       <body>
@@ -31,7 +34,7 @@ export function RootLayoutShell({ children, fontClassName = "" }: RootLayoutShel
               <div className="app-sidebar__brand">
                 <p className="app-kicker">EE Library</p>
                 <p className="app-sidebar__title">Engineering memory</p>
-                <p className="app-sidebar__subtitle">Find parts. Open projects. Ship verified files.</p>
+                <p className="app-sidebar__subtitle">Open projects. Find parts. Ship verified files.</p>
               </div>
             </Link>
             <form action="/catalog" className="app-sidebar__search" method="get" role="search">
@@ -49,10 +52,11 @@ export function RootLayoutShell({ children, fontClassName = "" }: RootLayoutShel
               />
             </form>
             <AppNavigation />
+            {showAccount ? <AppSidebarAccount /> : null}
             <section aria-label="Release reminder" className="app-sidebar__note">
               <span>Before release</span>
               <strong>Only use verified files.</strong>
-              <p>Open any part and expand "How verification works" for the full explanation.</p>
+              <p>Project files are your working copies. Export and catalog review gates apply when you promote files for release.</p>
             </section>
           </aside>
           <div className="app-main">

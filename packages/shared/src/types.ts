@@ -745,12 +745,100 @@ export interface ProjectListResponse {
   capabilities: ProjectMemoryCapability[];
 }
 
+/** ProjectFolderSyncOutcome describes how one folder or DB project was handled during sync. */
+export type ProjectFolderSyncOutcome = "created" | "linked" | "folder_ensured" | "skipped" | "error";
+
+/** ProjectFolderSyncEntry is one row in the folder ↔ database reconciliation report. */
+export interface ProjectFolderSyncEntry {
+  /** On-disk folder name when the entry came from the mirror root. */
+  folderName: string | null;
+  /** Canonical project key used in the database. */
+  projectKey: string;
+  /** Database id when the project exists or was created. */
+  projectId: string | null;
+  outcome: ProjectFolderSyncOutcome;
+  /** Optional operator-facing detail for skips and errors. */
+  message: string | null;
+}
+
+/** ProjectFolderSyncResponse reports a two-way reconcile between the mirror root and project memory. */
+export interface ProjectFolderSyncResponse {
+  availability: "configured" | "not_configured";
+  rootPath: string | null;
+  createdCount: number;
+  linkedCount: number;
+  folderEnsuredCount: number;
+  skippedCount: number;
+  entries: ProjectFolderSyncEntry[];
+  message: string | null;
+}
+
+/** ProjectMirrorIngestResponse reports parts-list import and catalog registration for one project folder. */
+export interface ProjectMirrorIngestResponse {
+  assetsLinked: number;
+  bomImportId: string | null;
+  bomLinesProcessed: number;
+  catalogAssetsIngested: number;
+  partsListFile: string | null;
+  partsRegistered: number;
+  usagesLinked: number;
+}
+
+/** ProjectPartKitFileRef points at a project mirror file or a catalog-backed asset. */
+export interface ProjectPartKitFileRef {
+  category: "datasheets" | "models" | "footprints";
+  name: string;
+  relativePath: string;
+  /** Catalog asset id when this file is served from part storage, not the project folder. */
+  assetId?: string;
+  /** Same-origin download path for catalog assets (web proxy). */
+  downloadUrl?: string;
+  /** Stored catalog format when known — drives open-in-browser vs download labels. */
+  fileFormat?: Asset["fileFormat"];
+  source?: "mirror" | "catalog";
+}
+
+/** ProjectPartKit is the engineer-facing bundle for one part in a project. */
+export interface ProjectPartKit {
+  partId: string;
+  mpn: string;
+  manufacturerName: string | null;
+  designators: string[];
+  usageIds: string[];
+  partUrl: string | null;
+  note: string | null;
+  datasheet: ProjectPartKitFileRef | null;
+  model: ProjectPartKitFileRef | null;
+  footprint: ProjectPartKitFileRef | null;
+}
+
+/** ProjectPartKitsResponse lists part kits for one project. */
+export interface ProjectPartKitsResponse {
+  projectId: string;
+  mirrorAvailable: boolean;
+  kits: ProjectPartKit[];
+}
+
+/** ProjectPartKitUpdateInput edits BOM-linked metadata for one part in a project. */
+export interface ProjectPartKitUpdateInput {
+  partUrl?: string | null;
+  note?: string | null;
+  /** When true, runs project mirror ingest after persisting metadata. */
+  syncToCatalog?: boolean;
+}
+
+/** ProjectPartKitUpdateResponse returns the refreshed kit and optional catalog sync summary. */
+export interface ProjectPartKitUpdateResponse {
+  kit: ProjectPartKit;
+  catalogSync: ProjectMirrorIngestResponse | null;
+}
+
 /**
  * ProjectFolderCategory enumerates the first-class subfolders the project file mirror
  * creates per project. Categories are the only top-level directories the API exposes;
  * deeper folders are shown as entries instead of traversed blindly.
  */
-export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "hardware" | "notes";
+export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "footprints" | "hardware" | "notes";
 
 /**
  * ProjectFolderEntry describes one file persisted inside a project folder category.
@@ -832,10 +920,39 @@ export interface ProjectCustomHardwareListing {
 
 /**
  * ProjectFilesAvailability tracks whether the file mirror is reachable. "configured"
- * means the API can read and write the project root; "not_configured" means the env
- * var has been disabled so the panel must show a clean, honest disabled state.
+ * means the API can read and write the project root; "not_configured" means the root
+ * setting is disabled so the panel must show a clean, honest disabled state.
  */
 export type ProjectFilesAvailability = "configured" | "not_configured" | "error";
+
+/** ProjectFilesRootSource identifies which configuration source selected the effective project mirror root. */
+export type ProjectFilesRootSource = "site_setting" | "environment" | "default" | "disabled";
+
+/** ProjectFilesRootSettingsResponse exposes the admin-visible folder setting without reading any project files. */
+export interface ProjectFilesRootSettingsResponse {
+  /** Effective absolute project mirror root, or null when the mirror is disabled. */
+  currentRootPath: string | null;
+  /** Persisted site-level override set through the admin UI, when one exists. */
+  siteRootPath: string | null;
+  /** Absolute root implied by EE_LIBRARY_PROJECT_FILES_ROOT, when that environment value is set and not disabled. */
+  environmentRootPath: string | null;
+  /** Default local root used when neither site nor environment settings are present. */
+  defaultRootPath: string;
+  /** Local JSON settings path where the API stores the admin-selected root. */
+  settingsPath: string;
+  /** Source currently controlling currentRootPath. */
+  source: ProjectFilesRootSource;
+  /** Human-readable setup or error detail for admin pages. */
+  message: string | null;
+}
+
+/** ProjectFilesRootSettingsUpdateInput is the admin-facing request body for changing the project mirror root. */
+export interface ProjectFilesRootSettingsUpdateInput {
+  /** New folder path. Null or resetToDefault clears the site override and returns to env/default behavior. */
+  rootPath?: string | null;
+  /** True when the admin wants to remove the persisted site override. */
+  resetToDefault?: boolean;
+}
 
 /** ProjectFilesResponse is the read-only project file mirror contract. */
 export interface ProjectFilesResponse {

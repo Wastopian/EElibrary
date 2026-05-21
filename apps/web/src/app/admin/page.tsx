@@ -5,7 +5,8 @@
 import Link from "next/link";
 import React from "react";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { auth } from "../../auth";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { AdminQueuePresentation } from "./AdminQueuePresentation";
 import type { AdminQueueOverviewGroup, AdminQueueOverviewStat, AdminQueueTableRow } from "./AdminQueuePresentation";
@@ -13,7 +14,8 @@ import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 import { isValidatedDownloadableAsset } from "@ee-library/shared/asset-state";
 import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSummary, getWorkflowReviewStatus } from "@ee-library/shared/review-workflow";
-import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchAuditEvents, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
+import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchAuditEvents, fetchPartSearchEnvelope, fetchProjectFilesRootSettings, isApiClientError, updatePartIssueWorkflow, updateProjectFilesRootSettings, updateSourceReconciliation } from "../../lib/api-client";
+import { getServerApiAuthHeaders } from "../../lib/server-api-auth";
 import type { AuditEventQueryFilters } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../lib/trust-lineage";
@@ -32,6 +34,7 @@ import type {
   PartRiskFlagCode,
   PartSearchFilters,
   PartSearchRecord,
+  ProjectFilesRootSettingsResponse,
   ReviewOutcome,
   ReviewTargetType,
   SourceReconciliationStatus
@@ -55,6 +58,10 @@ type AdminCatalogState =
 type AdminAuditEventState =
   | { status: "ready"; events: AuditEvent[]; boundary: string; filters: AuditEventQueryFilters }
   | { status: "unavailable"; message: string; filters: AuditEventQueryFilters };
+
+type AdminProjectFilesRootState =
+  | { status: "ready"; settings: ProjectFilesRootSettingsResponse }
+  | { status: "unavailable"; message: string };
 
 interface ReviewQueueItem {
   partId: string;
@@ -191,17 +198,53 @@ interface AdminPageProps {
  * pages can deep-link into a target-scoped audit view.
  */
 export default async function AdminPage(props: AdminPageProps) {
+  const session = await readAdminPageSession();
+
+  if (!session?.user?.id) {
+    redirect("/sign-in?callbackUrl=/admin");
+  }
+
+  if (session.user.role !== "admin") {
+    return <AdminAccessDenied signedInAs={session.user.email ?? "your account"} />;
+  }
+
   const resolvedSearchParams = props.searchParams ? await props.searchParams : {};
   const auditFilters = readAuditFiltersFromSearchParams(resolvedSearchParams);
+  const adminAuthHeaders = await getServerApiAuthHeaders();
+  const projectFilesRootState = await loadAdminProjectFilesRoot(adminAuthHeaders);
 
   const catalogState = await loadAdminCatalog();
 
+  /**
+   * Persists the project file mirror root through the API so the web app never writes local API settings directly.
+   */
+  async function submitProjectFilesRootAction(formData: FormData) {
+    "use server";
+
+    const intent = readRequiredFormString(formData.get("intent"));
+
+    if (intent === "reset") {
+      await updateProjectFilesRootSettings({ resetToDefault: true }, await getServerApiAuthHeaders());
+      revalidatePath("/admin");
+      return;
+    }
+
+    const rootPath = readRequiredFormString(formData.get("rootPath"));
+
+    if (!rootPath) {
+      return;
+    }
+
+    await updateProjectFilesRootSettings({ rootPath }, await getServerApiAuthHeaders());
+    revalidatePath("/admin");
+  }
+
   if (catalogState.status === "setup_required") {
-    return <AdminSetupState catalogState={catalogState} />;
+    return <AdminSetupState catalogState={catalogState} projectFilesRootAction={submitProjectFilesRootAction} projectFilesRootState={projectFilesRootState} />;
   }
 
   const { health, records, source, warnings } = catalogState;
-  const auditEventState = await loadAdminAuditEvents(auditFilters);
+  const auditEventState = await loadAdminAuditEvents(auditFilters, adminAuthHeaders);
   const reviewQueue = buildReviewQueue(records);
   const promotionQueue = buildPromotionQueue(records);
   const importRows = buildImportRows(records);
@@ -326,6 +369,7 @@ export default async function AdminPage(props: AdminPageProps) {
       <WorkspaceJumpNav
         ariaLabel="Admin workspace sections"
         items={[
+          { href: "#project-folder-heading", label: "Project folder" },
           { href: "#assistant-triage-heading", label: "Assistant triage" },
           { href: "#issue-ops-heading", label: "Issue operations" },
           { href: "#import-by-mpn-heading", label: "Import by MPN" },
@@ -336,6 +380,8 @@ export default async function AdminPage(props: AdminPageProps) {
           { href: "#user-action-audit-heading", label: "User action audit" }
         ]}
       />
+
+      <AdminProjectFilesRootSection action={submitProjectFilesRootAction} state={projectFilesRootState} />
 
       <AdminQueuePresentation groups={overviewGroups} rows={overviewTableRows} stats={overviewStats} />
 
@@ -853,6 +899,90 @@ export default async function AdminPage(props: AdminPageProps) {
 }
 
 /**
+ * Renders the admin control for the filesystem folder that backs project files.
+ */
+function AdminProjectFilesRootSection({
+  action,
+  state
+}: {
+  action: (formData: FormData) => Promise<void>;
+  state: AdminProjectFilesRootState;
+}): React.ReactElement {
+  return (
+    <section className="detail-section" aria-labelledby="project-folder-heading">
+      <SectionHeading
+        id="project-folder-heading"
+        index="CFG"
+        subtitle="Choose the operating-system folder watched by project workspaces."
+        title="Project file folder"
+      />
+      <SectionPanel
+        title="Folder root"
+        description="Project pages create one folder per project under this root, then keep BOMs, datasheets, CAD models, hardware notes, and review notes in stable subfolders."
+      >
+        {state.status === "ready" ? (
+          <div className="admin-project-folder">
+            <div className="admin-project-folder__summary">
+              <div>
+                <span>Current root</span>
+                <strong className="ui-mono">{state.settings.currentRootPath ?? "Project file mirror disabled"}</strong>
+              </div>
+              <div>
+                <span>Source</span>
+                <StatusBadge label={formatProjectFilesRootSource(state.settings.source)} tone={projectFilesRootSourceTone(state.settings.source)} />
+              </div>
+              <div>
+                <span>Settings file</span>
+                <strong className="ui-mono">{state.settings.settingsPath}</strong>
+              </div>
+            </div>
+            {state.settings.message ? <p className="muted-copy">{state.settings.message}</p> : null}
+            <form action={action} className="admin-project-folder__form">
+              <label>
+                <span>Folder path</span>
+                <input
+                  defaultValue={state.settings.currentRootPath ?? state.settings.defaultRootPath}
+                  name="rootPath"
+                  placeholder={state.settings.defaultRootPath}
+                  type="text"
+                />
+              </label>
+              <div className="admin-action-row">
+                <button name="intent" type="submit" value="save">Save folder</button>
+                <button className="button-link--quiet" name="intent" type="submit" value="reset">
+                  Use default
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : (
+          <EmptyState title="Project folder setting unavailable" body={state.message} />
+        )}
+      </SectionPanel>
+    </section>
+  );
+}
+
+/**
+ * Formats project-folder setting sources for compact admin badges.
+ */
+function formatProjectFilesRootSource(source: ProjectFilesRootSettingsResponse["source"]): string {
+  return {
+    default: "Default",
+    disabled: "Disabled",
+    environment: "Environment",
+    site_setting: "Site setting"
+  }[source];
+}
+
+/**
+ * Maps project-folder setting sources to the admin badge palette.
+ */
+function projectFilesRootSourceTone(source: ProjectFilesRootSettingsResponse["source"]): BadgeTone {
+  return source === "disabled" ? "review" : source === "site_setting" ? "verified" : "info";
+}
+
+/**
  * Renders the general API action audit trail without exposing request payloads.
  */
 function AdminUserActionAuditSection({ auditEventState }: { auditEventState: AdminAuditEventState }): React.ReactElement {
@@ -958,14 +1088,31 @@ function AdminUserActionAuditSection({ auditEventState }: { auditEventState: Adm
 /**
  * Loads recent user-action audit events without blocking the rest of the admin workspace.
  */
-async function loadAdminAuditEvents(filters: AuditEventQueryFilters): Promise<AdminAuditEventState> {
+async function loadAdminAuditEvents(filters: AuditEventQueryFilters, authHeaders: Record<string, string>): Promise<AdminAuditEventState> {
   try {
-    const response = await fetchAuditEvents(20, await getServerApiAuthHeaders(), filters);
+    const response = await fetchAuditEvents(20, authHeaders, filters);
     return { boundary: response.boundary, events: response.events, filters, status: "ready" };
   } catch (error) {
     return {
       filters,
       message: isApiClientError(error) ? `${error.code}: ${error.message}` : "Audit event API request failed.",
+      status: "unavailable"
+    };
+  }
+}
+
+/**
+ * Loads the admin-visible project file root setting without blocking the review queues.
+ */
+async function loadAdminProjectFilesRoot(authHeaders: Record<string, string>): Promise<AdminProjectFilesRootState> {
+  try {
+    return {
+      settings: await fetchProjectFilesRootSettings(authHeaders),
+      status: "ready"
+    };
+  } catch (error) {
+    return {
+      message: isApiClientError(error) ? `${error.code}: ${error.message}` : "Project file folder setting could not be read.",
       status: "unavailable"
     };
   }
@@ -1003,29 +1150,68 @@ function readFirst(value: string | string[] | undefined): string | undefined {
 }
 
 /**
- * Builds API auth headers for server-rendered admin reads by forwarding the current session cookie.
+ * Reads the signed-in session for the admin page, with a deterministic test-session shortcut.
  */
-async function getServerApiAuthHeaders(): Promise<Record<string, string>> {
-  let cookieHeader: string | null = null;
-  try {
-    cookieHeader = (await headers()).get("cookie");
-  } catch {
-    cookieHeader = null;
+async function readAdminPageSession() {
+  if (process.env.NODE_ENV === "test" || process.env.EE_LIBRARY_ALLOW_TEST_AUTH === "1") {
+    return {
+      user: {
+        email: "admin@ee-library.local",
+        id: "test-admin",
+        role: "admin" as const
+      }
+    };
   }
 
-  const base = process.env["NEXTAUTH_URL"] ?? "http://localhost:3000";
-  const response = await fetch(`${base}/api/token`, {
-    cache: "no-store",
-    headers: cookieHeader ? { cookie: cookieHeader } : {}
-  });
+  return auth();
+}
 
-  if (!response.ok) {
-    return {};
-  }
-
-  const body = (await response.json()) as { token?: unknown };
-
-  return typeof body.token === "string" && body.token.length > 0 ? { Authorization: `Bearer ${body.token}` } : {};
+/**
+ * Explains why the admin workspace is unavailable for the current signed-in account.
+ */
+function AdminAccessDenied({ signedInAs }: { signedInAs: string }) {
+  return (
+    <main className="admin-layout">
+      <section className="admin-hero">
+        <div>
+          <p className="app-kicker">Admin workspace</p>
+          <h1>Admin access required</h1>
+          <p className="admin-hero__lede">
+            You are signed in as <strong>{signedInAs}</strong>, but this account does not have the admin role. Review queues,
+            promotion tools, and project-folder settings live here for admin accounts only.
+          </p>
+          <div className="empty-recovery-actions">
+            <Link className="button-link" href="/projects">
+              Back to projects
+            </Link>
+            <Link className="button-link button-link--quiet" href="/system">
+              Open system checks
+            </Link>
+          </div>
+        </div>
+        <div className="admin-hero__status">
+          <StatusBadge label="Signed in" tone="info" />
+          <StatusBadge label="Not admin" tone="review" />
+        </div>
+      </section>
+      <SectionPanel
+        description="Local development usually seeds one admin user. Sign in with that account, or promote your user in the database."
+        title="How to get admin access locally"
+      >
+        <div className="setup-steps">
+          <div>
+            <strong>Seed the default admin user</strong>
+            <code>npm run seed:admin</code>
+            <span>Default login: admin@ee-library.local / localdev-admin</span>
+          </div>
+          <div>
+            <strong>Then sign out and sign back in</strong>
+            <span>Your session role is set at login. After promotion, refresh credentials with a new sign-in.</span>
+          </div>
+        </div>
+      </SectionPanel>
+    </main>
+  );
 }
 
 /**
@@ -1711,7 +1897,15 @@ async function loadAdminCatalog(): Promise<AdminCatalogState> {
   }
 }
 
-function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogState, { status: "setup_required" }> }) {
+function AdminSetupState({
+  catalogState,
+  projectFilesRootAction,
+  projectFilesRootState
+}: {
+  catalogState: Extract<AdminCatalogState, { status: "setup_required" }>;
+  projectFilesRootAction: (formData: FormData) => Promise<void>;
+  projectFilesRootState: AdminProjectFilesRootState;
+}) {
   return (
     <main className="admin-layout">
       <section className="admin-hero">
@@ -1742,6 +1936,7 @@ function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogS
           </div>
         </div>
       </SectionPanel>
+      <AdminProjectFilesRootSection action={projectFilesRootAction} state={projectFilesRootState} />
     </main>
   );
 }

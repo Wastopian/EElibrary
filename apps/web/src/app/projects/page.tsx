@@ -7,6 +7,8 @@ import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { ProjectCreatePanel } from "../../components/ProjectCreatePanel";
 import { ProjectsBrowser } from "../../components/ProjectsBrowser";
+import { ProjectsFolderSyncSubmitButton } from "../../components/ProjectsFolderSyncSubmitButton";
+import { syncProjectsFromFolderAction } from "./actions";
 import { fetchApiHealth, fetchProjectFleetRisk, fetchProjectListEnvelope, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
@@ -14,6 +16,21 @@ import type { BadgeTone } from "@ee-library/ui";
 import type { CatalogDataSource, ProjectFleetRiskResponse, ProjectFleetRiskRow, ProjectListResponse, ProjectMemoryCapability, ProjectMemoryCapabilityState, ProjectSummary } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
+
+/** ProjectsPageSearchParams carries folder-sync feedback from the server action redirect. */
+type ProjectsPageSearchParams = {
+  created?: string | string[];
+  folders?: string | string[];
+  linked?: string | string[];
+  skipped?: string | string[];
+  sync?: string | string[];
+  sync_error?: string | string[];
+  sync_message?: string | string[];
+};
+
+interface ProjectsPageProps {
+  searchParams?: Promise<ProjectsPageSearchParams>;
+}
 
 /** ProjectsDashboardState separates ready project-memory reads from setup/recovery states. */
 type ProjectsDashboardState =
@@ -34,7 +51,9 @@ type ProjectsDashboardState =
 /**
  * Renders the project-memory dashboard (fleet risk, BOM import/match, revision compare, export bundles, etc.).
  */
-export default async function ProjectsPage() {
+export default async function ProjectsPage(props: ProjectsPageProps = {}) {
+  const resolvedSearchParams = props.searchParams ? await props.searchParams : {};
+  const syncNotice = readProjectFolderSyncNotice(resolvedSearchParams);
   const dashboardState = await loadProjectsDashboard();
 
   if (dashboardState.status === "setup_required") {
@@ -63,33 +82,42 @@ export default async function ProjectsPage() {
         </div>
       </section>
 
+      <section className="detail-section" aria-labelledby="project-create-heading">
+        <SectionHeading
+          id="project-create-heading"
+          subtitle="A project is where your parts, files on disk, and parts list uploads live."
+          title="Create project"
+        />
+        <SectionPanel
+          description="Create the project first, then open it to edit parts and sync files from your project folder."
+          title="New project"
+        >
+          <ProjectCreatePanel />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="projects-list-heading">
         <SectionHeading
           id="projects-list-heading"
-          subtitle="Search by name, key, or owner. Click a project to see its parts."
+          subtitle="Search by name, key, or owner. Click a project to edit its part kit."
           title="All projects"
         />
         <SectionPanel
           description={response.projects.length > 0
-            ? "Click any project to open its parts and uploads."
-            : "No projects yet. Create one below to start tracking parts and uploads."}
+            ? "Click any project to open its parts and files. New folder on disk? Update the list below."
+            : "No projects yet. Create one above, or drop a folder on disk and update the list."}
           title={response.projects.length > 0 ? `${response.projects.length} project${response.projects.length === 1 ? "" : "s"}` : "No projects yet"}
         >
+          {syncNotice ? <p className={`projects-folder-sync__status projects-folder-sync__status--${syncNotice.tone}`}>{syncNotice.message}</p> : null}
+          <form action={syncProjectsFromFolderAction} className="projects-folder-sync">
+            <div className="projects-folder-sync__actions">
+              <ProjectsFolderSyncSubmitButton />
+              <span className="muted-copy" title="Scans the project folder for new directories, imports each project's parts list, and registers parts from disk.">
+                Sync new folders and parts lists from disk.
+              </span>
+            </div>
+          </form>
           {response.projects.length > 0 ? <ProjectsBrowser projects={response.projects} /> : <ProjectsEmptyState />}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-create-heading">
-        <SectionHeading
-          id="project-create-heading"
-          subtitle="A project is where your parts list uploads, files, and decisions live."
-          title="Create project"
-        />
-        <SectionPanel
-          description="Create the project first. Once it exists, you can upload a parts list from the project page."
-          title="New project"
-        >
-          <ProjectCreatePanel />
         </SectionPanel>
       </section>
 
@@ -146,6 +174,98 @@ export default async function ProjectsPage() {
       </details>
     </main>
   );
+}
+
+/**
+ * Turns folder-sync redirect query params into operator-facing status copy.
+ */
+function readProjectFolderSyncNotice(searchParams: ProjectsPageSearchParams): { message: string; tone: "failed" | "pending" | "success" } | null {
+  const syncError = readFirstSearchParam(searchParams.sync_error);
+
+  if (syncError) {
+    return {
+      message: formatProjectFolderSyncError(syncError, readFirstSearchParam(searchParams.sync_message)),
+      tone: "failed"
+    };
+  }
+
+  const syncState = readFirstSearchParam(searchParams.sync);
+
+  if (syncState === "unchanged") {
+    return {
+      message: "Project list already matches the project folder. No new directories were registered.",
+      tone: "success"
+    };
+  }
+
+  if (syncState !== "ok") {
+    return null;
+  }
+
+  const parts: string[] = [];
+  const created = Number(readFirstSearchParam(searchParams.created) ?? "0");
+  const linked = Number(readFirstSearchParam(searchParams.linked) ?? "0");
+  const folders = Number(readFirstSearchParam(searchParams.folders) ?? "0");
+  const skipped = Number(readFirstSearchParam(searchParams.skipped) ?? "0");
+
+  if (created > 0) {
+    parts.push(`${created} new project${created === 1 ? "" : "s"} registered from disk`);
+  }
+
+  if (linked > 0) {
+    parts.push(`${linked} existing project${linked === 1 ? "" : "s"} linked to folders`);
+  }
+
+  if (folders > 0) {
+    parts.push(`${folders} mirror folder${folders === 1 ? "" : "s"} prepared`);
+  }
+
+  if (skipped > 0) {
+    parts.push(`${skipped} skipped`);
+  }
+
+  return {
+    message: parts.length > 0 ? parts.join(". ") + "." : "Project folder sync completed.",
+    tone: "success"
+  };
+}
+
+/**
+ * Reads the first value from a search-param field that may be repeated.
+ */
+function readFirstSearchParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Maps sync failure codes from the server action redirect into plain-language recovery copy.
+ */
+function formatProjectFolderSyncError(code: string, detail: string | undefined): string {
+  if (code === "admin_required") {
+    return "Folder sync requires an admin session. Sign in with an admin account, or ask an admin to run seed:admin locally.";
+  }
+
+  if (code === "db_not_configured") {
+    return "Project folder sync needs the project-memory database. Finish setup, then try again.";
+  }
+
+  if (code === "missing_api_token") {
+    return "Could not issue an API session token. Sign out, sign back in, and try again.";
+  }
+
+  if (code === "api_unreachable") {
+    return "The API could not be reached from the web app. Confirm the API is running on port 4000, then try again.";
+  }
+
+  if (code === "HTTP_405" || code === "METHOD_NOT_ALLOWED") {
+    return "The API on port 4000 is missing the folder-sync route (usually a stale API still running). Stop any old API process, run npm run dev so both api and web start cleanly, then try Update from project folder again.";
+  }
+
+  if (detail) {
+    return detail.replace(/^Project folder sync failed \([^)]+\):\s*/u, "");
+  }
+
+  return "Project folder update failed. Check the API and try again.";
 }
 
 /**

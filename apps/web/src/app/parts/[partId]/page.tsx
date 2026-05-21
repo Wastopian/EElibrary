@@ -14,8 +14,17 @@ import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { PartEngineeringMemoryPanel } from "../../../components/PartEngineeringMemoryPanel";
 import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
+import { PartDetailFilesWorkspace } from "../../../components/PartDetailFilesWorkspace";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDetailEnvelope, fetchPartDocumentRevisions, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDetailEnvelope, fetchPartDocumentRevisions, fetchProjectDetail, fetchProjectPartKits, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { enrichPartKitsWithCatalogDetail } from "../../../lib/enrich-project-part-kits";
+import { buildCatalogAssetFileActions } from "../../../lib/part-kit-file-actions";
+import {
+  buildProjectFocusBackHref,
+  buildProjectFocusKitHref,
+  normalizeProjectContextId,
+  type ProjectFocusContext
+} from "../../../lib/part-detail-project-focus";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import { getTrustLineageSummary } from "../../../lib/trust-lineage";
@@ -52,13 +61,14 @@ import { getCircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-r
 import type { CircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartKit, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
 /** DetailPageProps contains the dynamic route parameter supplied by Next.js. */
 interface DetailPageProps {
   params: Promise<{ partId: string }>;
+  searchParams?: Promise<{ project?: string | string[] }>;
 }
 
 /** PartDetailPageDetail extracts the full detail payload shape directly from the API client return type. */
@@ -101,8 +111,11 @@ type PartDetailPageState =
 /**
  * Renders a component detail page with provenance, connector intelligence, asset state, and export readiness.
  */
-export default async function PartDetailPage({ params }: DetailPageProps) {
+export default async function PartDetailPage({ params, searchParams }: DetailPageProps) {
   const { partId } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const projectContextId = normalizeProjectContextId(resolvedSearchParams);
+  const projectContext = projectContextId ? await loadProjectFocusContext(projectContextId) : null;
   const pageState = await loadPartDetailPage(partId);
 
   if (pageState.status === "not_found") {
@@ -135,6 +148,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const nextActions = getPartNextActions(record);
   const primaryNextAction = nextActions[0];
   const latestSource = record.sources[0];
+  const projectPartKit = projectContext ? await loadProjectPartKitForPart(projectContext.projectId, partId) : null;
+  const supplierUrl =
+    projectPartKit?.partUrl?.trim() ||
+    detail.acquisitionSummary.sourceUrl?.trim() ||
+    latestSource?.sourceUrl?.trim() ||
+    null;
   const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
     label: formatMetricLabel(metric.metricKey),
     meta: `${Math.round(metric.confidenceScore * 100)}% confidence`,
@@ -281,15 +300,110 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const hasSimilarParts = record.similarParts.length > 0;
   const hasCompanionParts = record.companionRecommendations.length > 0;
 
+  const documentControlAuditBlock = (
+    <>
+      <div id="document-control-heading" />
+      <SectionPanel description="Controlled revision history, ACL intent, expiry, supersession, and engineering redlines." title="Document control">
+        <DocumentControlPanel
+          addRedlineAction={createDocumentRedlineAction}
+          assets={record.assets}
+          createRevisionAction={createDocumentRevisionAction}
+          state={documentControlState}
+          updateRedlineAction={updateDocumentRedlineAction}
+        />
+      </SectionPanel>
+
+      <details className="audit-disclosure detail-audit-disclosure">
+        <summary>Acquisition and enrichment audit</summary>
+        <div className="detail-audit-disclosure__grid">
+          <SectionPanel description="Where this part record came from." title="Acquisition summary">
+            <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
+          </SectionPanel>
+          <SectionPanel description="Background data updates. These run separately from review and export." title="Enrichment status">
+            <DetailEnrichmentSummary boundaryCopy={enrichmentBoundaryCopy} items={enrichmentStatusItems} summary={detail.enrichmentSummary} summarySignal={enrichmentSummarySignal} />
+          </SectionPanel>
+        </div>
+      </details>
+
+      <details className="audit-disclosure">
+        <summary>Source rows and import audit</summary>
+        <div className="source-list" style={{ marginTop: 8 }}>
+          {record.sources.length > 0 ? (
+            record.sources.map((sourceRow) => (
+              <article key={sourceRow.id}>
+                <div>
+                  <h3>{sourceRow.providerId}</h3>
+                  <p className="ui-mono">{sourceRow.providerPartKey}</p>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Import status</dt>
+                    <dd>{sourceRow.importStatus === "imported" ? "Imported" : "Failed import"}</dd>
+                  </div>
+                  <div>
+                    <dt>Fetched</dt>
+                    <dd>{formatDateTime(sourceRow.fetchedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Last seen</dt>
+                    <dd>{formatDateTime(sourceRow.sourceLastSeenAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Normalized</dt>
+                    <dd>{sourceRow.normalizedAt ? formatDateTime(sourceRow.normalizedAt) : "Not normalized"}</dd>
+                  </div>
+                  <div>
+                    <dt>Last imported</dt>
+                    <dd>{sourceRow.sourceLastImportedAt ? formatDateTime(sourceRow.sourceLastImportedAt) : "No successful import"}</dd>
+                  </div>
+                  {sourceRow.importErrorDetails ? (
+                    <div>
+                      <dt>Import error</dt>
+                      <dd>{sourceRow.importErrorDetails}</dd>
+                    </div>
+                  ) : null}
+                  <div>
+                    <dt>Source URL</dt>
+                    <dd>{sourceRow.sourceUrl ? <a href={sourceRow.sourceUrl}>{sourceRow.sourceUrl}</a> : "None"}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))
+          ) : (
+            <EmptyState body="No source records are attached to this part." title="No source rows" />
+          )}
+        </div>
+      </details>
+    </>
+  );
+
   return (
     <main className="detail-layout">
+      {projectContext ? <ProjectFocusBanner context={projectContext} mpn={record.part.mpn} /> : null}
+
       <div className="detail-nav-links">
-        <Link className="back-link" href="/catalog">
-          &larr; Back to catalog
-        </Link>
-        <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
-          Compare with another part
-        </Link>
+        {projectContext ? (
+          <>
+            <Link className="back-link" href={buildProjectFocusBackHref(projectContext.projectId)}>
+              &larr; Back to {projectContext.projectName}
+            </Link>
+            <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
+              Compare with another part
+            </Link>
+            <Link className="detail-nav-links__compare" href={buildProjectFocusKitHref(projectContext.projectId)}>
+              Edit part kit
+            </Link>
+          </>
+        ) : (
+          <>
+            <Link className="back-link" href="/catalog">
+              &larr; Back to catalog
+            </Link>
+            <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
+              Compare with another part
+            </Link>
+          </>
+        )}
       </div>
 
       <section className="detail-section" aria-labelledby="overview-heading">
@@ -313,6 +427,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             {record.part.description && (
               <p className="detail-hero__description">{record.part.description}</p>
             )}
+            {projectPartKit?.note && projectPartKit.note !== record.part.description ? (
+              <p className="detail-hero__description muted-copy">
+                <strong>Parts list:</strong> {projectPartKit.note}
+              </p>
+            ) : null}
             <TrustLineageStrip summary={trustLineage} />
             <details className="detail-trust-callout" id="how-verification-works">
               <summary>How verification works</summary>
@@ -395,12 +514,23 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
         <DetailSectionNav tabs={detailTabs} />
 
-        <PartFilesPanel
-          assetGroups={assetGroups}
-          partId={record.part.id}
-          source={source}
-          validationSummaries={assetValidationSummaries}
-        />
+        <div id="files-heading">
+          <SectionPanel
+            description="Open PDFs in the browser, download CAD files, preview 3D models below, and add missing files to your project folder when you arrived from a project."
+            title="Files and downloads"
+          >
+            <PartDetailFilesWorkspace
+              assetGroups={assetGroups}
+              partId={record.part.id}
+              partMpn={record.part.mpn}
+              projectId={projectContext?.projectId}
+              projectKit={projectPartKit}
+              source={source}
+              supplierUrl={supplierUrl}
+              validationSummaries={assetValidationSummaries}
+            />
+          </SectionPanel>
+        </div>
 
         <WorkspaceActionPanel
           actions={buildPartWorkspaceActions(record, bundleReadiness, whereUsedState)}
@@ -467,89 +597,22 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </div>
         </SectionPanel>
 
-        <div id="document-control-heading" />
-        <SectionPanel description="Controlled revision history, ACL intent, expiry, supersession, and engineering redlines." title="Document control">
-          <DocumentControlPanel
-            addRedlineAction={createDocumentRedlineAction}
-            assets={record.assets}
-            createRevisionAction={createDocumentRevisionAction}
-            state={documentControlState}
-            updateRedlineAction={updateDocumentRedlineAction}
-          />
-        </SectionPanel>
-
-        <details className="audit-disclosure detail-audit-disclosure">
-          <summary>Acquisition and enrichment audit</summary>
-          <div className="detail-audit-disclosure__grid">
-            <SectionPanel description="Where this part record came from." title="Acquisition summary">
-              <DetailAcquisitionSummary acquisitionSummary={detail.acquisitionSummary} boundaryCopy={importedBoundaryCopy} summarySignal={acquisitionSummarySignal} />
-            </SectionPanel>
-            <SectionPanel description="Background data updates. These run separately from review and export." title="Enrichment status">
-              <DetailEnrichmentSummary boundaryCopy={enrichmentBoundaryCopy} items={enrichmentStatusItems} summary={detail.enrichmentSummary} summarySignal={enrichmentSummarySignal} />
-            </SectionPanel>
-          </div>
-        </details>
-
-        <details className="audit-disclosure">
-          <summary>Source rows and import audit</summary>
-          <div className="source-list" style={{ marginTop: 8 }}>
-            {record.sources.length > 0 ? (
-              record.sources.map((source) => (
-                <article key={source.id}>
-                  <div>
-                    <h3>{source.providerId}</h3>
-                    <p className="ui-mono">{source.providerPartKey}</p>
-                  </div>
-                  <dl>
-                    <div>
-                      <dt>Import status</dt>
-                      <dd>{source.importStatus === "imported" ? "Imported" : "Failed import"}</dd>
-                    </div>
-                    <div>
-                      <dt>Fetched</dt>
-                      <dd>{formatDateTime(source.fetchedAt)}</dd>
-                    </div>
-                    <div>
-                      <dt>Last seen</dt>
-                      <dd>{formatDateTime(source.sourceLastSeenAt)}</dd>
-                    </div>
-                    <div>
-                      <dt>Normalized</dt>
-                      <dd>{source.normalizedAt ? formatDateTime(source.normalizedAt) : "Not normalized"}</dd>
-                    </div>
-                    <div>
-                      <dt>Last imported</dt>
-                      <dd>{source.sourceLastImportedAt ? formatDateTime(source.sourceLastImportedAt) : "No successful import"}</dd>
-                    </div>
-                    {source.importErrorDetails ? (
-                      <div>
-                        <dt>Import error</dt>
-                        <dd>{source.importErrorDetails}</dd>
-                      </div>
-                    ) : null}
-                    <div>
-                      <dt>Source URL</dt>
-                      <dd>{source.sourceUrl ? <a href={source.sourceUrl}>{source.sourceUrl}</a> : "None"}</dd>
-                    </div>
-                  </dl>
-                </article>
-              ))
-            ) : (
-              <EmptyState body="No source records are attached to this part." title="No source rows" />
-            )}
-          </div>
-        </details>
+        {documentControlAuditBlock}
       </section>
 
       <section className="detail-section" aria-labelledby="where-used-heading">
         <SectionHeading
           id="where-used-heading"
           index="02"
-          subtitle="Where this part appears in saved projects. Past use does not mean it is approved."
+          subtitle={
+            projectContext
+              ? `Projects using ${record.part.mpn}, including ${projectContext.projectName}.`
+              : "Where this part appears in saved projects. Past use does not mean it is approved."
+          }
           title="Where-used"
         />
         <SectionPanel description="Past project use of this part." title="Confirmed usage history">
-          <PartWhereUsedPanel state={whereUsedState} />
+          <PartWhereUsedPanel highlightProjectId={projectContext?.projectId} state={whereUsedState} />
         </SectionPanel>
       </section>
 
@@ -716,12 +779,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </div>
       </section>
 
-      <section className="detail-section detail-section--technical" aria-labelledby="files-heading">
+      <section className="detail-section detail-section--technical" aria-labelledby="files-models-heading">
         <SectionHeading
-          id="files-heading"
+          id="files-models-heading"
           index="06"
-          subtitle="Open usable files first. Missing classes are listed separately below."
-          title="Files and models"
+          subtitle="Inline PDF preview, 3D viewer, and per-file review when catalog assets are on file."
+          title="File previews and review"
         />
         <SectionPanel
           title="File coverage"
@@ -896,6 +959,71 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
       whereUsedState: await whereUsedPromise
     };
   }
+}
+
+/**
+ * Loads project metadata for the slim project-focused part detail view.
+ */
+/**
+ * Loads one enriched part kit row when the engineer opened this part from a project.
+ */
+async function loadProjectPartKitForPart(projectId: string, partId: string): Promise<ProjectPartKit | null> {
+  try {
+    const response = await fetchProjectPartKits(projectId);
+    const kit = response?.kits.find((entry) => entry.partId === partId);
+
+    if (!kit) {
+      return null;
+    }
+
+    const [enriched] = await enrichPartKitsWithCatalogDetail([kit]);
+
+    return enriched;
+  } catch {
+    return null;
+  }
+}
+
+async function loadProjectFocusContext(projectId: string): Promise<ProjectFocusContext | null> {
+  try {
+    const response = await fetchProjectDetail(projectId);
+
+    return response
+      ? {
+          projectId,
+          projectName: response.project.name
+        }
+      : {
+          projectId,
+          projectName: projectId
+        };
+  } catch {
+    return {
+      projectId,
+      projectName: projectId
+    };
+  }
+}
+
+/**
+ * Renders a short banner when the engineer opened this part from a project.
+ */
+function ProjectFocusBanner({ context, mpn }: { context: ProjectFocusContext; mpn: string }) {
+  return (
+    <section aria-label="Project context" className="detail-focus-banner">
+      <p>
+        Viewing <strong className="ui-mono">{mpn}</strong> from project <strong>{context.projectName}</strong>.
+      </p>
+      <div className="detail-focus-banner__actions">
+        <Link className="button-link" href={buildProjectFocusBackHref(context.projectId)}>
+          Back to project
+        </Link>
+        <Link className="button-link button-link--quiet" href={buildProjectFocusKitHref(context.projectId)}>
+          Edit part kit
+        </Link>
+      </div>
+    </section>
+  );
 }
 
 /**
@@ -1457,7 +1585,7 @@ function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; stal
  * confirmed in two projects but not yet promoted into a reusable block). Neither row count
  * implies the part is approved, validated, or export-ready — the panel boundary repeats that.
  */
-function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
+function PartWhereUsedPanel({ highlightProjectId, state }: { highlightProjectId?: string; state: PartWhereUsedState }) {
   if (state.status === "unavailable") {
     return (
       <EmptyState
@@ -1520,7 +1648,7 @@ function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
                 </thead>
                 <tbody>
                   {usages.map(({ bomLine, project, projectRevision, usage }) => (
-                    <tr key={usage.id}>
+                    <tr className={project.id === highlightProjectId ? "where-used-table__row--highlight" : undefined} key={usage.id}>
                       <td>
                         <Link href={`/projects/${project.id}`}>{project.name}</Link>
                         <p className="ui-mono">{project.projectKey}</p>
@@ -1714,143 +1842,12 @@ function DetailUseDecision({
   );
 }
 
-/** PartFilesRow describes one row of the Files and downloads panel. */
-type PartFilesRow = {
-  action: { href: string; label: string } | null;
-  format: string | null | undefined;
-  label: string;
-  status: { label: string; tone: BadgeTone };
-  trustCheck: AssetTrustCheckSummary;
-  unavailableLabel: string;
-};
-
 /** AssetTrustCheckSummary is the operator-facing result of the latest durable asset check. */
 type AssetTrustCheckSummary = {
   detail: string;
   label: string;
   tone: BadgeTone;
 };
-
-/**
- * Renders the Files and downloads panel near the top of the part detail page so
- * cross-discipline engineers can find datasheets, footprints, symbols, and 3D
- * models without scrolling past the trust workflow. Stored files and reference
- * URLs intentionally use different action labels so a reference never looks like
- * captured local bytes.
- */
-function PartFilesPanel({
-  assetGroups,
-  partId,
-  source,
-  validationSummaries
-}: {
-  assetGroups: AssetClassSummary[];
-  partId: string;
-  source: CatalogDataSource | undefined;
-  validationSummaries: AssetValidationSummary[];
-}) {
-  const assetRows: PartFilesRow[] = assetGroups.map((group) => {
-    const best = group.bestAsset;
-    if (!best) {
-      return {
-        action: null,
-        format: undefined,
-        label: assetTypeLabel(group.assetType),
-        status: { label: "Not yet generated", tone: "neutral" },
-        trustCheck: buildMissingAssetTrustCheckSummary(),
-        unavailableLabel: "No file yet"
-      };
-    }
-
-    const validationSummary = findAssetValidationSummary(validationSummaries, best);
-
-    return {
-      action: buildPartFileAction(best, partId, source),
-      format: best.fileFormat,
-      label: assetTypeLabel(group.assetType),
-      status: { label: formatAssetClassReadinessLabel(group.readiness), tone: assetClassReadinessTone(group.readiness) },
-      trustCheck: buildAssetTrustCheckSummary(best, validationSummary),
-      unavailableLabel: formatPartFileUnavailableLabel(best, source)
-    };
-  });
-
-  return (
-    <SectionPanel
-      description="Datasheet PDF, 3D model, footprint, and symbol. If we have a stored file you can download it; if we only have a link, you can open the source. Only verified files can be used for export."
-      title="Files and downloads"
-    >
-      <ul className="part-files-list">
-        {assetRows.map((row) => (
-          <li className="part-files-list__row" key={row.label}>
-            <div className="part-files-list__identity">
-              <strong>{row.label}</strong>
-              {row.format ? <span className="ui-mono part-files-list__format">{row.format}</span> : null}
-            </div>
-            <StatusBadge label={row.status.label} tone={row.status.tone} />
-            <span className="part-files-list__trust-check" title={row.trustCheck.detail}>
-              <StatusBadge label={row.trustCheck.label} tone={row.trustCheck.tone} />
-            </span>
-            {row.action ? (
-              <a className="button-link button-link--quiet part-files-list__action" href={row.action.href} rel="noopener noreferrer" target="_blank">
-                {row.action.label}
-              </a>
-            ) : (
-              <span className="muted-copy part-files-list__action">{row.unavailableLabel}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </SectionPanel>
-  );
-}
-
-/**
- * Builds the top-panel action for one asset without collapsing references into downloads.
- */
-function buildPartFileAction(asset: Asset, partId: string, source: CatalogDataSource | undefined): PartFilesRow["action"] {
-  if (source === "seed_fallback") {
-    return asset.sourceUrl ? { href: asset.sourceUrl, label: "View source" } : null;
-  }
-
-  if (isFileBackedAsset(asset)) {
-    return {
-      href: buildAssetDownloadUrl(partId, asset.id),
-      label: "Download file"
-    };
-  }
-
-  if (asset.availabilityStatus === "referenced" && asset.sourceUrl) {
-    return {
-      href: asset.sourceUrl,
-      label: "View source"
-    };
-  }
-
-  return null;
-}
-
-/**
- * Explains why the top files panel is not offering an action for this asset row.
- */
-function formatPartFileUnavailableLabel(asset: Asset, source: CatalogDataSource | undefined): string {
-  if (source === "seed_fallback" && isFileBackedAsset(asset)) {
-    return "Sample file not available";
-  }
-
-  if (asset.availabilityStatus === "failed") {
-    return "File failed";
-  }
-
-  if (asset.availabilityStatus === "referenced") {
-    return "No source URL";
-  }
-
-  if (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated") {
-    return "File evidence incomplete";
-  }
-
-  return "No file yet";
-}
 
 /**
  * Renders the explanation-first readiness record summary using existing view-model signals.
@@ -2610,10 +2607,10 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
   const promotionSummary = findAssetPromotionSummary(promotionSummaries, bestAsset);
   const workflowSummary = buildAssetWorkflowSurfaceSummary(bestAsset, promotionSummary, reviewStatus);
   const trustCheckSummary = buildAssetTrustCheckSummary(bestAsset, validationSummary);
-  const accessAction = buildAssetAccessAction(bestAsset, source, gatedRevision);
+  const accessActions = buildAssetAccessActions(bestAsset, source, gatedRevision, group.assetType);
 
   return (
-    <div className="asset-review-card">
+    <div className="asset-review-card" id={`part-asset-${group.assetType}`}>
       <AssetCard
         availabilityLabel={`${formatAssetAvailabilityStatus(bestAsset.availabilityStatus)} / ${provenanceLabel(bestAsset.provenance)}`}
         availabilityTone={assetClassReadinessTone(group.readiness)}
@@ -2666,11 +2663,17 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
             </p>
           </div>
         ) : null}
-        {accessAction ? (
-          <a className={accessAction.gated ? "asset-download-link asset-download-link--gated" : "asset-download-link"} href={accessAction.href} rel="noopener noreferrer" target="_blank">
-            {accessAction.label}
+        {accessActions.map((action) => (
+          <a
+            className={action.gated ? "asset-download-link asset-download-link--gated" : "asset-download-link"}
+            href={action.href}
+            key={action.label}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            {action.label}
           </a>
-        ) : null}
+        ))}
         <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
         <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
       </div>
@@ -2679,34 +2682,41 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
 }
 
 /**
- * Builds the detailed asset action without showing sample storage keys as real downloads.
+ * Builds open/download links for one asset card without showing sample storage keys as real files.
  */
-function buildAssetAccessAction(asset: Asset, source: CatalogDataSource | undefined, gatedRevision: ControlledDocumentRevision | null): { gated: boolean; href: string; label: string } | null {
+function buildAssetAccessActions(
+  asset: Asset,
+  source: CatalogDataSource | undefined,
+  gatedRevision: ControlledDocumentRevision | null,
+  assetType: AssetType
+): { gated: boolean; href: string; label: string }[] {
   if (source === "seed_fallback") {
-    return asset.sourceUrl ? { gated: false, href: asset.sourceUrl, label: "View source" } : null;
+    return asset.sourceUrl ? [{ gated: false, href: asset.sourceUrl, label: "View source" }] : [];
   }
 
   if (asset.availabilityStatus === "referenced" && asset.sourceUrl) {
-    return { gated: false, href: asset.sourceUrl, label: "View source" };
+    return [{ gated: false, href: asset.sourceUrl, label: "View source" }];
   }
 
   if (!isFileBackedAsset(asset)) {
-    return null;
+    return [];
   }
 
   if (gatedRevision) {
-    return {
-      gated: true,
-      href: `${buildAssetDownloadUrl(asset.partId, asset.id)}?ack=1`,
-      label: "Acknowledge and download"
-    };
+    return [
+      {
+        gated: true,
+        href: `${buildAssetDownloadUrl(asset.partId, asset.id)}&ack=1`,
+        label: "Acknowledge and download"
+      }
+    ];
   }
 
-  return {
+  return buildCatalogAssetFileActions(asset, asset.partId, assetType).map((action) => ({
     gated: false,
-    href: buildAssetDownloadUrl(asset.partId, asset.id),
-    label: "Download file"
-  };
+    href: action.href,
+    label: action.label
+  }));
 }
 
 /**

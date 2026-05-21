@@ -3,6 +3,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import { Pool, type PoolClient } from "pg";
 import { BomCsvParseError, buildBomImportPreview, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
 import {
@@ -11,6 +12,20 @@ import {
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
+import {
+  buildMirrorAssetEvidenceNotes,
+  buildMirrorAssetEvidenceTitle,
+  buildMirrorAssetSourceUrl,
+  buildPartLookupKeys,
+  findMirrorAssetsForPart,
+  hashMirrorAssetFile,
+  indexMirrorAssetFiles,
+  readPartsListImportContent,
+  selectPartsListImportFile,
+  type MirrorAssetFile
+} from "./project-folder-assets";
+import { ensureProjectMirrorForKey, listDiscoveredProjectFolders, sanitizeProjectKey } from "./project-files";
+import { registerCatalogPartsFromProjectMirror } from "./project-catalog-registration";
 import type {
   ApprovalBatchAction,
   ApprovalBatchCandidate,
@@ -159,6 +174,8 @@ import type {
   ProjectEvidenceAttachmentsResponse,
   ProjectFleetRiskResponse,
   ProjectFleetRiskRow,
+  ProjectFolderSyncEntry,
+  ProjectFolderSyncResponse,
   ProjectListResponse,
   ProjectMemoryCapability,
   ProjectOverlapCircuitBlockRolePreview,
@@ -186,6 +203,11 @@ import type {
 
 /** ProjectListReadResult reports list availability without falling back to fake project memory. */
 export type ProjectListReadResult = { status: "available"; response: ProjectListResponse } | { status: "not_configured" };
+
+/** ProjectFolderSyncResult reports folder ↔ database reconciliation availability. */
+export type ProjectFolderSyncResult =
+  | { status: "available"; response: ProjectFolderSyncResponse }
+  | { status: "not_configured" };
 
 /** ProjectFleetRiskReadResult reports the cross-project risk dashboard. */
 export type ProjectFleetRiskReadResult =
@@ -1105,6 +1127,8 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
         throw new CatalogStoreError("query_failed", "Project creation returned no persisted rows.", new Error("missing_project_create_rows"));
       }
 
+      await ensureProjectMirrorForKey(projectRow.project_key);
+
       return {
         response: {
           detail: detail.response,
@@ -1495,6 +1519,706 @@ export async function readProjectsFromDatabase(): Promise<ProjectListReadResult>
 }
 
 /**
+ * Reconciles project memory with the on-disk project folder mirror.
+ *
+ * Folder → database: every top-level project directory is registered when no matching
+ * project record exists. Database → folder: every persisted project gets the canonical
+ * subfolder tree so site-created projects remain writable on disk.
+ */
+export async function syncProjectsFromFolderMirror(): Promise<ProjectFolderSyncResult> {
+  const discovery = await listDiscoveredProjectFolders();
+
+  if (discovery.availability === "not_configured") {
+    return { status: "not_configured" };
+  }
+
+  const listResult = await readProjectsFromDatabase();
+
+  if (listResult.status === "not_configured") {
+    return { status: "not_configured" };
+  }
+
+  const entries: ProjectFolderSyncEntry[] = [];
+  let createdCount = 0;
+  let linkedCount = 0;
+  let folderEnsuredCount = 0;
+  let skippedCount = 0;
+  const matchedProjectIds = new Set<string>();
+  const projectsBySlug = new Map<string, ProjectSummary>();
+
+  for (const summary of listResult.response.projects) {
+    projectsBySlug.set(slugify(summary.project.projectKey), summary);
+  }
+
+  for (const folder of discovery.folders) {
+    const existing = projectsBySlug.get(slugify(folder.projectKey));
+
+    if (existing) {
+      matchedProjectIds.add(existing.project.id);
+
+      try {
+        const ensured = await ensureProjectMirrorForKey(existing.project.projectKey);
+        const ingestMessage = ensured.projectRoot
+          ? await formatProjectMirrorIngestMessage(existing.project.id, existing.project.projectKey, ensured.projectRoot)
+          : null;
+        linkedCount += 1;
+        entries.push({
+          folderName: folder.folderName,
+          message: ingestMessage,
+          outcome: "linked",
+          projectId: existing.project.id,
+          projectKey: existing.project.projectKey
+        });
+      } catch (error) {
+        skippedCount += 1;
+        entries.push({
+          folderName: folder.folderName,
+          message: error instanceof Error ? error.message : "Project folder could not be prepared.",
+          outcome: "error",
+          projectId: existing.project.id,
+          projectKey: existing.project.projectKey
+        });
+      }
+
+      continue;
+    }
+
+    const created = await createProjectFromFolderMirror(folder.projectKey, folder.folderName);
+
+    if (created.status === "created") {
+      createdCount += 1;
+      matchedProjectIds.add(created.response.project.id);
+      projectsBySlug.set(slugify(created.response.project.projectKey), {
+        bomImportCount: 0,
+        latestActivityAt: created.response.project.updatedAt,
+        project: created.response.project,
+        revisionCount: 1,
+        usageCount: 0
+      });
+      const ensured = await ensureProjectMirrorForKey(created.response.project.projectKey);
+      const ingestMessage = ensured.projectRoot
+        ? await formatProjectMirrorIngestMessage(created.response.project.id, created.response.project.projectKey, ensured.projectRoot)
+        : null;
+      entries.push({
+        folderName: folder.folderName,
+        message: ingestMessage,
+        outcome: "created",
+        projectId: created.response.project.id,
+        projectKey: created.response.project.projectKey
+      });
+      continue;
+    }
+
+    if (created.status === "conflict") {
+      const conflictSummary = projectsBySlug.get(slugify(folder.projectKey));
+      if (conflictSummary) {
+        matchedProjectIds.add(conflictSummary.project.id);
+        linkedCount += 1;
+        entries.push({
+          folderName: folder.folderName,
+          message: null,
+          outcome: "linked",
+          projectId: conflictSummary.project.id,
+          projectKey: conflictSummary.project.projectKey
+        });
+        continue;
+      }
+    }
+
+    skippedCount += 1;
+    entries.push({
+      folderName: folder.folderName,
+      message: created.status === "conflict" ? created.message : "Project memory is not configured.",
+      outcome: "error",
+      projectId: null,
+      projectKey: folder.projectKey
+    });
+  }
+
+  for (const summary of listResult.response.projects) {
+    if (matchedProjectIds.has(summary.project.id)) {
+      continue;
+    }
+
+    try {
+      await ensureProjectMirrorForKey(summary.project.projectKey);
+      folderEnsuredCount += 1;
+      entries.push({
+        folderName: null,
+        message: null,
+        outcome: "folder_ensured",
+        projectId: summary.project.id,
+        projectKey: summary.project.projectKey
+      });
+    } catch (error) {
+      skippedCount += 1;
+      entries.push({
+        folderName: null,
+        message: error instanceof Error ? error.message : "Project folder could not be created.",
+        outcome: "error",
+        projectId: summary.project.id,
+        projectKey: summary.project.projectKey
+      });
+    }
+  }
+
+  return {
+    response: {
+      availability: "configured",
+      createdCount,
+      entries,
+      folderEnsuredCount,
+      linkedCount,
+      message:
+        createdCount + linkedCount + folderEnsuredCount > 0
+          ? "Project list now matches the folder mirror."
+          : "No changes were needed. The project list already matches the folder mirror.",
+      rootPath: discovery.rootPath,
+      skippedCount
+    },
+    status: "available"
+  };
+}
+
+/** ProjectMirrorIngestSummary reports parts-list import and per-part mirror linking for one project. */
+export interface ProjectMirrorIngestSummary {
+  assetsLinked: number;
+  bomImportId: string | null;
+  bomLinesProcessed: number;
+  catalogAssetsIngested: number;
+  partsListFile: string | null;
+  partsRegistered: number;
+  usagesLinked: number;
+}
+
+/** ProjectMirrorIngestResult is the API outcome for one project mirror ingest request. */
+export type ProjectMirrorIngestResult =
+  | { status: "not_configured" }
+  | { status: "not_found" }
+  | { status: "mirror_unavailable"; message: string }
+  | { status: "available"; response: ProjectMirrorIngestSummary };
+
+/**
+ * Formats operator-facing sync copy after parts-list import and mirror asset linking.
+ */
+async function formatProjectMirrorIngestMessage(
+  projectId: string,
+  _projectKey: string,
+  projectRoot: string
+): Promise<string | null> {
+  try {
+    const summary = await ingestProjectMirrorContents(projectId, projectRoot, "project-folder-sync");
+    const parts: string[] = [];
+
+    if (summary.partsListFile && summary.bomImportId) {
+      parts.push(`imported ${summary.partsListFile}`);
+    }
+
+    if (summary.partsRegistered > 0) {
+      parts.push(`registered ${summary.partsRegistered} catalog part${summary.partsRegistered === 1 ? "" : "s"}`);
+    }
+
+    if (summary.catalogAssetsIngested > 0) {
+      parts.push(`ingested ${summary.catalogAssetsIngested} catalog asset${summary.catalogAssetsIngested === 1 ? "" : "s"}`);
+    }
+
+    if (summary.usagesLinked > 0) {
+      parts.push(`linked ${summary.usagesLinked} project usage${summary.usagesLinked === 1 ? "" : "s"}`);
+    }
+
+    if (summary.assetsLinked > 0) {
+      parts.push(`linked ${summary.assetsLinked} mirror file${summary.assetsLinked === 1 ? "" : "s"}`);
+    }
+
+    return parts.length > 0 ? parts.join("; ") : null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Project mirror ingest failed.";
+  }
+}
+
+/**
+ * Imports the on-disk parts list, registers missing catalog parts from BOM rows, and links mirror assets.
+ */
+export async function ingestProjectMirrorForProjectInDatabase(
+  projectId: string,
+  actor: string
+): Promise<ProjectMirrorIngestResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  if (!(await projectExists(databasePool, projectId))) {
+    return { status: "not_found" };
+  }
+
+  const projectResult = await databasePool.query<{ project_key: string }>(
+    `
+      SELECT project_key
+      FROM projects
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [projectId]
+  );
+  const projectKey = projectResult.rows[0]?.project_key;
+
+  if (!projectKey) {
+    return { status: "not_found" };
+  }
+
+  const ensured = await ensureProjectMirrorForKey(projectKey);
+
+  if (!ensured.projectRoot) {
+    return {
+      message: "Project folder mirror is not configured or this project folder is unavailable on disk.",
+      status: "mirror_unavailable"
+    };
+  }
+
+  try {
+    return {
+      response: await ingestProjectMirrorContents(projectId, ensured.projectRoot, actor),
+      status: "available"
+    };
+  } catch (error) {
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Reads the parts-list folder, persists a BOM import when needed, and links mirror assets to BOM lines.
+ */
+export async function ingestProjectMirrorContents(
+  projectId: string,
+  projectRoot: string,
+  actor: string
+): Promise<ProjectMirrorIngestSummary> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return {
+      assetsLinked: 0,
+      bomImportId: null,
+      bomLinesProcessed: 0,
+      catalogAssetsIngested: 0,
+      partsListFile: null,
+      partsRegistered: 0,
+      usagesLinked: 0
+    };
+  }
+
+  const partsListFolderPath = path.join(projectRoot, "parts-list");
+  const partsListCandidate = await selectPartsListImportFile(partsListFolderPath);
+  let bomImportId: string | null = null;
+  let bomLinesProcessed = 0;
+  let assetsLinked = 0;
+  let partsRegistered = 0;
+  let catalogAssetsIngested = 0;
+  let usagesLinked = 0;
+
+  if (partsListCandidate) {
+    bomImportId = await ensureBomImportFromPartsListFile(databasePool, projectId, partsListCandidate, actor);
+  }
+
+  if (!bomImportId) {
+    bomImportId = await readLatestBomImportIdForProject(databasePool, projectId);
+  }
+
+  if (!bomImportId) {
+    return {
+      assetsLinked: 0,
+      bomImportId: null,
+      bomLinesProcessed: 0,
+      catalogAssetsIngested: 0,
+      partsListFile: partsListCandidate?.name ?? null,
+      partsRegistered: 0,
+      usagesLinked: 0
+    };
+  }
+
+  await matchBomImportRowsInDatabase(bomImportId);
+
+  let lines = await readBomImportLines(databasePool, bomImportId);
+  bomLinesProcessed = lines.length;
+
+  const catalogSummary = await registerCatalogPartsFromProjectMirror(databasePool, projectId, projectRoot, lines, actor);
+  partsRegistered = catalogSummary.partsRegistered;
+  catalogAssetsIngested = catalogSummary.catalogAssetsIngested;
+  usagesLinked = catalogSummary.usagesLinked;
+
+  lines = await readBomImportLines(databasePool, bomImportId);
+
+  if (partsListCandidate && !(await mirrorEvidenceAlreadyLinked(databasePool, "bom_import", bomImportId, `Parts list: ${partsListCandidate.name}`))) {
+    await createEvidenceAttachmentInDatabase(
+      {
+        evidenceType: "link",
+        notes: `Parts list source file at ${path.relative(projectRoot, partsListCandidate.absolutePath).split(path.sep).join("/")}.`,
+        provenance: "project_folder_mirror",
+        sourceUrl: buildMirrorAssetSourceUrl(partsListCandidate.absolutePath),
+        targetId: bomImportId,
+        targetType: "bom_import",
+        title: `Parts list: ${partsListCandidate.name}`
+      },
+      actor
+    );
+  }
+
+  const assetIndex = await indexMirrorAssetFiles(projectRoot);
+
+  for (const line of lines) {
+    const partNames = [line.rawMpn, ...line.designators].filter((value): value is string => Boolean(value?.trim()));
+    const lookupKeys = new Set<string>();
+
+    for (const partName of partNames) {
+      for (const key of buildPartLookupKeys(partName)) {
+        lookupKeys.add(key);
+      }
+    }
+
+    if (lookupKeys.size === 0) {
+      continue;
+    }
+
+    const matches = findMirrorAssetsForPart(assetIndex, Array.from(lookupKeys));
+    assetsLinked += await linkMirrorAssetsToBomLine(databasePool, line.id, matches, actor);
+  }
+
+  return {
+    assetsLinked,
+    bomImportId,
+    bomLinesProcessed,
+    catalogAssetsIngested,
+    partsListFile: partsListCandidate?.name ?? null,
+    partsRegistered,
+    usagesLinked
+  };
+}
+
+/**
+ * Persists one BOM import from a mirror parts-list file when that filename is not already imported.
+ */
+async function ensureBomImportFromPartsListFile(
+  databasePool: Pool,
+  projectId: string,
+  candidate: Awaited<ReturnType<typeof selectPartsListImportFile>>,
+  actor: string
+): Promise<string | null> {
+  if (!candidate) {
+    return null;
+  }
+
+  const existingImportId = await readBomImportIdBySourceFilename(databasePool, projectId, candidate.name);
+  if (existingImportId) {
+    await matchBomImportRowsInDatabase(existingImportId);
+    return existingImportId;
+  }
+
+  let preview;
+  try {
+    preview = buildBomImportPreview({
+      rawContent: await readPartsListImportContent(candidate),
+      sourceFilename: candidate.name,
+      sourceFormat: candidate.sourceFormat
+    });
+  } catch (error) {
+    if (error instanceof BomCsvParseError) {
+      return null;
+    }
+
+    throw error;
+  }
+
+  if (!hasMappedHeader(preview.headers, preview.suggestedMapping.mpn)) {
+    return null;
+  }
+
+  const revisionId = await readLatestDraftRevisionIdForProject(databasePool, projectId);
+  if (!revisionId) {
+    return null;
+  }
+
+  const importResult = await createBomImportInDatabase(
+    projectId,
+    {
+      columnMapping: preview.suggestedMapping,
+      projectRevisionId: revisionId,
+      rawContent: await readPartsListImportContent(candidate),
+      sourceFilename: candidate.name,
+      sourceFormat: candidate.sourceFormat
+    },
+    actor
+  );
+
+  if (importResult.status !== "created") {
+    return null;
+  }
+
+  await matchBomImportRowsInDatabase(importResult.response.bomImport.id);
+  return importResult.response.bomImport.id;
+}
+
+/**
+ * Links mirror asset files to one BOM line as provenance-only evidence rows.
+ */
+async function linkMirrorAssetsToBomLine(
+  databasePool: Pool,
+  bomLineId: string,
+  files: MirrorAssetFile[],
+  actor: string
+): Promise<number> {
+  let linked = 0;
+
+  for (const file of files) {
+    const title = buildMirrorAssetEvidenceTitle(file);
+
+    if (await mirrorEvidenceAlreadyLinked(databasePool, "bom_line", bomLineId, title)) {
+      continue;
+    }
+
+    const created = await createEvidenceAttachmentInDatabase(
+      {
+        evidenceType: "link",
+        fileHash: await hashMirrorAssetFile(file.absolutePath),
+        mimeType: guessMirrorAssetMimeType(file.name),
+        notes: buildMirrorAssetEvidenceNotes(file),
+        provenance: "project_folder_mirror",
+        sourceUrl: buildMirrorAssetSourceUrl(file.absolutePath),
+        targetId: bomLineId,
+        targetType: "bom_line",
+        title
+      },
+      actor
+    );
+
+    if (created.status === "created") {
+      linked += 1;
+    }
+  }
+
+  return linked;
+}
+
+/**
+ * Returns whether one mirror-linked evidence row already exists for a target and title.
+ */
+async function mirrorEvidenceAlreadyLinked(
+  databasePool: Pool,
+  targetType: EvidenceTargetType,
+  targetId: string,
+  title: string
+): Promise<boolean> {
+  const result = await databasePool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM evidence_attachments
+      WHERE target_type = $1
+        AND target_id = $2
+        AND title = $3
+        AND provenance = 'project_folder_mirror'
+      LIMIT 1
+    `,
+    [targetType, targetId, title]
+  );
+
+  return result.rows.length > 0;
+}
+
+/**
+ * Reads the newest BOM import id for one project.
+ */
+async function readLatestBomImportIdForProject(databasePool: Pool, projectId: string): Promise<string | null> {
+  const result = await databasePool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM bom_imports
+      WHERE project_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [projectId]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Reads a BOM import id when the same parts-list filename was already imported for the project.
+ */
+async function readBomImportIdBySourceFilename(
+  databasePool: Pool,
+  projectId: string,
+  sourceFilename: string
+): Promise<string | null> {
+  const result = await databasePool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM bom_imports
+      WHERE project_id = $1
+        AND source_filename = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [projectId, sourceFilename]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Reads the latest draft revision id for one project so mirror imports attach to working BOM state.
+ */
+async function readLatestDraftRevisionIdForProject(databasePool: Pool, projectId: string): Promise<string | null> {
+  const result = await databasePool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM project_revisions
+      WHERE project_id = $1
+      ORDER BY CASE WHEN revision_status = 'draft' THEN 0 ELSE 1 END, created_at DESC
+      LIMIT 1
+    `,
+    [projectId]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Guesses a MIME type for one mirror asset filename.
+ */
+function guessMirrorAssetMimeType(fileName: string): string | null {
+  const extension = path.extname(fileName).toLowerCase();
+
+  switch (extension) {
+    case ".pdf":
+      return "application/pdf";
+    case ".csv":
+      return "text/csv";
+    case ".json":
+      return "application/json";
+    case ".md":
+    case ".txt":
+      return "text/plain";
+    case ".step":
+    case ".stp":
+      return "model/step";
+    case ".stl":
+      return "model/stl";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Creates a project record from an on-disk folder name while preserving the folder's key casing.
+ */
+async function createProjectFromFolderMirror(projectKey: string, folderName: string): Promise<ProjectCreateResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const normalizedProjectKey = sanitizeProjectKey(projectKey);
+  const normalizedName = humanizeProjectFolderName(folderName);
+  const revisionLabel = "Working";
+
+  try {
+    const client = await databasePool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const projectId = buildProjectId(normalizedProjectKey);
+      const revisionId = buildProjectRevisionId(projectId, revisionLabel);
+      const now = new Date();
+      const projectResult = await client.query<DatabaseProjectRow>(
+        `
+          INSERT INTO projects (id, project_key, name, description, owner, status, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          RETURNING id, project_key, name, description, owner, status, created_at, updated_at
+        `,
+        [projectId, normalizedProjectKey, normalizedName, "Registered from project folder mirror.", null, "active", now]
+      );
+      const revisionResult = await client.query<DatabaseProjectRevisionRow>(
+        `
+          INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
+          VALUES ($1, $2, $3, 'draft', $4, $5, $5)
+          RETURNING id, project_id, revision_label, revision_status, source_reference, released_at, created_at, updated_at
+        `,
+        [revisionId, projectId, revisionLabel, "Imported from project folder mirror", now]
+      );
+
+      await client.query("COMMIT");
+
+      await ensureProjectMirrorForKey(normalizedProjectKey);
+
+      const detail = await readProjectDetailFromDatabase(projectId);
+
+      if (detail.status !== "available") {
+        throw new CatalogStoreError("query_failed", "Created project could not be read back from project memory.", new Error("project_readback_failed"));
+      }
+
+      const projectRow = projectResult.rows[0];
+      const revisionRow = revisionResult.rows[0];
+
+      if (!projectRow || !revisionRow) {
+        throw new CatalogStoreError("query_failed", "Project creation returned no persisted rows.", new Error("missing_project_create_rows"));
+      }
+
+      return {
+        response: {
+          detail: detail.response,
+          initialRevision: mapProjectRevisionRow(revisionRow),
+          project: mapProjectRow(projectRow)
+        },
+        status: "created"
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+
+      if (isUniqueViolation(error)) {
+        return {
+          message: "A project with that key already exists.",
+          status: "conflict"
+        };
+      }
+
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return {
+        message: "A project with that key already exists.",
+        status: "conflict"
+      };
+    }
+
+    throw toProjectMemoryStoreError(error);
+  }
+}
+
+/**
+ * Turns a dropped folder name into readable project metadata without inventing extra context.
+ */
+function humanizeProjectFolderName(folderName: string): string {
+  const words = folderName
+    .replace(/[._-]+/gu, " ")
+    .trim()
+    .split(/\s+/u)
+    .filter((word) => word.length > 0);
+
+  if (words.length === 0) {
+    return folderName;
+  }
+
+  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+}
+
+/**
  * Reads a cross-project risk dashboard with explainable BOM, approval, lifecycle, CAD, and follow-up counts.
  */
 export async function readProjectFleetRiskFromDatabase(): Promise<ProjectFleetRiskReadResult> {
@@ -1800,6 +2524,64 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
 }
 
 /**
+ * Registers unmatched BOM rows into the catalog from the project folder before internal matching runs.
+ */
+export async function preflightCatalogRegistrationForBomImport(databasePool: Pool, bomImportId: string): Promise<void> {
+  try {
+    const contextResult = await databasePool.query<{ project_id: string; project_key: string }>(
+      `
+        SELECT bi.project_id, p.project_key
+        FROM bom_imports bi
+        JOIN projects p ON p.id = bi.project_id
+        WHERE bi.id = $1
+        LIMIT 1
+      `,
+      [bomImportId]
+    );
+    const context = contextResult.rows[0];
+
+    if (!context) {
+      return;
+    }
+
+    const ensured = await ensureProjectMirrorForKey(context.project_key);
+
+    if (!ensured.projectRoot) {
+      return;
+    }
+
+    const lines = await readBomImportLines(databasePool, bomImportId);
+
+    if (lines.length === 0) {
+      return;
+    }
+
+    await registerCatalogPartsFromProjectMirror(
+      databasePool,
+      context.project_id,
+      ensured.projectRoot,
+      lines,
+      "bom-match-preflight"
+    );
+  } catch {
+    // Mirror ingest is best-effort; matching must still run when the folder is empty or misconfigured.
+  }
+}
+
+/**
+ * Registers missing catalog parts from the project folder, then runs deterministic BOM matching.
+ */
+export async function matchBomImportRowsWithCatalogPreflightInDatabase(bomImportId: string): Promise<BomImportMatchResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (databasePool) {
+    await preflightCatalogRegistrationForBomImport(databasePool, bomImportId);
+  }
+
+  return matchBomImportRowsInDatabase(bomImportId);
+}
+
+/**
  * Matches one persisted BOM import against internal catalog rows and creates usage only for confirmed rows.
  */
 export async function matchBomImportRowsInDatabase(bomImportId: string): Promise<BomImportMatchResult> {
@@ -1843,9 +2625,16 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
       // before any write, letting the usage snapshot reads batch once per import.
       const lineOutcomes = sourceLines.map((line) => ({
         line,
-        outcome: line.matchStatus === "ignored"
-          ? ({ matchConfidenceScore: line.matchConfidenceScore, matchedPartId: line.matchedPartId, matchStatus: "ignored" } satisfies BomLineMatchOutcome)
-          : resolveBomLineMatch(line, candidatesByMpn)
+        outcome:
+          line.matchStatus === "ignored"
+            ? ({ matchConfidenceScore: line.matchConfidenceScore, matchedPartId: line.matchedPartId, matchStatus: "ignored" } satisfies BomLineMatchOutcome)
+            : line.matchStatus === "matched" && line.matchedPartId
+              ? ({
+                  matchConfidenceScore: line.matchConfidenceScore ?? 1,
+                  matchedPartId: line.matchedPartId,
+                  matchStatus: "matched"
+                } satisfies BomLineMatchOutcome)
+              : resolveBomLineMatch(line, candidatesByMpn)
       }));
 
       for (const { outcome } of lineOutcomes) {

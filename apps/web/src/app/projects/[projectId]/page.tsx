@@ -10,6 +10,7 @@ import { ApprovalBatchPanel } from "../../../components/ApprovalBatchPanel";
 import { BomDiagnosticsPanel } from "../../../components/BomDiagnosticsPanel";
 import { BomImportPanel } from "../../../components/BomImportPanel";
 import { BomImportMatchPanel } from "../../../components/BomImportMatchPanel";
+import { ProjectMirrorCatalogPanel } from "../../../components/ProjectMirrorCatalogPanel";
 import { CircuitBlockInstantiationPanel } from "../../../components/CircuitBlockInstantiationPanel";
 import { EvidenceAttachmentPanel } from "../../../components/EvidenceAttachmentPanel";
 import { ExportBundlePanel } from "../../../components/ExportBundlePanel";
@@ -20,11 +21,13 @@ import { ProjectFilesPanel } from "../../../components/ProjectFilesPanel";
 import { ProjectOverlapPanel } from "../../../components/ProjectOverlapPanel";
 import { ProjectRevisionApprovalGatePanel } from "../../../components/ProjectRevisionApprovalGatePanel";
 import { RecentActivityStrip } from "../../../components/RecentActivityStrip";
-import { ProjectUsageBrowser } from "../../../components/ProjectUsageBrowser";
+import { ProjectPartKitPanel } from "../../../components/ProjectPartKitPanel";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, fetchProjectOverlapPanel, isApiClientError } from "../../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchEntityAuditEvents, fetchProjectBomHealth, fetchProjectDetail, fetchProjectEvidenceAttachments, fetchProjectExportBundles, fetchProjectFiles, fetchProjectFollowUps, fetchProjectOverlapPanel, fetchProjectPartKits, isApiClientError } from "../../../lib/api-client";
+import { enrichPartKitsWithCatalogDetail } from "../../../lib/enrich-project-part-kits";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
 import type { ApiHealth } from "../../../lib/api-client";
+import type { ProjectPartKit } from "@ee-library/shared/types";
 import type { AuditEvent } from "@ee-library/shared/types";
 import type { BadgeTone } from "@ee-library/ui";
 import type {
@@ -100,9 +103,12 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
 
   const { bomHealth, evidence, exportBundles, files, followUps, health, overlap, response } = detailState;
   const { bomImports, capabilities, project, revisions, summary, usages } = response;
+  const partKitsState = await loadProjectPartKits(project.id, usages, files);
+  const mirrorAvailable = partKitsState.mirrorAvailable || files?.availability === "configured";
   const recentActivity = await loadRecentActivityForProject(project.id);
   const foundationCapabilities = capabilities.filter((capability) => capability.state === "foundation");
   const plannedCapabilities = capabilities.filter((capability) => capability.state === "planned");
+  const hasPartKits = partKitsState.kits.length > 0;
 
   return (
     <main className="projects-layout">
@@ -119,8 +125,9 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             {project.description ? <> &mdash; {project.description}</> : null}
           </p>
           <div className="empty-recovery-actions" aria-label="Project quick actions">
-            <a className="button-link" href="#project-bom-upload-heading">Upload parts list</a>
-            <Link className="button-link button-link--quiet" href="/where-used">Search where-used</Link>
+            <a className="button-link" href="#project-usage-heading">{hasPartKits ? "Edit part kit" : "Parts in this project"}</a>
+            <a className="button-link button-link--quiet" href="#project-files-heading">Project files</a>
+            <a className="button-link button-link--quiet" href="#project-parts-list-heading">Parts list setup</a>
             <a className="button-link button-link--quiet" href="#advanced-project-tools">More tools</a>
           </div>
           <div className="projects-hero__status">
@@ -131,54 +138,35 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </div>
       </section>
 
-      <section className="detail-section" aria-labelledby="project-overlap-heading">
-        <SectionHeading id="project-overlap-heading" subtitle="Prior projects and reusable roles sharing confirmed parts." title="Prior project overlap" />
-        <ProjectOverlapPanel overlap={overlap} />
-      </section>
-
       <section className="detail-section" aria-labelledby="project-usage-heading">
-        <SectionHeading id="project-usage-heading" subtitle="The parts confirmed in this project. Type to search." title="Parts in this project" />
-        <SectionPanel
-          description="Only confirmed matches appear here. Unclear rows wait in diagnostics until they are reviewed."
-          title={usages.length > 0 ? `${usages.length} part${usages.length === 1 ? "" : "s"} in this project` : "No confirmed parts yet"}
-        >
-          {usages.length > 0 ? (
-            <ProjectUsageBrowser usages={usages} />
-          ) : (
-            <EmptyState
-              title="No confirmed part usage yet"
-              body="Upload a parts list below, then confirm matches to populate this list. No parts are confirmed for this project yet."
-            />
-          )}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-bom-upload-heading">
-        <SectionHeading id="project-bom-upload-heading" subtitle="Upload a CSV or XLSX file. Map columns. Save rows." title="Upload parts list" />
-        <SectionPanel
-          description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
-          title="Upload mapped BOM"
-        >
-          <BomImportPanel projectId={project.id} revisions={revisions} />
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="project-bom-imports-heading">
         <SectionHeading
-          id="project-bom-imports-heading"
-          subtitle="Step 2: match the rows you uploaded so the app links them to known parts."
-          title="Match uploaded parts list"
+          id="project-usage-heading"
+          subtitle="Edit datasheet, 3D, footprint, note, and supplier link without leaving the project."
+          title="Parts in this project"
         />
         <SectionPanel
-          description="Each saved upload appears here. Click Match rows to link the list to known parts. Nothing is linked to your project until you do this step."
-          title={bomImports.length > 0 ? `${bomImports.length} saved upload${bomImports.length === 1 ? "" : "s"}` : "Nothing uploaded yet"}
+          description="Expand a part to edit its kit. Unmatched BOM rows stay in diagnostics until you match or register them."
+          title={partKitsState.kits.length > 0 ? `${partKitsState.kits.length} part${partKitsState.kits.length === 1 ? "" : "s"}` : "No parts in kit yet"}
         >
-          {bomImports.length > 0 ? (
-            <BomImportTable bomImports={bomImports} />
+          {partKitsState.loadFailed && summary.usageCount > 0 ? (
+            <p className="project-part-kit-panel__warning muted-copy" role="status">
+              Part kit data could not be refreshed from the API. Restart the API after pulling latest changes, then reload. Showing confirmed usage from project memory until then.
+            </p>
+          ) : null}
+          {partKitsState.kits.length > 0 ? (
+            <ProjectPartKitPanel
+              initialKits={partKitsState.kits}
+              mirrorAvailable={mirrorAvailable}
+              projectId={project.id}
+            />
           ) : (
             <EmptyState
-              title="No uploads to match yet"
-              body="Upload a parts list above first. After you save it, it appears here so you can match the rows to known parts."
+              title="No parts in kit yet"
+              body={
+                summary.bomImportCount > 0
+                  ? "Your parts list is uploaded. Open Parts list setup below, click Register missing parts from folder, then Match rows so parts appear here for kit editing."
+                  : "Use Parts list setup below to upload and match rows, or register parts from your project folder."
+              }
             />
           )}
         </SectionPanel>
@@ -198,6 +186,57 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </SectionPanel>
       </section>
 
+      <section className="detail-section project-bom-pipeline" aria-labelledby="project-parts-list-heading">
+        <SectionHeading
+          id="project-parts-list-heading"
+          subtitle="Upload a spreadsheet, then match rows so parts appear in the kit above."
+          title="Parts list setup"
+        />
+
+        <section className="detail-section detail-section--nested" aria-labelledby="project-bom-upload-heading">
+          <SectionHeading id="project-bom-upload-heading" subtitle="Step 1: upload a CSV or XLSX file, map columns, and save rows." title="Upload parts list" />
+          <SectionPanel
+            description="This step saves your parts list rows. Matching them to known parts is a separate step so wrong rows are not linked by accident."
+            title="Upload mapped BOM"
+          >
+            <BomImportPanel projectId={project.id} revisions={revisions} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section detail-section--nested" aria-labelledby="project-bom-imports-heading">
+          <SectionHeading
+            id="project-bom-imports-heading"
+            subtitle="Step 2: match the rows you uploaded so the app links them to known parts."
+            title="Match uploaded parts list"
+          />
+          <SectionPanel
+            description="Each saved upload appears here. Register missing MPNs from your project folder, then click Match rows to link the list to known parts."
+            title={bomImports.length > 0 ? `${bomImports.length} saved upload${bomImports.length === 1 ? "" : "s"}` : "Nothing uploaded yet"}
+          >
+            {bomImports.length > 0 ? (
+              <>
+                <ProjectMirrorCatalogPanel projectId={project.id} />
+                <BomImportTable bomImports={bomImports} />
+              </>
+            ) : (
+              <EmptyState
+                title="No uploads to match yet"
+                body="Upload a parts list in step 1 first. After you save it, it appears here so you can match the rows to known parts."
+              />
+            )}
+          </SectionPanel>
+        </section>
+      </section>
+
+      <section className="detail-section" aria-labelledby="project-overlap-heading">
+        <SectionHeading
+          id="project-overlap-heading"
+          subtitle="Other projects and reusable roles that share confirmed parts with this one."
+          title="Prior project overlap"
+        />
+        <ProjectOverlapPanel overlap={overlap} />
+      </section>
+
       <details className="projects-advanced" id="advanced-project-tools">
         <summary>Advanced project tools</summary>
         <p className="projects-advanced__lede muted-copy">
@@ -208,7 +247,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
 
         <OperatorChecklist
           primaryActionHref={response.bomImports.length > 0 ? "#project-bom-imports-heading" : "#project-bom-upload-heading"}
-          primaryActionLabel={response.bomImports.length > 0 ? "Match BOM rows" : "Upload first BOM"}
+          primaryActionLabel={response.bomImports.length > 0 ? "Match parts list rows" : "Upload first parts list"}
           steps={[
             {
               detail: "Upload your parts list file.",
@@ -387,6 +426,80 @@ async function loadRecentActivityForProject(projectId: string): Promise<AuditEve
 }
 
 /**
+ * Loads part kit summaries for the project parts table; failures downgrade to an empty list.
+ */
+async function loadProjectPartKits(
+  projectId: string,
+  usages: ProjectDetailResponse["usages"],
+  files: ProjectFilesResponse | null
+): Promise<{ kits: ProjectPartKit[]; mirrorAvailable: boolean; loadFailed: boolean }> {
+  const mirrorFromFiles = files?.availability === "configured";
+
+  try {
+    const response = await fetchProjectPartKits(projectId);
+
+    if (response) {
+      return {
+        kits: await enrichPartKitsWithCatalogDetail(response.kits),
+        loadFailed: false,
+        mirrorAvailable: response.mirrorAvailable || mirrorFromFiles
+      };
+    }
+  } catch {
+    // Fall through to usage-based fallback when the kits route is unavailable.
+  }
+
+  if (usages.length > 0) {
+    return {
+      kits: await enrichPartKitsWithCatalogDetail(buildFallbackPartKitsFromUsages(usages)),
+      loadFailed: true,
+      mirrorAvailable: mirrorFromFiles
+    };
+  }
+
+  return {
+    kits: [],
+    loadFailed: true,
+    mirrorAvailable: mirrorFromFiles
+  };
+}
+
+/**
+ * Builds minimal kits from confirmed usage when the part-kits API cannot be reached.
+ */
+function buildFallbackPartKitsFromUsages(usages: ProjectDetailResponse["usages"]): ProjectPartKit[] {
+  const kitsByPartId = new Map<string, ProjectPartKit>();
+
+  for (const usage of usages) {
+    const existing = kitsByPartId.get(usage.partId);
+    const mpn = usage.partMpn?.trim() ?? usage.partId;
+
+    if (existing) {
+      existing.designators = [...new Set([...existing.designators, ...usage.designators])];
+      existing.usageIds.push(usage.id);
+      continue;
+    }
+
+    kitsByPartId.set(usage.partId, {
+      datasheet: null,
+      designators: [...usage.designators],
+      footprint: null,
+      manufacturerName: usage.manufacturerName ?? null,
+      model: null,
+      mpn,
+      note: null,
+      partId: usage.partId,
+      partUrl: null,
+      usageIds: [usage.id]
+    });
+  }
+
+  return Array.from(kitsByPartId.values()).sort((left, right) =>
+    left.mpn.localeCompare(right.mpn, undefined, { sensitivity: "base" })
+  );
+}
+
+/**
  * Loads one project detail while preserving API and database setup failures.
  */
 async function loadProjectDetail(projectId: string): Promise<ProjectDetailState> {
@@ -561,14 +674,14 @@ function buildProjectNextStepActions({
       ? {
           body: "Persist the next revision so diagnostics and compare stay current.",
           href: "#project-bom-upload-heading",
-          label: "Upload next BOM revision",
+          label: "Upload next parts list",
           signal: `${response.bomImports.length} imported`
         }
       : {
           body: "Start by uploading one mapped BOM so the rest of this workspace can derive usage and risk.",
           href: "#project-bom-upload-heading",
-          label: "Upload first BOM",
-          signal: "No BOM imports"
+          label: "Upload first parts list",
+          signal: "No parts list uploads"
         },
     hasUsage
       ? {

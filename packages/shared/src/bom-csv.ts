@@ -212,7 +212,23 @@ export function suggestBomColumnMapping(headers: string[]): BomColumnMapping {
     mpn: findHeader(headers, ["mpn", "manufacturer part number", "mfg part number", "mfr part number", "part number", "part no", "part"]),
     notes: findHeader(headers, ["notes", "note", "comment", "comments"]),
     quantity: findHeader(headers, ["qty", "quantity", "count"]),
-    supplierReference: findHeader(headers, ["supplier", "supplier part", "supplier part number", "supplier pn", "digikey", "mouser", "lcsc", "jlcpcb", "provider part"])
+    supplierReference: findHeader(headers, [
+      "supplier",
+      "supplier part",
+      "supplier part number",
+      "supplier pn",
+      "supplier url",
+      "supplier link",
+      "product url",
+      "purchase link",
+      "link",
+      "url",
+      "digikey",
+      "mouser",
+      "lcsc",
+      "jlcpcb",
+      "provider part"
+    ])
   };
 }
 

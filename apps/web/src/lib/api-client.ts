@@ -71,6 +71,8 @@ import type {
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
   PartDetailResponse,
+  ProjectFilesRootSettingsResponse,
+  ProjectFilesRootSettingsUpdateInput,
   PartSubstitutionCreateInput,
   PartSubstitutionCreateResponse,
   PartSubstitutionListResponse,
@@ -93,6 +95,11 @@ import type {
   ProjectFromCsvInput,
   ProjectFromCsvResponse,
   ProjectOverlapPanelResponse,
+  ProjectFolderSyncResponse,
+  ProjectMirrorIngestResponse,
+  ProjectPartKitUpdateInput,
+  ProjectPartKitUpdateResponse,
+  ProjectPartKitsResponse,
   ProjectListResponse,
   VendorCreateInput,
   VendorCreateResponse,
@@ -311,6 +318,95 @@ export async function createProject(input: ProjectCreateInput): Promise<ProjectC
 }
 
 /**
+ * Reconciles the project list with top-level folders in the configured project mirror root.
+ */
+/**
+ * Imports the on-disk parts list and registers missing BOM rows into the catalog for one project.
+ */
+/**
+ * Fetches part kit summaries for one project (files on disk + BOM note/URL).
+ */
+export async function fetchProjectPartKits(projectId: string): Promise<ProjectPartKitsResponse | null> {
+  const apiPath = `/projects/${encodeURIComponent(projectId)}/part-kits`;
+  const response = await fetch(typeof window === "undefined" ? buildApiUrl(apiPath) : `/api/projects/${encodeURIComponent(projectId)}/part-kits`, {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project part kits request");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectPartKitsResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Saves part kit metadata and optionally syncs mirror files into the catalog.
+ */
+export async function updateProjectPartKit(
+  projectId: string,
+  partId: string,
+  input: ProjectPartKitUpdateInput
+): Promise<ProjectPartKitUpdateResponse> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/part-kits/${encodeURIComponent(partId)}`,
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "PATCH"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project part kit update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectPartKitUpdateResponse>;
+
+  return envelope.data;
+}
+
+export async function ingestProjectMirrorFromFolder(projectId: string): Promise<ProjectMirrorIngestResponse> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/mirror-ingest`, {
+    body: "{}",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project mirror ingest");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectMirrorIngestResponse>;
+
+  return envelope.data;
+}
+
+export async function syncProjectsFromFolder(authHeaders?: Record<string, string>): Promise<ProjectFolderSyncResponse> {
+  const response = await fetch(buildApiUrl("/projects/sync-from-folder"), {
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(authHeaders ?? await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder sync");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderSyncResponse>;
+
+  return envelope.data;
+}
+
+/**
  * Creates a project, persists the dropped CSV/XLSX as a BOM import, and runs
  * deterministic matching in one chained call so day-zero onboarding can land on
  * the diagnostics view in a single click. Errors carry structured details
@@ -447,6 +543,45 @@ export async function uploadProjectFile(
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectFileUploadResponse>;
+  return envelope.data;
+}
+
+/**
+ * Reads the admin-controlled project file root setting from the API.
+ */
+export async function fetchProjectFilesRootSettings(authHeaders?: Record<string, string>): Promise<ProjectFilesRootSettingsResponse> {
+  const response = await fetch(buildApiUrl("/admin/project-files-root"), {
+    cache: "no-store",
+    headers: authHeaders ?? await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project file root setting");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFilesRootSettingsResponse>;
+  return envelope.data;
+}
+
+/**
+ * Updates the admin-controlled project file root setting through the API.
+ */
+export async function updateProjectFilesRootSettings(
+  input: ProjectFilesRootSettingsUpdateInput,
+  authHeaders?: Record<string, string>
+): Promise<ProjectFilesRootSettingsResponse> {
+  const response = await fetch(buildApiUrl("/admin/project-files-root"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(authHeaders ?? await getAuthHeaders()) },
+    method: "PATCH"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project file root setting update");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFilesRootSettingsResponse>;
   return envelope.data;
 }
 
@@ -1896,7 +2031,14 @@ export async function applyApprovalBatch(projectId: string, input: ApprovalBatch
  * Builds the API download URL for one asset so the UI can link directly to the redirect endpoint.
  */
 export function buildAssetDownloadUrl(partId: string, assetId: string): string {
-  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+  return `/api/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download?attachment=1`;
+}
+
+/**
+ * Builds a same-origin URL that opens viewable files (PDF, images) in the browser tab.
+ */
+export function buildAssetOpenUrl(partId: string, assetId: string): string {
+  return `/api/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
 }
 
 /**
@@ -1905,7 +2047,7 @@ export function buildAssetDownloadUrl(partId: string, assetId: string): string {
  * the derived viewer artifact have separate availability and trust contracts.
  */
 export function buildAssetPreviewArtifactDownloadUrl(partId: string, assetId: string): string {
-  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`;
+  return `/api/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`;
 }
 
 const MAX_COMPARE_PARTS = 4;
@@ -1936,7 +2078,20 @@ export function buildExportBundleDownloadUrl(storageKey: string | null): string 
  * Resolves the API base URL for local and deployed web runtimes.
  */
 export function getApiBaseUrl(): string {
-  return process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000";
+  const configured = process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000";
+
+  try {
+    const parsed = new URL(configured);
+
+    if (parsed.pathname === "/api" || parsed.pathname.endsWith("/api")) {
+      parsed.pathname = parsed.pathname.replace(/\/api\/?$/u, "") || "/";
+      return parsed.toString().replace(/\/$/u, "");
+    }
+  } catch {
+    // Fall through to the string trim below when the env value is not a full URL.
+  }
+
+  return configured.replace(/\/$/u, "");
 }
 
 /**
