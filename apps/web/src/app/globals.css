@@ -1,13 +1,14 @@
 /**
- * File header: Cool engineering workspace theme — silver-blue surfaces, purple CTAs, dense technical panels.
+ * File header: Cool engineering workspace theme — silver-blue surfaces, green brand + CTAs, dense technical panels.
  *
- * Brand role mapping (V4, 2026-05):
- *   --color-accent   = PURPLE (#431C5D)   → primary action, links, focus rings, verified
+ * Brand role mapping (V5, 2026-05):
+ *   --color-cta      = GREEN (#A7C6A7 + black text) → primary buttons / pressed toggles / hero CTA
+ *   --color-accent   = GREEN (#2F6B3C)   → links, kickers/project keys, focus rings, verified
  *   --color-plum     = BLUE (#2F6F87)     → secondary accent / positive + info moments
  *   --color-info     = BLUE (#2F6F87)     → info badges (Lightsaber Blue #C2DDE6 soft fills)
  *   --color-caution  = ORANGE (#B8500F)   → warnings / attention (solid fills use #E05915)
  *   --color-review   = YELLOW (#7A6F08 text, #CDD422 accent) → review / generated highlights
- *   --color-technical-* = deep PURPLE     → dark sidebar + asset panels
+ *   --color-technical-* = dark GREEN      → dark sidebar + asset panels (light text)
  *   neutrals (bg/surface/border)          = SILVER (#BCCBDE family)
  *   --color-danger kept red so "failed/rejected" stays unmistakable.
  *
@@ -27,10 +28,10 @@
   --color-text: #1A2230;
   --color-text-muted: #51607A;
   --color-text-x-muted: #6A788F;
-  --color-accent: #431C5D;
-  --color-accent-hover: #5B2B7A;
-  --color-accent-soft: #EFE7F4;
-  --color-accent-border: #C3A9D6;
+  --color-accent: #2F6B3C;
+  --color-accent-hover: #25562F;
+  --color-accent-soft: #E3EFE3;
+  --color-accent-border: #A7C6A7;
   --color-cta: #A7C6A7;
   --color-cta-hover: #93B893;
   --color-cta-border: #8AAE8A;
@@ -51,15 +52,15 @@
   --color-review-border: #CDD422;
   --color-caution: #B8500F;
   --color-caution-soft: #FBE7DB;
-  --color-verified: #431C5D;
-  --color-verified-soft: #EFE7F4;
+  --color-verified: #2F6B3C;
+  --color-verified-soft: #E3EFE3;
   --color-generated: #7A6F08;
   --color-generated-soft: #F6F7D3;
-  --color-technical-bg: #2C1340;
-  --color-technical-surface: #3A1A52;
-  --color-technical-border: #50306B;
-  --color-technical-text: #ECE3F5;
-  --color-technical-muted: #B9A5D0;
+  --color-technical-bg: #18301E;
+  --color-technical-surface: #21412A;
+  --color-technical-border: #33543B;
+  --color-technical-text: #E2F0E2;
+  --color-technical-muted: #A7C6A7;
   --color-sidebar-active: #C2DDE6;
   --font-mono: var(--font-dm-mono), "DM Mono", "Cascadia Mono", "SFMono-Regular", monospace;
   --font-sans: var(--font-dm-sans), "DM Sans", "Segoe UI", system-ui, sans-serif;
@@ -1526,7 +1527,7 @@ main > .workspace-jump-nav {
 
 .quick-readiness-result--verified .quick-readiness-result__explanation {
   background: var(--color-verified-soft);
-  border-color: rgba(67, 28, 93, 0.28);
+  border-color: rgba(47, 107, 60, 0.28);
 }
 
 .quick-readiness-result--danger .quick-readiness-result__explanation {
@@ -5191,7 +5192,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .project-evidence-panel__boundary {
   background: var(--color-accent-soft);
-  border: 1px solid rgba(67, 28, 93, 0.25);
+  border: 1px solid rgba(47, 107, 60, 0.25);
   border-radius: var(--radius-sm);
   color: var(--color-text);
   font-size: 0.84rem;
@@ -6697,7 +6698,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-readiness-summary--verified {
   background: var(--color-verified-soft);
-  border-color: rgba(67, 28, 93, 0.28);
+  border-color: rgba(47, 107, 60, 0.28);
   border-left-color: var(--color-verified);
 }
 
@@ -7439,7 +7440,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-section--technical .ui-asset-card {
-  background: linear-gradient(180deg, rgba(58, 26, 82, 0.96) 0%, rgba(44, 19, 64, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(33, 65, 42, 0.96) 0%, rgba(24, 48, 30, 0.98) 100%);
   border-color: var(--color-technical-border);
 }
 
@@ -7669,7 +7670,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-trust-callout[open] {
   background: var(--color-accent-soft);
-  border-color: rgba(67, 28, 93, 0.28);
+  border-color: rgba(47, 107, 60, 0.28);
 }
 
 .detail-trust-callout > p {
@@ -8278,7 +8279,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-export-summary {
-  background: linear-gradient(180deg, rgba(58, 26, 82, 0.42) 0%, rgba(44, 19, 64, 0.18) 100%);
+  background: linear-gradient(180deg, rgba(33, 65, 42, 0.42) 0%, rgba(24, 48, 30, 0.18) 100%);
   border: 1px solid var(--color-technical-border);
   border-radius: var(--radius-md);
   box-shadow: inset 4px 0 0 var(--color-technical-muted);
@@ -8395,7 +8396,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .export-action--available {
-  border-color: rgba(67, 28, 93, 0.32);
+  border-color: rgba(47, 107, 60, 0.32);
   box-shadow: inset 4px 0 0 var(--color-verified);
 }
 
@@ -8424,7 +8425,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-section--technical .export-action {
-  background: linear-gradient(180deg, rgba(58, 26, 82, 0.96) 0%, rgba(44, 19, 64, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(33, 65, 42, 0.96) 0%, rgba(24, 48, 30, 0.98) 100%);
   border-color: var(--color-technical-border);
   color: var(--color-technical-text);
 }
@@ -8921,7 +8922,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .ui-badge--verified {
   background: var(--color-verified-soft);
-  border-color: rgba(67, 28, 93, 0.32);
+  border-color: rgba(47, 107, 60, 0.32);
   color: var(--color-verified);
 }
 
