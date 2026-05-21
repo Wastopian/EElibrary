@@ -1,59 +1,66 @@
 /**
- * File header: Warm engineering workspace theme — earthy surfaces, plum CTAs, dense technical panels.
+ * File header: Cool engineering workspace theme — silver-blue surfaces, purple CTAs, dense technical panels.
  *
- * Brand role mapping (V3, 2026-04):
- *   --color-accent  = PLUM (#4B1D3F)  → primary action, links, focus rings
- *   --color-plum    = GREEN (#99C68E) → secondary accent, status moments, highlights
- *   --color-info    = GREEN (#99C68E) → kept distinct from --color-verified so info badges
- *                                       do not visually collapse into verified badges
- *   --color-verified = PLUM           → unchanged (verified status keeps its emphatic plum)
+ * Brand role mapping (V4, 2026-05):
+ *   --color-accent   = PURPLE (#431C5D)   → primary action, links, focus rings, verified
+ *   --color-plum     = BLUE (#2F6F87)     → secondary accent / positive + info moments
+ *   --color-info     = BLUE (#2F6F87)     → info badges (Lightsaber Blue #C2DDE6 soft fills)
+ *   --color-caution  = ORANGE (#B8500F)   → warnings / attention (solid fills use #E05915)
+ *   --color-review   = YELLOW (#7A6F08 text, #CDD422 accent) → review / generated highlights
+ *   --color-technical-* = deep PURPLE     → dark sidebar + asset panels
+ *   neutrals (bg/surface/border)          = SILVER (#BCCBDE family)
+ *   --color-danger kept red so "failed/rejected" stays unmistakable.
  *
  * Token names are kept stable to avoid renaming across ~3.2k lines of rules; the values flip.
  */
 
 :root {
   color-scheme: light;
-  --color-bg: #EEF1ED;
-  --color-surface: #F7F8F5;
-  --color-surface-elevated: #FDFCFA;
-  --color-surface-muted: #ECEFEA;
-  --color-border: #CED6CB;
-  --color-border-light: #DDE3DA;
-  --color-border-strong: #AEB8AB;
-  --color-rule: #BBC5B7;
-  --color-text: #18140F;
-  --color-text-muted: #6E6459;
-  --color-text-x-muted: #756B61;
-  --color-accent: #4B1D3F;
-  --color-accent-hover: #6B2D5A;
-  --color-accent-soft: #F0E8ED;
-  --color-accent-border: #C4A0B8;
-  --color-plum: #99C68E;
-  --color-plum-hover: #4D8A40;
-  --color-plum-mid: #8DC07F;
-  --color-plum-light: #BDE0B6;
-  --color-plum-soft: #EBF5E8;
-  --color-plum-border: #C5DFBC;
-  --color-danger: #832218;
-  --color-danger-soft: #F8EDEB;
-  --color-danger-border: #E0A09A;
-  --color-info: #99C68E;
-  --color-info-soft: #EBF5E8;
-  --color-review: #7A5F08;
-  --color-review-soft: #FBF6E2;
-  --color-review-border: #D4B840;
-  --color-caution: #A06828;
-  --color-caution-soft: #F6EBD8;
-  --color-verified: #4B1D3F;
-  --color-verified-soft: #F0E8ED;
-  --color-generated: #7A5F08;
-  --color-generated-soft: #FBF6E2;
-  --color-technical-bg: #17301D;
-  --color-technical-surface: #203B26;
-  --color-technical-border: #2F5135;
-  --color-technical-text: #D9EFD3;
-  --color-technical-muted: #8ABF82;
-  --color-sidebar-active: #D9B5C8;
+  --color-bg: #EEF2F7;
+  --color-surface: #F7FAFC;
+  --color-surface-elevated: #FFFFFF;
+  --color-surface-muted: #E7EDF3;
+  --color-border: #C3D0DE;
+  --color-border-light: #D8E0EA;
+  --color-border-strong: #A7B8CB;
+  --color-rule: #C3D0DE;
+  --color-text: #1A2230;
+  --color-text-muted: #51607A;
+  --color-text-x-muted: #6A788F;
+  --color-accent: #431C5D;
+  --color-accent-hover: #5B2B7A;
+  --color-accent-soft: #EFE7F4;
+  --color-accent-border: #C3A9D6;
+  --color-cta: #A7C6A7;
+  --color-cta-hover: #93B893;
+  --color-cta-border: #8AAE8A;
+  --color-cta-text: #16201A;
+  --color-plum: #2F6F87;
+  --color-plum-hover: #245A6E;
+  --color-plum-mid: #4F93AB;
+  --color-plum-light: #9EC9D8;
+  --color-plum-soft: #E6F1F5;
+  --color-plum-border: #B6D6E0;
+  --color-danger: #9A2A1A;
+  --color-danger-soft: #F8E7E3;
+  --color-danger-border: #E0A99E;
+  --color-info: #2F6F87;
+  --color-info-soft: #DCEBF1;
+  --color-review: #7A6F08;
+  --color-review-soft: #F6F7D3;
+  --color-review-border: #CDD422;
+  --color-caution: #B8500F;
+  --color-caution-soft: #FBE7DB;
+  --color-verified: #431C5D;
+  --color-verified-soft: #EFE7F4;
+  --color-generated: #7A6F08;
+  --color-generated-soft: #F6F7D3;
+  --color-technical-bg: #2C1340;
+  --color-technical-surface: #3A1A52;
+  --color-technical-border: #50306B;
+  --color-technical-text: #ECE3F5;
+  --color-technical-muted: #B9A5D0;
+  --color-sidebar-active: #C2DDE6;
   --font-mono: var(--font-dm-mono), "DM Mono", "Cascadia Mono", "SFMono-Regular", monospace;
   --font-sans: var(--font-dm-sans), "DM Sans", "Segoe UI", system-ui, sans-serif;
   --font-display: var(--font-dm-sans), "DM Sans", "Segoe UI", system-ui, sans-serif;
@@ -69,7 +76,7 @@
 
 body {
   background: var(--color-bg);
-  background-image: linear-gradient(180deg, #FAFBF8 0%, var(--color-bg) 42%, var(--color-bg) 100%);
+  background-image: linear-gradient(180deg, #F7FAFD 0%, var(--color-bg) 42%, var(--color-bg) 100%);
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 16px;
@@ -99,10 +106,10 @@ select:focus-visible,
 button,
 .button-link {
   align-items: center;
-  background: var(--color-accent);
-  border: 1px solid var(--color-accent);
+  background: var(--color-cta);
+  border: 1px solid var(--color-cta-border);
   border-radius: 3px;
-  color: #F7F0F4;
+  color: var(--color-cta-text);
   cursor: pointer;
   display: inline-flex;
   font-family: var(--font-display);
@@ -118,8 +125,8 @@ button,
 
 button:hover:not(:disabled),
 .button-link:hover {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
+  background: var(--color-cta-hover);
+  border-color: var(--color-cta-hover);
 }
 
 button:disabled {
@@ -650,8 +657,8 @@ select {
 }
 
 .app-nav__link--active {
-  background: rgba(217, 181, 200, 0.12);
-  border-color: rgba(217, 181, 200, 0.45);
+  background: rgba(194, 221, 230, 0.12);
+  border-color: rgba(194, 221, 230, 0.45);
   box-shadow: inset 3px 0 0 var(--color-sidebar-active);
   color: #fff;
 }
@@ -1519,7 +1526,7 @@ main > .workspace-jump-nav {
 
 .quick-readiness-result--verified .quick-readiness-result__explanation {
   background: var(--color-verified-soft);
-  border-color: rgba(75, 29, 63, 0.28);
+  border-color: rgba(67, 28, 93, 0.28);
 }
 
 .quick-readiness-result--danger .quick-readiness-result__explanation {
@@ -2510,8 +2517,8 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .results-panel__mode button[aria-pressed="true"] {
-  background: var(--color-accent);
-  color: #fff;
+  background: var(--color-cta);
+  color: var(--color-cta-text);
 }
 
 .results-panel__mode button:hover:not([aria-pressed="true"]) {
@@ -3425,7 +3432,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .project-part-kit-row--expanded {
-  border-color: rgba(217, 181, 200, 0.45);
+  border-color: rgba(194, 221, 230, 0.45);
 }
 
 .project-part-kit-row__summary {
@@ -3662,8 +3669,8 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-focus-banner {
-  background: rgba(217, 181, 200, 0.08);
-  border: 1px solid rgba(217, 181, 200, 0.28);
+  background: rgba(194, 221, 230, 0.08);
+  border: 1px solid rgba(194, 221, 230, 0.28);
   border-radius: var(--radius-md);
   margin-bottom: 12px;
   padding: 10px 12px;
@@ -3719,7 +3726,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .where-used-table__row--highlight td {
-  background: rgba(217, 181, 200, 0.1);
+  background: rgba(194, 221, 230, 0.1);
 }
 
 .projects-folder-sync__actions {
@@ -5184,7 +5191,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .project-evidence-panel__boundary {
   background: var(--color-accent-soft);
-  border: 1px solid rgba(75, 29, 63, 0.25);
+  border: 1px solid rgba(67, 28, 93, 0.25);
   border-radius: var(--radius-sm);
   color: var(--color-text);
   font-size: 0.84rem;
@@ -6039,8 +6046,8 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .admin-queue-overview__mode button[aria-pressed="true"] {
-  background: var(--color-accent);
-  color: #fff;
+  background: var(--color-cta);
+  color: var(--color-cta-text);
 }
 
 .admin-queue-overview__mode button:hover {
@@ -6049,8 +6056,8 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .admin-queue-overview__mode button[aria-pressed="true"]:hover {
-  background: var(--color-accent);
-  color: #fff;
+  background: var(--color-cta-hover);
+  color: var(--color-cta-text);
 }
 
 .admin-queue-stats {
@@ -6690,7 +6697,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-readiness-summary--verified {
   background: var(--color-verified-soft);
-  border-color: rgba(75, 29, 63, 0.28);
+  border-color: rgba(67, 28, 93, 0.28);
   border-left-color: var(--color-verified);
 }
 
@@ -7424,11 +7431,15 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-section--technical a {
-  color: #9ecfff;
+  color: #C2DDE6;
+}
+
+.detail-section--technical .muted-copy {
+  color: var(--color-technical-muted);
 }
 
 .detail-section--technical .ui-asset-card {
-  background: linear-gradient(180deg, rgba(37, 63, 30, 0.96) 0%, rgba(31, 54, 26, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(58, 26, 82, 0.96) 0%, rgba(44, 19, 64, 0.98) 100%);
   border-color: var(--color-technical-border);
 }
 
@@ -7658,7 +7669,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-trust-callout[open] {
   background: var(--color-accent-soft);
-  border-color: rgba(75, 29, 63, 0.28);
+  border-color: rgba(67, 28, 93, 0.28);
 }
 
 .detail-trust-callout > p {
@@ -7957,8 +7968,8 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .package-dimensions__toolbar button[aria-pressed="true"] {
-  background: var(--color-accent);
-  color: #F7F0F4;
+  background: var(--color-cta);
+  color: var(--color-cta-text);
 }
 
 .package-dimensions__toolbar button:hover:not([aria-pressed="true"]) {
@@ -8267,7 +8278,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-export-summary {
-  background: linear-gradient(180deg, rgba(37, 63, 30, 0.42) 0%, rgba(30, 58, 24, 0.18) 100%);
+  background: linear-gradient(180deg, rgba(58, 26, 82, 0.42) 0%, rgba(44, 19, 64, 0.18) 100%);
   border: 1px solid var(--color-technical-border);
   border-radius: var(--radius-md);
   box-shadow: inset 4px 0 0 var(--color-technical-muted);
@@ -8384,7 +8395,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .export-action--available {
-  border-color: rgba(75, 29, 63, 0.32);
+  border-color: rgba(67, 28, 93, 0.32);
   box-shadow: inset 4px 0 0 var(--color-verified);
 }
 
@@ -8413,7 +8424,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-section--technical .export-action {
-  background: linear-gradient(180deg, rgba(37, 63, 30, 0.96) 0%, rgba(31, 54, 26, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(58, 26, 82, 0.96) 0%, rgba(44, 19, 64, 0.98) 100%);
   border-color: var(--color-technical-border);
   color: var(--color-technical-text);
 }
@@ -8904,31 +8915,31 @@ details[open] .trust-breakdown__toggle::before {
 
 .ui-badge--info {
   background: var(--color-info-soft);
-  border-color: rgba(153, 198, 142, 0.5);
+  border-color: rgba(47, 111, 135, 0.45);
   color: var(--color-plum-hover);
 }
 
 .ui-badge--verified {
   background: var(--color-verified-soft);
-  border-color: rgba(75, 29, 63, 0.28);
+  border-color: rgba(67, 28, 93, 0.32);
   color: var(--color-verified);
 }
 
 .ui-badge--review {
   background: var(--color-review-soft);
-  border-color: rgba(122, 95, 8, 0.35);
+  border-color: rgba(122, 111, 8, 0.4);
   color: var(--color-review);
 }
 
 .ui-badge--danger {
   background: var(--color-danger-soft);
-  border-color: rgba(131, 34, 24, 0.35);
+  border-color: rgba(154, 42, 26, 0.35);
   color: var(--color-danger);
 }
 
 .ui-badge--generated {
   background: var(--color-generated-soft);
-  border-color: rgba(122, 95, 8, 0.35);
+  border-color: rgba(122, 111, 8, 0.4);
   color: var(--color-generated);
 }
 
@@ -9347,17 +9358,17 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .landing-hero__cta-primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: #fff;
+  background: var(--color-cta);
+  border-color: var(--color-cta-border);
+  color: var(--color-cta-text);
   font-weight: 600;
   padding: 10px 22px;
 }
 
 .landing-hero__cta-primary:hover {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-  color: #fff;
+  background: var(--color-cta-hover);
+  border-color: var(--color-cta-hover);
+  color: var(--color-cta-text);
 }
 
 .landing-hero__cta-secondary {
@@ -10040,8 +10051,8 @@ details[open] .trust-breakdown__toggle::before {
 
 .asset-download-link--gated {
   background: var(--color-accent-soft, #f5e6e0);
-  border: 1px solid var(--color-accent, #4B1D3F);
-  color: var(--color-accent, #4B1D3F);
+  border: 1px solid var(--color-accent, #431C5D);
+  color: var(--color-accent, #431C5D);
 }
 
 /* Admin audit-filter form */
@@ -10096,7 +10107,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .recent-activity-strip__view-all {
-  color: var(--color-accent, #4B1D3F);
+  color: var(--color-accent, #431C5D);
   font-size: 0.84rem;
   font-weight: 600;
   white-space: nowrap;
