@@ -17,7 +17,7 @@ import {
   shouldServeFileInline
 } from "@ee-library/shared/file-display";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createManualPartAssetInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartAssetUploadTargetFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
@@ -34,10 +34,12 @@ import {
   readProjectFilesRootSettings,
   resolveProjectFolderCategory,
   resolveProjectMirrorFileDownload,
+  sanitizeUploadFilename,
   saveProjectFile,
   updateProjectFilesRootSettings
 } from "./project-files";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
+import { buildVendorUsageResponse } from "./vendor-usage";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin, requireAuth } from "./auth";
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
@@ -97,7 +99,10 @@ import type {
   FollowUpUpdateInput,
   GenerationRequestCreateInput,
   GenerationTargetAssetType,
+  AssetType,
   PartApprovalStatus,
+  PartAssetUploadInput,
+  PartAssetUploadResponse,
   PartIssueCode,
   PartIssueWorkflowUpdateInput,
   PartIssueWorkflowStatus,
@@ -141,6 +146,9 @@ const maxBomCsvBytes = 2 * 1024 * 1024;
 
 /** maxEvidenceUploadBytes bounds local evidence uploads accepted through JSON base64 MVP transport. */
 const maxEvidenceUploadBytes = 8 * 1024 * 1024;
+
+/** maxPartAssetUploadBytes bounds direct catalog asset uploads through the JSON base64 transport. */
+const maxPartAssetUploadBytes = 25 * 1024 * 1024;
 
 /** RouteTiming stores one measured operation for headers and local logs. */
 interface RouteTiming {
@@ -222,6 +230,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const documentRedlineDetailMatch = /^\/document-redlines\/([^/]+)$/u.exec(pathname);
   const issueWorkflowMatch = /^\/parts\/([^/]+)\/issues\/([^/]+)\/workflow$/u.exec(pathname);
   const sourceReconciliationMatch = /^\/parts\/([^/]+)\/source-reconciliation$/u.exec(pathname);
+  const partAssetUploadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)$/u.exec(pathname);
   const assetDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u.exec(pathname);
   const assetPreviewArtifactDownloadMatch = /^\/parts\/([^/]+)\/assets\/([^/]+)\/preview-artifact\/download$/u.exec(pathname);
   const projectRevisionsMatch = /^\/projects\/([^/]+)\/revisions$/u.exec(pathname);
@@ -267,6 +276,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectApprovalCandidatesMatch = /^\/projects\/([^/]+)\/approval-candidates$/u.exec(pathname);
   const storageServeMatch = /^\/storage\/(.+)$/u.exec(pathname);
   const vendorDetailMatch = /^\/vendors\/([^/]+)$/u.exec(pathname);
+  const vendorUsageMatch = /^\/vendors\/([^/]+)\/usage$/u.exec(pathname);
   const vendorFileUploadMatch = /^\/vendors\/([^/]+)\/files\/([^/]+)$/u.exec(pathname);
 
   try {
@@ -555,6 +565,18 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && partAssetUploadMatch?.[1] && partAssetUploadMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePartAssetUpload(
+      request,
+      response,
+      decodeURIComponent(partAssetUploadMatch[1]),
+      decodeURIComponent(partAssetUploadMatch[2])
+    );
+    return;
+  }
+
   if (request.method === "POST" && projectExportBundlesMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -796,6 +818,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method === "GET" && pathname === "/vendors") {
     await handleVendorListRead(response);
+    return;
+  }
+
+  if (request.method === "GET" && vendorUsageMatch?.[1]) {
+    await handleVendorUsageRead(response, decodeURIComponent(vendorUsageMatch[1]));
     return;
   }
 
@@ -2416,7 +2443,7 @@ async function handleProjectFileUpload(
     sendJson(response, 404, {
       error: {
         code: "PROJECT_FILE_CATEGORY_UNKNOWN",
-        message: "Project file category must be parts_list, datasheets, models, footprints, hardware, or notes."
+        message: "Project file category must be parts_list, datasheets, models, footprints, symbols, mechanical_drawings, hardware, or notes."
       }
     });
     return;
@@ -2473,7 +2500,7 @@ async function handleProjectFileUpload(
       sendJson(response, 404, {
         error: {
           code: "PROJECT_FILE_CATEGORY_UNKNOWN",
-          message: "Project file category must be parts_list, datasheets, models, footprints, hardware, or notes."
+          message: "Project file category must be parts_list, datasheets, models, footprints, symbols, mechanical_drawings, hardware, or notes."
         }
       });
       return;
@@ -2564,6 +2591,24 @@ async function handleVendorDetailRead(response: ServerResponse, slug: string): P
       "vendor-detail",
       () => buildVendorDetailResponse(slug),
       (value) => `${value.availability}:${value.vendor ? "found" : "missing"}`
+    );
+    sendCatalogJson(response, result, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles the reverse vendor→parts usage read: which catalog parts record a distributor offer
+ * from this supplier. Read-only and resilient — an empty parts list is a valid answer.
+ */
+async function handleVendorUsageRead(response: ServerResponse, slug: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "vendor-usage",
+      () => buildVendorUsageResponse(slug),
+      (value) => `${value.parts.length}`
     );
     sendCatalogJson(response, result, "database");
   } catch (error) {
@@ -2751,7 +2796,7 @@ async function handleVendorFileUpload(
  * web client treats them consistently.
  */
 /**
- * Streams one on-disk project mirror file to the browser (datasheets, models, footprints).
+ * Streams one on-disk project mirror file to the browser.
  */
 async function handleProjectMirrorFileDownload(
   request: IncomingMessage,
@@ -3998,6 +4043,145 @@ async function streamStorageFileToResponse(
 }
 
 /**
+ * Handles a user-selected file upload directly onto one catalog part asset class.
+ *
+ * The route only records local storage evidence and provenance. It does not mark the
+ * asset validated, approved, or export-ready because the file has not gone through an
+ * engineering review workflow yet.
+ */
+async function handlePartAssetUpload(
+  request: IncomingMessage,
+  response: ServerResponse,
+  partId: string,
+  rawAssetType: string
+): Promise<void> {
+  const assetType = readPartAssetUploadType(rawAssetType);
+
+  if (!assetType) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PART_ASSET_TYPE",
+        message: "Asset uploads require an asset type of datasheet, footprint, symbol, three_d_model, or mechanical_drawing."
+      }
+    });
+    return;
+  }
+
+  const body = await readJsonBody<PartAssetUploadInput>(request);
+  if (!body || typeof body.filename !== "string" || typeof body.contentBase64 !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PART_ASSET_UPLOAD",
+        message: "Part asset uploads require a filename and contentBase64."
+      }
+    });
+    return;
+  }
+
+  const filename = sanitizeUploadFilename(body.filename);
+  if (!filename) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PART_ASSET_FILENAME",
+        message: "Filename must include at least one letter, digit, dash, dot, or underscore."
+      }
+    });
+    return;
+  }
+
+  const content = decodeEvidenceUploadContent(body.contentBase64);
+  if (!content || content.length === 0 || content.length > maxPartAssetUploadBytes) {
+    sendJson(response, content && content.length > maxPartAssetUploadBytes ? 413 : 400, {
+      error: {
+        code: "INVALID_PART_ASSET_CONTENT",
+        message: `Part asset uploads must be valid base64 and no larger than ${maxPartAssetUploadBytes} bytes.`
+      }
+    });
+    return;
+  }
+
+  const storage = getStorageClient();
+  if (storage.backend === "not_configured") {
+    sendJson(response, 503, {
+      error: {
+        code: "ASSET_STORAGE_NOT_CONFIGURED",
+        message: "File storage is not configured, so browser-selected files cannot be added to catalog assets."
+      }
+    });
+    return;
+  }
+
+  try {
+    const target = await timeRouteOperation(
+      response,
+      "part-asset-upload-target",
+      () => readPartAssetUploadTargetFromDatabase(partId),
+      (value) => value.status
+    );
+
+    if (target.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Part asset uploads require a configured catalog database."
+        }
+      });
+      return;
+    }
+
+    if (target.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "PART_NOT_FOUND",
+          message: "The requested part does not exist in the catalog database."
+        }
+      });
+      return;
+    }
+
+    const fileHash = createHash("sha256").update(content).digest("hex");
+    const storageKey = buildPartAssetUploadStorageKey(partId, assetType, filename, fileHash);
+    await timeRouteOperation(response, "part-asset-upload-write", () => storage.write(storageKey, content), () => `${content.length} bytes`);
+
+    const result = await timeRouteOperation(
+      response,
+      "part-asset-upload-metadata",
+      () => createManualPartAssetInDatabase(partId, { assetType, fileHash, filename, storageKey }),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "DB_NOT_CONFIGURED",
+          message: "Part asset uploads require a configured catalog database."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "PART_NOT_FOUND",
+          message: "The requested part does not exist in the catalog database."
+        }
+      });
+      return;
+    }
+
+    const payload: PartAssetUploadResponse = {
+      asset: result.asset,
+      boundary: result.boundary
+    };
+
+    sendCatalogJsonWithStatus(response, 201, payload, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Redirects to source_url for referenced assets, or reports why a file is not accessible.
  *
  * For restricted and ITAR-controlled assets the gate is consulted in this order:
@@ -5121,6 +5305,35 @@ function buildEvidenceStorageKey(targetType: EvidenceTargetType, targetId: strin
 }
 
 /**
+ * Builds a deterministic storage key for one manually uploaded catalog asset.
+ */
+function buildPartAssetUploadStorageKey(partId: string, assetType: AssetType, fileName: string, fileHash: string): string {
+  const normalizedName = basename(fileName).replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "asset-file";
+  const extension = extname(normalizedName);
+  const nameWithoutExtension = extension ? normalizedName.slice(0, -extension.length) : normalizedName;
+  const safeName = `${nameWithoutExtension.slice(0, 72)}${extension.slice(0, 16)}`;
+
+  return `manual-assets/${slugStorageSegment(partId)}/${assetType}/${fileHash.slice(0, 16)}-${safeName}`;
+}
+
+/**
+ * Narrows a route segment to the supported catalog asset upload types.
+ */
+function readPartAssetUploadType(value: string): AssetType | null {
+  if (
+    value === "datasheet" ||
+    value === "footprint" ||
+    value === "symbol" ||
+    value === "three_d_model" ||
+    value === "mechanical_drawing"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+/**
  * Sanitizes user-provided target ids before using them as storage path segments.
  */
 function slugStorageSegment(value: string): string {
@@ -5264,6 +5477,7 @@ function describeAuditableRequest(method: string, url: URL): AuditRouteDescripto
  */
 function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetType; targetId: string | null } {
   const checks: Array<{ pattern: RegExp; targetType: AuditEventTargetType; idIndex: number }> = [
+    { idIndex: 1, pattern: /^\/parts\/([^/]+)\/assets\/([^/]+)$/u, targetType: "part" },
     { idIndex: 2, pattern: /^\/parts\/([^/]+)\/assets\/([^/]+)\/download$/u, targetType: "asset" },
     { idIndex: 1, pattern: /^\/parts\/([^/]+)\/reviews$/u, targetType: "part" },
     { idIndex: 1, pattern: /^\/parts\/([^/]+)\/asset-promotions$/u, targetType: "part" },
@@ -5558,6 +5772,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && /^\/parts\/[^/]+\/engineering-records\/[^/]+\/(confirm|dismiss)$/u.test(pathname)) return "api-part-engineering-record-draft-decision";
   if (method === "PATCH" && /^\/follow-ups\/[^/]+$/u.test(pathname)) return "api-follow-up-update";
   if (method === "GET" && /^\/storage\/.+$/u.test(pathname)) return "api-storage-serve";
+  if (method === "POST" && /^\/parts\/[^/]+\/assets\/[^/]+$/u.test(pathname)) return "api-part-asset-upload";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/download$/u.test(pathname)) return "api-asset-download";
   if (method === "GET" && /^\/parts\/[^/]+\/assets\/[^/]+\/preview-artifact\/download$/u.test(pathname)) return "api-asset-preview-artifact-download";
   if (method === "GET" && /^\/projects\/[^/]+\/overlap$/u.test(pathname)) return "api-project-overlap";

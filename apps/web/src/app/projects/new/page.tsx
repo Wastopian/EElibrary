@@ -10,6 +10,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import React from "react";
 import { SectionHeading, SectionPanel } from "@ee-library/ui";
+import { FileUploadField } from "../../../components/FileUploadField";
 import { createProjectFromCsv, isApiClientError } from "../../../lib/api-client";
 import type { ProjectFromCsvInput } from "@ee-library/shared/types";
 
@@ -134,10 +135,14 @@ export default async function ProjectFromCsvPage({
         >
           {errorBanner}
           <form action={submitProjectFromCsv} className="project-create-panel__form" encType="multipart/form-data">
-            <label className="project-create-panel__field project-create-panel__field--wide">
-              <span>Parts list file (CSV or XLSX)</span>
-              <input accept=".csv,.xlsx" name="bomFile" required type="file" />
-            </label>
+            <FileUploadField
+              accept=".csv,.xlsx"
+              buttonLabel="Choose parts list"
+              caption="Parts list file (CSV or XLSX)"
+              className="file-field--wide"
+              name="bomFile"
+              required
+            />
             <label className="project-create-panel__field">
               <span>Project name (optional)</span>
               <input autoComplete="off" name="projectName" placeholder="Derived from filename if blank" type="text" />

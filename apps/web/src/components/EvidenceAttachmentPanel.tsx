@@ -6,6 +6,7 @@
 
 import React, { useCallback, useState } from "react";
 import { createEvidenceAttachment, isApiClientError, uploadEvidenceAttachmentFile } from "../lib/api-client";
+import { FileUploadField } from "./FileUploadField";
 import type { EvidenceAttachmentCreateResponse, EvidenceTargetType } from "@ee-library/shared/types";
 
 /** EvidenceAttachmentPanelProps scopes the simple first-pass form to one evidence target. */
@@ -102,10 +103,10 @@ export function EvidenceAttachmentPanel({ submitLabel, targetId, targetType }: E
             <input onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://..." type="url" value={sourceUrl} />
           </label>
         ) : evidenceType === "file" ? (
-          <label>
-            <span>Evidence file</span>
-            <input onChange={(event) => setFile(event.target.files?.[0] ?? null)} type="file" />
-          </label>
+          <FileUploadField
+            caption="Evidence file"
+            onFileChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
         ) : (
           <label>
             <span>Evidence note</span>

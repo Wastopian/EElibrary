@@ -153,6 +153,29 @@ export type SourceReconciliationUpdateResult =
   | { status: "not_configured" }
   | { status: "not_found"; reason: string };
 
+/** PartAssetUploadTargetResult reports whether a direct catalog file upload can target a part. */
+export type PartAssetUploadTargetResult = { status: "available" } | { status: "not_configured" } | { status: "not_found" };
+
+/** ManualPartAssetCreateInput carries storage evidence after the API has accepted upload bytes. */
+export interface ManualPartAssetCreateInput {
+  /** Asset class the uploaded file should satisfy. */
+  assetType: Asset["assetType"];
+  /** Sanitized filename shown in datasheet revision labels and used for format inference. */
+  filename: string;
+  /** SHA-256 hash of the exact uploaded bytes. */
+  fileHash: string;
+  /** Storage key where the API wrote the uploaded bytes. */
+  storageKey: string;
+  /** Optional timestamp override for deterministic tests. */
+  uploadedAt?: string;
+}
+
+/** ManualPartAssetCreateResult reports the newly persisted manual asset or why it could not be written. */
+export type ManualPartAssetCreateResult =
+  | { status: "created"; asset: Asset; boundary: string }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
 /** CatalogStoreFailureKind distinguishes operational outages from schema/data shape problems. */
 export type CatalogStoreFailureKind = "database_unavailable" | "schema_mismatch" | "query_failed";
 
@@ -1011,6 +1034,335 @@ export async function readAssetDownloadTargetFromDatabase(partId: string, assetI
   } catch (error) {
     throw toCatalogStoreError(error);
   }
+}
+
+/**
+ * Confirms that a direct catalog upload can target the requested part before the API writes bytes.
+ */
+export async function readPartAssetUploadTargetFromDatabase(partId: string): Promise<PartAssetUploadTargetResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const result = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+
+    return result.rows.length > 0 ? { status: "available" } : { status: "not_found" };
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Creates or refreshes a manual catalog asset for bytes the API already stored.
+ *
+ * Trust stays deliberately conservative: the file is downloadable and traceable as
+ * `manual_internal`, but it is not validated, approved, or export-ready until review
+ * workflows promote it.
+ */
+export async function createManualPartAssetInDatabase(
+  partId: string,
+  input: ManualPartAssetCreateInput
+): Promise<ManualPartAssetCreateResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const client = await databasePool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const partCheck = await client.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+    if (partCheck.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return { status: "not_found" };
+    }
+
+    const uploadedAt = input.uploadedAt ?? new Date().toISOString();
+    const fileFormat = inferManualAssetFileFormat(input.filename, input.assetType);
+    const preview = deriveManualAssetPreviewFields(fileFormat, input.storageKey, uploadedAt);
+    const assetId = buildManualAssetId(partId, input.assetType, input.fileHash, input.filename);
+    const insert = await client.query<DatabaseAssetRow>(
+      `
+        INSERT INTO assets (
+          id,
+          part_id,
+          asset_type,
+          file_format,
+          storage_key,
+          file_hash,
+          provider_id,
+          license_mode,
+          provenance,
+          availability_status,
+          review_status,
+          export_status,
+          asset_status,
+          generation_method,
+          generation_source_asset_id,
+          validation_status,
+          preview_status,
+          preview_artifact_storage_key,
+          preview_artifact_format,
+          preview_artifact_generated_at,
+          preview_artifact_source,
+          asset_state,
+          source_url,
+          source_record_id,
+          last_updated_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          NULL,
+          'unknown',
+          'manual_internal',
+          'downloaded',
+          'review_required',
+          'not_exportable',
+          'downloaded',
+          NULL,
+          NULL,
+          'not_validated',
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          'downloaded',
+          NULL,
+          NULL,
+          $12
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          file_format = EXCLUDED.file_format,
+          storage_key = EXCLUDED.storage_key,
+          file_hash = EXCLUDED.file_hash,
+          provider_id = EXCLUDED.provider_id,
+          license_mode = EXCLUDED.license_mode,
+          provenance = EXCLUDED.provenance,
+          availability_status = EXCLUDED.availability_status,
+          review_status = EXCLUDED.review_status,
+          export_status = EXCLUDED.export_status,
+          asset_status = EXCLUDED.asset_status,
+          generation_method = EXCLUDED.generation_method,
+          generation_source_asset_id = EXCLUDED.generation_source_asset_id,
+          validation_status = EXCLUDED.validation_status,
+          preview_status = EXCLUDED.preview_status,
+          preview_artifact_storage_key = EXCLUDED.preview_artifact_storage_key,
+          preview_artifact_format = EXCLUDED.preview_artifact_format,
+          preview_artifact_generated_at = EXCLUDED.preview_artifact_generated_at,
+          preview_artifact_source = EXCLUDED.preview_artifact_source,
+          asset_state = EXCLUDED.asset_state,
+          source_url = EXCLUDED.source_url,
+          source_record_id = EXCLUDED.source_record_id,
+          last_updated_at = EXCLUDED.last_updated_at
+        RETURNING
+          id,
+          part_id,
+          asset_type,
+          file_format,
+          storage_key,
+          file_hash,
+          provider_id,
+          license_mode,
+          provenance,
+          availability_status,
+          review_status,
+          export_status,
+          asset_status,
+          generation_method,
+          generation_source_asset_id,
+          validation_status,
+          preview_status,
+          preview_artifact_storage_key,
+          preview_artifact_format,
+          preview_artifact_generated_at,
+          preview_artifact_source,
+          asset_state,
+          source_url,
+          source_record_id,
+          last_updated_at
+      `,
+      [
+        assetId,
+        partId,
+        input.assetType,
+        fileFormat,
+        input.storageKey,
+        input.fileHash,
+        preview.previewStatus,
+        preview.previewArtifactStorageKey,
+        preview.previewArtifactFormat,
+        preview.previewArtifactGeneratedAt,
+        preview.previewArtifactSource,
+        uploadedAt
+      ]
+    );
+
+    if (input.assetType === "datasheet") {
+      await ensureManualDatasheetRevisionForAsset(client, partId, assetId, input.filename, input.fileHash);
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      asset: mapAssetRow(insert.rows[0] as DatabaseAssetRow),
+      boundary: MANUAL_PART_ASSET_BOUNDARY,
+      status: "created"
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw toCatalogStoreError(error);
+  } finally {
+    client.release();
+  }
+}
+
+/** Boundary copy returned with manual uploads so clients do not imply validation. */
+const MANUAL_PART_ASSET_BOUNDARY = "File was added from an engineer-selected local upload. It is stored and downloadable, but still needs review before export.";
+
+/**
+ * Ensures a datasheet upload appears in the revision table without claiming parsed content.
+ */
+async function ensureManualDatasheetRevisionForAsset(
+  client: PoolClient,
+  partId: string,
+  assetId: string,
+  filename: string,
+  fileHash: string
+): Promise<void> {
+  const revisionId = `dsr-${slugCatalogSegment(partId)}-manual-${slugCatalogSegment(stripFilenameExtension(filename))}-${fileHash.slice(0, 12)}`.slice(0, 180);
+
+  await client.query(
+    `
+      INSERT INTO datasheet_revisions (id, part_id, revision_label, file_asset_id, parse_confidence, pin_table_status)
+      VALUES ($1, $2, $3, $4, 0.25, 'not_available')
+      ON CONFLICT (id) DO UPDATE SET
+        file_asset_id = EXCLUDED.file_asset_id,
+        revision_label = EXCLUDED.revision_label
+    `,
+    [revisionId, partId, `Manual upload (${filename})`, assetId]
+  );
+}
+
+/**
+ * Builds a stable manual asset id from part identity, asset class, filename, and content hash.
+ */
+function buildManualAssetId(partId: string, assetType: Asset["assetType"], fileHash: string, filename: string): string {
+  return `asset-manual-${slugCatalogSegment(partId)}-${assetType}-${fileHash.slice(0, 16)}-${slugCatalogSegment(stripFilenameExtension(filename))}`.slice(0, 180);
+}
+
+/**
+ * Infers the normalized catalog file_format from an upload filename and target asset class.
+ */
+function inferManualAssetFileFormat(filename: string, assetType: Asset["assetType"]): Asset["fileFormat"] {
+  const extension = getFilenameExtension(filename);
+
+  if (extension === "pdf") return "pdf";
+  if (extension === "png") return "png";
+  if (extension === "jpg") return "jpg";
+  if (extension === "jpeg") return "jpeg";
+  if (extension === "webp") return "webp";
+  if (extension === "step" || extension === "stp") return "step";
+  if (extension === "glb") return "glb";
+  if (extension === "gltf") return "gltf";
+  if (extension === "kicad_mod" || extension === "mod" || extension === "pcblib") return "kicad_mod";
+  if (extension === "kicad_sym" || extension === "sym" || extension === "lib" || extension === "schlib" || extension === "olb") return "kicad_sym";
+  if (extension === "dxf") return "dxf";
+
+  if (assetType === "datasheet") return "pdf";
+  if (assetType === "three_d_model") return "step";
+  if (assetType === "footprint") return "kicad_mod";
+  if (assetType === "symbol") return "kicad_sym";
+  if (assetType === "mechanical_drawing") return "dxf";
+
+  return "unknown";
+}
+
+/**
+ * Derives preview metadata for source-native browser formats without fabricating conversions.
+ */
+function deriveManualAssetPreviewFields(
+  fileFormat: Asset["fileFormat"],
+  storageKey: string,
+  uploadedAt: string
+): Pick<Asset, "previewArtifactFormat" | "previewArtifactGeneratedAt" | "previewArtifactSource" | "previewArtifactStorageKey" | "previewStatus"> {
+  const nativePreviewFormat = mapManualPreviewArtifactFormat(fileFormat);
+
+  if (nativePreviewFormat) {
+    return {
+      previewArtifactFormat: nativePreviewFormat,
+      previewArtifactGeneratedAt: uploadedAt,
+      previewArtifactSource: "source_native",
+      previewArtifactStorageKey: storageKey,
+      previewStatus: "ready"
+    };
+  }
+
+  return {
+    previewArtifactFormat: null,
+    previewArtifactGeneratedAt: null,
+    previewArtifactSource: null,
+    previewArtifactStorageKey: null,
+    previewStatus: fileFormat === "step" ? "pending" : "not_available"
+  };
+}
+
+/**
+ * Maps source formats that the browser can render directly into preview artifact formats.
+ */
+function mapManualPreviewArtifactFormat(fileFormat: Asset["fileFormat"]): Asset["previewArtifactFormat"] {
+  if (
+    fileFormat === "pdf" ||
+    fileFormat === "png" ||
+    fileFormat === "jpg" ||
+    fileFormat === "jpeg" ||
+    fileFormat === "webp" ||
+    fileFormat === "glb" ||
+    fileFormat === "gltf"
+  ) {
+    return fileFormat;
+  }
+
+  return null;
+}
+
+/**
+ * Returns a lower-case extension without the dot, or an empty string when none exists.
+ */
+function getFilenameExtension(filename: string): string {
+  const trimmed = filename.trim().toLowerCase();
+  const dotIndex = trimmed.lastIndexOf(".");
+
+  return dotIndex > 0 ? trimmed.slice(dotIndex + 1) : "";
+}
+
+/**
+ * Returns a filename stem for ids without assuming POSIX path parsing.
+ */
+function stripFilenameExtension(filename: string): string {
+  const dotIndex = filename.lastIndexOf(".");
+
+  return dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+}
+
+/**
+ * Normalizes one id or filename token for deterministic catalog ids.
+ */
+function slugCatalogSegment(value: string): string {
+  const slug = value.toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "");
+
+  return slug.length > 0 ? slug : "manual";
 }
 
 /**

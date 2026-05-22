@@ -64,11 +64,13 @@ test("project detail renders persisted project memory sections", async () => {
               designators: ["U1"],
               footprint: null,
               manufacturerName: "Texas Instruments",
+              mechanicalDrawing: null,
               model: null,
               mpn: "TPS7A02DBVR",
               note: null,
               partId: "part-tps7a02dbvr",
               partUrl: null,
+              symbol: null,
               usageIds: ["usage-line-alpha-1"]
             }
           ],
@@ -93,7 +95,7 @@ test("project detail renders persisted project memory sections", async () => {
     assert.match(html, /Main LDO/u);
     assert.match(html, /Parts in this project/u);
     assert.match(html, /Edit kit/u);
-    assert.match(html, /datasheet, 3D, footprint/u);
+    assert.match(html, /Edit files, notes, and supplier links/u);
     assert.match(html, /Upload parts list/u);
     assert.match(html, /Advanced project tools/u);
     assert.match(html, /Project summary/u);

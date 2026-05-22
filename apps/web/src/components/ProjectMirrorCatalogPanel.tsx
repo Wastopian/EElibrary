@@ -59,8 +59,9 @@ function ProjectMirrorCatalogStatus({ status }: { status: IngestStatus }): React
     return (
       <p className="project-mirror-catalog-panel__status muted-copy">
         Reads <span className="ui-mono">parts-list/</span>, <span className="ui-mono">datasheets/</span>,{" "}
-        <span className="ui-mono">models/</span>, and <span className="ui-mono">footprints/</span> on disk, adds any missing
-        MPNs to the catalog, then you can run <strong>Match rows</strong>.
+        <span className="ui-mono">models/</span>, <span className="ui-mono">footprints/</span>,{" "}
+        <span className="ui-mono">symbols/</span>, and <span className="ui-mono">mechanical-drawings/</span> on disk, adds
+        any missing MPNs to the catalog, then you can run <strong>Match rows</strong>.
       </p>
     );
   }

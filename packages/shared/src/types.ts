@@ -784,9 +784,12 @@ export interface ProjectMirrorIngestResponse {
   usagesLinked: number;
 }
 
+/** ProjectPartKitFileCategory names project mirror folders that map to first-class part assets. */
+export type ProjectPartKitFileCategory = "datasheets" | "models" | "footprints" | "symbols" | "mechanical_drawings";
+
 /** ProjectPartKitFileRef points at a project mirror file or a catalog-backed asset. */
 export interface ProjectPartKitFileRef {
-  category: "datasheets" | "models" | "footprints";
+  category: ProjectPartKitFileCategory;
   name: string;
   relativePath: string;
   /** Catalog asset id when this file is served from part storage, not the project folder. */
@@ -810,6 +813,13 @@ export interface ProjectPartKit {
   datasheet: ProjectPartKitFileRef | null;
   model: ProjectPartKitFileRef | null;
   footprint: ProjectPartKitFileRef | null;
+  symbol: ProjectPartKitFileRef | null;
+  mechanicalDrawing: ProjectPartKitFileRef | null;
+  /**
+   * Optional reuse-risk hint enriched from catalog part detail on the web side (the kits API
+   * itself omits it). Lets project/BOM views warn before reusing a part that bit the team.
+   */
+  engineeringMemoryWarning?: PartEngineeringMemoryWarningSummary | null;
 }
 
 /** ProjectPartKitsResponse lists part kits for one project. */
@@ -838,7 +848,15 @@ export interface ProjectPartKitUpdateResponse {
  * creates per project. Categories are the only top-level directories the API exposes;
  * deeper folders are shown as entries instead of traversed blindly.
  */
-export type ProjectFolderCategory = "parts_list" | "datasheets" | "models" | "footprints" | "hardware" | "notes";
+export type ProjectFolderCategory =
+  | "parts_list"
+  | "datasheets"
+  | "models"
+  | "footprints"
+  | "symbols"
+  | "mechanical_drawings"
+  | "hardware"
+  | "notes";
 
 /**
  * ProjectFolderEntry describes one file persisted inside a project folder category.
@@ -1087,6 +1105,24 @@ export interface VendorDetailResponse {
   filesPath: string | null;
   /** Human-readable detail when availability is "error". */
   message: string | null;
+}
+
+/** VendorUsagePart is one catalog part that records a distributor offer from this supplier. */
+export interface VendorUsagePart {
+  partId: string;
+  mpn: string;
+  manufacturerName: string | null;
+  /** Supplier name exactly as recorded on the offer (may differ in punctuation from the vendor). */
+  supplierName: string;
+  inventoryStatus: string;
+  lastSeenAt: string;
+}
+
+/** VendorUsageResponse lists catalog parts sourced from one vendor, for the reverse vendor-to-parts link. */
+export interface VendorUsageResponse {
+  slug: string;
+  vendorName: string | null;
+  parts: VendorUsagePart[];
 }
 
 /** VendorCreateInput is the request body for `POST /vendors`. */
@@ -2101,6 +2137,25 @@ export interface Asset {
   sourceUrl: string | null;
   sourceRecordId: string | null;
   lastUpdatedAt: string;
+}
+
+/**
+ * PartAssetUploadInput is the browser-file upload body for adding a catalog asset
+ * directly from a part detail workspace.
+ */
+export interface PartAssetUploadInput {
+  /** Suggested filename. The API sanitizes this before it becomes a storage key segment. */
+  filename: string;
+  /** Base64 payload for the selected file, with or without a data URL prefix. */
+  contentBase64: string;
+}
+
+/** PartAssetUploadResponse returns the newly recorded manual asset and its trust boundary. */
+export interface PartAssetUploadResponse {
+  /** Asset row created for the uploaded file. */
+  asset: Asset;
+  /** User-facing trust boundary explaining that upload does not validate or approve the file. */
+  boundary: string;
 }
 
 /** DatasheetRevision stores parsed datasheet revision metadata and parse confidence. */

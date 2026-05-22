@@ -7,6 +7,7 @@
 import { useRouter } from "next/navigation";
 import React, { useCallback, useMemo, useState } from "react";
 import { createBomImport, isApiClientError, previewBomImport } from "../lib/api-client";
+import { FileUploadField } from "./FileUploadField";
 import type { BomColumnMapping, BomImportCreateResponse, BomImportPreviewResponse, ProjectRevision } from "@ee-library/shared/types";
 
 /** BomImportPanelProps supplies project and revision context for a BOM upload. */
@@ -155,10 +156,12 @@ export function BomImportPanel({ projectId, revisions }: BomImportPanelProps): R
     <div className="bom-import-panel">
       <form className="bom-import-panel__form" onSubmit={onSubmit}>
         <div className="bom-import-panel__upload-row">
-          <label className="bom-import-panel__field">
-            <span>BOM file (CSV or XLSX)</span>
-            <input accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={onFileChange} type="file" />
-          </label>
+          <FileUploadField
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            buttonLabel="Choose BOM file"
+            caption="BOM file (CSV or XLSX)"
+            onFileChange={onFileChange}
+          />
           <label className="bom-import-panel__field">
             <span>Revision scope</span>
             <select onChange={(event) => setSelectedRevisionId(event.target.value)} value={selectedRevisionId}>

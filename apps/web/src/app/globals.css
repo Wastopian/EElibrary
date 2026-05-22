@@ -3483,6 +3483,20 @@ details[open] .trust-breakdown__toggle::before {
   color: var(--color-text);
 }
 
+/* Present but served from the catalog (not this project's folder) - distinct so engineers
+   can see the catalog already holds the file without expanding the row. */
+.project-part-kit-pill--catalog {
+  background: rgba(96, 140, 190, 0.16);
+  border-color: rgba(96, 140, 190, 0.5);
+}
+
+.project-part-kit-row__memory {
+  display: inline-flex;
+  margin-top: 4px;
+  text-decoration: none;
+  width: fit-content;
+}
+
 .project-part-kit-row__toggle {
   background: transparent;
   border: 1px solid var(--color-border);
@@ -3505,7 +3519,7 @@ details[open] .trust-breakdown__toggle::before {
 .project-part-kit-editor__files {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 @media (max-width: 900px) {
@@ -3575,27 +3589,70 @@ details[open] .trust-breakdown__toggle::before {
   justify-content: flex-end;
 }
 
-.part-detail-files-workspace__upload {
+/* Custom file upload: hide the native "Browse / No file selected" control and trigger it via the styled button inside the wrapping label. */
+.file-upload {
   align-items: center;
+  cursor: pointer;
   display: inline-flex;
   flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-upload__input {
+  clip: rect(0, 0, 0, 0);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.file-upload__input:focus-visible + .button-link {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.file-upload--disabled {
+  cursor: not-allowed;
+}
+
+.file-upload--disabled .button-link {
+  background: #e2e6ea;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+/* Form file picker: a labelled field with a styled trigger button in place of the native "Browse" box. */
+.file-field {
+  cursor: pointer;
+  display: grid;
   gap: 6px;
 }
 
-.part-detail-files-workspace__upload-input {
-  font-size: 0.82rem;
-  max-width: 100%;
+.file-field--wide {
+  grid-column: span 2;
 }
 
-.part-detail-files-workspace__upload-input::file-selector-button {
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  color: var(--color-text);
-  cursor: pointer;
+.file-field__caption {
+  color: var(--color-text-muted);
   font-size: 0.78rem;
-  margin-inline-end: 8px;
-  padding: 3px 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.file-field__button {
+  justify-self: start;
+}
+
+.file-field__filename {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  word-break: break-all;
 }
 
 .part-detail-files-workspace__upload--error {
@@ -3605,32 +3662,6 @@ details[open] .trust-breakdown__toggle::before {
 .project-part-kit-file__open {
   font-size: 0.82rem;
   justify-self: start;
-}
-
-.project-part-kit-file__upload-input {
-  font-size: 0.82rem;
-  max-width: 100%;
-}
-
-.project-part-kit-file__upload-input::file-selector-button {
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  color: var(--color-text);
-  cursor: pointer;
-  font-size: 0.78rem;
-  margin-inline-end: 8px;
-  padding: 3px 10px;
-}
-
-.project-part-kit-file__upload-input::file-selector-button:hover {
-  background: var(--color-surface);
-}
-
-.project-part-kit-file__upload-input:disabled,
-.project-part-kit-file__upload-input:disabled::file-selector-button {
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .project-part-kit-file__message {
@@ -3670,22 +3701,29 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-focus-banner {
+  align-items: center;
   background: rgba(194, 221, 230, 0.08);
   border: 1px solid rgba(194, 221, 230, 0.28);
   border-radius: var(--radius-md);
-  margin-bottom: 12px;
-  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-content: space-between;
+  padding: 8px 12px;
 }
 
 .detail-focus-banner p {
+  flex: 1 1 24rem;
   margin: 0;
+  min-width: 18rem;
 }
 
 .detail-focus-banner__actions {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 0;
 }
 
 .detail-focus-file-summary {
@@ -3867,7 +3905,7 @@ details[open] .trust-breakdown__toggle::before {
 /*
  * ProjectFilesPanel renders three category cards in a calm grid. Folders are the source
  * of truth here, so the cards lean on monospace paths, mute typography, and minimal
- * chrome — the file list itself does the talking.
+ * chrome - the file list itself does the talking.
  */
 .project-files-panel {
   display: flex;
@@ -4278,47 +4316,6 @@ details[open] .trust-breakdown__toggle::before {
   flex-direction: column;
   gap: 6px;
   padding-block-start: 10px;
-}
-
-.project-files-card__upload-label {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.project-files-card__upload-prompt {
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.project-files-card__upload-input {
-  font-size: 0.82rem;
-  max-width: 100%;
-}
-
-.project-files-card__upload-input::file-selector-button {
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  color: var(--color-text);
-  cursor: pointer;
-  font-size: 0.78rem;
-  margin-inline-end: 8px;
-  padding: 3px 10px;
-}
-
-.project-files-card__upload-input::file-selector-button:hover {
-  background: var(--color-surface);
-}
-
-.project-files-card__upload-input:disabled,
-.project-files-card__upload-input:disabled::file-selector-button {
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .project-files-card__upload-status {
@@ -4918,45 +4915,21 @@ details[open] .trust-breakdown__toggle::before {
   padding-block-start: 10px;
 }
 
-.vendor-section-card__upload-label {
-  align-items: center;
+.vendor-usage-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.vendor-usage-list__row {
+  align-items: baseline;
+  border-bottom: 1px solid var(--color-border-light, var(--color-border));
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-}
-
-.vendor-section-card__upload-prompt {
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.vendor-section-card__upload-input {
-  font-size: 0.82rem;
-  max-width: 100%;
-}
-
-.vendor-section-card__upload-input::file-selector-button {
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  color: var(--color-text);
-  cursor: pointer;
-  font-size: 0.78rem;
-  margin-inline-end: 8px;
-  padding: 3px 10px;
-}
-
-.vendor-section-card__upload-input::file-selector-button:hover {
-  background: var(--color-surface);
-}
-
-.vendor-section-card__upload-input:disabled,
-.vendor-section-card__upload-input:disabled::file-selector-button {
-  cursor: not-allowed;
-  opacity: 0.6;
+  gap: 4px 12px;
+  padding-bottom: 8px;
 }
 
 .vendor-section-card__upload-status {
@@ -6460,6 +6433,38 @@ details[open] .trust-breakdown__toggle::before {
   gap: 12px;
 }
 
+.detail-hero__media {
+  background: #15171c;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.detail-hero__media-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+/* The inline preview is built for the dark technical section; inside the hero well drop its
+   divider/top spacing and lighten muted hint copy so captions and the download link stay legible. */
+.detail-hero__media .asset-inline-preview {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.detail-hero__media .muted-copy {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.detail-hero__media .step-inline-preview__stage {
+  height: 240px;
+}
+
 .signal-strip {
   display: flex;
   flex-direction: column;
@@ -6708,6 +6713,42 @@ details[open] .trust-breakdown__toggle::before {
   border-left-color: var(--color-danger);
 }
 
+.detail-readiness-summary > summary {
+  cursor: pointer;
+  display: block;
+  list-style: none;
+}
+
+.detail-readiness-summary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.detail-readiness-summary > summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.detail-readiness-summary__more {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.04em;
+  margin-top: 10px;
+  text-transform: uppercase;
+}
+
+.detail-readiness-summary__more::after {
+  content: "v";
+  font-size: 0.7rem;
+}
+
+.detail-readiness-summary[open] .detail-readiness-summary__more::after {
+  content: "^";
+}
+
 .detail-readiness-summary__lead {
   align-items: flex-start;
   display: grid;
@@ -6802,9 +6843,141 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .detail-overview-grid {
+  align-items: start;
   display: grid;
   gap: 10px;
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+}
+
+.detail-quick-facts {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 16px 24px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.7fr);
+  padding: 16px 18px;
+}
+
+.detail-quick-facts .app-kicker {
+  margin-bottom: 10px;
+}
+
+.detail-quick-facts__specs {
+  display: grid;
+  gap: 8px 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail-quick-facts__specs li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-quick-facts__specs span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.detail-quick-facts__specs strong {
+  font-size: 0.95rem;
+}
+
+.detail-quick-facts__files {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail-quick-facts__files li {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.detail-quick-facts__file-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .detail-quick-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail-quick-facts__specs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.collapsible-section {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+}
+
+.collapsible-section > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  list-style: none;
+  padding: 14px 16px;
+}
+
+.collapsible-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-section > summary::after {
+  color: var(--color-text-muted);
+  content: "v";
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+.collapsible-section[open] > summary::after {
+  content: "^";
+}
+
+.collapsible-section > summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.collapsible-section__heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.collapsible-section__title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.collapsible-section__hint {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.collapsible-section__body {
+  border-top: 1px solid var(--color-border);
+  padding: 14px 16px;
 }
 
 .where-used-panel {
@@ -7248,6 +7421,39 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
+}
+
+details.detail-context-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.detail-context-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.detail-context-panel > summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+details.detail-context-panel > summary .detail-context-panel__header {
+  margin-bottom: 0;
+}
+
+details.detail-context-panel > summary::after {
+  color: var(--color-text-muted);
+  content: "v Show details";
+  display: inline-block;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-top: 8px;
+  text-transform: uppercase;
+}
+
+details.detail-context-panel[open] > summary::after {
+  content: "^ Hide details";
 }
 
 .detail-context-panel__header {
@@ -8622,6 +8828,12 @@ details[open] .trust-breakdown__toggle::before {
   font-size: 0.78rem;
 }
 
+.part-files-list__project-file {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
 .part-files-list__action {
   white-space: nowrap;
 }
@@ -9142,9 +9354,102 @@ details[open] .trust-breakdown__toggle::before {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* Stacked mode: collapse the sidebar into a slim horizontal top bar so page content is
+     visible immediately instead of behind a full screen of navigation. */
   .app-sidebar {
+    align-content: normal;
+    align-items: center;
+    column-gap: 16px;
+    display: flex;
+    flex-wrap: wrap;
     height: auto;
-    position: static;
+    overflow: visible;
+    padding: 10px 16px;
+    /* Pin the compact bar so search + nav stay reachable while scrolling long pages. */
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    row-gap: 10px;
+  }
+
+  .app-sidebar__brand-link {
+    order: 0;
+  }
+
+  .app-sidebar__brand .app-kicker,
+  .app-sidebar__subtitle,
+  .app-sidebar__search-label,
+  .app-sidebar__note,
+  .app-sidebar__account > span {
+    display: none;
+  }
+
+  .app-sidebar__title {
+    font-size: 1rem;
+  }
+
+  .app-sidebar__search {
+    flex: 1 1 200px;
+    min-width: 170px;
+    order: 1;
+  }
+
+  .app-sidebar__search-input {
+    min-height: 34px;
+  }
+
+  .app-sidebar__account {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+    order: 2;
+  }
+
+  .app-sidebar__account-email {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-nav {
+    align-items: center;
+    column-gap: 8px;
+    display: flex;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    order: 3;
+    row-gap: 6px;
+  }
+
+  .app-nav__group {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .app-nav__group-label {
+    display: none;
+  }
+
+  .app-nav__group-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .app-nav__link {
+    padding: 6px 10px;
+  }
+
+  .app-nav__link-description {
+    display: none;
+  }
+
+  .app-nav__more {
+    padding: 2px 8px;
   }
 
   .app-main-header {

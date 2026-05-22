@@ -701,16 +701,19 @@ function getPdfReviewFolderOrder(category: ProjectFolderCategory): number {
   if (category === "datasheets") {
     return 0;
   }
-  if (category === "models") {
+  if (category === "mechanical_drawings") {
     return 1;
   }
-  if (category === "hardware") {
+  if (category === "models") {
     return 2;
   }
-  if (category === "notes") {
+  if (category === "hardware") {
     return 3;
   }
-  return 4;
+  if (category === "notes") {
+    return 4;
+  }
+  return 5;
 }
 
 /** Sorts nullable ISO timestamps newest first while keeping invalid dates at the bottom. */
@@ -953,15 +956,15 @@ function UploadFileControl({ category, projectId }: { category: ProjectFolderCat
 
   return (
     <div className="project-files-card__upload">
-      <label className="project-files-card__upload-label">
-        <span className="project-files-card__upload-prompt">Upload file</span>
+      <label className={`file-upload${status === "uploading" ? " file-upload--disabled" : ""}`}>
         <input
           aria-label={`Upload file to ${category.replace("_", " ")}`}
-          className="project-files-card__upload-input"
+          className="file-upload__input"
           disabled={status === "uploading"}
           onChange={onChange}
           type="file"
         />
+        <span className="button-link button-link--quiet">Upload file</span>
       </label>
       {status !== "idle" && message ? (
         <p

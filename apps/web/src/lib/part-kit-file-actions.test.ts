@@ -47,3 +47,23 @@ test("buildKitFileActions offers download only for STEP models", () => {
   assert.equal(actions.length, 1);
   assert.equal(actions[0]?.label, "Download STEP");
 });
+
+test("buildKitFileActions labels symbol and mechanical drawing downloads", () => {
+  const symbol: ProjectPartKitFileRef = {
+    category: "symbols",
+    fileFormat: "kicad_sym",
+    name: "cbj3157.kicad_sym",
+    relativePath: "symbols/cbj3157.kicad_sym",
+    source: "mirror"
+  };
+  const drawing: ProjectPartKitFileRef = {
+    category: "mechanical_drawings",
+    fileFormat: "dxf",
+    name: "cbj3157.dxf",
+    relativePath: "mechanical-drawings/cbj3157.dxf",
+    source: "mirror"
+  };
+
+  assert.equal(buildKitFileActions(symbol, "part-1", "project-1", "symbol")[0]?.label, "Download symbol");
+  assert.equal(buildKitFileActions(drawing, "part-1", "project-1", "mechanical_drawing")[0]?.label, "Download drawing");
+});

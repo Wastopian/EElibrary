@@ -10,9 +10,9 @@ import Link from "next/link";
 import React from "react";
 import { SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { VendorWorkspace } from "../../../components/VendorWorkspace";
-import { fetchVendorDetail, isApiClientError } from "../../../lib/api-client";
+import { fetchVendorDetail, fetchVendorUsage, isApiClientError } from "../../../lib/api-client";
 import { getSetupStateCopy } from "../../../lib/setup-state-copy";
-import type { VendorCategory, VendorDetailResponse } from "@ee-library/shared/types";
+import type { VendorCategory, VendorDetailResponse, VendorUsageResponse } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +84,9 @@ export default async function VendorDetailPage({ params }: { params: Promise<{ s
   }
 
   const vendor = response.vendor;
+  const usage = vendor
+    ? await fetchVendorUsage(slug).catch((): VendorUsageResponse => ({ slug, vendorName: vendor.name, parts: [] }))
+    : ({ slug, vendorName: null, parts: [] } satisfies VendorUsageResponse);
 
   return (
     <main className="projects-layout">
@@ -111,12 +114,35 @@ export default async function VendorDetailPage({ params }: { params: Promise<{ s
           title="Notes and reference files"
         />
         <SectionPanel
-          description="Type a note below, or upload. If you use a shared folder instead, drop files in the paths shown — refresh to see them here."
+          description="Notes and files mirror to a folder on disk, so you can also add them there directly."
           title="Workspace"
         >
           <VendorWorkspace detail={response} />
         </SectionPanel>
       </section>
+
+      {usage.parts.length > 0 ? (
+        <section className="detail-section" aria-labelledby="vendor-parts-heading">
+          <SectionHeading
+            id="vendor-parts-heading"
+            subtitle="Catalog parts with a recorded distributor offer from this supplier."
+            title="Parts sourced here"
+          />
+          <SectionPanel
+            description={`${usage.parts.length} part${usage.parts.length === 1 ? "" : "s"} reference this supplier in their distributor offers.`}
+            title="Parts using this supplier"
+          >
+            <ul className="vendor-usage-list">
+              {usage.parts.map((part) => (
+                <li key={part.partId} className="vendor-usage-list__row">
+                  <Link className="ui-mono" href={`/parts/${encodeURIComponent(part.partId)}`}>{part.mpn}</Link>
+                  <span className="muted-copy">{part.manufacturerName ?? "Manufacturer not recorded"}</span>
+                </li>
+              ))}
+            </ul>
+          </SectionPanel>
+        </section>
+      ) : null}
     </main>
   );
 }

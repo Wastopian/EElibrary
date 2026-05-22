@@ -27,6 +27,9 @@ test("shouldServeFileInline opens PDFs by default and downloads when attachment=
 
 test("inferMirrorPathFormat maps datasheet folder files to PDF", () => {
   assert.equal(inferMirrorPathFormat("datasheets/cbj3157-pdf"), "pdf");
+  assert.equal(inferMirrorPathFormat("symbols/cbj3157.kicad_sym"), "kicad_sym");
+  assert.equal(inferMirrorPathFormat("mechanical-drawings/cbj3157.dxf"), "dxf");
+  assert.equal(inferMirrorPathFormat("mechanical_drawings/cbj3157.dxf"), "dxf");
 });
 
 test("buildFileContentDisposition emits inline or attachment", () => {

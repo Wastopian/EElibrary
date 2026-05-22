@@ -12,7 +12,7 @@ import type { ProjectFolderCategory } from "@ee-library/shared/types";
 import { PROJECT_FOLDER_DEFINITIONS } from "./project-files";
 
 /** MirrorAssetCategory is a project mirror folder that can hold per-part deliverables. */
-export type MirrorAssetCategory = "datasheets" | "models" | "footprints";
+export type MirrorAssetCategory = "datasheets" | "models" | "footprints" | "symbols" | "mechanical_drawings";
 
 /** MirrorAssetFile is one on-disk file discovered under a mirror category folder. */
 export interface MirrorAssetFile {
@@ -56,8 +56,11 @@ const ASSET_FILE_EXTENSIONS = new Set([
   ".iges",
   ".igs",
   ".zip",
+  ".dxf",
   ".kicad_mod",
+  ".kicad_sym",
   ".lib",
+  ".sym",
   ".schlib",
   ".pcblib",
   ".lia",
@@ -162,11 +165,11 @@ export async function readPartsListImportContent(candidate: PartsListCandidate):
 }
 
 /**
- * Indexes datasheet, model, and footprint files under a project mirror by part lookup keys.
+ * Indexes first-class part asset files under a project mirror by part lookup keys.
  */
 export async function indexMirrorAssetFiles(
   projectRoot: string,
-  categories: readonly MirrorAssetCategory[] = ["datasheets", "models", "footprints"]
+  categories: readonly MirrorAssetCategory[] = ["datasheets", "models", "footprints", "symbols", "mechanical_drawings"]
 ): Promise<Map<string, MirrorAssetFile[]>> {
   const index = new Map<string, MirrorAssetFile[]>();
 
@@ -360,5 +363,9 @@ function normalizePartLookupKey(value: string): string | null {
  * Exposes footprint as a first-class mirror category in shared types.
  */
 export function isMirrorAssetCategory(category: ProjectFolderCategory): category is MirrorAssetCategory {
-  return category === "datasheets" || category === "models" || category === "footprints";
+  return category === "datasheets" ||
+    category === "models" ||
+    category === "footprints" ||
+    category === "symbols" ||
+    category === "mechanical_drawings";
 }

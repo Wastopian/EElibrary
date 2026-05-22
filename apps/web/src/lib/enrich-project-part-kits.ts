@@ -10,11 +10,20 @@ import { fetchPartDetail } from "./api-client";
 const ENRICH_CONCURRENCY = 8;
 
 /**
- * Enriches kits that are missing datasheet, supplier URL, or description using catalog detail truth.
+ * Enriches kits that are missing files, supplier URL, or description using catalog detail truth.
  */
 export async function enrichPartKitsWithCatalogDetail(kits: ProjectPartKit[]): Promise<ProjectPartKit[]> {
+  // Only fetch catalog detail for kits missing files/URL/note. The reuse-risk memory warning is
+  // supplied directly by the part-kits API (one batched query), so it does not require a fetch here.
   const targets = kits.filter(
-    (kit) => !kit.datasheet || !kit.model || !kit.footprint || !kit.partUrl?.trim() || !kit.note?.trim()
+    (kit) =>
+      !kit.datasheet ||
+      !kit.model ||
+      !kit.footprint ||
+      !kit.symbol ||
+      !kit.mechanicalDrawing ||
+      !kit.partUrl?.trim() ||
+      !kit.note?.trim()
   );
 
   if (targets.length === 0) {
@@ -46,13 +55,15 @@ export async function enrichPartKitsWithCatalogDetail(kits: ProjectPartKit[]): P
 }
 
 /**
- * Merges catalog datasheet, source URL, and description into one kit without overwriting BOM values.
+ * Merges catalog files, source URL, and description into one kit without overwriting BOM values.
  */
 export function mergeCatalogHintsIntoPartKit(kit: ProjectPartKit, detail: PartDetailResponse): ProjectPartKit {
   const { record } = detail;
   const datasheetAsset = resolveDatasheetAsset(record);
   const modelAsset = resolveKitAsset(record.assets, "three_d_model");
   const footprintAsset = resolveKitAsset(record.assets, "footprint");
+  const symbolAsset = resolveKitAsset(record.assets, "symbol");
+  const mechanicalDrawingAsset = resolveKitAsset(record.assets, "mechanical_drawing");
   const catalogUrl =
     normalizeOptionalText(detail.acquisitionSummary.sourceUrl) ??
     normalizeOptionalText(record.sources.find((source) => source.sourceUrl)?.sourceUrl ?? null);
@@ -62,9 +73,13 @@ export function mergeCatalogHintsIntoPartKit(kit: ProjectPartKit, detail: PartDe
     ...kit,
     datasheet: kit.datasheet ?? (datasheetAsset ? buildCatalogKitFileRefFromAsset(record.part.id, datasheetAsset) : null),
     footprint: kit.footprint ?? (footprintAsset ? buildCatalogKitFileRefFromAsset(record.part.id, footprintAsset) : null),
+    mechanicalDrawing: kit.mechanicalDrawing ?? (mechanicalDrawingAsset ? buildCatalogKitFileRefFromAsset(record.part.id, mechanicalDrawingAsset) : null),
     model: kit.model ?? (modelAsset ? buildCatalogKitFileRefFromAsset(record.part.id, modelAsset) : null),
     note: kit.note ?? catalogNote,
-    partUrl: kit.partUrl ?? catalogUrl
+    partUrl: kit.partUrl ?? catalogUrl,
+    symbol: kit.symbol ?? (symbolAsset ? buildCatalogKitFileRefFromAsset(record.part.id, symbolAsset) : null),
+    // Prefer the warning the part-kits API already attached; fall back to detail for safety.
+    engineeringMemoryWarning: kit.engineeringMemoryWarning ?? record.engineeringMemoryWarning ?? null
   };
 }
 
@@ -106,8 +121,7 @@ function resolveKitAsset(assets: Asset[], assetType: AssetType): Asset | undefin
  * Builds a kit file reference from one catalog asset.
  */
 function buildCatalogKitFileRefFromAsset(partId: string, asset: Asset): ProjectPartKitFileRef {
-  const category =
-    asset.assetType === "datasheet" ? "datasheets" : asset.assetType === "three_d_model" ? "models" : "footprints";
+  const category = assetTypeToKitFileCategory(asset.assetType);
   const name =
     asset.storageKey?.split("/").pop() ??
     asset.sourceUrl?.split("/").pop() ??
@@ -120,10 +134,34 @@ function buildCatalogKitFileRefFromAsset(partId: string, asset: Asset): ProjectP
     assetId: asset.id,
     category,
     ...(downloadUrl !== undefined ? { downloadUrl } : {}),
+    fileFormat: asset.fileFormat,
     name,
     relativePath: asset.storageKey ?? asset.sourceUrl ?? `catalog/${asset.id}`,
     source: "catalog"
   };
+}
+
+/**
+ * Maps one catalog asset type to the project kit file category used by UI actions.
+ */
+function assetTypeToKitFileCategory(assetType: Asset["assetType"]): ProjectPartKitFileRef["category"] {
+  if (assetType === "datasheet") {
+    return "datasheets";
+  }
+
+  if (assetType === "three_d_model") {
+    return "models";
+  }
+
+  if (assetType === "footprint") {
+    return "footprints";
+  }
+
+  if (assetType === "symbol") {
+    return "symbols";
+  }
+
+  return "mechanical_drawings";
 }
 
 /**

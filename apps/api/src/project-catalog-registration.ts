@@ -2,7 +2,7 @@
  * File header: Registers project mirror BOM rows into the shared parts catalog and links where-used.
  *
  * Unmatched BOM lines become catalog parts with file-backed assets copied into object storage.
- * Matched lines are enriched with any missing datasheet, model, or footprint files from the mirror.
+ * Matched lines are enriched with any missing first-class asset files from the mirror.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -554,8 +554,12 @@ function inferCatalogFileFormat(fileName: string, assetType: AssetType): string 
     return "kicad_mod";
   }
 
-  if (extension === "kicad_sym" || extension === "sym") {
+  if (extension === "kicad_sym" || extension === "sym" || extension === "lib" || extension === "schlib" || extension === "olb") {
     return "kicad_sym";
+  }
+
+  if (extension === "dxf") {
+    return "dxf";
   }
 
   if (assetType === "datasheet") {
@@ -568,6 +572,14 @@ function inferCatalogFileFormat(fileName: string, assetType: AssetType): string 
 
   if (assetType === "footprint") {
     return "kicad_mod";
+  }
+
+  if (assetType === "symbol") {
+    return "kicad_sym";
+  }
+
+  if (assetType === "mechanical_drawing") {
+    return "dxf";
   }
 
   return extension.length > 0 ? extension : "unknown";
@@ -584,6 +596,10 @@ function mapMirrorCategoryToAssetType(category: MirrorAssetFile["category"]): As
       return "three_d_model";
     case "footprints":
       return "footprint";
+    case "symbols":
+      return "symbol";
+    case "mechanical_drawings":
+      return "mechanical_drawing";
     default:
       return null;
   }

@@ -3,7 +3,12 @@
  */
 
 import { Pool } from "pg";
+import path from "node:path";
 import type {
+  PartEngineeringMemoryWarningSummary,
+  PartEngineeringRecordKind,
+  PartEngineeringRecordOutcome,
+  PartEngineeringRecordSeverity,
   ProjectMirrorIngestResponse,
   ProjectPartKit,
   ProjectPartKitFileRef,
@@ -135,6 +140,7 @@ export async function listProjectPartKitsInDatabase(projectId: string): Promise<
   const partIds = [...kitsByPartId.keys()];
   const catalogAssetsByPartId = await readCatalogKitFilesByPartId(databasePool, partIds);
   const catalogContextByPartId = await readCatalogPartContextByPartId(databasePool, partIds);
+  const memoryWarningByPartId = await readEngineeringMemoryWarningsByPartId(databasePool, partIds);
 
   for (const kit of kitsByPartId.values()) {
     mergeCatalogAssetsIntoKit(kit, catalogAssetsByPartId.get(kit.partId));
@@ -144,6 +150,8 @@ export async function listProjectPartKitsInDatabase(projectId: string): Promise<
       kit.partUrl ??= catalogContext.partUrl;
       kit.note ??= catalogContext.note;
     }
+
+    kit.engineeringMemoryWarning = memoryWarningByPartId.get(kit.partId) ?? null;
   }
 
   const kits = Array.from(kitsByPartId.values()).sort((left, right) =>
@@ -342,6 +350,8 @@ function mergePartKit(kitsByPartId: Map<string, ProjectPartKit>, input: PartKitM
     existing.datasheet ??= pickKitFile(input.mirrorFiles, "datasheets");
     existing.model ??= pickKitFile(input.mirrorFiles, "models");
     existing.footprint ??= pickKitFile(input.mirrorFiles, "footprints");
+    existing.symbol ??= pickKitFile(input.mirrorFiles, "symbols");
+    existing.mechanicalDrawing ??= pickKitFile(input.mirrorFiles, "mechanical_drawings");
     return;
   }
 
@@ -350,11 +360,13 @@ function mergePartKit(kitsByPartId: Map<string, ProjectPartKit>, input: PartKitM
     designators: [...input.designators],
     footprint: pickKitFile(input.mirrorFiles, "footprints"),
     manufacturerName: input.manufacturerName,
+    mechanicalDrawing: pickKitFile(input.mirrorFiles, "mechanical_drawings"),
     model: pickKitFile(input.mirrorFiles, "models"),
     mpn: input.mpn,
     note: input.metadata.note,
     partId: input.partId,
     partUrl: input.metadata.partUrl,
+    symbol: pickKitFile(input.mirrorFiles, "symbols"),
     usageIds: input.usageId ? [input.usageId] : []
   });
 }
@@ -678,11 +690,13 @@ function scanPayloadForDescription(payload: Record<string, unknown>, mpn: string
 interface CatalogKitFiles {
   datasheet: ProjectPartKitFileRef | null;
   footprint: ProjectPartKitFileRef | null;
+  mechanicalDrawing: ProjectPartKitFileRef | null;
   model: ProjectPartKitFileRef | null;
+  symbol: ProjectPartKitFileRef | null;
 }
 
 /**
- * Reads catalog-backed datasheet, model, and footprint assets for project part kits.
+ * Reads catalog-backed assets for every first-class project part kit slot.
  */
 async function readCatalogKitFilesByPartId(
   databasePool: Pool,
@@ -722,7 +736,7 @@ async function readCatalogKitFilesByPartId(
         last_updated_at
       FROM assets
       WHERE part_id = ANY($1::text[])
-        AND asset_type IN ('datasheet', 'footprint', 'three_d_model')
+        AND asset_type IN ('datasheet', 'footprint', 'mechanical_drawing', 'symbol', 'three_d_model')
       ORDER BY asset_type ASC, last_updated_at DESC, id ASC
     `,
     [partIds]
@@ -744,7 +758,9 @@ async function readCatalogKitFilesByPartId(
     byPartId.set(partId, {
       datasheet: catalogAssetToKitFileRef(partId, selectBestAvailableAsset(assets.filter((asset) => asset.assetType === "datasheet"))),
       footprint: catalogAssetToKitFileRef(partId, selectBestAvailableAsset(assets.filter((asset) => asset.assetType === "footprint"))),
-      model: catalogAssetToKitFileRef(partId, selectBestAvailableAsset(assets.filter((asset) => asset.assetType === "three_d_model")))
+      mechanicalDrawing: catalogAssetToKitFileRef(partId, selectBestAvailableAsset(assets.filter((asset) => asset.assetType === "mechanical_drawing"))),
+      model: catalogAssetToKitFileRef(partId, selectBestAvailableAsset(assets.filter((asset) => asset.assetType === "three_d_model"))),
+      symbol: catalogAssetToKitFileRef(partId, selectBestAvailableAsset(assets.filter((asset) => asset.assetType === "symbol")))
     });
   }
 
@@ -754,7 +770,9 @@ async function readCatalogKitFilesByPartId(
     const existing = byPartId.get(partId) ?? {
       datasheet: null,
       footprint: null,
-      model: null
+      mechanicalDrawing: null,
+      model: null,
+      symbol: null
     };
 
     existing.datasheet ??= datasheet;
@@ -894,6 +912,73 @@ async function readDatasheetRevisionKitFilesByPartId(
   return byPartId;
 }
 
+/** ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT bounds preview rows attached per kit. */
+const ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT = 3;
+
+/**
+ * Reads confirmed, unresolved "this bit us / blocking" engineering memory for the kit parts in
+ * one batched query, so project/BOM views can warn before reusing a part that burned the team.
+ * Mirrors the catalog search warning rule. Any failure yields an empty map (no badges) rather
+ * than breaking the kit list.
+ */
+async function readEngineeringMemoryWarningsByPartId(
+  databasePool: Pool,
+  partIds: string[]
+): Promise<Map<string, PartEngineeringMemoryWarningSummary>> {
+  if (partIds.length === 0) {
+    return new Map();
+  }
+
+  const byPartId = new Map<string, PartEngineeringMemoryWarningSummary>();
+
+  try {
+    const result = await databasePool.query<{
+      part_id: string;
+      record_id: string;
+      record_kind: string;
+      severity: string;
+      outcome: string | null;
+      title: string;
+    }>(
+      `
+        SELECT per.part_id, per.id AS record_id, per.record_kind, per.severity, per.outcome, per.title
+        FROM part_engineering_records per
+        WHERE per.part_id = ANY($1::text[])
+          AND per.draft_status = 'confirmed'
+          AND per.resolved_at IS NULL
+          AND (per.outcome = 'bit_us' OR per.severity = 'blocking')
+        ORDER BY CASE WHEN per.severity = 'blocking' THEN 0 ELSE 1 END, per.recorded_at DESC, per.id ASC
+      `,
+      [partIds]
+    );
+
+    for (const row of result.rows) {
+      const summary = byPartId.get(row.part_id) ?? { blockingCount: 0, preview: [], warningCount: 0 };
+      summary.warningCount += 1;
+
+      if (row.severity === "blocking") {
+        summary.blockingCount += 1;
+      }
+
+      if (summary.preview.length < ENGINEERING_MEMORY_WARNING_PREVIEW_LIMIT) {
+        summary.preview.push({
+          outcome: (row.outcome as PartEngineeringRecordOutcome | null) ?? null,
+          recordId: row.record_id,
+          recordKind: row.record_kind as PartEngineeringRecordKind,
+          severity: row.severity as PartEngineeringRecordSeverity,
+          title: row.title
+        });
+      }
+
+      byPartId.set(row.part_id, summary);
+    }
+  } catch {
+    return new Map();
+  }
+
+  return byPartId;
+}
+
 /** CatalogPartContext carries catalog fallbacks when BOM metadata is empty. */
 interface CatalogPartContext {
   note: string | null;
@@ -965,6 +1050,14 @@ function catalogAssetTypeToKitSlot(assetType: string): MirrorAssetCategory | nul
     return "footprints";
   }
 
+  if (assetType === "symbol") {
+    return "symbols";
+  }
+
+  if (assetType === "mechanical_drawing") {
+    return "mechanical_drawings";
+  }
+
   return null;
 }
 
@@ -1010,6 +1103,8 @@ function mergeCatalogAssetsIntoKit(kit: ProjectPartKit, catalog: CatalogKitFiles
   kit.datasheet = pickBetterKitFile(kit.datasheet, catalog.datasheet);
   kit.model = pickBetterKitFile(kit.model, catalog.model);
   kit.footprint = pickBetterKitFile(kit.footprint, catalog.footprint);
+  kit.symbol = pickBetterKitFile(kit.symbol, catalog.symbol);
+  kit.mechanicalDrawing = pickBetterKitFile(kit.mechanicalDrawing, catalog.mechanicalDrawing);
 }
 
 /**
@@ -1095,10 +1190,7 @@ function pickKitFile(files: MirrorAssetFile[], category: MirrorAssetCategory): P
     return null;
   }
 
-  const preferred =
-    category === "datasheets"
-      ? matches.find((file) => file.name.toLowerCase().endsWith(".pdf")) ?? matches[0]
-      : matches[0];
+  const preferred = pickPreferredKitFile(matches, category);
 
   if (!preferred) {
     return null;
@@ -1106,10 +1198,79 @@ function pickKitFile(files: MirrorAssetFile[], category: MirrorAssetCategory): P
 
   return {
     category,
+    fileFormat: inferKitFileFormat(preferred.name, category),
     name: preferred.name,
     relativePath: preferred.relativePath,
     source: "mirror"
   };
+}
+
+/**
+ * Chooses the clearest default file inside a mirror slot when several candidates match.
+ */
+function pickPreferredKitFile(files: MirrorAssetFile[], category: MirrorAssetCategory): MirrorAssetFile | undefined {
+  if (category === "datasheets") {
+    return files.find((file) => file.name.toLowerCase().endsWith(".pdf")) ?? files[0];
+  }
+
+  if (category === "symbols") {
+    return files.find((file) => file.name.toLowerCase().endsWith(".kicad_sym")) ?? files[0];
+  }
+
+  if (category === "mechanical_drawings") {
+    return files.find((file) => /\.(?:dxf|pdf)$/iu.test(file.name)) ?? files[0];
+  }
+
+  return files[0];
+}
+
+/**
+ * Infers a project kit file format from the mirror category and filename extension.
+ */
+function inferKitFileFormat(fileName: string, category: MirrorAssetCategory): NonNullable<ProjectPartKitFileRef["fileFormat"]> {
+  const extension = path.extname(fileName).toLowerCase();
+
+  if (extension === ".pdf") {
+    return "pdf";
+  }
+
+  if (extension === ".step" || extension === ".stp") {
+    return "step";
+  }
+
+  if (extension === ".kicad_mod" || extension === ".mod") {
+    return "kicad_mod";
+  }
+
+  if (extension === ".kicad_sym" || extension === ".sym" || extension === ".lib" || extension === ".schlib") {
+    return "kicad_sym";
+  }
+
+  if (extension === ".dxf") {
+    return "dxf";
+  }
+
+  if (category === "datasheets") {
+    return "pdf";
+  }
+
+  if (category === "models") {
+    return "step";
+  }
+
+  if (category === "footprints") {
+    return "kicad_mod";
+  }
+
+  if (category === "symbols") {
+    return "kicad_sym";
+  }
+
+  if (category === "mechanical_drawings") {
+    return "dxf";
+  }
+
+  return "unknown";
 }
 
 /**

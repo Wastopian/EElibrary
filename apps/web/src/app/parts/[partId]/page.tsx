@@ -8,15 +8,17 @@ import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
+import { ENGINEERING_ASSET_TYPES } from "@ee-library/shared/asset-resolution";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
 import { PackageDimensions } from "../../../components/PackageDimensions";
 import { PartSubstitutionPanel } from "../../../components/PartSubstitutionPanel";
 import { PartEngineeringMemoryPanel } from "../../../components/PartEngineeringMemoryPanel";
-import { AssetInlinePreview } from "../../../components/AssetInlinePreview";
+import { AssetInlinePreview, canEmbedAssetPreview } from "../../../components/AssetInlinePreview";
 import { PartDetailFilesWorkspace } from "../../../components/PartDetailFilesWorkspace";
+import { CollapsibleSection } from "../../../components/CollapsibleSection";
 import { WorkspaceActionPanel, type WorkspaceAction } from "../../../components/WorkspaceActionPanel";
-import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, createReviewAction, fetchEntityAuditEvents, fetchPartDetail, fetchPartDetailEnvelope, fetchPartDocumentRevisions, fetchProjectDetail, fetchProjectPartKits, fetchPartSupplyOffers, fetchPartWhereUsed, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
+import { buildAssetDownloadUrl, buildCompareUrl, createAssetPromotion, createDocumentRedline, createDocumentRevision, createGenerationRequest, fetchEntityAuditEvents, fetchPartDetail, fetchPartDetailEnvelope, fetchPartDocumentRevisions, fetchProjectDetail, fetchProjectPartKits, fetchPartSupplyOffers, fetchPartWhereUsed, fetchVendorList, isApiClientError, updateDocumentRedline } from "../../../lib/api-client";
 import { enrichPartKitsWithCatalogDetail } from "../../../lib/enrich-project-part-kits";
 import { buildCatalogAssetFileActions } from "../../../lib/part-kit-file-actions";
 import {
@@ -55,13 +57,12 @@ import {
   shouldRenderAssetPromotionAction,
   shouldRenderConnectorSections,
   shouldRenderGenerationOptions,
-  shouldRenderReviewActions
 } from "../../../lib/detail-view-model";
 import { getCircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { CircuitBlockReuseHeadline } from "../../../lib/circuit-block-reuse-readiness";
 import type { BadgeTone, MetricTableRow } from "@ee-library/ui";
 import type { DetailCompletenessChecklistItem, DetailEnrichmentStatusItem, PartNextAction, ViewTone } from "../../../lib/detail-view-model";
-import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetType, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartKit, ProjectPartUsageStatus, RelatedPartSummary, ReviewOutcome, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
+import type { Asset, AssetClassReadiness, AssetClassSummary, AssetPromotionSummary, AssetProvenance, AssetType, AssetValidationSummary, AuditEvent, BundleReadinessState, BundleReadinessSummary, CatalogDataSource, ControlledDocumentRevision, DocumentAccessLevel, DocumentAclPermission, DocumentAclPrincipalType, DocumentControlType, DocumentRedlineSeverity, DocumentRedlineStatus, DocumentRevisionLifecycleStatus, DocumentRevisionListResponse, GenerationSourceReadiness, GenerationTargetAssetType, GenerationWorkflowState, InventoryStatus, MateRelation, Package, PartAcquisitionSummary, PartCircuitBlockDependencyRecord, PartSupplyOffersResponse, PartWhereUsedResponse, PreviewStatus, PriceBreak, ProjectPartKit, ProjectPartUsageStatus, RelatedPartSummary, ReviewStatusSummary, ReviewTargetType, SupplyOffering, ValidationStatus } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -148,7 +149,8 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
   const nextActions = getPartNextActions(record);
   const primaryNextAction = nextActions[0];
   const latestSource = record.sources[0];
-  const projectPartKit = projectContext ? await loadProjectPartKitForPart(projectContext.projectId, partId) : null;
+  const projectPartKitState = projectContext ? await loadProjectPartKitForPart(projectContext.projectId, partId) : null;
+  const projectPartKit = projectPartKitState?.kit ?? null;
   const supplierUrl =
     projectPartKit?.partUrl?.trim() ||
     detail.acquisitionSummary.sourceUrl?.trim() ||
@@ -164,6 +166,9 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
   const missingAssetGroups = assetGroups.filter((group) => group.bestAsset === null);
   const gatingByAssetId = buildAssetGatingMap(documentControlState);
+  const vendorSlugByName = await loadVendorSlugLookup();
+  const threeDModelAsset = assetGroups.find((group) => group.assetType === "three_d_model")?.bestAsset ?? null;
+  const heroThreeDModelAsset = threeDModelAsset && source !== "seed_fallback" && canEmbedAssetPreview(threeDModelAsset) ? threeDModelAsset : null;
 
   /**
    * Requests generation through the API while leaving completion and export approval explicit.
@@ -178,28 +183,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
     }
 
     await createGenerationRequest(partId, targetAssetType);
-    revalidatePath(`/parts/${partId}`);
-  }
-
-  /**
-   * Persists an explicit review action without implying unreviewed export readiness.
-   */
-  async function submitReviewAction(formData: FormData) {
-    "use server";
-
-    const targetType = readReviewTargetType(formData.get("targetType"));
-    const targetId = readRequiredFormString(formData.get("targetId"));
-    const outcome = readReviewOutcome(formData.get("outcome"));
-
-    if (!targetType || !targetId || !outcome) {
-      return;
-    }
-
-    await createReviewAction(partId, {
-      outcome,
-      targetId,
-      targetType
-    });
     revalidatePath(`/parts/${partId}`);
   }
 
@@ -379,32 +362,18 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
 
   return (
     <main className="detail-layout">
-      {projectContext ? <ProjectFocusBanner context={projectContext} mpn={record.part.mpn} /> : null}
-
-      <div className="detail-nav-links">
-        {projectContext ? (
-          <>
-            <Link className="back-link" href={buildProjectFocusBackHref(projectContext.projectId)}>
-              &larr; Back to {projectContext.projectName}
-            </Link>
-            <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
-              Compare with another part
-            </Link>
-            <Link className="detail-nav-links__compare" href={buildProjectFocusKitHref(projectContext.projectId)}>
-              Edit part kit
-            </Link>
-          </>
-        ) : (
-          <>
-            <Link className="back-link" href="/catalog">
-              &larr; Back to catalog
-            </Link>
-            <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
-              Compare with another part
-            </Link>
-          </>
-        )}
-      </div>
+      {projectContext ? (
+        <ProjectFocusBanner context={projectContext} mpn={record.part.mpn} partId={record.part.id} />
+      ) : (
+        <div className="detail-nav-links">
+          <Link className="back-link" href="/catalog">
+            &larr; Back to catalog
+          </Link>
+          <Link className="detail-nav-links__compare" href={buildCompareUrl([record.part.id])}>
+            Compare with another part
+          </Link>
+        </div>
+      )}
 
       <section className="detail-section" aria-labelledby="overview-heading">
         <SectionHeading
@@ -469,6 +438,12 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
             </div>
           </div>
           <div className="detail-hero__status">
+            {heroThreeDModelAsset ? (
+              <div className="detail-hero__media" id="part-asset-three_d_model">
+                <p className="detail-hero__media-label">3D model</p>
+                <AssetInlinePreview asset={heroThreeDModelAsset} partId={record.part.id} />
+              </div>
+            ) : null}
             <details className="detail-hero__trust-meter">
               <summary>Confidence score</summary>
               <TrustMeter label="Confidence" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
@@ -505,10 +480,42 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
             <DetailUseDecision
               assetTruthSummary={assetTruthSummary}
               datasheetAsset={datasheetAsset}
-              latestSource={latestSource}
               nextAction={primaryNextAction}
               record={record}
             />
+          </div>
+        </section>
+
+        <section className="detail-quick-facts" aria-label="Specs and files at a glance">
+          <div className="detail-quick-facts__col">
+            <p className="app-kicker">Key specs</p>
+            {metricRows.length > 0 ? (
+              <ul className="detail-quick-facts__specs">
+                {metricRows.slice(0, 6).map((row) => (
+                  <li key={row.label}>
+                    <span>{row.label}</span>
+                    <strong>{row.value}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted-copy">No specs are attached to this part yet.</p>
+            )}
+          </div>
+          <div className="detail-quick-facts__col">
+            <p className="app-kicker">Files on hand</p>
+            <ul className="detail-quick-facts__files">
+              {ENGINEERING_ASSET_TYPES.map((assetType) => {
+                const present = assetGroups.some((group) => group.assetType === assetType && group.bestAsset !== null);
+
+                return (
+                  <li key={assetType}>
+                    <span className="detail-quick-facts__file-name">{assetTypeLabel(assetType)}</span>
+                    <StatusBadge label={present ? "On file" : "Missing"} tone={present ? "verified" : "neutral"} />
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         </section>
 
@@ -516,7 +523,7 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
 
         <div id="files-heading">
           <SectionPanel
-            description="Open PDFs in the browser, download CAD files, preview 3D models below, and add missing files to your project folder when you arrived from a project."
+            description="Open PDFs in the browser, download CAD files, preview 3D models below, and add or change files in your project folder when you arrived from a project."
             title="Files and downloads"
           >
             <PartDetailFilesWorkspace
@@ -525,6 +532,7 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
               partMpn={record.part.mpn}
               projectId={projectContext?.projectId}
               projectKit={projectPartKit}
+              projectMirrorAvailable={projectPartKitState?.mirrorAvailable ?? false}
               source={source}
               supplierUrl={supplierUrl}
               validationSummaries={assetValidationSummaries}
@@ -549,16 +557,15 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
           reviewWorkflowSummary={reviewWorkflowSummary}
         />
 
-        <SectionPanel description="What is done and what is still missing for this part." title="Completeness checklist">
+        <CollapsibleSection description="What is done and what is still missing for this part." title="Completeness checklist">
           <DetailCompletenessChecklist items={completenessChecklist} />
-        </SectionPanel>
+        </CollapsibleSection>
 
         <div className="detail-overview-grid">
           <DetailContextPanel
             bestMate={bestMate ?? undefined}
             datasheetAsset={datasheetAsset}
             hasConnectorIntelligence={hasConnectorIntelligence}
-            latestSource={latestSource}
             record={record}
             relatedPartSummaries={relatedPartSummaries}
           />
@@ -581,21 +588,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
             />
           </SectionPanel>
         </div>
-
-        <SectionPanel description="Which datasheet revision this part record references. Downloads live in the Files and downloads panel above." title="Datasheet revision">
-          <div className="datasheet-panel">
-            <div>
-              <p className="ui-mono">{record.datasheetRevision?.revisionLabel ?? "No revision"}</p>
-              <p>{record.datasheetRevision?.revisionDate ?? "Revision date unknown"}</p>
-              <p>{record.datasheetRevision?.pageCount ? `${record.datasheetRevision.pageCount} pages` : "Page count unknown"}</p>
-            </div>
-            <div className="datasheet-panel__badges">
-              <StatusBadge label={formatDatasheetParseConfidence(record.datasheetRevision?.parseConfidence)} tone={record.datasheetRevision ? scoreTone(record.datasheetRevision.parseConfidence) : "neutral"} />
-              <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
-              <StatusBadge label={latestSource ? `Ingestion ${latestSource.providerId}` : "No source row"} tone={latestSource ? "info" : "neutral"} />
-            </div>
-          </div>
-        </SectionPanel>
 
         {documentControlAuditBlock}
       </section>
@@ -645,14 +637,8 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
                   <p className="muted-copy">No best-mate mapping is stored for this part.</p>
                 )}
               </SectionPanel>
-              <SectionPanel description="Mate, required hardware, tools, and cable options for a buildable set." title="Buildable mating set">
+              <SectionPanel description="Required hardware, tools, and cable options for a buildable set. Mates are listed in the Best mate panel." title="Buildable mating set">
                 <ul className="connector-list">
-                  <li>
-                    <strong>Best mate:</strong> {bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "Not available"}
-                  </li>
-                  <li>
-                    <strong>Alternate mates:</strong> {renderMateRelationList(record.buildableMatingSet.alternateMates, relatedPartSummaries)}
-                  </li>
                   <li>
                     <strong>Family conflicts:</strong> {renderRelatedList(record.buildableMatingSet.familyConflicts.map((item) => item.candidatePartId), relatedPartSummaries)}
                   </li>
@@ -774,9 +760,22 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
             </div>
           </SectionPanel>
           <SectionPanel description="Source-linked commercial snapshots; refresh imports before buying." title="Distributor offers">
-            <SupplyOffersPanel state={supplyOffersState} />
+            <SupplyOffersPanel state={supplyOffersState} vendorSlugByName={vendorSlugByName} />
           </SectionPanel>
         </div>
+        <SectionPanel description="Which datasheet revision this part record references. Downloads live in the Files and downloads panel near the top." title="Datasheet revision">
+          <div className="datasheet-panel">
+            <div>
+              <p className="ui-mono">{record.datasheetRevision?.revisionLabel ?? "No revision"}</p>
+              <p>{record.datasheetRevision?.revisionDate ?? "Revision date unknown"}</p>
+              <p>{record.datasheetRevision?.pageCount ? `${record.datasheetRevision.pageCount} pages` : "Page count unknown"}</p>
+            </div>
+            <div className="datasheet-panel__badges">
+              <StatusBadge label={formatDatasheetParseConfidence(record.datasheetRevision?.parseConfidence)} tone={record.datasheetRevision ? scoreTone(record.datasheetRevision.parseConfidence) : "neutral"} />
+              <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
+            </div>
+          </div>
+        </SectionPanel>
       </section>
 
       <section className="detail-section detail-section--technical" aria-labelledby="files-models-heading">
@@ -796,67 +795,64 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
           </div>
         </SectionPanel>
         {populatedAssetGroups.length > 0 ? (
-          <div className="asset-grid">
-            {populatedAssetGroups.map((group) => (
-              <EngineeringAssetSummary
-                group={group}
-                key={group.assetType}
-                promotionAction={submitAssetPromotionAction}
-                promotionSummaries={assetPromotionSummaries}
-                reviewAction={submitReviewAction}
-                reviewStatuses={assetReviewStatuses}
-                source={source}
-                validationSummaries={assetValidationSummaries}
-                gatedRevision={group.bestAsset ? gatingByAssetId.get(group.bestAsset.id) ?? null : null}
-              />
-            ))}
-          </div>
+          <details className="audit-disclosure" style={{ marginTop: 12 }}>
+            <summary>Per-file detail, previews, and review ({populatedAssetGroups.length} on file)</summary>
+            <div className="asset-grid" style={{ marginTop: 12 }}>
+              {populatedAssetGroups.map((group) => (
+                <EngineeringAssetSummary
+                  group={group}
+                  key={group.assetType}
+                  promotionAction={submitAssetPromotionAction}
+                  promotionSummaries={assetPromotionSummaries}
+                  reviewStatuses={assetReviewStatuses}
+                  source={source}
+                  validationSummaries={assetValidationSummaries}
+                  gatedRevision={group.bestAsset ? gatingByAssetId.get(group.bestAsset.id) ?? null : null}
+                />
+              ))}
+            </div>
+            {missingAssetGroups.length > 0 ? (
+              <ul className="info-list" style={{ marginTop: 12 }}>
+                {missingAssetGroups.map((group) => (
+                  <li key={`missing-${group.assetType}`}>
+                    <span>{assetTypeLabel(group.assetType)}: no file rows yet.</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {record.generationWorkflows.length > 0 ? (
+              <>
+                <h3 className="ui-section-heading__title" style={{ marginTop: 18 }}>
+                  Generation workflow status
+                </h3>
+                <p className="muted-copy" style={{ fontSize: "0.88rem", marginBottom: 12 }}>
+                  Tracks async work separately from stored official or verified file assets.
+                </p>
+                <ul className="info-list">
+                  {record.generationWorkflows.map((workflow) => {
+                    const reviewStatus = findReviewStatus(workflowReviewStatuses, "generation_workflow", workflow.id);
+
+                    return (
+                      <li key={workflow.id}>
+                        <div className="datasheet-panel">
+                          <div>
+                            <p>{formatGenerationWorkflowLabel(workflow, record.assets)}</p>
+                            <p className="muted-copy">Review: {formatReviewStateLabel(reviewStatus.state)}</p>
+                          </div>
+                          <div className="datasheet-panel__badges">
+                            <StatusBadge label={formatReviewStateLabel(reviewStatus.state)} tone={mapViewToneToBadge(reviewStateTone(reviewStatus.state))} />
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : null}
+          </details>
         ) : (
           <EmptyState body="No files yet. Use the action above to request a draft or upload one." title="No usable files yet" />
         )}
-        {missingAssetGroups.length > 0 ? (
-          <details className="audit-disclosure" style={{ marginTop: 12 }}>
-            <summary>Show missing file classes ({missingAssetGroups.length})</summary>
-            <ul className="info-list">
-              {missingAssetGroups.map((group) => (
-                <li key={`missing-${group.assetType}`}>
-                  <span>{assetTypeLabel(group.assetType)}: no file rows yet.</span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        ) : null}
-
-        {record.generationWorkflows.length > 0 ? (
-          <>
-            <h3 className="ui-section-heading__title" style={{ marginTop: 18 }}>
-              Generation workflow status
-            </h3>
-            <p className="muted-copy" style={{ fontSize: "0.88rem", marginBottom: 12 }}>
-              Tracks async work separately from stored official or verified file assets.
-            </p>
-            <ul className="info-list">
-              {record.generationWorkflows.map((workflow) => {
-                const reviewStatus = findReviewStatus(workflowReviewStatuses, "generation_workflow", workflow.id);
-
-                return (
-                  <li key={workflow.id}>
-                    <div className="datasheet-panel">
-                      <div>
-                        <p>{formatGenerationWorkflowLabel(workflow, record.assets)}</p>
-                        <p className="muted-copy">Review: {formatReviewStateLabel(reviewStatus.state)}</p>
-                      </div>
-                      <div className="datasheet-panel__badges">
-                        <StatusBadge label={formatReviewStateLabel(reviewStatus.state)} tone={mapViewToneToBadge(reviewStateTone(reviewStatus.state))} />
-                        <ReviewActionPanel reviewAction={submitReviewAction} reviewStatus={reviewStatus} targetId={workflow.id} targetType="generation_workflow" />
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        ) : null}
       </section>
 
       <section className="detail-section" aria-labelledby="approval-heading">
@@ -967,18 +963,24 @@ async function loadPartDetailPage(partId: string): Promise<PartDetailPageState> 
 /**
  * Loads one enriched part kit row when the engineer opened this part from a project.
  */
-async function loadProjectPartKitForPart(projectId: string, partId: string): Promise<ProjectPartKit | null> {
+async function loadProjectPartKitForPart(projectId: string, partId: string): Promise<{ kit: ProjectPartKit | null; mirrorAvailable: boolean } | null> {
   try {
     const response = await fetchProjectPartKits(projectId);
     const kit = response?.kits.find((entry) => entry.partId === partId);
 
     if (!kit) {
-      return null;
+      return {
+        kit: null,
+        mirrorAvailable: response?.mirrorAvailable ?? false
+      };
     }
 
     const [enriched] = await enrichPartKitsWithCatalogDetail([kit]);
 
-    return enriched ?? null;
+    return {
+      kit: enriched ?? null,
+      mirrorAvailable: response?.mirrorAvailable ?? false
+    };
   } catch {
     return null;
   }
@@ -1005,10 +1007,17 @@ async function loadProjectFocusContext(projectId: string): Promise<ProjectFocusC
   }
 }
 
+/** ProjectFocusBannerProps carries the part and project needed for the compact project action row. */
+interface ProjectFocusBannerProps {
+  context: ProjectFocusContext;
+  mpn: string;
+  partId: string;
+}
+
 /**
  * Renders a short banner when the engineer opened this part from a project.
  */
-function ProjectFocusBanner({ context, mpn }: { context: ProjectFocusContext; mpn: string }) {
+function ProjectFocusBanner({ context, mpn, partId }: ProjectFocusBannerProps) {
   return (
     <section aria-label="Project context" className="detail-focus-banner">
       <p>
@@ -1017,6 +1026,9 @@ function ProjectFocusBanner({ context, mpn }: { context: ProjectFocusContext; mp
       <div className="detail-focus-banner__actions">
         <Link className="button-link" href={buildProjectFocusBackHref(context.projectId)}>
           Back to project
+        </Link>
+        <Link className="button-link button-link--quiet" href={buildCompareUrl([partId])}>
+          Compare with another part
         </Link>
         <Link className="button-link button-link--quiet" href={buildProjectFocusKitHref(context.projectId)}>
           Edit part kit
@@ -1463,7 +1475,7 @@ function DocumentRevisionCard({
 /**
  * Renders source-linked commercial snapshots without treating them as live stock or approval.
  */
-function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
+function SupplyOffersPanel({ state, vendorSlugByName }: { state: PartSupplyOffersState; vendorSlugByName: Map<string, string> }) {
   if (state.status === "unavailable") {
     return (
       <EmptyState
@@ -1531,7 +1543,7 @@ function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
           </thead>
           <tbody>
             {response.offers.map((offer) => (
-              <SupplyOfferRow key={offer.id} offer={offer} staleAfterDays={response.staleAfterDays} />
+              <SupplyOfferRow key={offer.id} offer={offer} staleAfterDays={response.staleAfterDays} vendorSlugByName={vendorSlugByName} />
             ))}
           </tbody>
         </table>
@@ -1543,14 +1555,17 @@ function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
 /**
  * Renders one supply-offer row with source and freshness context.
  */
-function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; staleAfterDays: number }) {
+function SupplyOfferRow({ offer, staleAfterDays, vendorSlugByName }: { offer: SupplyOffering; staleAfterDays: number; vendorSlugByName: Map<string, string> }) {
   const bestBreak = getBestPriceBreak(offer.priceBreaks);
   const supplierLabel = formatSupplySourceLabel(offer);
+  const vendorSlug = offer.supplierName ? vendorSlugByName.get(vendorMatchKey(offer.supplierName)) : undefined;
 
   return (
     <tr>
       <td>
-        <strong>{supplierLabel}</strong>
+        <strong>
+          {vendorSlug ? <Link href={`/vendors/${vendorSlug}`}>{supplierLabel}</Link> : supplierLabel}
+        </strong>
         <p>{offer.supplierName ? `via ${offer.providerId}` : `Provider ${offer.providerId}`}</p>
         <p>{offer.providerSku ? `SKU ${offer.providerSku}` : `Provider key ${offer.providerPartKey}`}</p>
         {offer.sourceUrl ? <a href={offer.sourceUrl}>Source record</a> : <span className="muted-copy">No source URL</span>}
@@ -1797,13 +1812,11 @@ function headlineToneToBadgeForWhereUsed(tone: CircuitBlockReuseHeadline["tone"]
 function DetailUseDecision({
   assetTruthSummary,
   datasheetAsset,
-  latestSource,
   nextAction,
   record
 }: {
   assetTruthSummary: ReturnType<typeof getAssetTruthSummary>;
   datasheetAsset: Asset | undefined;
-  latestSource: PartDetailPageRecord["sources"][number] | undefined;
   nextAction: PartNextAction | undefined;
   record: PartDetailPageRecord;
 }) {
@@ -1826,10 +1839,6 @@ function DetailUseDecision({
         <div>
           <dt>CAD/export</dt>
           <dd>{assetTruthSummary.label}</dd>
-        </div>
-        <div>
-          <dt>Source</dt>
-          <dd>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source row"}</dd>
         </div>
       </dl>
 
@@ -1868,22 +1877,26 @@ function DetailReadinessSummary({
   reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
-    <section aria-label="Readiness summary" className={`detail-readiness-summary detail-readiness-summary--${quickReadinessSummary.tone}`}>
-      <div className="detail-readiness-summary__lead">
-        <div>
-          <p className="app-kicker">Readiness record</p>
-          <h2>{readinessSummary.label}</h2>
-          <p className="detail-readiness-summary__subhead">{approval.summary}</p>
-          <p>{readinessSummary.detail}</p>
+    <details aria-label="Readiness summary" className={`detail-readiness-summary detail-readiness-summary--${quickReadinessSummary.tone}`}>
+      <summary className="detail-readiness-summary__summary">
+        <div className="detail-readiness-summary__lead">
+          <div>
+            <p className="app-kicker">Readiness record</p>
+            <h2>{readinessSummary.label}</h2>
+            <p className="detail-readiness-summary__subhead">{approval.summary}</p>
+          </div>
+          <div className="detail-readiness-summary__badges">
+            <StatusBadge label={readinessSummary.label} tone={readinessStatusTone(readinessSummary.status)} />
+            <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
+            <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
+            <StatusBadge label={connectorOrRecoverySummary.label} tone={mapViewToneToBadge(connectorOrRecoverySummary.tone)} />
+            <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
+          </div>
         </div>
-        <div className="detail-readiness-summary__badges">
-          <StatusBadge label={readinessSummary.label} tone={readinessStatusTone(readinessSummary.status)} />
-          <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
-          <StatusBadge label={assetTruthSummary.label} tone={mapViewToneToBadge(assetTruthSummary.tone)} />
-          <StatusBadge label={connectorOrRecoverySummary.label} tone={mapViewToneToBadge(connectorOrRecoverySummary.tone)} />
-          <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
-        </div>
-      </div>
+        <span className="detail-readiness-summary__more">Blockers, approval and file status</span>
+      </summary>
+
+      <p className="detail-readiness-summary__detail">{readinessSummary.detail}</p>
 
       <div className="detail-readiness-summary__grid">
         <div>
@@ -1911,7 +1924,7 @@ function DetailReadinessSummary({
           <p>{quickReadinessSummary.detail}</p>
         </div>
       </div>
-    </section>
+    </details>
   );
 }
 
@@ -2108,14 +2121,12 @@ function DetailContextPanel({
   bestMate,
   datasheetAsset,
   hasConnectorIntelligence,
-  latestSource,
   record,
   relatedPartSummaries
 }: {
   bestMate: MateRelation | undefined;
   datasheetAsset: Asset | undefined;
   hasConnectorIntelligence: boolean;
-  latestSource: PartDetailPageRecord["sources"][number] | undefined;
   record: PartDetailPageRecord;
   relatedPartSummaries: RelatedPartSummary[];
 }) {
@@ -2123,23 +2134,25 @@ function DetailContextPanel({
     const primaryConnectorWarning = record.buildableMatingSet.warningDetails[0] ?? null;
 
     return (
-      <section className="detail-context-panel" aria-label="Connector build set">
-        <div className="detail-context-panel__header">
-          <div>
-            <p className="app-kicker">Connector build set</p>
-            <h3>Implementation-friendly mate and accessory context</h3>
+      <details className="detail-context-panel" aria-label="Connector build set">
+        <summary className="detail-context-panel__summary">
+          <div className="detail-context-panel__header">
+            <div>
+              <p className="app-kicker">Connector build set</p>
+              <h3>Implementation-friendly mate and accessory context</h3>
+            </div>
+            <StatusBadge
+              label={
+                primaryConnectorWarning
+                  ? primaryConnectorWarning.summary
+                  : bestMate
+                    ? "Best mate mapped"
+                    : "Mate mapping incomplete"
+              }
+              tone={primaryConnectorWarning ? primaryConnectorWarning.tone : bestMate ? "info" : "review"}
+            />
           </div>
-          <StatusBadge
-            label={
-              primaryConnectorWarning
-                ? primaryConnectorWarning.summary
-                : bestMate
-                  ? "Best mate mapped"
-                  : "Mate mapping incomplete"
-            }
-            tone={primaryConnectorWarning ? primaryConnectorWarning.tone : bestMate ? "info" : "review"}
-          />
-        </div>
+        </summary>
         <p className="muted-copy">
           Buildable set reflects stored relationship mapping. Verify pitch, family, and mechanical fit before layout.
           {record.buildableMatingSet.confidenceScore !== null ? ` ${buildConnectorConfidenceSummary(record.buildableMatingSet)}` : ""}
@@ -2187,20 +2200,22 @@ function DetailContextPanel({
             <span>{renderCableAssumptionList(record.buildableMatingSet.cableAssumptions, relatedPartSummaries)}</span>
           </li>
         </ul>
-      </section>
+      </details>
     );
   }
 
   return (
-    <section className="detail-context-panel" aria-label="Engineering context">
-      <div className="detail-context-panel__header">
-        <div>
-          <p className="app-kicker">Engineering context</p>
-          <h3>Identity and source evidence</h3>
+    <details className="detail-context-panel" aria-label="Engineering context">
+      <summary className="detail-context-panel__summary">
+        <div className="detail-context-panel__header">
+          <div>
+            <p className="app-kicker">Engineering context</p>
+            <h3>Identity and source evidence</h3>
+          </div>
+          <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
         </div>
-        <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
-      </div>
-      <p className="muted-copy">This panel keeps package, lifecycle, and source evidence visible before scrolling into deeper audit detail.</p>
+      </summary>
+      <p className="muted-copy">This panel keeps package and lifecycle visible before scrolling into deeper audit detail.</p>
       <ul className="detail-context-list">
         <li>
           <strong>Package</strong>
@@ -2210,16 +2225,8 @@ function DetailContextPanel({
           <strong>Lifecycle</strong>
           <span>{record.part.lifecycleStatus}</span>
         </li>
-        <li>
-          <strong>Latest source</strong>
-          <span>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source row stored"}</span>
-        </li>
-        <li>
-          <strong>Datasheet revision</strong>
-          <span>{record.datasheetRevision?.revisionLabel ?? "No revision metadata"}</span>
-        </li>
       </ul>
-    </section>
+    </details>
   );
 }
 
@@ -2561,7 +2568,7 @@ function gatedAccessBadge(level: DocumentAccessLevel): { label: string; tone: Ba
 /**
  * Renders the best available asset for one engineering asset class.
  */
-function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewAction, reviewStatuses, source, validationSummaries, gatedRevision }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewAction: (formData: FormData) => Promise<void>; reviewStatuses: ReviewStatusSummary[]; source: CatalogDataSource | undefined; validationSummaries: AssetValidationSummary[]; gatedRevision: ControlledDocumentRevision | null }) {
+function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, reviewStatuses, source, validationSummaries, gatedRevision }: { group: AssetClassSummary; promotionAction: (formData: FormData) => Promise<void>; promotionSummaries: AssetPromotionSummary[]; reviewStatuses: ReviewStatusSummary[]; source: CatalogDataSource | undefined; validationSummaries: AssetValidationSummary[]; gatedRevision: ControlledDocumentRevision | null }) {
   const bestAsset = group.bestAsset;
 
   if (!bestAsset) {
@@ -2609,8 +2616,14 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
   const trustCheckSummary = buildAssetTrustCheckSummary(bestAsset, validationSummary);
   const accessActions = buildAssetAccessActions(bestAsset, source, gatedRevision, group.assetType);
 
+  // The 3D model preview now lives in the page hero, which owns the canonical
+  // `part-asset-three_d_model` anchor, so this card uses a distinct id and skips the
+  // duplicate inline viewer.
+  const isThreeDModel = group.assetType === "three_d_model";
+  const cardId = isThreeDModel ? "part-asset-three_d_model-card" : `part-asset-${group.assetType}`;
+
   return (
-    <div className="asset-review-card" id={`part-asset-${group.assetType}`}>
+    <div className="asset-review-card" id={cardId}>
       <AssetCard
         availabilityLabel={`${formatAssetAvailabilityStatus(bestAsset.availabilityStatus)} / ${provenanceLabel(bestAsset.provenance)}`}
         availabilityTone={assetClassReadinessTone(group.readiness)}
@@ -2625,7 +2638,7 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
         validationLabel={`${validationLabel(bestAsset.validationStatus)} / ${formatAssetExportStatus(bestAsset.exportStatus)}`}
         validationTone={validationTone(bestAsset.validationStatus)}
       />
-      <AssetInlinePreview asset={bestAsset} partId={bestAsset.partId} />
+      {isThreeDModel ? null : <AssetInlinePreview asset={bestAsset} partId={bestAsset.partId} />}
       <div className="asset-review-card__snapshot">
         <div>
           <span>Class state</span>
@@ -2674,7 +2687,6 @@ function EngineeringAssetSummary({ group, promotionAction, promotionSummaries, r
             {action.label}
           </a>
         ))}
-        <ReviewActionPanel reviewAction={reviewAction} reviewStatus={reviewStatus} targetId={bestAsset.id} targetType="asset" />
         <AssetPromotionPanel asset={bestAsset} promotionAction={promotionAction} promotionSummary={promotionSummary} />
       </div>
     </div>
@@ -3037,32 +3049,6 @@ function buildAssetWorkflowSurfaceSummary(asset: Asset, promotionSummary: AssetP
 }
 
 /**
- * Renders local review actions for one reviewable asset or workflow.
- */
-function ReviewActionPanel({ reviewAction, reviewStatus, targetId, targetType }: { reviewAction: (formData: FormData) => Promise<void>; reviewStatus: ReviewStatusSummary; targetId: string; targetType: ReviewTargetType }) {
-  if (!shouldRenderReviewActions(reviewStatus)) {
-    return null;
-  }
-
-  return (
-    <form action={reviewAction} className="review-action-panel">
-      <input name="targetId" type="hidden" value={targetId} />
-      <input name="targetType" type="hidden" value={targetType} />
-      <span>Local review (dev)</span>
-      <button name="outcome" type="submit" value="approved">
-        Approve
-      </button>
-      <button name="outcome" type="submit" value="changes_requested">
-        Request changes
-      </button>
-      <button name="outcome" type="submit" value="rejected">
-        Reject
-      </button>
-    </form>
-  );
-}
-
-/**
  * Finds a precomputed review status and falls back to a neutral state if the target is not reviewable.
  */
 function findReviewStatus(reviewStatuses: ReviewStatusSummary[], targetType: ReviewTargetType, targetId: string): ReviewStatusSummary {
@@ -3283,6 +3269,37 @@ function inventoryStatusTone(status: InventoryStatus): BadgeTone {
  */
 function formatSupplySourceLabel(source: { providerId: string; supplierName: string | null }): string {
   return source.supplierName ?? source.providerId;
+}
+
+/**
+ * Normalizes a supplier/vendor name into a comparison key so a part's distributor offer can
+ * be matched to a vendor notebook record despite punctuation/casing differences
+ * (e.g. "Digi-Key" and "DigiKey" both reduce to "digikey").
+ */
+function vendorMatchKey(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * Loads a match-key to slug lookup for existing vendor notebook records so sourcing offers can
+ * deep-link to "what we know about this supplier". Resilient: any failure yields an empty map
+ * (offers simply render without a vendor link) so the part page never breaks on vendor reads.
+ */
+async function loadVendorSlugLookup(): Promise<Map<string, string>> {
+  try {
+    const list = await fetchVendorList();
+    const lookup = new Map<string, string>();
+    for (const summary of list.vendors) {
+      lookup.set(vendorMatchKey(summary.vendor.name), summary.vendor.slug);
+    }
+    return lookup;
+  } catch {
+    return new Map();
+  }
 }
 
 /**
@@ -3588,28 +3605,6 @@ function readGenerationTargetAssetType(value: FormDataEntryValue | null): Genera
 }
 
 /**
- * Reads a review target type from form data without trusting arbitrary input.
- */
-function readReviewTargetType(value: FormDataEntryValue | null): ReviewTargetType | null {
-  if (value === "asset" || value === "generation_workflow") {
-    return value;
-  }
-
-  return null;
-}
-
-/**
- * Reads a review outcome from form data without trusting arbitrary input.
- */
-function readReviewOutcome(value: FormDataEntryValue | null): ReviewOutcome | null {
-  if (value === "approved" || value === "changes_requested" || value === "rejected") {
-    return value;
-  }
-
-  return null;
-}
-
-/**
  * Reads a required string from form data without accepting empty strings.
  */
 function readRequiredFormString(value: FormDataEntryValue | null): string | null {
@@ -3805,8 +3800,16 @@ function renderCableAssumptionList(
     return "None recorded";
   }
 
-  return assumptions
-    .map((assumption) => `${renderPart(assumption.cablePartId, relatedPartSummaries)}: ${assumption.summary}`)
+  // Group assumptions by cable so the cable name appears once instead of repeating per line.
+  const summariesByCable = new Map<string, string[]>();
+  for (const assumption of assumptions) {
+    const existing = summariesByCable.get(assumption.cablePartId) ?? [];
+    existing.push(assumption.summary);
+    summariesByCable.set(assumption.cablePartId, existing);
+  }
+
+  return [...summariesByCable.entries()]
+    .map(([cablePartId, summaries]) => `${renderPart(cablePartId, relatedPartSummaries)}: ${summaries.join("; ")}`)
     .join(" | ");
 }
 

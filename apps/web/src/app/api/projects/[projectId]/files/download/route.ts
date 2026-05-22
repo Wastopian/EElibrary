@@ -9,7 +9,7 @@ import { resolveCatalogAssetContentDisposition, shouldPreferInlineDisplay } from
 import { getServerApiAuthHeaders } from "@/lib/server-api-auth";
 
 /**
- * Streams one project mirror file (datasheet, model, or footprint) from the API host.
+ * Streams one project mirror file from the API host.
  */
 export async function GET(
   request: Request,

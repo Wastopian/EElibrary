@@ -66,11 +66,6 @@ export function VendorWorkspace({ detail }: VendorWorkspaceProps) {
 
   return (
     <div className="vendor-workspace">
-      <p className="vendor-workspace__hint muted-copy">
-        If your team keeps a shared drive, you can copy files into the folders below on the API computer.
-        Or upload here — the page refreshes after each save so everyone sees the same list.
-      </p>
-
       <div className="vendor-workspace__grid">
         <VendorSectionCard
           absolutePath={detail.notesPath}
@@ -193,15 +188,15 @@ function UploadFileControl({ section, slug }: { section: VendorFolderSection; sl
 
   return (
     <div className="vendor-section-card__upload">
-      <label className="vendor-section-card__upload-label">
-        <span className="vendor-section-card__upload-prompt">Upload file</span>
+      <label className={`file-upload${status === "uploading" ? " file-upload--disabled" : ""}`}>
         <input
           aria-label={`Upload file to ${section}`}
-          className="vendor-section-card__upload-input"
+          className="file-upload__input"
           disabled={status === "uploading"}
           onChange={onChange}
           type="file"
         />
+        <span className="button-link button-link--quiet">Upload file</span>
       </label>
       {status !== "idle" && message ? (
         <p

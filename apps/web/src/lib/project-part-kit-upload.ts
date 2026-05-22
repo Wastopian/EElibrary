@@ -2,7 +2,10 @@
  * File header: Helpers for uploading project mirror files from the part kit editor.
  */
 
-import type { ProjectFolderCategory } from "@ee-library/shared/types";
+import type { ProjectPartKitFileCategory, ProjectPartKitFileRef } from "@ee-library/shared/types";
+
+/** PartKitUploadSlot names the project kit file slots that can receive browser uploads. */
+export type PartKitUploadSlot = "datasheet" | "model" | "footprint" | "symbol" | "mechanical_drawing";
 
 /** MAX_PART_KIT_UPLOAD_BYTES mirrors the API upload cap. */
 export const MAX_PART_KIT_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -18,9 +21,6 @@ export function suggestPartKitFilename(mpn: string, file: File): string {
 }
 
 /**
- * Maps one kit slot to the project mirror category used for uploads.
- */
-/**
  * Builds a same-origin URL for opening or downloading one project mirror file.
  */
 export function buildProjectMirrorFileUrl(projectId: string, relativePath: string, preferInline: boolean): string {
@@ -33,7 +33,10 @@ export function buildProjectMirrorFileUrl(projectId: string, relativePath: strin
   return `/api/projects/${encodeURIComponent(projectId)}/files/download?${params.toString()}`;
 }
 
-export function partKitSlotToCategory(slot: "datasheet" | "model" | "footprint"): ProjectFolderCategory {
+/**
+ * Maps one kit slot to the project mirror category used for uploads.
+ */
+export function partKitSlotToCategory(slot: PartKitUploadSlot): ProjectPartKitFileCategory {
   if (slot === "datasheet") {
     return "datasheets";
   }
@@ -42,7 +45,87 @@ export function partKitSlotToCategory(slot: "datasheet" | "model" | "footprint")
     return "models";
   }
 
-  return "footprints";
+  if (slot === "footprint") {
+    return "footprints";
+  }
+
+  if (slot === "symbol") {
+    return "symbols";
+  }
+
+  return "mechanical_drawings";
+}
+
+/**
+ * Builds the file reference shown immediately after a project kit upload completes.
+ */
+export function buildUploadedPartKitFileRef(slot: PartKitUploadSlot, filename: string): ProjectPartKitFileRef {
+  const category = partKitSlotToCategory(slot);
+  const folderName = partKitSlotToFolderName(slot);
+
+  return {
+    category,
+    fileFormat: inferPartKitFileFormat(slot, filename),
+    name: filename,
+    relativePath: `${folderName}/${filename}`,
+    source: "mirror"
+  };
+}
+
+/**
+ * Maps one kit slot to the physical project folder name used in relative paths.
+ */
+export function partKitSlotToFolderName(slot: PartKitUploadSlot): string {
+  if (slot === "mechanical_drawing") {
+    return "mechanical-drawings";
+  }
+
+  return partKitSlotToCategory(slot);
+}
+
+/**
+ * Infers the project kit format from the selected slot and uploaded filename.
+ */
+export function inferPartKitFileFormat(slot: PartKitUploadSlot, filename: string): NonNullable<ProjectPartKitFileRef["fileFormat"]> {
+  const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")).toLowerCase() : "";
+
+  if (extension === ".pdf") {
+    return "pdf";
+  }
+
+  if (extension === ".step" || extension === ".stp") {
+    return "step";
+  }
+
+  if (extension === ".kicad_mod" || extension === ".mod") {
+    return "kicad_mod";
+  }
+
+  if (extension === ".kicad_sym" || extension === ".sym" || extension === ".lib" || extension === ".schlib") {
+    return "kicad_sym";
+  }
+
+  if (extension === ".dxf") {
+    return "dxf";
+  }
+
+  if (slot === "datasheet") {
+    return "pdf";
+  }
+
+  if (slot === "model") {
+    return "step";
+  }
+
+  if (slot === "footprint") {
+    return "kicad_mod";
+  }
+
+  if (slot === "symbol") {
+    return "kicad_sym";
+  }
+
+  return "dxf";
 }
 
 /**

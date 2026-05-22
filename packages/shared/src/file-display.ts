@@ -88,6 +88,14 @@ export function inferMirrorPathFormat(relativePath: string): FileFormatHint | nu
     return "kicad_mod";
   }
 
+  if (folder === "symbols") {
+    return "kicad_sym";
+  }
+
+  if (folder === "mechanical_drawings" || folder === "mechanical-drawings") {
+    return "dxf";
+  }
+
   return null;
 }
 

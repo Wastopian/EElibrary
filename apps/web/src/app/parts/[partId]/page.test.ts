@@ -131,7 +131,11 @@ test("part detail keeps full catalog layout when opened from a project", async (
 
     assert.match(html, /detail-layout/u);
     assert.doesNotMatch(html, /detail-layout--project-focus/u);
-    assert.match(html, /Back to Trial project 1/u);
+    assert.match(html, /Viewing <strong class="ui-mono">TPS7A02DBVR<\/strong> from project <strong>Trial project 1<\/strong>/u);
+    assert.match(html, /Back to project/u);
+    assert.equal(countOccurrences(html, "href=\"/projects/project-alpha\""), 1);
+    assert.equal(countOccurrences(html, "Edit part kit"), 1);
+    assert.equal(countOccurrences(html, "Compare with another part"), 1);
     assert.match(html, /Edit part kit/u);
     assert.match(html, /How verification works/u);
     assert.match(html, /Next workspaces/u);
@@ -932,4 +936,11 @@ function jsonResponse(body: unknown, status = 200): Response {
     },
     status
   });
+}
+
+/**
+ * Counts literal text occurrences in rendered markup for duplicate-action assertions.
+ */
+function countOccurrences(source: string, needle: string): number {
+  return source.split(needle).length - 1;
 }

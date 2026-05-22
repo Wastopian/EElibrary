@@ -6,7 +6,7 @@ import type { Asset, ProjectPartKitFileRef } from "@ee-library/shared/types";
 import { buildAssetDownloadUrl, buildAssetOpenUrl } from "./api-client";
 import { buildProjectMirrorFileUrl } from "./project-part-kit-upload";
 
-export type KitFileSlot = "datasheet" | "model" | "footprint";
+export type KitFileSlot = "datasheet" | "model" | "footprint" | "symbol" | "mechanical_drawing";
 
 export interface KitFileAction {
   href: string;
@@ -167,16 +167,48 @@ function downloadLabelForSlot(slot: KitFileSlot): string {
     return "Download PDF";
   }
 
+  if (slot === "symbol") {
+    return "Download symbol";
+  }
+
+  if (slot === "mechanical_drawing") {
+    return "Download drawing";
+  }
+
   return "Download file";
 }
 
 function downloadLabelForAssetType(assetType: Asset["assetType"], fileFormat: Asset["fileFormat"]): string {
-  if (assetType === "three_d_model" || fileFormat === "step") {
+  if (assetType === "three_d_model") {
     return "Download STEP";
   }
 
-  if (assetType === "datasheet" || fileFormat === "pdf") {
+  if (assetType === "datasheet") {
     return "Download PDF";
+  }
+
+  if (assetType === "symbol") {
+    return "Download symbol";
+  }
+
+  if (assetType === "mechanical_drawing") {
+    return "Download drawing";
+  }
+
+  if (fileFormat === "step") {
+    return "Download STEP";
+  }
+
+  if (fileFormat === "pdf") {
+    return "Download PDF";
+  }
+
+  if (fileFormat === "kicad_sym") {
+    return "Download symbol";
+  }
+
+  if (fileFormat === "dxf") {
+    return "Download drawing";
   }
 
   return "Download file";

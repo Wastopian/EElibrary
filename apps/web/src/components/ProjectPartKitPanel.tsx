@@ -1,18 +1,20 @@
 "use client";
 
 /**
- * File header: Project-scoped part kit editor — datasheet, 3D, footprint, note, and supplier URL.
+ * File header: Project-scoped part kit editor — datasheet, symbol, footprint, 3D, drawing, note, and supplier URL.
  *
  * The table stays compact: each row shows quick file/URL status. Expanding a row opens the
- * five-field editor without sending engineers through the catalog verification workspace.
+ * all-slot editor without sending engineers through the catalog verification workspace.
  */
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { StatusBadge } from "@ee-library/ui";
 import { isApiClientError, updateProjectPartKit, uploadProjectFile } from "../lib/api-client";
 import { buildKitFileActions, type KitFileSlot } from "../lib/part-kit-file-actions";
 import {
+  buildUploadedPartKitFileRef,
   MAX_PART_KIT_UPLOAD_BYTES,
   partKitSlotToCategory,
   readFileAsBase64,
@@ -54,7 +56,7 @@ export function ProjectPartKitPanel({ projectId, initialKits, mirrorAvailable }:
   return (
     <div className="project-part-kit-panel">
       <p className="project-part-kit-panel__lede muted-copy">
-        Add datasheet, 3D model, footprint, a note, and a supplier link. Files are saved in your project folder;{" "}
+        Add datasheet, symbol, footprint, 3D model, mechanical drawing, a note, and a supplier link. Files are saved in your project folder;{" "}
         <strong>Save</strong> updates the BOM and copies files into the catalog when the mirror is available.
       </p>
 
@@ -119,6 +121,8 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
   const [datasheet, setDatasheet] = useState(kit.datasheet);
   const [model, setModel] = useState(kit.model);
   const [footprint, setFootprint] = useState(kit.footprint);
+  const [symbol, setSymbol] = useState(kit.symbol);
+  const [mechanicalDrawing, setMechanicalDrawing] = useState(kit.mechanicalDrawing);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
 
   useEffect(() => {
@@ -127,7 +131,9 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
     setDatasheet(kit.datasheet);
     setModel(kit.model);
     setFootprint(kit.footprint);
-  }, [kit.datasheet, kit.footprint, kit.model, kit.mpn, kit.note, kit.partId, kit.partUrl]);
+    setSymbol(kit.symbol);
+    setMechanicalDrawing(kit.mechanicalDrawing);
+  }, [kit.datasheet, kit.footprint, kit.mechanicalDrawing, kit.model, kit.mpn, kit.note, kit.partId, kit.partUrl, kit.symbol]);
 
   const onSave = useCallback(async () => {
     setSaveState({ kind: "saving" });
@@ -138,12 +144,14 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
         partUrl: partUrl.trim() || null,
         syncToCatalog: mirrorAvailable
       });
-      onKitUpdated(result.kit);
+      onKitUpdated({ ...result.kit, engineeringMemoryWarning: result.kit.engineeringMemoryWarning ?? kit.engineeringMemoryWarning ?? null });
       setPartUrl(result.kit.partUrl ?? "");
       setNote(result.kit.note ?? "");
       setDatasheet(result.kit.datasheet);
       setModel(result.kit.model);
       setFootprint(result.kit.footprint);
+      setSymbol(result.kit.symbol);
+      setMechanicalDrawing(result.kit.mechanicalDrawing);
       setSaveState({
         kind: "success",
         message: result.catalogSync
@@ -167,12 +175,26 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
           </Link>
           <span className="muted-copy">{kit.manufacturerName ?? "Manufacturer not recorded"}</span>
           <span className="muted-copy">{formatDesignators(kit.designators)}</span>
+          {kit.engineeringMemoryWarning && kit.engineeringMemoryWarning.warningCount > 0 ? (
+            <Link
+              className="project-part-kit-row__memory"
+              href={`/parts/${encodeURIComponent(kit.partId)}?project=${encodeURIComponent(projectId)}#engineering-memory-heading`}
+              title="This part has confirmed engineering-memory records. Review before reusing."
+            >
+              <StatusBadge
+                label={kit.engineeringMemoryWarning.blockingCount > 0 ? "Blocked before" : "Bit us before"}
+                tone={kit.engineeringMemoryWarning.blockingCount > 0 ? "danger" : "review"}
+              />
+            </Link>
+          ) : null}
         </div>
 
         <div className="project-part-kit-row__pills" aria-label="Part kit status">
-          <KitPill label="DS" present={Boolean(datasheet)} />
-          <KitPill label="3D" present={Boolean(model)} />
-          <KitPill label="FP" present={Boolean(footprint)} />
+          <KitPill label="DS" present={Boolean(datasheet)} source={datasheet?.source} />
+          <KitPill label="SYM" present={Boolean(symbol)} source={symbol?.source} />
+          <KitPill label="3D" present={Boolean(model)} source={model?.source} />
+          <KitPill label="FP" present={Boolean(footprint)} source={footprint?.source} />
+          <KitPill label="DWG" present={Boolean(mechanicalDrawing)} source={mechanicalDrawing?.source} />
           <KitPill label="URL" present={Boolean(partUrl.trim())} />
         </div>
 
@@ -198,6 +220,17 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
             <KitFileSlot
               catalogPartId={kit.partId}
               disabled={!mirrorAvailable}
+              fileRef={symbol}
+              label="Symbol"
+              mirrorAvailable={mirrorAvailable}
+              onUploaded={setSymbol}
+              projectId={projectId}
+              slot="symbol"
+              suggestedMpn={kit.mpn}
+            />
+            <KitFileSlot
+              catalogPartId={kit.partId}
+              disabled={!mirrorAvailable}
               fileRef={model}
               label="3D model"
               mirrorAvailable={mirrorAvailable}
@@ -215,6 +248,17 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
               onUploaded={setFootprint}
               projectId={projectId}
               slot="footprint"
+              suggestedMpn={kit.mpn}
+            />
+            <KitFileSlot
+              catalogPartId={kit.partId}
+              disabled={!mirrorAvailable}
+              fileRef={mechanicalDrawing}
+              label="Mechanical drawing"
+              mirrorAvailable={mirrorAvailable}
+              onUploaded={setMechanicalDrawing}
+              projectId={projectId}
+              slot="mechanical_drawing"
               suggestedMpn={kit.mpn}
             />
           </div>
@@ -270,14 +314,28 @@ function ProjectPartKitRow({ projectId, kit, expanded, mirrorAvailable, onToggle
 interface KitPillProps {
   label: string;
   present: boolean;
+  source?: ProjectPartKitFileRef["source"];
 }
 
 /**
- * Renders one compact kit status chip.
+ * Renders one compact kit status chip. A catalog-sourced file is marked distinctly so engineers
+ * can see the catalog already holds it (no need to re-upload) without expanding the row.
  */
-function KitPill({ label, present }: KitPillProps) {
+function KitPill({ label, present, source }: KitPillProps) {
+  const fromCatalog = present && source === "catalog";
+  const title = !present
+    ? "Missing"
+    : fromCatalog
+      ? "Already in the catalog — no need to re-upload"
+      : source === "mirror"
+        ? "In this project's folder"
+        : "Present";
+
   return (
-    <span className={`project-part-kit-pill${present ? " project-part-kit-pill--present" : ""}`} title={present ? "Present" : "Missing"}>
+    <span
+      className={`project-part-kit-pill${present ? " project-part-kit-pill--present" : ""}${fromCatalog ? " project-part-kit-pill--catalog" : ""}`}
+      title={title}
+    >
       {label}
     </span>
   );
@@ -341,13 +399,7 @@ function KitFileSlot({
           contentBase64: await readFileAsBase64(file),
           filename: suggestPartKitFilename(suggestedMpn, file)
         });
-        onUploaded({
-          category: slot === "datasheet" ? "datasheets" : slot === "model" ? "models" : "footprints",
-          fileFormat: slot === "datasheet" ? "pdf" : slot === "model" ? "step" : "kicad_mod",
-          name: result.entry.name,
-          relativePath: `${category}/${result.entry.name}`,
-          source: "mirror"
-        });
+        onUploaded(buildUploadedPartKitFileRef(slot, result.entry.name));
         setStatus("idle");
         setMessage(`Saved as ${result.entry.name}. Press Save to copy into the catalog.`);
       } catch (error) {
@@ -392,15 +444,16 @@ function KitFileSlot({
         </div>
       ) : null}
       {mirrorAvailable ? (
-        <div className="project-part-kit-file__upload">
+        <label className={`file-upload${disabled || status === "uploading" ? " file-upload--disabled" : ""}`}>
           <input
             aria-label={`Upload ${label} for ${suggestedMpn}`}
-            className="project-part-kit-file__upload-input"
+            className="file-upload__input"
             disabled={disabled || status === "uploading"}
             onChange={(event) => void onChange(event)}
             type="file"
           />
-        </div>
+          <span className="button-link button-link--quiet">{fileRef ? "Change file" : "Add file"}</span>
+        </label>
       ) : (
         <p className="muted-copy project-part-kit-file__mirror-off">Upload needs the project folder mirror configured in admin.</p>
       )}

@@ -141,7 +141,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
       <section className="detail-section" aria-labelledby="project-usage-heading">
         <SectionHeading
           id="project-usage-heading"
-          subtitle="Edit datasheet, 3D, footprint, note, and supplier link without leaving the project."
+          subtitle="Edit files, notes, and supplier links without leaving the project."
           title="Parts in this project"
         />
         <SectionPanel
@@ -179,7 +179,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           title="Project files"
         />
         <SectionPanel
-          description="Each project has its own folder with subfolders for parts list source files, custom designs, datasheets, and 3D models. The site reads what is on disk."
+          description="Each project has its own folder with subfolders for parts list source files, custom designs, datasheets, CAD assets, drawings, and notes. The site reads what is on disk."
           title="Folders on the API host"
         >
           <ProjectFilesPanel files={files} projectId={project.id} />
@@ -485,11 +485,13 @@ function buildFallbackPartKitsFromUsages(usages: ProjectDetailResponse["usages"]
       designators: [...usage.designators],
       footprint: null,
       manufacturerName: usage.manufacturerName ?? null,
+      mechanicalDrawing: null,
       model: null,
       mpn,
       note: null,
       partId: usage.partId,
       partUrl: null,
+      symbol: null,
       usageIds: [usage.id]
     });
   }

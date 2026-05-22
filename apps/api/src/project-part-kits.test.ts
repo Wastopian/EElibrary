@@ -29,20 +29,28 @@ test("pickBomDescription reads long text from unmapped payload cells", () => {
   assert.equal(description, "250mA LDO regulator, SOT-23-5");
 });
 
-test("list part kits finds datasheet and model files by flexible MPN folder names", async () => {
+test("list part kits finds project asset files by flexible MPN folder names", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ee-part-kit-"));
   const datasheets = path.join(root, "datasheets");
   const models = path.join(root, "models");
+  const symbols = path.join(root, "symbols");
+  const drawings = path.join(root, "mechanical-drawings");
 
   await mkdir(datasheets, { recursive: true });
   await mkdir(models, { recursive: true });
+  await mkdir(symbols, { recursive: true });
+  await mkdir(drawings, { recursive: true });
   await writeFile(path.join(datasheets, "TPS7A02DBVR.pdf"), "%PDF-1.4");
   await writeFile(path.join(models, "TPS7A02DBVR.step"), "solid");
+  await writeFile(path.join(symbols, "TPS7A02DBVR.kicad_sym"), "(symbol)");
+  await writeFile(path.join(drawings, "TPS7A02DBVR.dxf"), "drawing");
 
   const index = await indexMirrorAssetFiles(root);
   const matches = findMirrorAssetsForPart(index, buildPartLookupKeys("TPS7A02DBVR"));
 
-  assert.equal(matches.length, 2);
+  assert.equal(matches.length, 4);
   assert.ok(matches.some((file) => file.category === "datasheets"));
   assert.ok(matches.some((file) => file.category === "models"));
+  assert.ok(matches.some((file) => file.category === "symbols"));
+  assert.ok(matches.some((file) => file.category === "mechanical_drawings"));
 });

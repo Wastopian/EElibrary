@@ -3,7 +3,7 @@
  *
  * Persists project files outside the database so engineers can also drop files directly
  * into operating-system folders. For each project the service maintains first-class
- * subfolders for parts lists, datasheets, 3D models, internal hardware, and notes.
+ * subfolders for parts lists, datasheets, CAD assets, internal hardware, and notes.
  *
  * The root resolves in this order:
  *   1. The local admin site setting saved from `/admin`.
@@ -84,6 +84,18 @@ export const PROJECT_FOLDER_DEFINITIONS: readonly ProjectFolderDefinition[] = [
     folderName: "footprints",
     label: "Footprints",
     description: "PCB footprints and land-pattern libraries for Altium and other layout tools."
+  },
+  {
+    category: "symbols",
+    folderName: "symbols",
+    label: "Symbols",
+    description: "Schematic symbols, pin maps, and capture library files."
+  },
+  {
+    category: "mechanical_drawings",
+    folderName: "mechanical-drawings",
+    label: "Mechanical drawings",
+    description: "Package drawings, DXF outlines, and mechanical source documents."
   },
   {
     category: "notes",

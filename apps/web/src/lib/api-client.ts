@@ -9,6 +9,9 @@ import type {
   ApprovalBatchRequest,
   ApprovalBatchResponse,
   AuditEventListResponse,
+  AssetType,
+  PartAssetUploadInput,
+  PartAssetUploadResponse,
   AssetPromotionInput,
   AssetPromotionResponse,
   BomImportCreateInput,
@@ -108,6 +111,7 @@ import type {
   VendorFileUploadResponse,
   VendorFolderSection,
   VendorListResponse,
+  VendorUsageResponse,
   ProjectRevisionCompareResponse,
   ProjectRevisionApprovalGateListResponse,
   ProjectRevisionApprovalGateRequest,
@@ -492,7 +496,7 @@ export async function fetchProjectDetail(projectId: string): Promise<ProjectDeta
 }
 
 /**
- * Fetches the project file mirror listing (parts list, datasheets, 3D models) for one project.
+ * Fetches the project file mirror listing for one project.
  *
  * Returns null on 404 so the project detail page can still render when the API does not
  * persist the project. Other API errors propagate as ApiClientError values so the caller
@@ -543,6 +547,35 @@ export async function uploadProjectFile(
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectFileUploadResponse>;
+  return envelope.data;
+}
+
+/**
+ * Uploads one selected file directly into the catalog asset registry for a part.
+ *
+ * The API records the file as manual/internal and review-required; the client uses the
+ * returned asset immediately for open/download actions without claiming export readiness.
+ */
+export async function uploadPartAsset(
+  partId: string,
+  assetType: AssetType,
+  input: PartAssetUploadInput
+): Promise<PartAssetUploadResponse> {
+  const response = await fetch(
+    buildApiUrl(`/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetType)}`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Part asset upload");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PartAssetUploadResponse>;
   return envelope.data;
 }
 
@@ -613,6 +646,20 @@ export async function fetchVendorDetail(slug: string): Promise<VendorDetailRespo
   }
 
   const envelope = (await response.json()) as ApiEnvelope<VendorDetailResponse>;
+  return envelope.data;
+}
+
+/**
+ * Fetches the catalog parts that record a distributor offer from one vendor (reverse link).
+ */
+export async function fetchVendorUsage(slug: string): Promise<VendorUsageResponse> {
+  const response = await fetch(buildApiUrl(`/vendors/${encodeURIComponent(slug)}/usage`), { cache: "no-store" });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Vendor usage");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<VendorUsageResponse>;
   return envelope.data;
 }
 

@@ -95,15 +95,10 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         items={[
           { href: "#circuit-block-reuse-readiness-heading", label: "Reuse readiness" },
           { href: "#circuit-block-summary-heading", label: "Summary" },
-          { href: "#circuit-block-edit-heading", label: "Edit" },
           { href: "#circuit-block-parts-heading", label: "Parts" },
-          { href: "#circuit-block-add-part-heading", label: "Add part" },
           { href: "#circuit-block-instantiations-heading", label: "Reuse history" },
           { href: "#circuit-block-known-risks-heading", label: "Known risks" },
-          { href: "#circuit-block-deps-heading", label: "Dependent projects" },
-          { href: "#circuit-block-follow-ups-heading", label: "Follow-ups" },
-          { href: "#circuit-block-evidence-heading", label: "Evidence" },
-          { href: "#circuit-block-next-workspaces-heading", label: "Next workspaces" }
+          { href: "#advanced-circuit-block-tools", label: "Advanced tools" }
         ]}
       />
 
@@ -147,31 +142,17 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="circuit-block-edit-heading">
-        <SectionHeading id="circuit-block-edit-heading" index="02" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
-        <SectionPanel description="These edits update block metadata only. Block status, scope, and constraints do not approve linked parts or verify export assets." title="Metadata maintenance">
-          <CircuitBlockEditPanel circuitBlock={detail.circuitBlock} />
-        </SectionPanel>
-      </section>
-
       <section className="detail-section" aria-labelledby="circuit-block-parts-heading">
-        <SectionHeading id="circuit-block-parts-heading" index="03" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
+        <SectionHeading id="circuit-block-parts-heading" index="02" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
         <SectionPanel description="Required and optional roles are saved separately. A block can be approved while a linked part still needs review." title={detail.parts.length > 0 ? `${detail.parts.length} part roles` : "No part roles"}>
           {detail.parts.length > 0 ? <CircuitBlockPartEditTable circuitBlockId={detail.circuitBlock.id} parts={detail.parts} /> : <EmptyState title="No part roles yet" body="Add internal part roles before this circuit block can support reuse review." />}
-        </SectionPanel>
-      </section>
-
-      <section className="detail-section" aria-labelledby="circuit-block-add-part-heading">
-        <SectionHeading id="circuit-block-add-part-heading" index="04" subtitle="Link known internal parts to required or optional roles." title="Add part role" />
-        <SectionPanel description="Part roles record reuse structure and substitution policy. They do not change part approval or export readiness." title="New part role">
-          <CircuitBlockPartAddPanel circuitBlockId={detail.circuitBlock.id} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="circuit-block-instantiations-heading">
         <SectionHeading
           id="circuit-block-instantiations-heading"
-          index="05"
+          index="03"
           subtitle="Engineering memory: every time this reusable block was dropped into a project BOM."
           title="Reuse history"
         />
@@ -188,7 +169,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <section className="detail-section" aria-labelledby="circuit-block-known-risks-heading">
         <SectionHeading
           id="circuit-block-known-risks-heading"
-          index="06"
+          index="04"
           subtitle="Engineering memory the team learned the hard way: errata, limitations, and cautions tied to this reusable pattern."
           title="Known risks &amp; limitations"
         />
@@ -202,49 +183,70 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </SectionPanel>
       </section>
 
-      <section className="detail-section" aria-labelledby="circuit-block-deps-heading">
-        <SectionHeading id="circuit-block-deps-heading" index="07" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
-        <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or make export available." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
-          {detail.projectDependencies.length > 0
-            ? <CircuitBlockProjectDependencyTable dependencies={detail.projectDependencies} />
-            : <EmptyState title="No project dependencies yet" body="Projects become dependent when their confirmed BOM usages overlap with this block's part roles." />}
-        </SectionPanel>
-      </section>
+      <details className="projects-advanced" id="advanced-circuit-block-tools">
+        <summary>Advanced circuit block tools</summary>
+        <p className="projects-advanced__lede muted-copy">
+          Edit metadata, add part roles, dependent projects, follow-ups, evidence, and related workspaces. Open these when you need them.
+        </p>
 
-      <section className="detail-section" aria-labelledby="circuit-block-follow-ups-heading">
-        <SectionHeading id="circuit-block-follow-ups-heading" index="08" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
-        <SectionPanel description="Follow-up workflow state does not approve linked parts or make this circuit export-ready. Refresh creates or updates records from current required-role readiness gaps." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
-          <FollowUpPanel followUps={followUps} targetId={detail.circuitBlock.id} targetType="circuit_block" />
-        </SectionPanel>
-      </section>
+        <section className="detail-section" aria-labelledby="circuit-block-edit-heading">
+          <SectionHeading id="circuit-block-edit-heading" index="05" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
+          <SectionPanel description="These edits update block metadata only. Block status, scope, and constraints do not approve linked parts or verify export assets." title="Metadata maintenance">
+            <CircuitBlockEditPanel circuitBlock={detail.circuitBlock} />
+          </SectionPanel>
+        </section>
 
-      <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-        <SectionHeading id="circuit-block-evidence-heading" index="09" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
-        <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or make export available." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
-          <div className="project-evidence-panel">
-            <div className="project-evidence-panel__boundary">
-              <strong>Evidence is provenance.</strong> It supports future review without changing part approval, validation, or export readiness.
+        <section className="detail-section" aria-labelledby="circuit-block-add-part-heading">
+          <SectionHeading id="circuit-block-add-part-heading" index="06" subtitle="Link known internal parts to required or optional roles." title="Add part role" />
+          <SectionPanel description="Part roles record reuse structure and substitution policy. They do not change part approval or export readiness." title="New part role">
+            <CircuitBlockPartAddPanel circuitBlockId={detail.circuitBlock.id} />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="circuit-block-deps-heading">
+          <SectionHeading id="circuit-block-deps-heading" index="07" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
+          <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or make export available." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
+            {detail.projectDependencies.length > 0
+              ? <CircuitBlockProjectDependencyTable dependencies={detail.projectDependencies} />
+              : <EmptyState title="No project dependencies yet" body="Projects become dependent when their confirmed BOM usages overlap with this block's part roles." />}
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="circuit-block-follow-ups-heading">
+          <SectionHeading id="circuit-block-follow-ups-heading" index="08" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
+          <SectionPanel description="Follow-up workflow state does not approve linked parts or make this circuit export-ready. Refresh creates or updates records from current required-role readiness gaps." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
+            <FollowUpPanel followUps={followUps} targetId={detail.circuitBlock.id} targetType="circuit_block" />
+          </SectionPanel>
+        </section>
+
+        <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
+          <SectionHeading id="circuit-block-evidence-heading" index="09" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
+          <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or make export available." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
+            <div className="project-evidence-panel">
+              <div className="project-evidence-panel__boundary">
+                <strong>Evidence is provenance.</strong> It supports future review without changing part approval, validation, or export readiness.
+              </div>
+              <EvidenceAttachmentPanel submitLabel="Attach circuit evidence" targetId={detail.circuitBlock.id} targetType="circuit_block" />
+              {detail.evidence.length > 0 ? <CircuitBlockEvidenceTable evidence={detail.evidence} /> : <EmptyState title="No circuit evidence yet" body="Attach design review links or notes when this reusable circuit is reviewed." />}
             </div>
-            <EvidenceAttachmentPanel submitLabel="Attach circuit evidence" targetId={detail.circuitBlock.id} targetType="circuit_block" />
-            {detail.evidence.length > 0 ? <CircuitBlockEvidenceTable evidence={detail.evidence} /> : <EmptyState title="No circuit evidence yet" body="Attach design review links or notes when this reusable circuit is reviewed." />}
-          </div>
-        </SectionPanel>
-      </section>
+          </SectionPanel>
+        </section>
 
-      <section className="detail-section" aria-labelledby="circuit-block-next-workspaces-heading">
-        <SectionHeading
-          id="circuit-block-next-workspaces-heading"
-          index="10"
-          subtitle="Cross-link into the workspaces that work alongside this block. Each link is read-only context — none of these change reuse readiness or part approval."
-          title="Next workspaces"
-        />
-        <SectionPanel
-          description="Engineering teams typically move from a block to: a project that needs to reuse it, the global where-used view, or the full library."
-          title="Open a related workspace"
-        >
-          <CircuitBlockNextWorkspaces circuitBlock={detail.circuitBlock} dependentProjects={detail.projectDependencies} />
-        </SectionPanel>
-      </section>
+        <section className="detail-section" aria-labelledby="circuit-block-next-workspaces-heading">
+          <SectionHeading
+            id="circuit-block-next-workspaces-heading"
+            index="10"
+            subtitle="Cross-link into the workspaces that work alongside this block. Each link is read-only context — none of these change reuse readiness or part approval."
+            title="Next workspaces"
+          />
+          <SectionPanel
+            description="Engineering teams typically move from a block to: a project that needs to reuse it, the global where-used view, or the full library."
+            title="Open a related workspace"
+          >
+            <CircuitBlockNextWorkspaces circuitBlock={detail.circuitBlock} dependentProjects={detail.projectDependencies} />
+          </SectionPanel>
+        </section>
+      </details>
     </main>
   );
 }

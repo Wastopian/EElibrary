@@ -434,7 +434,16 @@ test("buildProjectFilesResponse falls back to project when projectKey is whitesp
 
 test("PROJECT_FOLDER_DEFINITIONS includes the hardware and notes categories", () => {
   const categories = PROJECT_FOLDER_DEFINITIONS.map((folder) => folder.category);
-  assert.deepEqual(categories, ["parts_list", "hardware", "datasheets", "models", "footprints", "notes"]);
+  assert.deepEqual(categories, [
+    "parts_list",
+    "hardware",
+    "datasheets",
+    "models",
+    "footprints",
+    "symbols",
+    "mechanical_drawings",
+    "notes"
+  ]);
 });
 
 test("resolveProjectFolderCategory rejects unknown categories", () => {
@@ -442,6 +451,8 @@ test("resolveProjectFolderCategory rejects unknown categories", () => {
   assert.equal(resolveProjectFolderCategory("hardware"), "hardware");
   assert.equal(resolveProjectFolderCategory("datasheets"), "datasheets");
   assert.equal(resolveProjectFolderCategory("footprints"), "footprints");
+  assert.equal(resolveProjectFolderCategory("symbols"), "symbols");
+  assert.equal(resolveProjectFolderCategory("mechanical_drawings"), "mechanical_drawings");
   assert.equal(resolveProjectFolderCategory("evidence"), null);
   assert.equal(resolveProjectFolderCategory(""), null);
   assert.equal(resolveProjectFolderCategory("../../etc"), null);

@@ -20,11 +20,13 @@ test("mergeCatalogHintsIntoPartKit fills missing model when datasheet already pr
     designators: ["U1"],
     footprint: null,
     manufacturerName: "TI",
+    mechanicalDrawing: null,
     model: null,
     mpn: "CBJ3157",
     note: "From BOM",
     partId: "part-1",
     partUrl: "https://bom.example/link",
+    symbol: null,
     usageIds: []
   };
 
