@@ -317,7 +317,9 @@ select {
   margin: 0 auto;
   max-width: 1600px;
   min-height: 100vh;
+  min-width: 0;
   padding: 18px;
+  width: 100%;
 }
 
 .app-sidebar {
@@ -3095,6 +3097,7 @@ details[open] .trust-breakdown__toggle::before {
 .projects-layout {
   display: grid;
   gap: 24px;
+  min-width: 0;
 }
 
 .project-bom-pipeline {
@@ -3252,6 +3255,8 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .projects-table-wrap {
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
 }
 
@@ -3289,6 +3294,81 @@ details[open] .trust-breakdown__toggle::before {
   color: var(--color-text);
   font-weight: 700;
   margin-top: 4px;
+}
+
+/*
+ * Narrow desktop project lists should not make the whole shell scroll sideways.
+ * The first column already links to the project, so rows can become compact cards
+ * before the sidebar collapses at the next breakpoint.
+ */
+@media (max-width: 1220px) {
+  .projects-browser .projects-table-wrap {
+    overflow-x: visible;
+  }
+
+  .projects-browser .projects-table {
+    border-collapse: separate;
+    min-width: 0;
+  }
+
+  .projects-browser .projects-table thead {
+    display: none;
+  }
+
+  .projects-browser .projects-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .projects-browser .projects-table tr {
+    background: var(--color-surface-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    display: grid;
+    gap: 8px 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+    padding: 10px;
+  }
+
+  .projects-browser .projects-table tbody tr:nth-child(even) {
+    background: var(--color-surface-elevated);
+  }
+
+  .projects-browser .projects-table td {
+    border-bottom: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding: 0;
+  }
+
+  .projects-browser .projects-table td:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .projects-browser .projects-table td::before {
+    color: var(--color-text-muted);
+    content: attr(data-label);
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    line-height: 1.25;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+  }
+
+  .projects-browser .projects-table td:first-child::before {
+    display: none;
+  }
+
+  .projects-browser .projects-table td:last-child {
+    align-self: end;
+    justify-self: end;
+  }
+
+  .projects-browser .projects-table td:last-child::before {
+    display: none;
+  }
 }
 
 /*
@@ -3394,6 +3474,7 @@ details[open] .trust-breakdown__toggle::before {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .project-part-kit-panel__lede {

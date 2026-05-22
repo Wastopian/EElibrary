@@ -63,7 +63,7 @@ export function ProjectsBrowser({ projects }: ProjectsBrowserProps) {
             <tbody>
               {filtered.map((summary) => (
                 <tr key={summary.project.id}>
-                  <td>
+                  <td data-label="Project">
                     <Link className="projects-browser__link" href={`/projects/${summary.project.id}`}>
                       <span className="ui-mono">{summary.project.projectKey}</span>
                     </Link>
@@ -72,13 +72,13 @@ export function ProjectsBrowser({ projects }: ProjectsBrowserProps) {
                       <div className="muted-copy">{summary.project.description}</div>
                     ) : null}
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <StatusBadge label={formatProjectStatus(summary.project.status)} tone={projectStatusTone(summary.project.status)} />
                   </td>
-                  <td>{summary.project.owner ?? "Unassigned"}</td>
-                  <td>{summary.usageCount}</td>
-                  <td>{formatDateTime(summary.latestActivityAt)}</td>
-                  <td>
+                  <td data-label="Owner">{summary.project.owner ?? "Unassigned"}</td>
+                  <td data-label="Parts">{summary.usageCount}</td>
+                  <td data-label="Latest activity">{formatDateTime(summary.latestActivityAt)}</td>
+                  <td data-label="Open">
                     <Link className="button-link button-link--quiet" href={`/projects/${summary.project.id}`}>
                       Open
                     </Link>
