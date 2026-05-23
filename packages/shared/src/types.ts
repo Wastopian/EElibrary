@@ -3302,6 +3302,56 @@ export function isAppRole(value: unknown): value is AppRole {
   return typeof value === "string" && (APP_ROLES as readonly string[]).includes(value);
 }
 
+/**
+ * Permission is one capability the API can gate on. Authorization checks **permissions**, not role
+ * names, so roles can diverge cleanly later (e.g. a future `exporter` that can export but not approve)
+ * without rewriting route guards. The v1 set is intentionally coarse.
+ */
+export type Permission =
+  | "catalog.read"
+  | "project.read"
+  | "project.write"
+  | "part.import"
+  | "part.approve"
+  | "asset.review"
+  | "asset.promote_export"
+  | "governance.admin";
+
+const VIEWER_PERMISSIONS: readonly Permission[] = ["catalog.read", "project.read"];
+const CONTRIBUTOR_PERMISSIONS: readonly Permission[] = [...VIEWER_PERMISSIONS, "project.write", "part.import"];
+const APPROVER_PERMISSIONS: readonly Permission[] = [
+  ...CONTRIBUTOR_PERMISSIONS,
+  "part.approve",
+  "asset.review",
+  "asset.promote_export"
+];
+const ADMIN_PERMISSIONS: readonly Permission[] = [...APPROVER_PERMISSIONS, "governance.admin"];
+
+/**
+ * ROLE_PERMISSIONS maps each role to the capabilities it grants. v1 is a simple nested hierarchy:
+ * `viewer ⊂ contributor ⊂ approver ⊂ admin`. `governance.admin` (role management, queues, system
+ * ops) is reserved to `admin` so the role system itself cannot be self-bypassed.
+ *
+ * Legacy `user` is the full-trusted-engineer baseline (everything except `governance.admin`) so the
+ * role widening restricts no existing account — see memory: small trusted team, everyone full-power.
+ *
+ * NOTE: this policy is only enforced where a route actually calls a permission guard. Today only
+ * `governance.admin` is wired (via the existing admin gate); finer per-route permissions are adopted
+ * incrementally so "restrict no one by default" is preserved at each step.
+ */
+export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly Permission[]>> = {
+  admin: ADMIN_PERMISSIONS,
+  approver: APPROVER_PERMISSIONS,
+  contributor: CONTRIBUTOR_PERMISSIONS,
+  user: APPROVER_PERMISSIONS,
+  viewer: VIEWER_PERMISSIONS
+};
+
+/** roleHasPermission returns whether a role grants a capability. Unknown roles grant nothing (fail closed). */
+export function roleHasPermission(role: AppRole, permission: Permission): boolean {
+  return (ROLE_PERMISSIONS[role] ?? []).includes(permission);
+}
+
 /** AuditActorRole mirrors the authenticated role captured at the API boundary. */
 export type AuditActorRole = AppRole;
 

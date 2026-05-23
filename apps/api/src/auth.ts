@@ -4,7 +4,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { jwtVerify } from "jose";
-import { isAppRole, type AppRole } from "@ee-library/shared/types";
+import { isAppRole, roleHasPermission, type AppRole, type Permission } from "@ee-library/shared/types";
 
 export interface ApiSession {
   sub: string;
@@ -152,7 +152,37 @@ export async function readOptionalSession(request: IncomingMessage): Promise<Api
   return session;
 }
 
-/** requireAdmin returns the session or an HTTP error descriptor for non-admin requests. */
+/**
+ * requirePermission returns the session, or an HTTP error when the actor's role does not grant the
+ * capability. This is the single authorization chokepoint: routes gate on a {@link Permission}, the
+ * role→permission policy lives in `@ee-library/shared`, and unknown roles grant nothing (fail closed).
+ */
+export async function requirePermission(
+  request: IncomingMessage,
+  permission: Permission
+): Promise<ApiSession | { statusCode: number; code: string; message: string }> {
+  const result = await requireAuth(request);
+
+  if ("statusCode" in result) return result;
+
+  if (!roleHasPermission(result.role, permission)) {
+    return {
+      statusCode: 403,
+      code: "FORBIDDEN",
+      message: `This operation requires the '${permission}' permission.`,
+    };
+  }
+
+  return result;
+}
+
+/**
+ * requireAdmin returns the session or an HTTP error descriptor for non-admin requests.
+ *
+ * Now expressed through the permission policy (`governance.admin`, which only `admin` holds), so it
+ * stays behavior-identical to the previous `role === "admin"` check while routing through the shared
+ * authorization model. The operator-facing message is preserved.
+ */
 export async function requireAdmin(
   request: IncomingMessage
 ): Promise<ApiSession | { statusCode: number; code: string; message: string }> {
@@ -160,7 +190,7 @@ export async function requireAdmin(
 
   if ("statusCode" in result) return result;
 
-  if (result.role !== "admin") {
+  if (!roleHasPermission(result.role, "governance.admin")) {
     return {
       statusCode: 403,
       code: "FORBIDDEN",
