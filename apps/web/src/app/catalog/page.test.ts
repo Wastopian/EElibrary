@@ -51,13 +51,35 @@ test("catalog page renders compact filter bar and explanation-first list results
     assert.match(html, /1 matches/u);
     assert.match(html, /Live catalog/u);
     assert.match(html, /Catalog search/u);
-    assert.match(html, /File status/u);
+    assert.match(html, /Part lookup and review queue/u);
+    assert.match(html, /Back to projects/u);
+    assert.match(html, /CAD\/export/u);
     assert.match(html, /Verification steps/u);
-    assert.match(html, /Connector intelligence/u);
+    assert.match(html, /Next action/u);
     assert.match(html, /Rows per page/u);
-    assert.match(html, /First time here\?/u);
-    assert.match(html, /Catalog first-run checklist/u);
+    assert.match(html, /Switch between a dense scan table/u);
+    assert.doesNotMatch(html, /First time here\?/u);
+    assert.doesNotMatch(html, /Catalog first-run checklist/u);
     assert.doesNotMatch(html, /<details class="catalog-getting-started" open="">/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("catalog page shows worker impact near catalog actions when the daemon is offline", async () => {
+  const records = getAllPartRecords();
+  const record = records[0];
+
+  assert.ok(record, "expected at least one seed record");
+
+  const restoreFetch = mockFetch(buildReadyFetchHandler([record], {}, buildSystemHealthResponse("offline")));
+
+  try {
+    const html = renderToStaticMarkup(await SearchPage({ searchParams: Promise.resolve({}) }));
+
+    assert.match(html, /Worker is not running/u);
+    assert.match(html, /Supplier acquisition, enrichment, generated previews, validation checks, and export assembly/u);
+    assert.match(html, /Open System/u);
   } finally {
     restoreFetch();
   }
@@ -281,7 +303,8 @@ test("catalog page shows ambiguous match when multiple records match the query",
  */
 function buildReadyFetchHandler(
   records: PartSearchRecord[],
-  paginationOverrides?: Partial<SearchPagination>
+  paginationOverrides?: Partial<SearchPagination>,
+  systemHealth?: ReturnType<typeof buildSystemHealthResponse>
 ): (url: URL) => Response {
   const pagination = buildPagination(records.length, paginationOverrides);
 
@@ -290,11 +313,36 @@ function buildReadyFetchHandler(
       return jsonResponse(buildHealthResponse("connected"));
     }
 
+    if (url.pathname === "/system/health" && systemHealth) {
+      return jsonResponse(systemHealth);
+    }
+
     if (url.pathname.startsWith("/parts/facets")) {
       return jsonResponse({ data: buildEmptyFacets(), source: "database" });
     }
 
     return jsonResponse({ data: records, source: "database", pagination });
+  };
+}
+
+/**
+ * Builds a canonical system-health payload for catalog worker-visibility tests.
+ */
+function buildSystemHealthResponse(workerStatus: "online" | "offline" | "unknown") {
+  return {
+    api: { status: "ok" },
+    database: { status: "connected" },
+    objectStorage: { status: "connected" },
+    queues: {
+      acquisition: { failed: 0, pending: 0 },
+      enrichment: { failed: 0, pending: 0 },
+      exportBundleAssembly: { failed: 0, pending: 0 }
+    },
+    worker: {
+      lastSeenAt: workerStatus === "online" ? "2026-05-22T00:00:00.000Z" : null,
+      staleAfterSeconds: 30,
+      status: workerStatus
+    }
   };
 }
 

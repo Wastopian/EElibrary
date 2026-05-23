@@ -13,9 +13,17 @@ export function CompareNoPartsRecovery() {
   return (
     <div className="empty-recovery-state">
       <EmptyState
-        body="Find a catalog part first, then choose the compare workspace from that part. You can also add a known internal part id in the compare selection box."
+        body="Add exact MPNs or internal part ids above. Compare resolves only saved catalog records, so ambiguous search terms stay out of the table."
         title="No parts selected"
       />
+      <div className="compare-starter-examples" aria-label="Compare starter examples">
+        <strong>Try a saved comparison</strong>
+        <div>
+          <Link href="/compare?parts=TPS7A02DBVR,STM32G031K8T6">TPS7A02DBVR + STM32G031K8T6</Link>
+          <Link href="/compare?parts=AMPHENOL-C091-5P-HSG,AMPHENOL-C091-5P-MATE">C091 housing + mate</Link>
+          <Link href="/catalog?category=Connector">Browse connector candidates</Link>
+        </div>
+      </div>
       <div className="empty-recovery-actions" aria-label="Compare recovery actions">
         <Link className="button-link" href="/catalog">Find parts in Catalog</Link>
         <Link className="button-link button-link--quiet" href="/projects">Open project BOMs</Link>

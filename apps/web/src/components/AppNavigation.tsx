@@ -68,6 +68,12 @@ const PRIMARY_NAVIGATION_ITEMS: NavigationItem[] = [
 /** MORE_NAVIGATION_ITEMS are useful but less frequent workspaces. */
 const MORE_NAVIGATION_ITEMS: NavigationItem[] = [
   {
+    description: "Run EE scratch calculations and copy evidence-note drafts.",
+    href: "/tools",
+    label: "Tools",
+    match: { path: "/tools", type: "path" }
+  },
+  {
     description: "Remember PCB shops, sheet metal, and who you trust.",
     href: "/vendors",
     label: "Vendors",

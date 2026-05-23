@@ -74,6 +74,47 @@ test("part detail renders readiness record summary from detail response", async 
 });
 
 /**
+ * Verifies the distributor-offer panel renders merge-summary signals without procurement claims.
+ */
+test("part detail renders provider-neutral supply offer merge summary", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed part detail record");
+
+  const restoreFetch = mockFetch(
+    () =>
+      jsonResponse({
+        data: buildPartDetailResponse(record, records),
+        source: "database"
+      }),
+    undefined,
+    () =>
+      jsonResponse({
+        data: buildSupplyOffersResponse(record.part.id),
+        source: "database"
+      })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.match(html, /Commercial snapshot/u);
+    assert.match(html, /Source spread/u);
+    assert.match(html, /2 providers/u);
+    assert.match(html, /2 named suppliers/u);
+    assert.match(html, /Best current in-stock tier/u);
+    assert.match(html, /\$0\.4100/u);
+    assert.match(html, /Provider merge summary/u);
+    assert.match(html, /octopart: 2\/2 current, 2 in stock, 2 named suppliers/u);
+    assert.match(html, /local-catalog: 0\/1 current, 0 in stock, 0 named suppliers/u);
+    assert.doesNotMatch(html, /procurement approved/iu);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies project query context uses the full catalog part page with project navigation.
  */
 test("part detail keeps full catalog layout when opened from a project", async () => {
@@ -782,11 +823,174 @@ function buildEmptySupplyOffersResponse(partId: string): PartSupplyOffersRespons
     staleAfterDays: 14,
     state: "empty",
     summary: {
+      currentOfferCount: 0,
       inStockOfferCount: 0,
       lastSeenAt: null,
+      lowestCurrentInStockUnitPrice: null,
       lowestUnitPrice: null,
+      namedSupplierCount: 0,
       offerCount: 0,
+      providerCount: 0,
+      providerSummaries: [],
       staleOfferCount: 0
+    }
+  };
+}
+
+/**
+ * Builds a provider-spread supply-offer response for the part-detail sourcing panel test.
+ */
+function buildSupplyOffersResponse(partId: string): PartSupplyOffersResponse {
+  return {
+    boundary: "Supply offers are source-linked commercial snapshots. They are not live distributor availability, procurement approval, or an engineering-use decision.",
+    offers: [
+      {
+        createdAt: "2099-01-02T00:00:00.000Z",
+        currencyCode: "USD",
+        id: "offer-digikey",
+        inventoryQuantity: 1200,
+        inventoryStatus: "in_stock",
+        lastSeenAt: "2099-01-02T00:00:00.000Z",
+        leadTimeDays: 3,
+        moq: 1,
+        packaging: "Tape and reel",
+        partId,
+        preferredRank: 1,
+        priceBreaks: [
+          {
+            capturedAt: "2099-01-02T00:00:00.000Z",
+            currencyCode: "USD",
+            id: "price-digikey-100",
+            minQuantity: 100,
+            supplyOfferingId: "offer-digikey",
+            unitPrice: 0.41
+          }
+        ],
+        providerId: "octopart",
+        providerPartKey: "TPS7A02DBVR",
+        providerSku: "296-TPS7A02DBVR",
+        sourceRecordId: "source-octopart-digikey",
+        sourceUrl: "https://example.test/digikey",
+        supplierName: "Digi-Key",
+        updatedAt: "2099-01-02T00:00:00.000Z"
+      },
+      {
+        createdAt: "2099-01-02T00:00:00.000Z",
+        currencyCode: "USD",
+        id: "offer-mouser",
+        inventoryQuantity: 500,
+        inventoryStatus: "in_stock",
+        lastSeenAt: "2099-01-02T00:00:00.000Z",
+        leadTimeDays: 4,
+        moq: 1,
+        packaging: "Cut tape",
+        partId,
+        preferredRank: 2,
+        priceBreaks: [
+          {
+            capturedAt: "2099-01-02T00:00:00.000Z",
+            currencyCode: "USD",
+            id: "price-mouser-1",
+            minQuantity: 1,
+            supplyOfferingId: "offer-mouser",
+            unitPrice: 0.48
+          }
+        ],
+        providerId: "octopart",
+        providerPartKey: "TPS7A02DBVR",
+        providerSku: "595-TPS7A02DBVR",
+        sourceRecordId: "source-octopart-mouser",
+        sourceUrl: "https://example.test/mouser",
+        supplierName: "Mouser",
+        updatedAt: "2099-01-02T00:00:00.000Z"
+      },
+      {
+        createdAt: "2020-01-02T00:00:00.000Z",
+        currencyCode: "USD",
+        id: "offer-local-stale",
+        inventoryQuantity: null,
+        inventoryStatus: "unknown",
+        lastSeenAt: "2020-01-02T00:00:00.000Z",
+        leadTimeDays: null,
+        moq: null,
+        packaging: null,
+        partId,
+        preferredRank: 3,
+        priceBreaks: [],
+        providerId: "local-catalog",
+        providerPartKey: "TPS7A02DBVR",
+        providerSku: null,
+        sourceRecordId: "source-local-stale",
+        sourceUrl: "https://example.test/local",
+        supplierName: null,
+        updatedAt: "2020-01-02T00:00:00.000Z"
+      }
+    ],
+    partId,
+    staleAfterDays: 14,
+    state: "available",
+    summary: {
+      currentOfferCount: 2,
+      inStockOfferCount: 2,
+      lastSeenAt: "2099-01-02T00:00:00.000Z",
+      lowestCurrentInStockUnitPrice: {
+        currencyCode: "USD",
+        minQuantity: 100,
+        offeringId: "offer-digikey",
+        providerId: "octopart",
+        supplierName: "Digi-Key",
+        unitPrice: 0.41
+      },
+      lowestUnitPrice: {
+        currencyCode: "USD",
+        minQuantity: 100,
+        offeringId: "offer-digikey",
+        providerId: "octopart",
+        supplierName: "Digi-Key",
+        unitPrice: 0.41
+      },
+      namedSupplierCount: 2,
+      offerCount: 3,
+      providerCount: 2,
+      providerSummaries: [
+        {
+          currentOfferCount: 2,
+          inStockOfferCount: 2,
+          lastSeenAt: "2099-01-02T00:00:00.000Z",
+          lowestCurrentInStockUnitPrice: {
+            currencyCode: "USD",
+            minQuantity: 100,
+            offeringId: "offer-digikey",
+            providerId: "octopart",
+            supplierName: "Digi-Key",
+            unitPrice: 0.41
+          },
+          lowestUnitPrice: {
+            currencyCode: "USD",
+            minQuantity: 100,
+            offeringId: "offer-digikey",
+            providerId: "octopart",
+            supplierName: "Digi-Key",
+            unitPrice: 0.41
+          },
+          namedSupplierCount: 2,
+          offerCount: 2,
+          providerId: "octopart",
+          staleOfferCount: 0
+        },
+        {
+          currentOfferCount: 0,
+          inStockOfferCount: 0,
+          lastSeenAt: "2020-01-02T00:00:00.000Z",
+          lowestCurrentInStockUnitPrice: null,
+          lowestUnitPrice: null,
+          namedSupplierCount: 0,
+          offerCount: 1,
+          providerId: "local-catalog",
+          staleOfferCount: 1
+        }
+      ],
+      staleOfferCount: 1
     }
   };
 }

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
+import { formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
 import { CircuitBlockEditPanel } from "../../../components/CircuitBlockEditPanel";
 import { CircuitBlockPartEditTable } from "../../../components/CircuitBlockPartEditTable";
 import { CircuitBlockKnownRisksPanel } from "../../../components/CircuitBlockKnownRisksPanel";
@@ -25,6 +26,8 @@ import type {
   CircuitBlock,
   CircuitBlockDetailResponse,
   CircuitBlockInstantiationHistoryRecord,
+  CircuitBlockMetricRollup,
+  CircuitBlockMetricRollupEntry,
   CircuitBlockProjectDependency,
   CircuitBlockStatus,
   CircuitBlockType,
@@ -66,6 +69,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
   }
 
   const { detail, followUps } = pageState;
+  const metricRollup = getCircuitBlockMetricRollup(detail);
 
   return (
     <main className="projects-layout">
@@ -95,6 +99,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         items={[
           { href: "#circuit-block-reuse-readiness-heading", label: "Reuse readiness" },
           { href: "#circuit-block-summary-heading", label: "Summary" },
+          { href: "#circuit-block-metrics-heading", label: "Metrics" },
           { href: "#circuit-block-parts-heading", label: "Parts" },
           { href: "#circuit-block-instantiations-heading", label: "Reuse history" },
           { href: "#circuit-block-known-risks-heading", label: "Known risks" },
@@ -142,8 +147,20 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </SectionPanel>
       </section>
 
+      <section className="detail-section" aria-labelledby="circuit-block-metrics-heading">
+        <SectionHeading
+          id="circuit-block-metrics-heading"
+          index="02"
+          subtitle="Datasheet-style metrics from the parts linked into this block, with source confidence."
+          title="Linked-part metrics"
+        />
+        <SectionPanel description={metricRollup.boundary} title={formatMetricRollupTitle(metricRollup)}>
+          <CircuitBlockMetricRollupPanel rollup={metricRollup} />
+        </SectionPanel>
+      </section>
+
       <section className="detail-section" aria-labelledby="circuit-block-parts-heading">
-        <SectionHeading id="circuit-block-parts-heading" index="02" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
+        <SectionHeading id="circuit-block-parts-heading" index="03" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
         <SectionPanel description="Required and optional roles are saved separately. A block can be approved while a linked part still needs review." title={detail.parts.length > 0 ? `${detail.parts.length} part roles` : "No part roles"}>
           {detail.parts.length > 0 ? <CircuitBlockPartEditTable circuitBlockId={detail.circuitBlock.id} parts={detail.parts} /> : <EmptyState title="No part roles yet" body="Add internal part roles before this circuit block can support reuse review." />}
         </SectionPanel>
@@ -152,7 +169,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <section className="detail-section" aria-labelledby="circuit-block-instantiations-heading">
         <SectionHeading
           id="circuit-block-instantiations-heading"
-          index="03"
+          index="04"
           subtitle="Engineering memory: every time this reusable block was dropped into a project BOM."
           title="Reuse history"
         />
@@ -169,7 +186,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <section className="detail-section" aria-labelledby="circuit-block-known-risks-heading">
         <SectionHeading
           id="circuit-block-known-risks-heading"
-          index="04"
+          index="05"
           subtitle="Engineering memory the team learned the hard way: errata, limitations, and cautions tied to this reusable pattern."
           title="Known risks &amp; limitations"
         />
@@ -190,21 +207,21 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </p>
 
         <section className="detail-section" aria-labelledby="circuit-block-edit-heading">
-          <SectionHeading id="circuit-block-edit-heading" index="05" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
+          <SectionHeading id="circuit-block-edit-heading" index="06" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
           <SectionPanel description="These edits update block metadata only. Block status, scope, and constraints do not approve linked parts or verify export assets." title="Metadata maintenance">
             <CircuitBlockEditPanel circuitBlock={detail.circuitBlock} />
           </SectionPanel>
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-add-part-heading">
-          <SectionHeading id="circuit-block-add-part-heading" index="06" subtitle="Link known internal parts to required or optional roles." title="Add part role" />
+          <SectionHeading id="circuit-block-add-part-heading" index="07" subtitle="Link known internal parts to required or optional roles." title="Add part role" />
           <SectionPanel description="Part roles record reuse structure and substitution policy. They do not change part approval or export readiness." title="New part role">
             <CircuitBlockPartAddPanel circuitBlockId={detail.circuitBlock.id} />
           </SectionPanel>
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-deps-heading">
-          <SectionHeading id="circuit-block-deps-heading" index="07" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
+          <SectionHeading id="circuit-block-deps-heading" index="08" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
           <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or make export available." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
             {detail.projectDependencies.length > 0
               ? <CircuitBlockProjectDependencyTable dependencies={detail.projectDependencies} />
@@ -213,14 +230,14 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-follow-ups-heading">
-          <SectionHeading id="circuit-block-follow-ups-heading" index="08" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
+          <SectionHeading id="circuit-block-follow-ups-heading" index="09" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
           <SectionPanel description="Follow-up workflow state does not approve linked parts or make this circuit export-ready. Refresh creates or updates records from current required-role readiness gaps." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
             <FollowUpPanel followUps={followUps} targetId={detail.circuitBlock.id} targetType="circuit_block" />
           </SectionPanel>
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-          <SectionHeading id="circuit-block-evidence-heading" index="09" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
+          <SectionHeading id="circuit-block-evidence-heading" index="10" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
           <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or make export available." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
             <div className="project-evidence-panel">
               <div className="project-evidence-panel__boundary">
@@ -235,7 +252,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         <section className="detail-section" aria-labelledby="circuit-block-next-workspaces-heading">
           <SectionHeading
             id="circuit-block-next-workspaces-heading"
-            index="10"
+            index="11"
             subtitle="Cross-link into the workspaces that work alongside this block. Each link is read-only context — none of these change reuse readiness or part approval."
             title="Next workspaces"
           />
@@ -331,6 +348,204 @@ function CircuitBlockStat({ label, tone, value }: { label: string; tone: BadgeTo
       <strong>{value}</strong>
     </div>
   );
+}
+
+/**
+ * Reads the metric rollup while tolerating older API responses during local/dev rollouts.
+ */
+function getCircuitBlockMetricRollup(detail: CircuitBlockDetailResponse): CircuitBlockMetricRollup {
+  const responseRollup = (detail as CircuitBlockDetailResponse & { metricRollup?: CircuitBlockMetricRollup }).metricRollup;
+
+  if (responseRollup) {
+    return responseRollup;
+  }
+
+  return {
+    boundary: "Linked-part metric rollup is unavailable from this API response. This empty state does not change block reuse, part approval, asset validation, or export readiness.",
+    entries: [],
+    metricCount: 0,
+    rolesWithAnyMetricCount: 0,
+    state: "empty",
+    totalRoleCount: detail.parts.length
+  };
+}
+
+/**
+ * Renders the compact datasheet-style metric rollup for linked circuit-block parts.
+ */
+function CircuitBlockMetricRollupPanel({ rollup }: { rollup: CircuitBlockMetricRollup }) {
+  if (rollup.state === "empty" || rollup.entries.length === 0) {
+    return (
+      <div className="circuit-block-metric-rollup">
+        <EmptyState
+          title="No linked-part metrics yet"
+          body="Metrics appear here after normalized datasheet values exist for parts linked into this circuit block."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="circuit-block-metric-rollup">
+      <div className="circuit-block-metric-rollup__summary" aria-label="Linked-part metric coverage">
+        <span>{rollup.metricCount} {formatCountLabel("metric group", rollup.metricCount)}</span>
+        <span>{rollup.rolesWithAnyMetricCount} / {rollup.totalRoleCount} linked {formatCountLabel("role", rollup.totalRoleCount)} with metrics</span>
+      </div>
+      <div className="projects-table-wrap circuit-block-metric-table-wrap">
+        <table className="projects-table circuit-block-metric-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Linked role values</th>
+              <th>Role coverage</th>
+              <th>Confidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rollup.entries.map((entry) => (
+              <tr key={`${entry.metricKey}-${entry.unit}`}>
+                <td>
+                  <strong>{formatMetricLabel(entry.metricKey)}</strong>
+                  <div className="muted-copy ui-mono">{entry.metricKey} / {entry.unit}</div>
+                </td>
+                <td>
+                  <ul className="circuit-block-metric-values">
+                    {entry.values.map((value) => (
+                      <li key={`${entry.metricKey}-${entry.unit}-${value.blockPartId}`}>
+                        <span>
+                          <strong>{value.role}</strong>
+                          <span className="muted-copy ui-mono">{value.mpn}</span>
+                        </span>
+                        <span>{formatMetricValue(value.metric)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </td>
+                <td>
+                  <StatusBadge label={formatMetricCoverageLabel(entry)} tone={metricCoverageTone(entry)} />
+                  <p className="muted-copy circuit-block-metric-table__note">{formatMetricCoverageDetail(entry)}</p>
+                  <MetricMissingRoleDisclosure entry={entry} />
+                </td>
+                <td>
+                  <StatusBadge label={formatMetricConfidenceLabel(entry)} tone={metricConfidenceTone(entry)} />
+                  <p className="muted-copy circuit-block-metric-table__note">{formatMetricConfidenceDetail(entry)}</p>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Keeps missing-role detail available without making the rollup table visually heavy.
+ */
+function MetricMissingRoleDisclosure({ entry }: { entry: CircuitBlockMetricRollupEntry }) {
+  const missingRoles = [...entry.missingRequiredRoles, ...entry.missingOptionalRoles];
+
+  if (missingRoles.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="circuit-block-metric-missing">
+      <summary>Roles without this metric</summary>
+      <ul>
+        {missingRoles.map((role) => (
+          <li key={role}>{role}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/**
+ * Formats the SectionPanel title for the metric rollup.
+ */
+function formatMetricRollupTitle(rollup: CircuitBlockMetricRollup): string {
+  if (rollup.state === "empty" || rollup.metricCount === 0) {
+    return "No linked-part metrics";
+  }
+
+  return `${rollup.metricCount} ${formatCountLabel("metric group", rollup.metricCount)} across ${rollup.rolesWithAnyMetricCount} linked ${formatCountLabel("role", rollup.rolesWithAnyMetricCount)}`;
+}
+
+/**
+ * Formats the coverage badge for one metric group.
+ */
+function formatMetricCoverageLabel(entry: CircuitBlockMetricRollupEntry): string {
+  if (entry.coverageStatus === "complete") return "Complete";
+  if (entry.coverageStatus === "partial") return "Partial";
+  return "Not covered";
+}
+
+/**
+ * Explains role coverage without implying that uncovered metrics block reuse.
+ */
+function formatMetricCoverageDetail(entry: CircuitBlockMetricRollupEntry): string {
+  const requiredCopy = entry.requiredRoleCount > 0
+    ? `${entry.coveredRequiredRoleCount} / ${entry.requiredRoleCount} required`
+    : "No required roles";
+  const optionalCopy = entry.optionalRoleCount > 0
+    ? `; ${entry.coveredOptionalRoleCount} / ${entry.optionalRoleCount} optional`
+    : "";
+
+  return `${requiredCopy}${optionalCopy} with this metric.`;
+}
+
+/**
+ * Maps metric coverage onto the shared badge palette.
+ */
+function metricCoverageTone(entry: CircuitBlockMetricRollupEntry): BadgeTone {
+  if (entry.coverageStatus === "complete") return "verified";
+  if (entry.coverageStatus === "partial") return "review";
+  return "neutral";
+}
+
+/**
+ * Formats the confidence badge for one metric group.
+ */
+function formatMetricConfidenceLabel(entry: CircuitBlockMetricRollupEntry): string {
+  return entry.minConfidenceScore === null ? "No confidence" : `${formatConfidencePercent(entry.minConfidenceScore)} min`;
+}
+
+/**
+ * Explains average confidence across the linked values in one metric group.
+ */
+function formatMetricConfidenceDetail(entry: CircuitBlockMetricRollupEntry): string {
+  if (entry.averageConfidenceScore === null) {
+    return "No confidence score recorded.";
+  }
+
+  return `${formatConfidencePercent(entry.averageConfidenceScore)} avg across ${entry.values.length} ${formatCountLabel("value", entry.values.length)}.`;
+}
+
+/**
+ * Maps the lowest metric confidence onto a badge tone.
+ */
+function metricConfidenceTone(entry: CircuitBlockMetricRollupEntry): BadgeTone {
+  const score = entry.minConfidenceScore;
+
+  if (score === null) return "neutral";
+  if (score >= 0.8) return "verified";
+  if (score >= 0.65) return "review";
+  return "danger";
+}
+
+/**
+ * Formats a confidence score as a whole-number percentage.
+ */
+function formatConfidencePercent(score: number): string {
+  return `${Math.round(score * 100)}%`;
+}
+
+/**
+ * Pluralizes short labels used in dense metric-summary copy.
+ */
+function formatCountLabel(label: string, count: number): string {
+  return count === 1 ? label : `${label}s`;
 }
 
 /**
@@ -445,6 +660,7 @@ function CircuitBlockInstantiationHistoryTable({ instantiations }: { instantiati
             <th>Revision</th>
             <th>BOM import</th>
             <th>Lines</th>
+            <th>Current pattern</th>
             <th>Optional?</th>
             <th>Instantiated</th>
             <th>By</th>
@@ -474,6 +690,19 @@ function CircuitBlockInstantiationHistoryTable({ instantiations }: { instantiati
                 )}
               </td>
               <td>{record.instantiatedBomLineCount}</td>
+              <td>
+                <StatusBadge label={formatInstantiationPatternDriftStatus(record.patternDrift.status)} tone={instantiationPatternDriftTone(record.patternDrift.status)} />
+                <div className="muted-copy">{summarizeInstantiationPatternDrift(record)}</div>
+                {record.patternDrift.items.length > 0 ? (
+                  <ul className="instantiation-drift-list">
+                    {record.patternDrift.items.slice(0, 3).map((item) => (
+                      <li key={`${record.instantiation.id}-${item.kind}-${item.role}-${item.instantiatedBomLineId ?? item.currentCircuitBlockPartId ?? "missing"}`}>
+                        {item.detail}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </td>
               <td>{record.instantiation.includeOptional ? "Included" : "Required only"}</td>
               <td>{formatDateTime(record.instantiation.createdAt)}</td>
               <td>{record.instantiation.createdBy ?? <span className="muted-copy">Unrecorded</span>}</td>
@@ -483,6 +712,54 @@ function CircuitBlockInstantiationHistoryTable({ instantiations }: { instantiati
       </table>
     </div>
   );
+}
+
+/**
+ * Formats the current-pattern drift verdict for compact history rows.
+ */
+function formatInstantiationPatternDriftStatus(status: CircuitBlockInstantiationHistoryRecord["patternDrift"]["status"]): string {
+  switch (status) {
+    case "drifted":
+      return "Drifted";
+    case "matches_current_pattern":
+      return "Matches current";
+    case "needs_review":
+      return "Review";
+    default:
+      return status;
+  }
+}
+
+/**
+ * Maps the drift verdict to the shared status badge tone.
+ */
+function instantiationPatternDriftTone(status: CircuitBlockInstantiationHistoryRecord["patternDrift"]["status"]): BadgeTone {
+  switch (status) {
+    case "drifted":
+      return "danger";
+    case "matches_current_pattern":
+      return "verified";
+    case "needs_review":
+      return "review";
+    default:
+      return "neutral";
+  }
+}
+
+/**
+ * Builds the one-line explanation under the current-pattern badge.
+ */
+function summarizeInstantiationPatternDrift(record: CircuitBlockInstantiationHistoryRecord): string {
+  const { patternDrift } = record;
+
+  if (patternDrift.status === "matches_current_pattern") {
+    return `${patternDrift.instantiatedRoleCount} generated line${patternDrift.instantiatedRoleCount === 1 ? "" : "s"} still match the current scoped pattern.`;
+  }
+
+  const issueCount = patternDrift.items.length;
+  const roleCopy = `${patternDrift.instantiatedRoleCount}/${patternDrift.currentRoleCount} scoped role${patternDrift.currentRoleCount === 1 ? "" : "s"}`;
+
+  return `${issueCount} difference${issueCount === 1 ? "" : "s"} across ${roleCopy}.`;
 }
 
 /**

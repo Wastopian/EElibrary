@@ -103,6 +103,7 @@ export function CompareSelectionTray({ initialPartIds }: { initialPartIds: strin
         />
         <button type="submit">Add parts</button>
       </form>
+      <p className="compare-selection-tray__hint">Use exact MPNs or internal ids, separated by commas. Ambiguous matches are ignored until you choose a saved catalog record.</p>
       {warning ? <p className="muted-copy">{warning}</p> : null}
     </section>
   );

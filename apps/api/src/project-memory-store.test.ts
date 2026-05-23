@@ -678,6 +678,12 @@ test("project memory store exposes circuit block library and linked part readine
     assert.equal(detail.response.parts[0]?.blockPart.role, "Main LDO");
     assert.equal(detail.response.parts[0]?.part.approvalStatus, "approved");
     assert.equal(detail.response.parts[0]?.part.readinessStatus, "needs_attention");
+    assert.equal(detail.response.metricRollup.state, "available");
+    assert.equal(detail.response.metricRollup.entries.length, 2);
+    assert.equal(detail.response.metricRollup.entries[0]?.metricKey, "input_voltage_max");
+    assert.equal(detail.response.metricRollup.entries[1]?.values[0]?.metric.id, "metric-memory-ldo-output-current");
+    assert.equal(detail.response.metricRollup.entries[1]?.minConfidenceScore, 0.81);
+    assert.match(detail.response.metricRollup.boundary, /do not approve/u);
     assert.match(detail.response.boundary, /approval, readiness, validation, and export/u);
   } finally {
     setProjectMemoryStorePoolForTests(null);
@@ -2570,6 +2576,22 @@ test("instantiateCircuitBlockIntoProjectBomInDatabase creates a synthetic BOM im
     assert.equal(history.revision.revisionLabel, "A");
     assert.equal(history.bomImport?.id, response.bomImport.id);
     assert.equal(history.instantiatedBomLineCount, 1);
+    assert.equal(history.patternDrift.status, "matches_current_pattern");
+    assert.equal(history.patternDrift.items.length, 0);
+
+    await pool.query(
+      `INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at)
+         VALUES ('cbpart-alpha-power-output-cap', 'cblock-alpha-power', 'part-memory-resistor', 'Output capacitor', 1, true, 'exact_required', 'Added after the first project reuse.', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`
+    );
+
+    const detailAfterPatternChange = await readCircuitBlockDetailFromDatabase("cblock-alpha-power");
+    assert.equal(detailAfterPatternChange.status, "available");
+    if (detailAfterPatternChange.status !== "available") return;
+
+    const driftedHistory = detailAfterPatternChange.response.instantiations[0]!;
+    assert.equal(driftedHistory.patternDrift.status, "drifted");
+    assert.equal(driftedHistory.patternDrift.items[0]?.kind, "missing_current_role");
+    assert.match(driftedHistory.patternDrift.items[0]?.detail ?? "", /Output capacitor/u);
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -3410,6 +3432,20 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       pin_table_status TEXT NOT NULL DEFAULT 'not_available'
     );
 
+    CREATE TABLE part_metrics (
+      id TEXT PRIMARY KEY,
+      part_id TEXT NOT NULL,
+      metric_key TEXT NOT NULL,
+      metric_value NUMERIC,
+      unit TEXT NOT NULL,
+      min_value NUMERIC,
+      max_value NUMERIC,
+      confidence_score NUMERIC NOT NULL,
+      source_revision_id TEXT NOT NULL,
+      source_record_id TEXT,
+      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE assets (
       id TEXT PRIMARY KEY,
       part_id TEXT NOT NULL,
@@ -3753,6 +3789,11 @@ function seedInternalCatalogRows(db: ReturnType<typeof newDb>): void {
 
     INSERT INTO part_readiness_summaries (part_id, readiness_status, identity_status, connector_class, blocker_count, blocker_summary, recommended_actions, detail, last_evaluated_at)
     VALUES ('part-memory-ldo', 'needs_attention', 'confirmed', 'non_connector', 1, '{"missing verified CAD"}', '{"review CAD"}', 'Fixture readiness summary.', '2026-04-30T00:08:00.000Z');
+
+    INSERT INTO part_metrics (id, part_id, metric_key, metric_value, unit, min_value, max_value, confidence_score, source_revision_id, source_record_id, last_updated_at)
+    VALUES
+      ('metric-memory-ldo-output-current', 'part-memory-ldo', 'output_current_max', 0.2, 'A', NULL, NULL, 0.81, 'dsr-memory-ldo-a', 'sr-memory-ldo', '2026-04-30T00:08:30.000Z'),
+      ('metric-memory-ldo-input-voltage', 'part-memory-ldo', 'input_voltage_max', 5.5, 'V', NULL, NULL, 0.9, 'dsr-memory-ldo-a', 'sr-memory-ldo', '2026-04-30T00:08:31.000Z');
   `);
 }
 

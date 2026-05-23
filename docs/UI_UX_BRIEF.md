@@ -408,6 +408,11 @@ Notes:
 Purpose:
 - extend the platform into practical EE workflows
 
+Shipped first workspace:
+- `/tools` is a local scratchpad for voltage-divider tolerance/load shift, pull-up edge timing, and package power derating
+- each tool produces a copyable evidence-note draft for later attachment to a project, part, or evidence record
+- tools do not write project memory, approve parts, validate assets, or unlock export bundles
+
 Examples:
 - calculators
 - cross-reference tools
@@ -656,7 +661,7 @@ Must make it clear:
 - requestable generation must not appear available unless source-readiness rules support it
 - uncertain connector compatibility must remain visibly uncertain
 - blocked readiness states must explain the blockers directly
-- planned project/BOM, where-used, circuit block, evidence vault, and BOM health screens must be labeled as planned until implemented
+- any unimplemented project/BOM, where-used, circuit block, evidence vault, or BOM health depth must be labeled as planned until it ships
 - evidence attachments must not imply validation, approval, or export readiness by themselves
 - project usage history must not imply approved reuse unless approval and risk state support that claim
 - circuit block membership must not hide part-level blockers or constraints

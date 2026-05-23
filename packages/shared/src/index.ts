@@ -9,6 +9,8 @@ export * from "./asset-state";
 export * from "./asset-resolution";
 export * from "./bom-csv";
 export * from "./catalog-runtime";
+export * from "./circuit-block-instantiation-drift";
+export * from "./circuit-block-metric-rollup";
 export * from "./circuit-block-readiness";
 export * from "./connector-intelligence";
 export * from "./normalization";

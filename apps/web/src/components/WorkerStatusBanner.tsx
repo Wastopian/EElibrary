@@ -94,9 +94,9 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
   if (queueSummary.totalFailed > 0) {
     return (
       <div className="status-banner status-banner--warning" data-testid="banner-queue-failures" role="status">
-        <strong>Queued provider work has failures.</strong>
+        <strong>Queued background work has failures.</strong>
         <span>
-          {formatQueueSummary(queueSummary)} Check <code>npm run operations:worker</code> or the admin queue before trusting async acquisition results.
+          {formatQueueSummary(queueSummary)} Check <code>npm run operations:worker</code> or the admin queue before trusting async results.
         </span>
       </div>
     );
@@ -126,6 +126,10 @@ interface QueueSummary {
   enrichmentPending: number;
   /** Failed enrichment jobs. */
   enrichmentFailed: number;
+  /** Pending export bundle assembly rows. */
+  exportAssemblyPending: number;
+  /** Failed export bundle assembly rows. */
+  exportAssemblyFailed: number;
   /** All pending or running jobs. */
   totalPending: number;
   /** All failed jobs. */
@@ -140,14 +144,18 @@ function summarizeQueues(health: SystemHealthResponse): QueueSummary {
   const acquisitionFailed = health.queues.acquisition.failed;
   const enrichmentPending = health.queues.enrichment.pending;
   const enrichmentFailed = health.queues.enrichment.failed;
+  const exportAssemblyPending = health.queues.exportBundleAssembly.pending;
+  const exportAssemblyFailed = health.queues.exportBundleAssembly.failed;
 
   return {
     acquisitionFailed,
     acquisitionPending,
+    exportAssemblyFailed,
+    exportAssemblyPending,
     enrichmentFailed,
     enrichmentPending,
-    totalFailed: acquisitionFailed + enrichmentFailed,
-    totalPending: acquisitionPending + enrichmentPending
+    totalFailed: acquisitionFailed + enrichmentFailed + exportAssemblyFailed,
+    totalPending: acquisitionPending + enrichmentPending + exportAssemblyPending
   };
 }
 
@@ -155,7 +163,7 @@ function summarizeQueues(health: SystemHealthResponse): QueueSummary {
  * Formats queue counts for the status banner without hiding which queue needs attention.
  */
 function formatQueueSummary(summary: QueueSummary): string {
-  return `Acquisition: ${summary.acquisitionPending} pending, ${summary.acquisitionFailed} failed. Enrichment: ${summary.enrichmentPending} pending, ${summary.enrichmentFailed} failed.`;
+  return `Acquisition: ${summary.acquisitionPending} pending, ${summary.acquisitionFailed} failed. Enrichment: ${summary.enrichmentPending} pending, ${summary.enrichmentFailed} failed. Export assembly: ${summary.exportAssemblyPending} pending, ${summary.exportAssemblyFailed} failed.`;
 }
 
 /**

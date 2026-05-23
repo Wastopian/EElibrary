@@ -382,13 +382,40 @@ export interface LowestSupplyPriceSummary {
   currencyCode: string;
 }
 
-/** PartSupplyOfferSummary counts freshness and stock signals for one part's commercial snapshots. */
+/** SupplyOfferProviderSummary groups provider-specific commercial snapshots for comparison. */
+export interface SupplyOfferProviderSummary {
+  /** Provider that captured or normalized these commercial snapshots. */
+  providerId: string;
+  /** Number of active offer rows from this provider. */
+  offerCount: number;
+  /** Number of active offer rows from this provider that are not stale. */
+  currentOfferCount: number;
+  /** Number of active offer rows from this provider that are older than the freshness window. */
+  staleOfferCount: number;
+  /** Number of named suppliers or sellers exposed by this provider. */
+  namedSupplierCount: number;
+  /** Number of provider rows that report in-stock inventory. */
+  inStockOfferCount: number;
+  /** Newest last-seen timestamp from this provider. */
+  lastSeenAt: string | null;
+  /** Lowest recorded price tier from this provider, regardless of stock or freshness. */
+  lowestUnitPrice: LowestSupplyPriceSummary | null;
+  /** Lowest recorded current in-stock price tier from this provider. */
+  lowestCurrentInStockUnitPrice: LowestSupplyPriceSummary | null;
+}
+
+/** PartSupplyOfferSummary counts freshness, source spread, and stock signals for one part's commercial snapshots. */
 export interface PartSupplyOfferSummary {
   offerCount: number;
+  currentOfferCount: number;
   inStockOfferCount: number;
   staleOfferCount: number;
+  providerCount: number;
+  namedSupplierCount: number;
   lastSeenAt: string | null;
   lowestUnitPrice: LowestSupplyPriceSummary | null;
+  lowestCurrentInStockUnitPrice: LowestSupplyPriceSummary | null;
+  providerSummaries: SupplyOfferProviderSummary[];
 }
 
 /** PartSupplyOffersResponse returns source-linked supply snapshots beside part detail truth. */
@@ -1677,6 +1704,47 @@ export interface CircuitBlockPartRecord {
   part: CircuitBlockPartCatalogSummary;
 }
 
+/** CircuitBlockMetricCoverageStatus summarizes whether a metric appears across required roles. */
+export type CircuitBlockMetricCoverageStatus = "complete" | "partial" | "missing";
+
+/** CircuitBlockMetricRoleValue pairs one linked role with one normalized datasheet metric. */
+export interface CircuitBlockMetricRoleValue {
+  blockPartId: string;
+  role: string;
+  isRequired: boolean;
+  quantity: number | null;
+  partId: string;
+  mpn: string;
+  manufacturerName: string;
+  metric: PartMetric;
+}
+
+/** CircuitBlockMetricRollupEntry groups the same metric key and unit across linked part roles. */
+export interface CircuitBlockMetricRollupEntry {
+  metricKey: string;
+  unit: MetricUnit;
+  coverageStatus: CircuitBlockMetricCoverageStatus;
+  values: CircuitBlockMetricRoleValue[];
+  missingRequiredRoles: string[];
+  missingOptionalRoles: string[];
+  requiredRoleCount: number;
+  coveredRequiredRoleCount: number;
+  optionalRoleCount: number;
+  coveredOptionalRoleCount: number;
+  minConfidenceScore: number | null;
+  averageConfidenceScore: number | null;
+}
+
+/** CircuitBlockMetricRollup is the read-only datasheet-style metric summary for linked parts. */
+export interface CircuitBlockMetricRollup {
+  state: "available" | "empty";
+  entries: CircuitBlockMetricRollupEntry[];
+  metricCount: number;
+  totalRoleCount: number;
+  rolesWithAnyMetricCount: number;
+  boundary: string;
+}
+
 /** CircuitBlockSummary reports list-level counts without converting them into opaque readiness scores. */
 export interface CircuitBlockSummary {
   circuitBlock: CircuitBlock;
@@ -1796,6 +1864,7 @@ export interface CircuitBlockDetailResponse {
   parts: CircuitBlockPartRecord[];
   evidence: EvidenceAttachment[];
   projectDependencies: CircuitBlockProjectDependency[];
+  metricRollup: CircuitBlockMetricRollup;
   instantiations: CircuitBlockInstantiationHistoryRecord[];
   /**
    * Known risks and limitations recorded against this block. Rows are newest-first by `recordedAt`,
@@ -1968,6 +2037,62 @@ export interface PartEngineeringMemoryWarningSummary {
   preview: PartEngineeringMemoryWarningPreview[];
 }
 
+/** CircuitBlockInstantiationPatternDriftStatus is the rollup verdict for one reuse event vs the current block definition. */
+export type CircuitBlockInstantiationPatternDriftStatus = "matches_current_pattern" | "needs_review" | "drifted";
+
+/** CircuitBlockInstantiationPatternDriftKind names the concrete difference found in a reused block instance. */
+export type CircuitBlockInstantiationPatternDriftKind =
+  | "missing_current_role"
+  | "extra_instantiated_role"
+  | "duplicate_instantiated_role"
+  | "part_changed"
+  | "quantity_changed"
+  | "line_match_changed"
+  | "role_label_changed"
+  | "requirement_changed";
+
+/**
+ * CircuitBlockInstantiationPatternDriftItem explains one concrete difference between
+ * the current reusable block pattern and the BOM lines created by a past instantiation.
+ */
+export interface CircuitBlockInstantiationPatternDriftItem {
+  /** Difference category. */
+  kind: CircuitBlockInstantiationPatternDriftKind;
+  /** `drift` means the project BOM differs materially; `review` means metadata changed. */
+  severity: "drift" | "review";
+  /** Human role label from the current block role, or the original BOM payload when the role no longer exists. */
+  role: string;
+  /** Current circuit-block part-role id, when the role still exists. */
+  currentCircuitBlockPartId: string | null;
+  /** Current part id on the reusable block role, when present. */
+  currentPartId: string | null;
+  /** Current part MPN on the reusable block role, when present. */
+  currentPartMpn: string | null;
+  /** BOM line id generated by the original instantiation, when present. */
+  instantiatedBomLineId: string | null;
+  /** Part id currently matched on the instantiated BOM line, when present. */
+  instantiatedPartId: string | null;
+  /** MPN text recorded on the instantiated BOM line, when present. */
+  instantiatedPartMpn: string | null;
+  /** Plain operator-facing explanation. */
+  detail: string;
+}
+
+/**
+ * CircuitBlockInstantiationPatternDrift summarizes whether a project that reused a
+ * circuit block still matches the current reusable pattern.
+ */
+export interface CircuitBlockInstantiationPatternDrift {
+  /** Rollup verdict for the instantiation history row. */
+  status: CircuitBlockInstantiationPatternDriftStatus;
+  /** Count of current block roles that should be present for the original optional/required scope. */
+  currentRoleCount: number;
+  /** Count of generated BOM lines still tied to this block instantiation. */
+  instantiatedRoleCount: number;
+  /** Concrete differences, bounded by the number of roles and generated lines. */
+  items: CircuitBlockInstantiationPatternDriftItem[];
+}
+
 /** CircuitBlockInstantiationHistoryRecord pairs one instantiation event with its project, revision, and BOM import context. */
 export interface CircuitBlockInstantiationHistoryRecord {
   instantiation: CircuitBlockInstantiation;
@@ -1976,6 +2101,8 @@ export interface CircuitBlockInstantiationHistoryRecord {
   bomImport: BomImport | null;
   /** Count of BOM lines that were generated from this instantiation. Recorded as engineering memory, not a trust signal. */
   instantiatedBomLineCount: number;
+  /** Current-pattern drift summary. Review signal only; it does not change part approval, validation, or export readiness. */
+  patternDrift: CircuitBlockInstantiationPatternDrift;
 }
 
 /** CircuitBlockInstantiation records one event of generating BOM lines from a reusable circuit block. */

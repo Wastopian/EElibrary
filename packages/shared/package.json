@@ -26,6 +26,14 @@
       "types": "./src/circuit-block-readiness.ts",
       "default": "./src/circuit-block-readiness.ts"
     },
+    "./circuit-block-instantiation-drift": {
+      "types": "./src/circuit-block-instantiation-drift.ts",
+      "default": "./src/circuit-block-instantiation-drift.ts"
+    },
+    "./circuit-block-metric-rollup": {
+      "types": "./src/circuit-block-metric-rollup.ts",
+      "default": "./src/circuit-block-metric-rollup.ts"
+    },
     "./connector-intelligence": {
       "types": "./src/connector-intelligence.ts",
       "default": "./src/connector-intelligence.ts"

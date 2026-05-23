@@ -27,7 +27,7 @@ After the FUNC1–FUNC18 wave (history: `docs/TODO_COMPLETED_ARCHIVE.md`), near-
 2. **Export adapters** — keep bundle generation deterministic and visible end-to-end.
 3. **Validation and trust scoring** — surface evidence without conflating approval and export.
 4. **Compare (incremental)** — FUNC18 ships `/compare` for metrics/readiness/bundle gate; add connector/CAD depth when data contracts are ready.
-5. **BOM tools and calculators** — only after the above stay trustworthy.
+5. **BOM tools and calculators** — first `/tools` scratchpads are shipped; broaden only where the output can flow back into project evidence or review.
 
 `docs/IMPLEMENTATION_STATUS.md` is the source of truth for what is already shipped; this section is forward-looking only.
 
@@ -179,7 +179,7 @@ Planned:
 - where-used lookup for parts
 - where-used lookup for connector sets
 - where-used lookup for trusted assets
-- where-used lookup for circuit blocks once those exist
+- where-used lookup for circuit blocks
 - filters by project, status, lifecycle, approval, and risk
 
 Outcome:
@@ -220,7 +220,7 @@ Outcome:
 
 ### Phase PM7: Circuit Block Records
 
-Planned:
+Shipped foundation:
 
 - reusable circuit block entity
 - associated parts and known-good connector sets
@@ -228,6 +228,8 @@ Planned:
 - validation evidence
 - project usage history
 - risk and allowed reuse scope
+- linked-part metric rollups with source confidence
+- instantiation history with current-pattern drift
 
 Outcome:
 
@@ -268,14 +270,14 @@ Outcome:
 
 ### Engineering Decision Tools
 
-Planned:
+Shipped and planned:
 
-- side-by-side compare
+- side-by-side compare is shipped for parts, CAD status, trust-stage rows, CAD previews, connector context, and export readiness
+- first engineering calculators are shipped in `/tools`: divider tolerance/load shift, pull-up edge timing, and package power derating with evidence-note drafts
 - alternate ranking
 - package and revision risk warnings
 - lifecycle and sourcing overlays
 - companion-part guidance improvements
-- engineering calculators
 - package and footprint validation helpers
 - compatibility explanation tools
 

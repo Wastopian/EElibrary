@@ -67,7 +67,7 @@ export function CatalogResultsPresentation({ initialMode = "list", rows }: Catal
   return (
     <div className="catalog-results-presentation">
       <div className="results-panel__toolbar">
-        <p>List mode shows each match with its readiness explained. Switch to table for a dense scan view across all rows.</p>
+        <p>Switch between a dense scan table and an explanation-first list.</p>
         <div className="results-panel__mode" aria-label="Catalog results presentation mode">
           <button aria-pressed={mode === "list"} onClick={() => setMode("list")} type="button">
             List

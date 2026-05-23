@@ -895,6 +895,19 @@ main > .workspace-jump-nav {
   font-size: 1.28rem;
 }
 
+.site-intro--catalog {
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.site-intro__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .site-intro__paths {
   display: grid;
   gap: 12px;
@@ -934,7 +947,7 @@ main > .workspace-jump-nav {
 }
 
 .catalog-workbench-hero {
-  padding: 18px 20px;
+  padding: 14px 16px;
 }
 
 .catalog-workbench-hero::before,
@@ -1371,6 +1384,11 @@ main > .workspace-jump-nav {
   margin-top: 14px;
   max-width: 760px;
   padding: 16px 18px;
+}
+
+.catalog-workbench-hero .quick-check-empty--idle {
+  margin-top: 10px;
+  padding: 10px 12px;
 }
 
 .quick-check-empty--idle {
@@ -7135,6 +7153,259 @@ details[open] .trust-breakdown__toggle::before {
   padding: 9px 10px;
 }
 
+/* Engineering tools workspace: local calculators with copyable evidence-note drafts. */
+.tools-page {
+  gap: 24px;
+}
+
+.tools-hero .projects-hero__lede {
+  max-width: 760px;
+}
+
+.engineering-tools {
+  display: grid;
+  gap: 18px;
+}
+
+.tools-tablist {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 6px;
+}
+
+.tools-tab {
+  align-items: start;
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text);
+  display: grid;
+  gap: 2px;
+  justify-content: stretch;
+  min-height: 64px;
+  padding: 10px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.tools-tab:hover {
+  background: var(--color-plum-soft);
+  border-color: var(--color-plum-border);
+}
+
+.tools-tab--active,
+.tools-tab--active:hover {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.tools-tab span {
+  font-size: 0.94rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.tools-tab small {
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.tools-panel {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1fr);
+}
+
+.tools-panel__form {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+
+.tools-fieldset {
+  border: 0;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  min-inline-size: 0;
+  padding: 0;
+}
+
+.tools-fieldset--dense {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tools-fieldset legend {
+  color: var(--color-text);
+  font-size: 0.95rem;
+  font-weight: 800;
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  padding: 0;
+}
+
+.tools-number-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tools-number-field span {
+  align-items: baseline;
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: 0.72rem;
+  font-weight: 800;
+  gap: 6px;
+  justify-content: space-between;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.tools-number-field small {
+  color: var(--color-text-x-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.tools-number-field input {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  min-height: 42px;
+  padding: 9px 10px;
+}
+
+.tools-result,
+.tools-evidence-note {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.tools-evidence-note {
+  grid-column: 1 / -1;
+}
+
+.tools-result__header,
+.tools-evidence-note__header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.tools-result__header span,
+.tools-evidence-note__header span {
+  color: var(--color-text-muted);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tools-result__header h3,
+.tools-evidence-note__header h3 {
+  font-size: 1.05rem;
+  line-height: 1.25;
+  margin: 2px 0 0;
+}
+
+.tools-result-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tools-fact {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 6px;
+  min-height: 156px;
+  padding: 12px;
+}
+
+.tools-fact > span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tools-fact strong {
+  font-family: var(--font-mono);
+  font-size: 1.02rem;
+  line-height: 1.2;
+}
+
+.tools-fact p {
+  color: var(--color-text-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.tools-issue-list {
+  color: var(--color-danger);
+  display: grid;
+  gap: 6px;
+  margin: 0 0 0 18px;
+  padding: 0;
+}
+
+.tools-boundary-copy {
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.tools-evidence-note textarea {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  min-height: 210px;
+  padding: 12px;
+  resize: vertical;
+  width: 100%;
+}
+
+.tools-handoff-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tools-handoff-card {
+  min-height: 150px;
+}
+
+.tools-boundary-grid {
+  margin-top: 0;
+}
+
 .circuit-block-library-filters {
   align-items: end;
   display: grid;
@@ -7193,6 +7464,77 @@ details[open] .trust-breakdown__toggle::before {
   color: var(--color-accent);
 }
 
+/* Styles the read-only linked-part metric rollup on circuit-block detail pages. */
+.circuit-block-metric-rollup {
+  display: grid;
+  gap: 14px;
+}
+
+.circuit-block-metric-rollup__summary {
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.86rem;
+  gap: 8px 18px;
+}
+
+.circuit-block-metric-table-wrap {
+  margin-top: 0;
+}
+
+.circuit-block-metric-table th:first-child {
+  min-width: 180px;
+}
+
+.circuit-block-metric-table th:nth-child(2) {
+  min-width: 260px;
+}
+
+.circuit-block-metric-values {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.circuit-block-metric-values li {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(150px, 1fr) auto;
+}
+
+.circuit-block-metric-values li > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.circuit-block-metric-table__note {
+  line-height: 1.4;
+  margin: 8px 0 0;
+}
+
+.circuit-block-metric-missing {
+  margin-top: 8px;
+}
+
+.circuit-block-metric-missing summary {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.circuit-block-metric-missing ul {
+  color: var(--color-text-muted);
+  display: grid;
+  font-size: 0.78rem;
+  gap: 3px;
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
 .circuit-block-next-workspaces {
   display: grid;
   gap: 16px;
@@ -7236,6 +7578,19 @@ details[open] .trust-breakdown__toggle::before {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 8px;
+}
+
+/* Keeps current-pattern drift details readable inside the reuse-history table. */
+.instantiation-drift-list {
+  color: var(--color-text-muted);
+  display: grid;
+  font-size: 0.78rem;
+  gap: 4px;
+  line-height: 1.35;
+  list-style-position: outside;
+  margin: 8px 0 0 18px;
+  max-width: 420px;
+  padding: 0;
 }
 
 .form-row--inline {
@@ -7489,6 +7844,53 @@ details[open] .trust-breakdown__toggle::before {
   font-size: 0.84rem;
   line-height: 1.5;
   margin: 0;
+}
+
+/* Supply offers: compact commercial snapshot rollup for provider/source comparison. */
+.supply-offers-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+/* Supply offers: provider-level merge notes stay textual so they do not read as procurement approval cards. */
+.supply-provider-summary {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin: 0 0 12px;
+  padding: 10px 12px;
+}
+
+.supply-provider-summary span {
+  color: var(--color-text-muted);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.supply-provider-summary ul {
+  color: var(--color-text-muted);
+  display: grid;
+  font-size: 0.84rem;
+  gap: 4px;
+  line-height: 1.45;
+  list-style-position: outside;
+  margin: 0 0 0 18px;
+  padding: 0;
+}
+
+@media (max-width: 1100px) {
+  .supply-offers-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .supply-offers-summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .detail-unavailable-card {
@@ -9416,6 +9818,8 @@ details.detail-context-panel[open] > summary::after {
   .where-used-query-guidance,
   .where-used-search-form,
   .where-used-match-grid,
+  .tools-panel,
+  .tools-handoff-grid,
   .bom-import-panel__upload-row,
   .bom-import-panel__mapping-grid,
   .admin-queue-overview__header,
@@ -9628,7 +10032,12 @@ details.detail-context-panel[open] > summary::after {
   .quick-check-rail__metrics,
   .result-row__signals,
   .admin-hero__snapshot,
-  .projects-hero__snapshot {
+  .projects-hero__snapshot,
+  .tools-tablist,
+  .tools-fieldset,
+  .tools-fieldset--dense,
+  .tools-result-grid,
+  .tools-handoff-grid {
     grid-template-columns: 1fr;
   }
 
@@ -9644,6 +10053,16 @@ details.detail-context-panel[open] > summary::after {
   .results-panel__toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .site-intro--catalog,
+  .async-workflow-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .site-intro__actions,
+  .async-workflow-banner__actions {
+    justify-content: flex-start;
   }
 
   .results-filter-summary {
@@ -10128,6 +10547,60 @@ details.detail-context-panel[open] > summary::after {
   font-size: 0.85rem;
 }
 
+/* Inline async workflow status for catalog and compare pages that depend on the worker. */
+.async-workflow-banner {
+  align-items: start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
+.async-workflow-banner--danger {
+  border-left-color: var(--color-danger);
+}
+
+.async-workflow-banner--review {
+  border-left-color: var(--color-review);
+}
+
+.async-workflow-banner__copy {
+  display: grid;
+  gap: 3px;
+}
+
+.async-workflow-banner__copy span {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.async-workflow-banner__copy strong,
+.async-workflow-banner__copy p {
+  margin: 0;
+}
+
+.async-workflow-banner__copy p {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.async-workflow-banner__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 /* Inline PDF preview on part detail asset cards */
 .asset-inline-preview {
   margin-top: 0.75rem;
@@ -10295,6 +10768,50 @@ details.detail-context-panel[open] > summary::after {
 
 .compare-selection-tray__form input {
   min-width: 280px;
+}
+
+.compare-selection-tray__hint {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.compare-starter-examples {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.compare-starter-examples strong {
+  font-size: 0.9rem;
+}
+
+.compare-starter-examples div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compare-starter-examples a {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 6px 9px;
+  text-decoration: none;
+}
+
+.compare-starter-examples a:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent-hover);
+  text-decoration: none;
 }
 
 .compare-table-wrap {

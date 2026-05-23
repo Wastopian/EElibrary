@@ -6,16 +6,18 @@ import Link from "next/link";
 import React from "react";
 import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
+import { AsyncWorkflowStatusBanner } from "../../components/AsyncWorkflowStatusBanner";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
 import { OperatorChecklist } from "../../components/OperatorChecklist";
 import { ProviderLookupPanel } from "../../components/ProviderLookupPanel";
-import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, isApiClientError } from "../../lib/api-client";
+import { buildCompareUrl, fetchApiHealth, fetchPartSearchEnvelope, fetchSearchFacetsEnvelope, fetchSystemHealth, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, getQuickReadinessDataCoverage, getQuickReadinessSummary, getRecoveryWorkflowSummary, getSearchExportReadiness } from "../../lib/detail-view-model";
 import { buildCatalogTrustLineageBadges } from "../../lib/trust-lineage";
 import { importUiCopy } from "../../lib/import-ui-copy";
 import type { BadgeTone } from "@ee-library/ui";
+import type { SystemHealthResponse } from "@ee-library/shared";
 import type { CadAvailabilityFilter, CatalogDataSource, ConnectorClass, LifecycleStatus, PartApprovalStatus, PartReadinessStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
 import type { ApiHealth } from "../../lib/api-client";
 
@@ -49,12 +51,14 @@ type HomepageCatalogState =
       source: CatalogDataSource;
       warnings: string[];
       health: ApiHealth | null;
+      systemHealth: SystemHealthResponse | null;
     }
   | {
       status: "setup_required";
       code: string;
       message: string;
       health: ApiHealth | null;
+      systemHealth: SystemHealthResponse | null;
     };
 
 /** QuickLookupState makes no-match and ambiguity explicit before rendering a readiness answer. */
@@ -119,7 +123,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     return <HomepageSetupState catalogState={catalogState} />;
   }
 
-  const { facets, health, pagination, results, source, warnings } = catalogState;
+  const { facets, health, pagination, results, source, systemHealth, warnings } = catalogState;
   const catalogStats = buildCatalogStats(results, pagination.totalRecords);
   const providerSummary = buildProviderSummary(results, source, health);
   const resultRange = buildResultRange(pagination, results.length);
@@ -146,38 +150,26 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   });
   // Active context trims first-run framing so returning users can stay focused on search work.
   const hasActiveCatalogContext = activeFilterPills.length > 0 || typeof page === "number";
+  const resultsInitialMode = quickLookupState.status === "matched" ? "list" : "table";
 
   return (
     <main>
-      {hasActiveCatalogContext ? (
-        <section aria-label="Catalog context" className="site-intro site-intro--compact">
-          <p className="app-kicker">EE Library</p>
-          <h1>Parts catalog</h1>
-          <p className="site-intro__lede">Use the filters to narrow the list, or open a part to see its full record.</p>
-        </section>
-      ) : (
-        <section aria-label="What EE Library is" className="site-intro">
-          <p className="app-kicker">EE Library</p>
-          <h1>Find a part. Get its files. Trust what you ship.</h1>
+      <section aria-label="Catalog context" className="site-intro site-intro--compact site-intro--catalog">
+        <div>
+          <p className="app-kicker">Catalog</p>
+          <h1>{hasActiveCatalogContext ? "Parts catalog" : "Part lookup and review queue"}</h1>
           <p className="site-intro__lede">
-            Your engineering memory for parts, datasheets, footprints, and 3D models. Search a part below, or jump to projects, vendors, or saved circuit blocks.
+            {hasActiveCatalogContext
+              ? "Use the filters to narrow the list, or open a part to see its full record."
+              : "Use this when a project BOM needs a part check, missing CAD review, or supplier-backed record before the project can move forward."}
           </p>
-          <div className="site-intro__paths" role="navigation" aria-label="Quick paths">
-            <Link className="site-intro__path" href="#quick-check">
-              <strong>Search a part</strong>
-              <span>Type an MPN to see specs, files, and what is missing.</span>
-            </Link>
-            <Link className="site-intro__path" href="/projects">
-              <strong>Open a project</strong>
-              <span>See the parts in a build, plus uploads and BOMs.</span>
-            </Link>
-            <Link className="site-intro__path" href="/vendors">
-              <strong>Browse vendors</strong>
-              <span>PCB shops, sheet metal, and the people you trust.</span>
-            </Link>
-          </div>
-        </section>
-      )}
+        </div>
+        <div className="site-intro__actions" aria-label="Catalog shortcuts">
+          <Link className="button-link button-link--quiet" href="/projects">Back to projects</Link>
+          <Link className="button-link button-link--quiet" href="/catalog?cad=unavailable">Missing CAD</Link>
+          <Link className="button-link button-link--quiet" href="/catalog?approvalStatus=pending_review">Pending review</Link>
+        </div>
+      </section>
 
       <section aria-label="Catalog search" className="quick-check-workspace catalog-workbench-hero" id="quick-check">
         <div className="quick-check-workspace__layout">
@@ -239,6 +231,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             {warnings.length > 0 ? <p className="mode-warning">{warnings.join(" ")}</p> : null}
             {source === "seed_fallback" ? <p className="mode-warning">Showing local sample data for testing.</p> : null}
 
+            <AsyncWorkflowStatusBanner context="catalog" health={systemHealth} />
+
             <QuickLookupPanel noMatchProviderLookup={noMatchProviderLookup} state={quickLookupState} />
 
             <details className="catalog-import-drawer" id="import-by-mpn">
@@ -251,29 +245,31 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </section>
 
-      <details className="catalog-getting-started">
-        <summary>First time here? See 3 quick steps</summary>
-        <OperatorChecklist
-          primaryActionHref={primaryAction.href}
-          primaryActionLabel={primaryAction.label}
-          steps={[
-            {
-              detail: "Search for one part number first.",
-              label: "Step 1: Search"
-            },
-            {
-              detail: "Use filters to narrow the list, then pick the right row.",
-              label: "Step 2: Narrow down"
-            },
-            {
-              detail: "Open the full part page to decide what to do next.",
-              label: "Step 3: Open details"
-            }
-          ]}
-          summary="Simple flow for first-time users."
-          title="Catalog first-run checklist"
-        />
-      </details>
+      {results.length === 0 || quickLookupState.status !== "idle" ? (
+        <details className="catalog-getting-started">
+          <summary>First time here? See 3 quick steps</summary>
+          <OperatorChecklist
+            primaryActionHref={primaryAction.href}
+            primaryActionLabel={primaryAction.label}
+            steps={[
+              {
+                detail: "Search for one part number first.",
+                label: "Step 1: Search"
+              },
+              {
+                detail: "Use filters to narrow the list, then pick the right row.",
+                label: "Step 2: Narrow down"
+              },
+              {
+                detail: "Open the full part page to decide what to do next.",
+                label: "Step 3: Open details"
+              }
+            ]}
+            summary="Simple flow for first-time users."
+            title="Catalog first-run checklist"
+          />
+        </details>
+      ) : null}
 
       <div className="search-workspace">
         <aside className="filter-rail filter-rail--bar" aria-label="Search filters" id="catalog-filters">
@@ -430,7 +426,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           ) : null}
 
           {results.length > 0 ? (
-            <CatalogResultsPresentation initialMode="list" rows={catalogResultRows} />
+            <CatalogResultsPresentation initialMode={resultsInitialMode} rows={catalogResultRows} />
           ) : (
             <EmptyState
               body={
@@ -1033,9 +1029,10 @@ function formatLifecycleShort(status: string): string {
 
 async function loadHomepageCatalog(filters: PartSearchFilters): Promise<HomepageCatalogState> {
   const healthPromise = fetchApiHealth();
+  const systemHealthPromise = fetchSystemHealth();
 
   try {
-    const [health, facetsEnvelope, resultsEnvelope] = await Promise.all([healthPromise, fetchSearchFacetsEnvelope(filters), fetchPartSearchEnvelope(filters)]);
+    const [health, systemHealth, facetsEnvelope, resultsEnvelope] = await Promise.all([healthPromise, systemHealthPromise, fetchSearchFacetsEnvelope(filters), fetchPartSearchEnvelope(filters)]);
     const source = resultsEnvelope.source ?? facetsEnvelope.source ?? "database";
 
     return {
@@ -1045,10 +1042,11 @@ async function loadHomepageCatalog(filters: PartSearchFilters): Promise<Homepage
       results: resultsEnvelope.data,
       source,
       status: "ready",
+      systemHealth,
       warnings: [...new Set([...(facetsEnvelope.warnings ?? []), ...(resultsEnvelope.warnings ?? [])])]
     };
   } catch (error) {
-    return buildSetupCatalogState(error, await healthPromise);
+    return buildSetupCatalogState(error, await healthPromise, await systemHealthPromise);
   }
 }
 
@@ -1083,13 +1081,14 @@ function SearchPaginationControls({ filters, pagination }: { filters: PartSearch
   );
 }
 
-function buildSetupCatalogState(error: unknown, health: ApiHealth | null): HomepageCatalogState {
+function buildSetupCatalogState(error: unknown, health: ApiHealth | null, systemHealth: SystemHealthResponse | null): HomepageCatalogState {
   if (isApiClientError(error) && error.code === "DB_NOT_CONFIGURED") {
     return {
       code: error.code,
       health,
       message: "Catalog database is not configured, and explicit local seed fallback is disabled.",
-      status: "setup_required"
+      status: "setup_required",
+      systemHealth
     };
   }
 
@@ -1098,7 +1097,8 @@ function buildSetupCatalogState(error: unknown, health: ApiHealth | null): Homep
       code: error.code,
       health,
       message: error.message,
-      status: "setup_required"
+      status: "setup_required",
+      systemHealth
     };
   }
 
@@ -1106,7 +1106,8 @@ function buildSetupCatalogState(error: unknown, health: ApiHealth | null): Homep
     code: "API_UNAVAILABLE",
     health,
     message: "The API could not be reached, so the homepage cannot load catalog records.",
-    status: "setup_required"
+    status: "setup_required",
+    systemHealth
   };
 }
 

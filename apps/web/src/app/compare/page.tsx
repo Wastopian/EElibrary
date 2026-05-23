@@ -1,5 +1,5 @@
 /**
- * Side-by-side comparison for up to four catalog parts.
+ * File header: Renders the side-by-side comparison workspace for up to four catalog parts.
  */
 
 import Link from "next/link";
@@ -7,10 +7,12 @@ import React from "react";
 import { formatMetricLabel } from "@ee-library/shared/catalog-runtime";
 import { EmptyState, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import type { BadgeTone } from "@ee-library/ui";
+import { AsyncWorkflowStatusBanner } from "../../components/AsyncWorkflowStatusBanner";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import { CompareAssetPreviewBand } from "../../components/CompareAssetPreviewBand";
 import { CompareSelectionTray } from "../../components/CompareSelectionTray";
 import { CompareMissingPartsRecovery, CompareNoPartsRecovery } from "../../components/CompareRecoveryStates";
+import { fetchSystemHealth } from "../../lib/api-client";
 import { loadComparePage, type ComparePageState } from "../../lib/compare-page-loader";
 import {
   buildCompareAssetClassRows,
@@ -50,7 +52,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
   const raw = resolved.parts;
   const param = Array.isArray(raw) ? raw[0] : raw;
   const partIdentifiers = parsePartIdentifiersParam(typeof param === "string" ? param : undefined);
-  const compareState = await loadComparePage(partIdentifiers);
+  const [compareState, systemHealth] = await Promise.all([loadComparePage(partIdentifiers), fetchSystemHealth()]);
   const details = compareState.status === "ready" ? compareState.details : [];
 
   const records = detailsToRecords(details);
@@ -77,6 +79,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
       </header>
 
       {compareState.status === "ready" ? <CompareSelectionTray initialPartIds={partIdentifiers} /> : null}
+      <AsyncWorkflowStatusBanner context="compare" health={systemHealth} />
 
       {compareState.status === "setup_required" ? (
         <CompareSetupState state={compareState} />

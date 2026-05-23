@@ -71,7 +71,7 @@ Catalog presence is not treated as success. EE Library keeps part identity, data
 
 ## Product Direction
 
-These are the high-value workflows EE Library is built around. Most have **shipped** foundations today—see [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for exact boundaries. Basic **`/compare`** is shipped; **deeper compare** (connector/CAD-first matrices) and **calculators** remain planned until listed there.
+These are the high-value workflows EE Library is built around. Most have **shipped** foundations today—see [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for exact boundaries. Basic **`/compare`** and the first **`/tools`** scratch calculators are shipped; deeper compare and broader tool depth remain incremental until listed there.
 
 - **Find prior use before choosing a part**
 - **Separate imported data from reviewed, approved, and export-ready truth**
@@ -84,7 +84,7 @@ These are the high-value workflows EE Library is built around. Most have **shipp
 - **Part readiness, approval, and internal reuse**: distinguish imported, reviewed, approved, reusable, and export-ready parts.
 - **Evidence-based validation and asset trust**: preserve datasheets, source rows, validation results, review decisions, and file-backed CAD evidence.
 - **Connector buildability and known-good connector sets**: record mates, accessories, cables, tooling, confidence warnings, and working connector combinations.
-- **Reusable circuit blocks**: track proven subcircuits with parts, notes, constraints, and reuse context.
+- **Reusable circuit blocks**: track proven subcircuits with parts, notes, constraints, known risks, reuse history, and linked-part metric rollups.
 - **BOM health and risk review**: summarize lifecycle, approval, CAD/export, evidence, connector, and sourcing risk across a project.
 
 ## Who This Is For
@@ -114,7 +114,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/` and `/catalog` open into the dense catalog workbench (filters: readiness, approval, CAD, lifecycle, connector class, sort, etc.).
 - Exact no-match MPN searches first run an explicit provider lookup, then import the selected exact candidate from configured providers. Free sources are `jlcparts`, `digikey`, `mouser`, the local `kicad` CAD index, and `local-catalog`; `octopart` (Octopart via the paid Nexar API) is optional and only active when Nexar credentials are configured.
 - Part detail is answer-first: use decision, datasheet and CAD/export state, connector buildable set, provenance, approved substitutes, next actions.
-- Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, freshness warnings, stale refresh scheduling, retired-row handling, and no live-stock claim.
+- Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, provider-spread merge summaries, current/stale split, best current in-stock price tier, stale refresh scheduling, retired-row handling, and no live-stock claim.
 - Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
 - **File-grounded asset validators** (worker jobs): footprint geometry sanity (pad count vs pin count, body bounding box) and symbol pin-count cross-check against high-confidence datasheet extraction. Results write `asset_validation_records` with `provenance = 'generated'`; validators never auto-promote `validation_status`, `review_status`, or `export_status`. Part detail surfaces plain trust-check badges in the files area, and `/admin` has a CAD trust-check worklist for failed or review-required checks.
 
@@ -128,10 +128,11 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 **Engineering workspaces**
 
 - **`/compare`** — up to four parts from Catalog/detail actions or the in-page selection tray: key metrics, lifecycle, trust, readiness, approval, asset-class readiness, trust-stage diff, **side-by-side CAD preview band** (Symbol / Footprint / 3D model using the shared honesty matrix), connector context, and export bundle gate in one table.
+- **`/tools`** — local EE scratch calculators for voltage-divider tolerance/load shift, pull-up edge timing, and package power derating. Each tool produces a copyable evidence-note draft and writes no project, approval, validation, or export state.
 - **Asset PDF/image/3D preview** on part detail — when a stored PDF or supported image is `previewStatus: ready`, an inline preview appears; when a stored STEP (or other source 3D format) has a worker-generated viewer-only glTF/glb artifact, an inline lazy-loaded `<model-viewer>` is shown. The derived 3D preview never promotes the source asset's validation, approval, or export state. Reference-only files stay download / open in new tab only.
 - `/where-used` across parts, circuit blocks, connector sets (mates), and assets (bundle manifests).
 - `/evidence` vault with filters, review, and storage-backed attachments tied to projects, BOM lines, parts, findings, and blocks.
-- `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
+- `/circuit-blocks` library and detail: part roles, reuse signals, linked-part metrics with confidence, known risks, and instantiation into a project BOM.
 - `/connector-sets`: browse connector families, mate pairs, and project usage counts.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in`; raw API health remains available at `/system/health`.
 
@@ -142,14 +143,14 @@ Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTAT
 These remain product direction; they are **not** in the implementation-status matrix as shipped features (or are only **partial** there).
 
 - **Deeper compare** (richer datasheet-revision diff; CAD preview band is now shipped).
-- **Tools / EE calculators** page.
+- **Broader tools** beyond the first `/tools` scratchpads, especially BOM-adjacent and package/cable helpers.
 - **Subcategory** search facets until backed by persisted catalog data.
-- **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation (deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission) beyond current worker foundations.
+- **Broader** distributor/provider coverage, **broad** datasheet extraction, and **production-grade** automatic CAD generation (deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission) beyond current worker foundations.
 - **More file-grounded validators** (STEP integrity, footprint pad pitch vs package geometry) and richer validation cross-reference on the part record.
 
 ## Near-Term Product Priority
 
-After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED_ARCHIVE.md`](docs/TODO_COMPLETED_ARCHIVE.md)), the next high-leverage build follows [`AGENTS.md`](AGENTS.md) and root [`TODO.md`](TODO.md): deepen **asset preview**, then **export** reliability, **validation/trust**, then **deeper compare** and BOM-adjacent **tools**—without blurring shipped vs planned behavior.
+After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED_ARCHIVE.md`](docs/TODO_COMPLETED_ARCHIVE.md)), the next high-leverage build follows [`AGENTS.md`](AGENTS.md) and root [`TODO.md`](TODO.md): deepen **asset preview**, then **export** reliability, **validation/trust**, then **deeper compare** and broader BOM-adjacent **tools** beyond the first shipped scratchpads—without blurring shipped vs planned behavior.
 
 ## What EE Library Is Not
 
@@ -158,11 +159,11 @@ After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED
 - It is not an automatic claim that imported provider data is approved, validated, or export-ready.
 - It is not a loose notes app for circuits, connectors, and review decisions.
 - It is not a production CAD generator today.
-- It is not allowed to present **tools/calculators** or **deep compare** (connector/CAD-first matrices) as shipped until those capabilities exist and are listed in `docs/IMPLEMENTATION_STATUS.md`. A basic part compare route is listed when present.
+- It is not allowed to present **additional tools/calculators** or **deep compare** dimensions as shipped until those capabilities exist and are listed in `docs/IMPLEMENTATION_STATUS.md`.
 
 ## Current Boundaries
 
-- **`/compare`** (basic readiness metrics) and **`/system`** health are in the workspace sidebar. **`/tools`** (calculators) stays out of primary navigation until that route exists.
+- **`/compare`**, **`/tools`**, and **`/system`** health are in the workspace sidebar. `/tools` runs local scratch math and evidence-note drafting only; it does not write project memory or change any approval/export gate.
 - Exact-MPN import and supply-offer snapshots are not broad live distributor search.
 - Imported does not mean approved, CAD-verified, or export-ready.
 - BOM upload preserves raw context; matching and usage follow explicit operator actions and deterministic rules—weak rows do not silently become confirmed usage.

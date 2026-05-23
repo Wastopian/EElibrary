@@ -85,6 +85,17 @@ test("app navigation marks the system route as active inside system health pages
 });
 
 /**
+ * Verifies the tools workspace is visible once the dedicated route exists.
+ */
+test("app navigation marks the tools route as active inside calculator pages", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/tools" />);
+
+  assert.match(html, /Tools/u);
+  assert.match(html, /Run EE scratch calculations/u);
+  assert.match(html, /aria-current="page"[^>]*href="\/tools"/u);
+});
+
+/**
  * Verifies saved-view query links mark active state on the catalog route only.
  */
 test("app navigation marks the pending approval view as active when its catalog filter is applied", () => {

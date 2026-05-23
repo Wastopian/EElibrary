@@ -16,6 +16,7 @@ test("WorkerStatusBanner renders offline worker warning with pending queue count
       databaseUrlConfigured: true,
       health: buildHealth({
         acquisitionPending: 2,
+        exportAssemblyPending: 1,
         workerStatus: "offline"
       }),
       isLocalDev: true
@@ -24,6 +25,7 @@ test("WorkerStatusBanner renders offline worker warning with pending queue count
 
   assert.match(html, /Worker daemon is offline/u);
   assert.match(html, /Acquisition: 2 pending, 0 failed/u);
+  assert.match(html, /Export assembly: 1 pending, 0 failed/u);
   assert.match(html, /waiting for a worker/u);
 });
 
@@ -40,7 +42,7 @@ test("WorkerStatusBanner renders queue failure diagnostics while worker is onlin
     })
   );
 
-  assert.match(html, /Queued provider work has failures/u);
+  assert.match(html, /Queued background work has failures/u);
   assert.match(html, /Enrichment: 0 pending, 1 failed/u);
   assert.match(html, /operations:worker/u);
 });
@@ -66,12 +68,16 @@ function buildHealth({
   acquisitionPending = 0,
   enrichmentFailed = 0,
   enrichmentPending = 0,
+  exportAssemblyFailed = 0,
+  exportAssemblyPending = 0,
   workerStatus
 }: {
   acquisitionFailed?: number;
   acquisitionPending?: number;
   enrichmentFailed?: number;
   enrichmentPending?: number;
+  exportAssemblyFailed?: number;
+  exportAssemblyPending?: number;
   workerStatus: SystemHealthResponse["worker"]["status"];
 }): SystemHealthResponse {
   return {
@@ -88,8 +94,8 @@ function buildHealth({
         pending: enrichmentPending
       },
       exportBundleAssembly: {
-        failed: 0,
-        pending: 0
+        failed: exportAssemblyFailed,
+        pending: exportAssemblyPending
       }
     },
     worker: {

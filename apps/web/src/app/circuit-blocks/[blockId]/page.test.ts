@@ -48,6 +48,10 @@ test("circuit block detail renders part roles and evidence without overriding re
     assert.match(html, /Attach circuit evidence/u);
     assert.match(html, /Circuit review/u);
     assert.match(html, /does not approve the block/u);
+    assert.match(html, /Linked-part metrics/u);
+    assert.match(html, /Output Current Max/u);
+    assert.match(html, /0.2 A/u);
+    assert.match(html, /81% min/u);
     assert.match(html, /Next workspaces/u);
     assert.match(html, /Open where-used for ALPHA-POWER/u);
     assert.match(html, /Pick a project to instantiate/u);
@@ -55,6 +59,143 @@ test("circuit block detail renders part roles and evidence without overriding re
     assert.match(html, /Known risks/u);
     assert.match(html, /No known risks recorded/u);
     assert.match(html, /Recording or resolving a known risk does not approve/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies the page degrades to an empty metric state when an older API omits metricRollup.
+ */
+test("circuit block detail tolerates legacy responses without a metric rollup", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/circuit-blocks/cblock-alpha-power") {
+      const fixture = buildCircuitBlockDetailResponse();
+      delete (fixture as Partial<CircuitBlockDetailResponse>).metricRollup;
+      return jsonResponse({
+        data: fixture,
+        source: "database"
+      });
+    }
+
+    if (url.pathname === "/circuit-blocks/cblock-alpha-power/follow-ups") {
+      return jsonResponse({
+        data: buildCircuitBlockFollowUpsResponse("cblock-alpha-power"),
+        source: "database"
+      });
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderCircuitBlockDetailPage("cblock-alpha-power");
+
+    assert.match(html, /Linked-part metrics/u);
+    assert.match(html, /No linked-part metrics/u);
+    assert.match(html, /unavailable from this API response/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies reuse history shows whether a past project still matches the current pattern.
+ */
+test("circuit block detail renders instantiation current-pattern drift", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/circuit-blocks/cblock-alpha-power") {
+      const fixture = buildCircuitBlockDetailResponse();
+      fixture.instantiations = [
+        {
+          bomImport: {
+            columnMapping: {},
+            createdAt: "2026-05-02T12:00:00.000Z",
+            id: "bominst-alpha",
+            importStatus: "processed",
+            importSummary: {},
+            importedBy: "test-admin",
+            projectId: "project-alpha",
+            projectRevisionId: "rev-alpha-a",
+            sourceFilename: "Circuit block: Alpha power rail",
+            sourceFormat: "manual",
+            storageKey: null,
+            updatedAt: "2026-05-02T12:00:00.000Z"
+          },
+          instantiatedBomLineCount: 1,
+          instantiation: {
+            bomImportId: "bominst-alpha",
+            circuitBlockId: "cblock-alpha-power",
+            createdAt: "2026-05-02T12:00:00.000Z",
+            createdBy: "test-admin",
+            designatorPrefix: "U",
+            id: "cbinst-alpha",
+            includeOptional: false,
+            notes: null,
+            projectId: "project-alpha",
+            projectRevisionId: "rev-alpha-a"
+          },
+          patternDrift: {
+            currentRoleCount: 2,
+            instantiatedRoleCount: 1,
+            items: [
+              {
+                currentCircuitBlockPartId: "cbpart-alpha-power-cap",
+                currentPartId: "part-output-cap",
+                currentPartMpn: "GRM188R61E106KA73D",
+                detail: "Output capacitor (GRM188R61E106KA73D) is in the current pattern but not in this project instantiation.",
+                instantiatedBomLineId: null,
+                instantiatedPartId: null,
+                instantiatedPartMpn: null,
+                kind: "missing_current_role",
+                role: "Output capacitor",
+                severity: "drift"
+              }
+            ],
+            status: "drifted"
+          },
+          project: {
+            createdAt: "2026-05-01T00:00:00.000Z",
+            description: "Fixture project.",
+            id: "project-alpha",
+            name: "Alpha Controller",
+            owner: "Hardware",
+            projectKey: "ALPHA",
+            status: "active",
+            updatedAt: "2026-05-01T00:00:00.000Z"
+          },
+          revision: {
+            createdAt: "2026-05-01T00:00:00.000Z",
+            id: "rev-alpha-a",
+            projectId: "project-alpha",
+            releasedAt: null,
+            revisionLabel: "A",
+            revisionStatus: "draft",
+            sourceReference: "alpha-a",
+            updatedAt: "2026-05-01T00:00:00.000Z"
+          }
+        }
+      ];
+      return jsonResponse({ data: fixture, source: "database" });
+    }
+
+    if (url.pathname === "/circuit-blocks/cblock-alpha-power/follow-ups") {
+      return jsonResponse({
+        data: buildCircuitBlockFollowUpsResponse("cblock-alpha-power"),
+        source: "database"
+      });
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderCircuitBlockDetailPage("cblock-alpha-power");
+
+    assert.match(html, /Current pattern/u);
+    assert.match(html, /Drifted/u);
+    assert.match(html, /1 difference across 1\/2 scoped roles/u);
+    assert.match(html, /Output capacitor/u);
   } finally {
     restoreFetch();
   }
@@ -312,6 +453,52 @@ function buildCircuitBlockDetailResponse(): CircuitBlockDetailResponse {
         }
       }
     ],
+    metricRollup: {
+      boundary: "Linked-part metrics are a read-only datasheet rollup with source confidence. They do not approve the circuit block, approve linked parts, validate assets, or unlock export.",
+      entries: [
+        {
+          averageConfidenceScore: 0.81,
+          coverageStatus: "complete",
+          coveredOptionalRoleCount: 0,
+          coveredRequiredRoleCount: 1,
+          metricKey: "output_current_max",
+          minConfidenceScore: 0.81,
+          missingOptionalRoles: [],
+          missingRequiredRoles: [],
+          optionalRoleCount: 0,
+          requiredRoleCount: 1,
+          unit: "A",
+          values: [
+            {
+              blockPartId: "cbpart-alpha-power-ldo",
+              isRequired: true,
+              manufacturerName: "Texas Instruments",
+              metric: {
+                confidenceScore: 0.81,
+                id: "metric-memory-ldo-output-current",
+                lastUpdatedAt: "2026-05-01T12:20:00.000Z",
+                maxValue: null,
+                metricKey: "output_current_max",
+                metricValue: 0.2,
+                minValue: null,
+                partId: "part-memory-ldo",
+                sourceRecordId: "source-memory-ldo",
+                sourceRevisionId: "dsr-memory-ldo-a",
+                unit: "A"
+              },
+              mpn: "TPS7A02DBVR",
+              partId: "part-memory-ldo",
+              quantity: 1,
+              role: "Main LDO"
+            }
+          ]
+        }
+      ],
+      metricCount: 1,
+      rolesWithAnyMetricCount: 1,
+      state: "available",
+      totalRoleCount: 1
+    },
     instantiations: [],
     knownRisks: [],
     projectDependencies: [],

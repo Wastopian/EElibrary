@@ -402,6 +402,14 @@ function buildDetail(input: {
     evidence: [],
     instantiations: [],
     knownRisks: [],
+    metricRollup: {
+      boundary: "Linked-part metrics are read-only test context.",
+      entries: [],
+      metricCount: 0,
+      rolesWithAnyMetricCount: 0,
+      state: "empty",
+      totalRoleCount: 0
+    },
     parts: [],
     projectDependencies: [],
     state: "available",

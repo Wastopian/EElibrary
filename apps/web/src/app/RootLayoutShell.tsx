@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { AppNavigation } from "../components/AppNavigation";
 import { AppSidebarAccount } from "../components/AppSidebarAccount";
+import { SearchHotkey } from "../components/SearchHotkey";
 
 /** RootLayoutShellProps carries page content and optional font class names from the Next layout. */
 export interface RootLayoutShellProps {
@@ -28,6 +29,7 @@ export function RootLayoutShell({ children, fontClassName = "", showAccount = tr
         <a className="skip-link" href="#page-content">
           Skip to main content
         </a>
+        <SearchHotkey />
         <div className="app-shell">
           <aside aria-label="Primary workspace shell" className="app-sidebar">
             <Link className="app-sidebar__brand-link" href="/">
@@ -42,12 +44,14 @@ export function RootLayoutShell({ children, fontClassName = "", showAccount = tr
                 Search a part number
               </label>
               <input
+                aria-keyshortcuts="/ Control+K Meta+K"
                 aria-label="Search the catalog by part number"
                 autoComplete="off"
                 className="app-sidebar__search-input"
                 id="sidebar-search"
                 name="q"
                 placeholder="MPN or keyword"
+                title="Search parts — press / or Ctrl/Cmd+K"
                 type="search"
               />
             </form>

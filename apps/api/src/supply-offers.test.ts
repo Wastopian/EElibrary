@@ -34,8 +34,11 @@ test("readPartSupplyOffersFromDatabase returns source-linked commercial snapshot
     assert.equal(result.response.state, "available");
     assert.equal(result.response.boundary.includes("not live distributor availability"), true);
     assert.equal(result.response.summary.offerCount, 2);
+    assert.equal(result.response.summary.currentOfferCount, 1);
     assert.equal(result.response.summary.inStockOfferCount, 1);
     assert.equal(result.response.summary.staleOfferCount, 1);
+    assert.equal(result.response.summary.providerCount, 2);
+    assert.equal(result.response.summary.namedSupplierCount, 1);
     assert.deepEqual(result.response.summary.lowestUnitPrice, {
       currencyCode: "USD",
       minQuantity: 100,
@@ -44,6 +47,12 @@ test("readPartSupplyOffersFromDatabase returns source-linked commercial snapshot
       supplierName: "Digi-Key",
       unitPrice: 0.39
     });
+    assert.deepEqual(result.response.summary.lowestCurrentInStockUnitPrice, result.response.summary.lowestUnitPrice);
+    assert.equal(result.response.summary.providerSummaries.length, 2);
+    assert.equal(result.response.summary.providerSummaries[0]?.providerId, "octopart");
+    assert.equal(result.response.summary.providerSummaries[0]?.currentOfferCount, 1);
+    assert.equal(result.response.summary.providerSummaries[1]?.providerId, "local-catalog");
+    assert.equal(result.response.summary.providerSummaries[1]?.staleOfferCount, 1);
     assert.equal(result.response.offers[0]?.sourceRecordId, "source-alpha-future");
     assert.equal(result.response.offers[0]?.sourceUrl, "https://example.test/future");
     assert.equal(result.response.offers[0]?.supplierName, "Digi-Key");
@@ -71,6 +80,8 @@ test("readPartSupplyOffersFromDatabase returns empty state when no offers exist"
     assert.equal(result.response.state, "empty");
     assert.deepEqual(result.response.offers, []);
     assert.equal(result.response.summary.lowestUnitPrice, null);
+    assert.equal(result.response.summary.lowestCurrentInStockUnitPrice, null);
+    assert.equal(result.response.summary.providerSummaries.length, 0);
   } finally {
     setSupplyOfferPoolForTests(null);
     await pool.end();

@@ -20,10 +20,12 @@ test("compare empty recovery points users to catalog and projects", () => {
   const html = renderToStaticMarkup(React.createElement(CompareNoPartsRecovery));
 
   assert.match(html, /No parts selected/u);
+  assert.match(html, /Try a saved comparison/u);
+  assert.match(html, /TPS7A02DBVR \+ STM32G031K8T6/u);
+  assert.match(html, /C091 housing \+ mate/u);
   assert.match(html, /Find parts in Catalog/u);
   assert.match(html, /Open project BOMs/u);
   assert.doesNotMatch(html, /URL query string/u);
-  assert.doesNotMatch(html, /\?parts/u);
 });
 
 /**

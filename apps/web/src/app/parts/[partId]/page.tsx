@@ -1505,6 +1505,12 @@ function SupplyOffersPanel({ state, vendorSlugByName }: { state: PartSupplyOffer
 
   const { response } = state;
   const { summary } = response;
+  const providerSummaries = summary.providerSummaries ?? [];
+  const currentOfferCount = summary.currentOfferCount ?? response.offers.filter((offer) => !isSupplyOfferStale(offer.lastSeenAt, response.staleAfterDays)).length;
+  const providerCount = summary.providerCount ?? new Set(response.offers.map((offer) => offer.providerId)).size;
+  const namedSupplierCount = summary.namedSupplierCount ?? new Set(response.offers.map((offer) => offer.supplierName?.trim().toLowerCase()).filter(Boolean)).size;
+  const lowestCurrentInStockUnitPrice =
+    summary.lowestCurrentInStockUnitPrice ?? getLowestCurrentInStockSupplyPrice(response.offers, response.staleAfterDays);
 
   return (
     <div className="supply-offers-panel">
@@ -1512,23 +1518,39 @@ function SupplyOffersPanel({ state, vendorSlugByName }: { state: PartSupplyOffer
         <strong>Commercial snapshot.</strong> {response.boundary}
       </p>
 
-      <div className="detail-sourcing-grid" style={{ marginBottom: 12 }}>
+      <div className="detail-sourcing-grid supply-offers-summary-grid">
         <div>
           <span>Recorded offers</span>
           <strong>{summary.offerCount}</strong>
-          <p>{summary.inStockOfferCount} in-stock snapshot{summary.inStockOfferCount === 1 ? "" : "s"} recorded.</p>
+          <p>{currentOfferCount} current / {summary.inStockOfferCount} in-stock / {summary.staleOfferCount} stale.</p>
         </div>
         <div>
-          <span>Lowest price tier</span>
-          <strong>{summary.lowestUnitPrice ? formatSupplyPrice(summary.lowestUnitPrice.unitPrice, summary.lowestUnitPrice.currencyCode) : "No price tiers"}</strong>
-          <p>{summary.lowestUnitPrice ? `${formatSupplySourceLabel(summary.lowestUnitPrice)} at ${summary.lowestUnitPrice.minQuantity}+ units.` : "No provider price breaks are attached yet."}</p>
+          <span>Source spread</span>
+          <strong>{providerCount} provider{providerCount === 1 ? "" : "s"}</strong>
+          <p>{namedSupplierCount} named supplier{namedSupplierCount === 1 ? "" : "s"} across active snapshots.</p>
         </div>
         <div>
-          <span>Freshness</span>
+          <span>Best current in-stock tier</span>
+          <strong>{lowestCurrentInStockUnitPrice ? formatSupplyPrice(lowestCurrentInStockUnitPrice.unitPrice, lowestCurrentInStockUnitPrice.currencyCode) : "No current in-stock price"}</strong>
+          <p>{lowestCurrentInStockUnitPrice ? `${formatSupplySourceLabel(lowestCurrentInStockUnitPrice)} at ${lowestCurrentInStockUnitPrice.minQuantity}+ units.` : "Refresh supplier imports before comparing price."}</p>
+        </div>
+        <div>
+          <span>Newest snapshot</span>
           <strong>{summary.lastSeenAt ? formatDateTime(summary.lastSeenAt) : "Not seen"}</strong>
-          <p>{summary.staleOfferCount} offer{summary.staleOfferCount === 1 ? "" : "s"} older than {response.staleAfterDays} days.</p>
+          <p>{response.staleAfterDays}-day freshness window; stale rows stay visible for audit.</p>
         </div>
       </div>
+
+      {providerSummaries.length > 0 ? (
+        <div className="supply-provider-summary" aria-label="Provider merge summary">
+          <span>Provider merge summary</span>
+          <ul>
+            {providerSummaries.map((provider) => (
+              <li key={provider.providerId}>{formatSupplyProviderSummary(provider)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="ui-table-wrap">
         <table className="ui-table supply-offers-table">
@@ -3313,12 +3335,50 @@ function formatSupplyTerms(offer: SupplyOffering): string {
 }
 
 /**
+ * Formats one provider-level merge summary for the compact sourcing rollup.
+ */
+function formatSupplyProviderSummary(provider: PartSupplyOffersResponse["summary"]["providerSummaries"][number]): string {
+  const sourceCopy = `${provider.currentOfferCount}/${provider.offerCount} current`;
+  const supplierCopy = `${provider.namedSupplierCount} named supplier${provider.namedSupplierCount === 1 ? "" : "s"}`;
+  const stockCopy = `${provider.inStockOfferCount} in stock`;
+  const priceCopy = provider.lowestCurrentInStockUnitPrice
+    ? `best current in-stock ${formatSupplyPrice(provider.lowestCurrentInStockUnitPrice.unitPrice, provider.lowestCurrentInStockUnitPrice.currencyCode)}`
+    : "no current in-stock price";
+
+  return `${provider.providerId}: ${sourceCopy}, ${stockCopy}, ${supplierCopy}, ${priceCopy}.`;
+}
+
+/**
  * Selects the lowest price break for one offer and keeps the MOQ tie-break deterministic.
  */
 function getBestPriceBreak(priceBreaks: PriceBreak[]): PriceBreak | null {
   const sorted = [...priceBreaks].sort((left, right) => left.unitPrice - right.unitPrice || left.minQuantity - right.minQuantity);
 
   return sorted[0] ?? null;
+}
+
+/**
+ * Derives the best current in-stock price when an older API summary lacks the precomputed field.
+ */
+function getLowestCurrentInStockSupplyPrice(
+  offers: SupplyOffering[],
+  staleAfterDays: number
+): PartSupplyOffersResponse["summary"]["lowestUnitPrice"] {
+  const candidates = offers
+    .filter((offer) => offer.inventoryStatus === "in_stock" && offer.inventoryQuantity !== 0 && !isSupplyOfferStale(offer.lastSeenAt, staleAfterDays))
+    .flatMap((offer) =>
+      offer.priceBreaks.map((priceBreak) => ({
+        currencyCode: priceBreak.currencyCode,
+        minQuantity: priceBreak.minQuantity,
+        offeringId: offer.id,
+        providerId: offer.providerId,
+        supplierName: offer.supplierName,
+        unitPrice: priceBreak.unitPrice
+      }))
+    )
+    .sort((left, right) => left.unitPrice - right.unitPrice || left.minQuantity - right.minQuantity || left.providerId.localeCompare(right.providerId));
+
+  return candidates[0] ?? null;
 }
 
 /**

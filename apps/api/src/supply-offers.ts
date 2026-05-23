@@ -4,10 +4,9 @@
 
 import { Pool } from "pg";
 import { CatalogStoreError } from "./catalog-store";
-import { SUPPLY_OFFER_STALE_AFTER_DAYS } from "@ee-library/shared/supply-offers";
+import { buildPartSupplyOfferSummary, SUPPLY_OFFER_STALE_AFTER_DAYS } from "@ee-library/shared/supply-offers";
 import type {
   InventoryStatus,
-  LowestSupplyPriceSummary,
   PartSupplyOffersResponse,
   PriceBreak,
   SupplyOffering
@@ -118,16 +117,7 @@ function buildPartSupplyOffersResponse(partId: string, offers: SupplyOffering[])
  * Computes compact sourcing signals without converting supply data into approval truth.
  */
 function buildSupplyOfferSummary(offers: SupplyOffering[]): PartSupplyOffersResponse["summary"] {
-  const latestSeenAt = getLatestSeenAt(offers);
-  const lowestUnitPrice = getLowestUnitPrice(offers);
-
-  return {
-    inStockOfferCount: offers.filter((offer) => offer.inventoryStatus === "in_stock" && offer.inventoryQuantity !== 0).length,
-    lastSeenAt: latestSeenAt,
-    lowestUnitPrice,
-    offerCount: offers.length,
-    staleOfferCount: offers.filter((offer) => isStaleTimestamp(offer.lastSeenAt)).length
-  };
+  return buildPartSupplyOfferSummary(offers);
 }
 
 /**
@@ -242,52 +232,6 @@ function mapPriceBreak(row: DatabasePriceBreakRow): PriceBreak {
     supplyOfferingId: row.supply_offering_id,
     unitPrice: toNumber(row.unit_price)
   };
-}
-
-/**
- * Finds the newest last-seen timestamp across commercial snapshots.
- */
-function getLatestSeenAt(offers: SupplyOffering[]): string | null {
-  const timestamps = offers.map((offer) => Date.parse(offer.lastSeenAt)).filter((value) => Number.isFinite(value));
-
-  if (timestamps.length === 0) {
-    return null;
-  }
-
-  return new Date(Math.max(...timestamps)).toISOString();
-}
-
-/**
- * Finds the lowest recorded unit price while preserving its provider and MOQ context.
- */
-function getLowestUnitPrice(offers: SupplyOffering[]): LowestSupplyPriceSummary | null {
-  const candidates = offers.flatMap((offer) =>
-    offer.priceBreaks.map((priceBreak) => ({
-      currencyCode: priceBreak.currencyCode,
-      minQuantity: priceBreak.minQuantity,
-      offeringId: offer.id,
-      providerId: offer.providerId,
-      supplierName: offer.supplierName,
-      unitPrice: priceBreak.unitPrice
-    }))
-  );
-
-  candidates.sort((left, right) => left.unitPrice - right.unitPrice || left.minQuantity - right.minQuantity || left.providerId.localeCompare(right.providerId));
-
-  return candidates[0] ?? null;
-}
-
-/**
- * Reports whether a timestamp is older than the configured supply freshness window.
- */
-function isStaleTimestamp(timestamp: string): boolean {
-  const parsed = Date.parse(timestamp);
-
-  if (!Number.isFinite(parsed)) {
-    return true;
-  }
-
-  return Date.now() - parsed > SUPPLY_OFFER_STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
 }
 
 /**

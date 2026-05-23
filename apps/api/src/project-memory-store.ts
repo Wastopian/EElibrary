@@ -6,6 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { Pool, type PoolClient } from "pg";
 import { BomCsvParseError, buildBomImportPreview, countMappedBomFields, hasMappedHeader, mapBomRowsToDrafts, parseBomCsv, parseBomXlsx } from "@ee-library/shared/bom-csv";
+import { buildCircuitBlockInstantiationPatternDrift } from "@ee-library/shared/circuit-block-instantiation-drift";
+import { buildCircuitBlockMetricRollup } from "@ee-library/shared/circuit-block-metric-rollup";
 import {
   getCircuitBlockReuseHeadlineVerdict,
   matchesCircuitBlockReuseReadinessFilter
@@ -55,7 +57,9 @@ import type {
   ConnectorSetListResponse,
   ConnectorSetMatePair,
   LifecycleStatus,
+  MetricUnit,
   PartApprovalStatus,
+  PartMetric,
   PartReadinessStatus,
   ProjectRevisionCompareChangeKind,
   ProjectRevisionCompareIdentityKind,
@@ -897,6 +901,21 @@ interface DatabaseCircuitBlockPartDetailRow extends DatabaseCircuitBlockPartRow 
   readiness_status: CircuitBlockPartCatalogSummary["readinessStatus"];
   connector_class: CircuitBlockPartCatalogSummary["connectorClass"];
   blocker_count: string | number | null;
+}
+
+/** DatabaseMetricRow is one normalized datasheet metric row used by circuit-block rollups. */
+interface DatabaseMetricRow {
+  id: string;
+  part_id: string;
+  metric_key: string;
+  metric_value: string | number | null;
+  unit: MetricUnit;
+  min_value: string | number | null;
+  max_value: string | number | null;
+  confidence_score: string | number;
+  source_revision_id: string;
+  source_record_id: string | null;
+  last_updated_at: Date | string;
 }
 
 /** DatabaseWhereUsedPartSummaryRow is a compact part identity plus current readiness context. */
@@ -5912,6 +5931,43 @@ async function readCircuitBlockPartRecords(databasePool: Pool | PoolClient, circ
 }
 
 /**
+ * Reads normalized datasheet metrics for the parts linked into a circuit block.
+ */
+async function readPartMetricsForCircuitBlockParts(
+  databasePool: Pool | PoolClient,
+  parts: CircuitBlockPartRecord[]
+): Promise<PartMetric[]> {
+  const partIds = [...new Set(parts.map((part) => part.blockPart.partId))];
+
+  if (partIds.length === 0) {
+    return [];
+  }
+
+  const result = await databasePool.query<DatabaseMetricRow>(
+    `
+      SELECT
+        id,
+        part_id,
+        metric_key,
+        metric_value,
+        unit,
+        min_value,
+        max_value,
+        confidence_score,
+        source_revision_id,
+        source_record_id,
+        last_updated_at
+      FROM part_metrics
+      WHERE part_id = ANY($1::text[])
+      ORDER BY metric_key ASC, confidence_score DESC, last_updated_at DESC, id ASC
+    `,
+    [partIds]
+  );
+
+  return result.rows.map(mapMetricRow);
+}
+
+/**
  * Reads evidence attached to a circuit block or one of its part-role rows.
  */
 async function readCircuitBlockEvidenceAttachments(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<EvidenceAttachment[]> {
@@ -5932,14 +5988,14 @@ async function readCircuitBlockEvidenceAttachments(databasePool: Pool | PoolClie
 /**
  * Reads the instantiation history for one circuit block, joined with project, revision, and BOM import context.
  *
- * Returns events in newest-first order. Each row reports the count of BOM lines that still record
- * `instantiated_from_circuit_block_id = $1`, so engineers can see how many BOM rows the reuse event
- * actually placed (without making that count a trust signal — instantiation is engineering memory,
- * not part approval).
+ * Returns events in newest-first order. Each row reports the generated-line count and
+ * current-pattern drift state. Instantiation history is engineering memory, not part
+ * approval or export readiness.
  */
 async function readCircuitBlockInstantiationHistory(
   databasePool: Pool | PoolClient,
-  circuitBlockId: string
+  circuitBlockId: string,
+  currentPartRoles: CircuitBlockPartRecord[]
 ): Promise<CircuitBlockInstantiationHistoryRecord[]> {
   const result = await databasePool.query<DatabaseCircuitBlockInstantiationHistoryRow>(
     `
@@ -6004,14 +6060,76 @@ async function readCircuitBlockInstantiationHistory(
     [circuitBlockId]
   );
 
-  return result.rows.map(mapCircuitBlockInstantiationHistoryRow);
+  const generatedLinesByImport = await readCircuitBlockInstantiationBomLines(
+    databasePool,
+    circuitBlockId,
+    result.rows.map((row) => row.inst_bom_import_id)
+  );
+
+  return result.rows.map((row) => mapCircuitBlockInstantiationHistoryRow(row, currentPartRoles, generatedLinesByImport.get(row.inst_bom_import_id) ?? []));
+}
+
+/**
+ * Reads generated BOM lines for the instantiation history rows in one bounded batch.
+ */
+async function readCircuitBlockInstantiationBomLines(
+  databasePool: Pool | PoolClient,
+  circuitBlockId: string,
+  bomImportIds: string[]
+): Promise<Map<string, BomLine[]>> {
+  if (bomImportIds.length === 0) {
+    return new Map();
+  }
+
+  const result = await databasePool.query<DatabaseBomLineRow>(
+    `
+      SELECT
+        id,
+        bom_import_id,
+        project_id,
+        project_revision_id,
+        row_number,
+        designators,
+        quantity,
+        raw_mpn,
+        raw_manufacturer,
+        raw_description,
+        raw_supplier_reference,
+        raw_notes,
+        raw_row_payload,
+        matched_part_id,
+        match_status,
+        match_confidence_score,
+        instantiated_from_circuit_block_id,
+        instantiated_from_circuit_block_part_id,
+        instantiated_at,
+        created_at,
+        updated_at
+      FROM bom_lines
+      WHERE instantiated_from_circuit_block_id = $1
+        AND bom_import_id = ANY($2::text[])
+      ORDER BY bom_import_id ASC, row_number ASC, id ASC
+    `,
+    [circuitBlockId, bomImportIds]
+  );
+
+  const byImportId = new Map<string, BomLine[]>();
+
+  for (const row of result.rows) {
+    const line = mapBomLineRow(row);
+    byImportId.set(line.bomImportId, [...(byImportId.get(line.bomImportId) ?? []), line]);
+  }
+
+  return byImportId;
 }
 
 /**
  * Maps one joined instantiation row into the shared history record.
  */
 function mapCircuitBlockInstantiationHistoryRow(
-  row: DatabaseCircuitBlockInstantiationHistoryRow
+  row: DatabaseCircuitBlockInstantiationHistoryRow,
+  currentPartRoles: CircuitBlockPartRecord[],
+  generatedBomLines: BomLine[]
 ): CircuitBlockInstantiationHistoryRecord {
   const project: Project = {
     createdAt: toIsoTimestamp(row.project_created_at),
@@ -6069,6 +6187,11 @@ function mapCircuitBlockInstantiationHistoryRow(
     bomImport,
     instantiatedBomLineCount: toNumber(row.bom_line_count),
     instantiation,
+    patternDrift: buildCircuitBlockInstantiationPatternDrift({
+      currentPartRoles,
+      includeOptional: instantiation.includeOptional,
+      instantiatedBomLines: generatedBomLines
+    }),
     project,
     revision
   };
@@ -6085,12 +6208,15 @@ async function buildCircuitBlockDetail(databasePool: Pool | PoolClient, circuitB
     return null;
   }
 
-  const [parts, evidence, projectDependenciesResult, instantiations, knownRisks] = await Promise.all([
+  const [parts, evidence, projectDependenciesResult, knownRisks] = await Promise.all([
     readCircuitBlockPartRecords(databasePool, circuitBlockId),
     readCircuitBlockEvidenceAttachments(databasePool, circuitBlockId),
     readCircuitBlockProjectDependenciesFromDatabase(circuitBlockId),
-    readCircuitBlockInstantiationHistory(databasePool, circuitBlockId),
     readCircuitBlockKnownRisks(databasePool, circuitBlockId)
+  ]);
+  const [instantiations, linkedPartMetrics] = await Promise.all([
+    readCircuitBlockInstantiationHistory(databasePool, circuitBlockId, parts),
+    readPartMetricsForCircuitBlockParts(databasePool, parts)
   ]);
 
   const projectDependencies = projectDependenciesResult.status === "available" ? projectDependenciesResult.dependencies : [];
@@ -6101,6 +6227,7 @@ async function buildCircuitBlockDetail(databasePool: Pool | PoolClient, circuitB
     evidence,
     instantiations,
     knownRisks,
+    metricRollup: buildCircuitBlockMetricRollup(parts, linkedPartMetrics),
     parts,
     projectDependencies,
     state: "available",
@@ -7531,6 +7658,25 @@ function mapCircuitBlockPartDetailRow(row: DatabaseCircuitBlockPartDetailRow): C
       partId: row.part_id,
       readinessStatus: row.readiness_status
     }
+  };
+}
+
+/**
+ * Maps a normalized metric row into the shared PartMetric contract.
+ */
+function mapMetricRow(row: DatabaseMetricRow): PartMetric {
+  return {
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    maxValue: toNullableNumber(row.max_value),
+    metricKey: row.metric_key,
+    metricValue: toNullableNumber(row.metric_value),
+    minValue: toNullableNumber(row.min_value),
+    partId: row.part_id,
+    sourceRecordId: row.source_record_id,
+    sourceRevisionId: row.source_revision_id,
+    unit: row.unit
   };
 }
 
