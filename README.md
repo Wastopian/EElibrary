@@ -136,11 +136,30 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/connector-sets`: browse connector families, mate pairs, and project usage counts.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in`; raw API health remains available at `/system/health`.
 
+**Team governance (foundation)**
+
+- **Audit log** — request-pipeline middleware records every unsafe (mutating) API call: actor, role, target, action, outcome, and hashed source hints (never request bodies, secrets, or document bytes). Per-entity activity strips render on part/project detail and an admin timeline lists recent events.
+- **Project revision approval gate** — a reviewer approves or requests changes on the diff between two project revisions, pinned to the exact diff fingerprint reviewed. Single-stage today; it decides revision review only and never approves parts or unlocks export.
+- **Controlled document revisions, ACLs, and redlines** — datasheets/drawings carry revision label, lifecycle, access level (`public` / `internal` / `restricted` / `itar_controlled`), expiry, and supersession; `user | team | role` ACL principals with `view | review | approve | admin` permissions back a per-asset download-grant resolver; page-anchored redlines capture review notes with severity and resolution.
+- **Vendor notebook** — `/vendors` remembers trusted fab/assembly/sheet-metal suppliers with files and usage references back into project work.
+
 Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
 
 ## Still Planned (not shipped)
 
 These remain product direction; they are **not** in the implementation-status matrix as shipped features (or are only **partial** there).
+
+**Team readiness (next major direction — best tool for engineering teams):**
+
+- **Role-based access control** beyond `admin | user` (viewer / contributor / reviewer / approver / exporter / admin, with per-project / per-program scope).
+- **OIDC single sign-on** (Okta / Azure AD / Ping).
+- **Concurrent editing safety** (optimistic locking + presence indicators).
+- **Multi-stage ECN/ECO** change workflow (the shipped approval gate is single-stage).
+- **Real ECAD/MCAD emission** (deterministic KiCad library output, then a SolidWorks add-in).
+- **Live distributor pricing/stock** (read-only Octopart/Nexar beside the shipped supply-offer snapshots).
+- **PLM / ERP / requirements bridges** (Aras, ERP CSV/AVL export, Jama).
+
+**Workbench depth (incremental):**
 
 - **Deeper compare** (richer datasheet-revision diff; CAD preview band is now shipped).
 - **Broader tools** beyond the first `/tools` scratchpads, especially BOM-adjacent and package/cable helpers.
@@ -150,7 +169,7 @@ These remain product direction; they are **not** in the implementation-status ma
 
 ## Near-Term Product Priority
 
-After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED_ARCHIVE.md`](docs/TODO_COMPLETED_ARCHIVE.md)), the next high-leverage build follows [`AGENTS.md`](AGENTS.md) and root [`TODO.md`](TODO.md): deepen **asset preview**, then **export** reliability, **validation/trust**, then **deeper compare** and broader BOM-adjacent **tools** beyond the first shipped scratchpads—without blurring shipped vs planned behavior.
+After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED_ARCHIVE.md`](docs/TODO_COMPLETED_ARCHIVE.md)) and the governance foundation (audit log, approval gate, document control, vendors), the next major direction is becoming the **best tool for engineering teams**: make the single-operator memory genuinely multi-engineer. In leverage order (see [`docs/ROADMAP.md`](docs/ROADMAP.md) and root [`TODO.md`](TODO.md)): **RBAC expansion** → **OIDC SSO** → **multi-stage ECN/ECO** → **concurrent editing** → **real ECAD emission** → **live distributor data**. Workbench depth (deeper compare, broader `/tools`, more validators) continues incrementally in parallel—without blurring shipped vs planned behavior.
 
 ## What EE Library Is Not
 
@@ -168,6 +187,8 @@ After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED
 - Imported does not mean approved, CAD-verified, or export-ready.
 - BOM upload preserves raw context; matching and usage follow explicit operator actions and deterministic rules—weak rows do not silently become confirmed usage.
 - Multi-provider conflict handling is **partial**; richer merge policy and extraction/generation depth remain **planned** (see implementation status).
+- Access control is still **`admin | user`** only. Scoped roles (reviewer / approver / exporter, per-project scope), OIDC SSO, and enforced ITAR/EAR download gating are **planned** — the audit log, approval gate, and document-control ACLs are the shipped foundation they build on.
+- The project revision approval gate is **single-stage** today; multi-stage ECN/ECO is planned. The approval gate decides revision review only and never approves parts or unlocks export.
 
 ## Monorepo Layout
 

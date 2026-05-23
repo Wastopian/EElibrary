@@ -30,6 +30,25 @@ Use this list to close gaps between **documented intent**, **`IMPLEMENTATION_STA
 
 ## Active work
 
+### 0. Team readiness — next major direction (best tool for engineering teams)
+
+The shipped product is a strong **single-operator** engineering memory. The next arc makes it genuinely **multi-engineer** — shared, governed, accountable, concurrent — without weakening imported ≠ approved ≠ export-ready. Full vision: `docs/ROADMAP.md` ("The Best Tool for Engineering Teams") and `docs/IMPLEMENTATION_STATUS.md` ("Team Collaboration and Governance").
+
+**Governance foundation already shipped (do not rebuild):** request-pipeline **audit log** (`apps/api/src/audit-log.ts`, `flushRequestAuditEvent`), single-stage **project revision approval gate** (`ProjectRevisionApprovalGatePanel`), **controlled document revisions / ACL / redlines** (`apps/api/src/document-control.ts`, incl. `itar_controlled` access level + download-grant resolver), and a **vendor notebook** (`/vendors`).
+
+Active, in leverage order:
+
+1. **RBAC expansion** — move beyond `admin | user` (`apps/web/src/auth.ts`, `apps/web/src/middleware.ts`) to scoped roles (viewer / contributor / reviewer / approver / exporter / admin) with per-project / per-program scope. Generalize the shipped document-control ACL principal/permission model (`user|team|role` × `view|review|approve|admin`) — do not invent a second model. **Highest-leverage next piece.** Honesty: roles decide who *may* act; the shipped audit log records what they *did*.
+2. **OIDC SSO** — Okta / Azure AD / Ping through the existing NextAuth shell.
+3. **ECN/ECO multi-stage change workflow** — grow the shipped single-stage approval gate + document redlines into multi-stage approvals with effectivity dates, assignment, and notifications.
+4. **Concurrent editing safety** — optimistic version checks + lightweight presence ("Sarah is viewing this"); no full CRDT for v1.
+5. **Real ECAD/MCAD emission** — deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission first, then a SolidWorks add-in, so export lands in the engineer's tool. Generated library content stays `generated`, never `official`.
+6. **Live distributor pricing/stock** — read-only Octopart/Nexar + distributor data beside the shipped supply-offer summary; never live procurement authority.
+7. **ITAR/EAR part classification + enforced download gating** — build on the shipped document access levels + download-grant resolver; depends on RBAC (#1).
+8. **Interoperability bridges** — PLM (Aras first), ERP CSV/AVL export, Jama requirements linkage.
+
+Cross-cutting: every new write path stays audited + provenance-bearing; every new surface keeps explicit empty / loading / error / `setup_required`.
+
 ### 1. Documentation and contract truth
 
 These keep onboarding and boundaries honest for contributors and operators.

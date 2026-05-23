@@ -465,9 +465,36 @@ Notes:
 
 ---
 
-## Planned Project Memory Screens
+## Team Collaboration and Governance
 
-The screens in this section are planned/future. They should not be presented as shipped until implementation status confirms them.
+As more than one engineer relies on the same memory, the UI must make access, accountability, and controlled change legible — using the same calm, honest, scannable language as the rest of the product. The governance foundation is shipped; the role-aware surfaces are the next UX direction.
+
+### Shipped governance surfaces
+
+- **Activity / audit history** — per-entity activity strips on part and project detail, plus an admin timeline. Each entry reads as a plain sentence: who did what, to which target, with what outcome. Never expose raw request bodies, tokens, or hashes-as-identity; hashes are integrity hints, not user-facing identifiers.
+- **Project revision approval gate** — a clear approve / request-changes control over a visible revision diff, with the reviewed diff fingerprint shown so the decision's scope is unmistakable. Disabled or pending states must say exactly what is being decided and that it does not approve parts or unlock export.
+- **Document control** — controlled document revisions show lifecycle, access level (incl. `itar_controlled`), expiry, and "replaces rev X" supersession; redlines are page-anchored and severity-tagged. A blocked download must say *why* (access level / ACL), not fail silently.
+- **Vendor notebook** — `/vendors` reads like a trusted-supplier address book with files and usage references, not a procurement catalog.
+
+### Planned role-aware UX
+
+- **Roles and scope** — surfaces must adapt to the viewer's role (viewer / contributor / reviewer / approver / exporter / admin) and project scope: hide or disable actions the role cannot perform, and explain *why* an action is unavailable rather than hiding it without a reason.
+- **SSO sign-in** — a single, unsurprising OIDC sign-in path.
+- **Multi-stage ECN/ECO** — show the change's current stage, who must act next, and the redline diff, as a calm pipeline rather than a noisy workflow engine.
+- **Presence and concurrency** — lightweight "who else is here" indicators and clear, recoverable conflict messages instead of last-write-wins surprises.
+
+Governance honesty rules:
+
+- authorization state (who *may* act) and audit state (what *was* done) are shown as distinct concepts, never merged into one vague "status"
+- disabled governance actions explain the missing role, scope, or access level
+- an approval's scope is always visible; nothing implies an approval is broader than it is
+- governance never collapses the imported → reviewed → approved → verified_for_export lineage
+
+---
+
+## Project Memory Screens (shipped)
+
+> **Status note (2026-05-23):** The screens in this section have **shipped** (projects, BOM import/mapping, BOM health, where-used, circuit blocks, evidence). They are kept here as the UX reference for those surfaces; they are no longer "planned." Defer to `docs/IMPLEMENTATION_STATUS.md` for current status.
 
 ### Projects Dashboard
 Purpose:

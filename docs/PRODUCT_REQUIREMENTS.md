@@ -120,7 +120,29 @@ Target risk dimensions:
 - unresolved duplicate or source-conflict issues
 - internal reuse and where-used context
 
-The BOM health dashboard is planned and is not fully implemented today.
+The BOM health dashboard, fleet risk, revision compare, follow-ups, and lifecycle regression findings are shipped today (see `docs/IMPLEMENTATION_STATUS.md`).
+
+### 7. Team Collaboration, Roles, and Change Governance
+
+The product must work for a **team**, not just one librarian. As more than one engineer relies on the same engineering memory, the platform must make access, accountability, and change control first-class — without weakening the imported ≠ approved ≠ export-ready discipline.
+
+Foundation now shipped:
+
+- a request-pipeline **audit log** of every unsafe API action (actor, role, target, outcome, hashed source hints)
+- a single-stage **project revision approval gate** pinned to the reviewed diff fingerprint
+- **controlled document revisions** with lifecycle, access levels (`public` / `internal` / `restricted` / `itar_controlled`), expiry, supersession, `user | team | role` ACL principals (`view | review | approve | admin`), a per-asset download-grant resolver, and page-anchored redlines
+- a **vendor notebook** for trusted suppliers
+
+Target capabilities (planned):
+
+- **role-based access control** beyond `admin | user`: viewer, contributor, reviewer, approver, exporter, admin, with per-project / per-program scope (generalizing the shipped document-control ACL model)
+- **OIDC single sign-on** (Okta / Azure AD / Ping)
+- **multi-stage ECN/ECO** change workflow with effectivity dates, assignment, and notifications
+- **concurrent editing safety** (optimistic locking + presence indicators)
+- **enforced ITAR/EAR classification and download gating** built on the shipped document access levels
+- **real ECAD/MCAD emission** and **PLM / ERP / requirements bridges** so a team's exports and records flow into the rest of its stack
+
+Governance rule: roles decide who *may* act; the audit log records what they *did*; the two stay separate, and a scoped approval never widens silently.
 
 ---
 
@@ -225,7 +247,7 @@ The current working product is the part-readiness foundation:
 - admin surfaces for review, promotion, failed import, validation, and issue-driven operations queues
 - system health reporting for API, database, storage, worker heartbeat, and async queue state
 
-This slice is intentionally narrower than the full engineering-memory mission.
+This part-readiness foundation has since been joined by the full **project/BOM memory** track (projects, revisions, CSV/XLSX BOM intake and matching, confirmed usage, where-used, BOM health and fleet risk, evidence vault, circuit blocks, connector-set catalog, export bundles with cryptographic provenance) and the **team-governance foundation** (audit log, project revision approval gate, controlled document revisions/ACL/redlines, vendor notebook). `docs/IMPLEMENTATION_STATUS.md` is authoritative for exactly what is shipped. The remaining mission is the **multi-engineer** arc in pillar 7 above: scoped RBAC, SSO, multi-stage ECN/ECO, concurrency, and real CAD emission.
 
 ---
 
@@ -544,7 +566,7 @@ The MVP should not attempt to:
 - scrape the entire internet in real time
 - support every CAD tool immediately
 - auto-generate perfect CAD assets for arbitrary parts
-- provide full enterprise permissions/auth complexity
+- provide full enterprise permissions/auth complexity in the MVP itself (scoped RBAC, OIDC SSO, and enforced ITAR gating are deliberately sequenced as the post-MVP **team-readiness** direction in pillar 7, building on the shipped audit log and document-control ACL foundation — not crammed into the initial slice)
 - become a distributor marketplace
 - replace formal engineering review for production-critical designs
 - claim universal connector compatibility across every vendor family without evidence

@@ -11,7 +11,13 @@ search -> import exact MPN when needed -> inspect -> trust -> export
 project -> BOM intake -> match -> usage -> health / where-used / evidence / reuse -> export when verified
 ```
 
-The next major direction is **workbench depth** without losing honesty:
+The next major direction is to become the **best tool for engineering teams**: take the strong single-operator engineering memory that ships today and make it genuinely **multi-engineer** — shared, governed, accountable, and concurrent — without losing honesty:
+
+```txt
+single-operator memory -> roles + SSO -> audited change governance -> concurrent reuse -> export into the team's tools
+```
+
+Workbench depth continues in parallel as incremental work:
 
 ```txt
 asset preview and trust -> compare and selection tools -> calculators and BOM-adjacent utilities
@@ -21,15 +27,69 @@ asset preview and trust -> compare and selection tools -> calculators and BOM-ad
 
 ## Roadmap Priority (next)
 
-After the FUNC1–FUNC18 wave (history: `docs/TODO_COMPLETED_ARCHIVE.md`), near-term product priority follows `AGENTS.md` and root `TODO.md`:
+After the FUNC1–FUNC18 wave (history: `docs/TODO_COMPLETED_ARCHIVE.md`), the governance **foundation** is now shipped — request-pipeline **audit log**, single-stage **project revision approval gate**, **controlled document revisions / ACL / redlines**, and a **vendor notebook** (see `docs/IMPLEMENTATION_STATUS.md`). Near-term priority now leads with the team arc, then continues workbench depth:
 
-1. **Asset registry and preview (incremental)** — FUNC17 ships **stored PDF** iframe preview when preview state + storage align; extend next with non-PDF honesty rules (STEP/thumbnails only when real previews exist).
-2. **Export adapters** — keep bundle generation deterministic and visible end-to-end.
-3. **Validation and trust scoring** — surface evidence without conflating approval and export.
-4. **Compare (incremental)** — FUNC18 ships `/compare` for metrics/readiness/bundle gate; add connector/CAD depth when data contracts are ready.
-5. **BOM tools and calculators** — first `/tools` scratchpads are shipped; broaden only where the output can flow back into project evidence or review.
+1. **Role-based access control (RBAC)** — move beyond `admin | user` to scoped roles (viewer / contributor / reviewer / approver / exporter / admin) with per-project / per-program scope, generalizing the shipped document-control ACL model. This is the highest-leverage next piece for team use.
+2. **OIDC single sign-on** — Okta / Azure AD / Ping via NextAuth so a team adopts without a second password store.
+3. **ECN/ECO multi-stage change workflow** — grow the shipped single-stage approval gate and document redlines into multi-stage approvals with effectivity dates, assignment, and notifications.
+4. **Concurrent editing safety** — optimistic version checks plus lightweight presence so two engineers never clobber one BOM/project.
+5. **Real ECAD/MCAD emission** — deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission first, then a SolidWorks add-in, so "export" lands in the engineer's tools.
+6. **Workbench depth (incremental, parallel)** — richer datasheet-revision diff in `/compare`, broader BOM-adjacent `/tools`, and more file-grounded validators; broaden only where output can flow back into project evidence or review.
+7. **Live distributor pricing/stock** — read-only Octopart/Nexar + distributor data beside the shipped supply-offer snapshots, never live procurement authority.
 
 `docs/IMPLEMENTATION_STATUS.md` is the source of truth for what is already shipped; this section is forward-looking only.
+
+---
+
+## Next Major Direction: The Best Tool for Engineering Teams
+
+EE Library is already a strong **single-operator** engineering memory with honest trust boundaries. The next arc makes that memory genuinely **multi-engineer** so a whole hardware team — not just one librarian — depends on it daily. Each pillar builds on a foundation that already ships; none of them is allowed to weaken imported ≠ approved ≠ export-ready or generated ≠ official.
+
+### Pillar 1 — Identity and access (RBAC + scopes)
+
+- move beyond `admin | user` to scoped roles: viewer, contributor, reviewer, approver, exporter, admin
+- per-project / per-program scope so access matches responsibility
+- generalize the **shipped** document-control ACL principal/permission model (`user | team | role` × `view | review | approve | admin`) into a platform-wide policy
+- outcome: "who may approve" and "who may export" become first-class, enforced concepts
+
+### Pillar 2 — Single sign-on (OIDC)
+
+- Okta / Azure AD / Ping through the existing NextAuth shell
+- outcome: a team adopts without managing a second password store; gates most enterprise conversations
+
+### Pillar 3 — Accountability (audit everywhere) — foundation shipped
+
+- request-pipeline audit middleware records every unsafe API method (actor, role, target, outcome, hashed source hints); per-entity activity strips and an admin timeline exist
+- next: broaden coverage assertions and surface history wherever a decision is made
+- outcome: the governance spine every later feature depends on
+
+### Pillar 4 — Change management (ECN/ECO)
+
+- grow the **shipped** single-stage project revision approval gate and document redlines into a multi-stage engineering-change workflow
+- effectivity dates, assignment, notifications, redline diffs
+- outcome: a real engineering change runs end-to-end with a visible, auditable trail
+
+### Pillar 5 — Concurrency (presence + optimistic locking)
+
+- optimistic version checks plus lightweight presence ("Sarah is viewing this")
+- outcome: multiple engineers on one BOM/project without silent data loss; full CRDT is out of scope for v1
+
+### Pillar 6 — Export into the team's tools (ECAD/MCAD emission)
+
+- deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission first, then a SolidWorks add-in
+- outcome: "export" stops being a file bundle and starts landing verified parts in the engineer's design tool
+
+### Pillar 7 — Live commercial truth (distributor read)
+
+- read-only Octopart/Nexar + distributor pricing/stock beside the shipped supply-offer summary
+- outcome: closes the "pricing not shown" gap while staying a provenance-stamped snapshot, never procurement authority
+
+### Pillar 8 — Interoperability (PLM / ERP / requirements bridges)
+
+- PLM (Aras first, then Teamcenter / Windchill), ERP CSV / AVL export, Jama requirements linkage
+- outcome: coexist with the incumbent stack (augmentation) and prove EE Library handles real engineering data (replacement)
+
+**Cross-cutting honesty for every pillar:** new write paths stay audited and provenance-bearing; new states keep explicit empty / loading / error / `setup_required`; generated and imported data never silently cross into approved or export-ready.
 
 ---
 
@@ -117,9 +177,11 @@ Outcome:
 
 ---
 
-## Next Major Direction: Project Memory Foundation
+## Delivered Direction: Project Memory Foundation
 
-This is the next product expansion. It should be implemented without weakening the shipped part-readiness truth boundaries.
+> **Status note (2026-05-23):** This expansion has **shipped**. Phases PM1–PM7 below are kept for historical context, but the project/BOM memory, where-used, evidence vault, circuit blocks, BOM health, and export-bundle tracks are live today. The per-phase "Still planned" notes are stale — defer to `docs/IMPLEMENTATION_STATUS.md` for current status. The forward-looking work has moved to **The Best Tool for Engineering Teams** above.
+
+This was the project expansion built on top of part readiness, without weakening the shipped part-readiness truth boundaries.
 
 ### Phase PM1: Project Records
 

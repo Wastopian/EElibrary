@@ -6,7 +6,7 @@ EE Library is a provider-neutral **private engineering memory system for hardwar
 
 Provider/catalog data is input. The product center is internal engineering truth around parts, BOMs, connectors, reusable circuit blocks, evidence, approvals, and risk over time.
 
-The architecture is designed around eight core goals:
+The architecture is designed around nine core goals:
 
 1. maintain a canonical engineering record for each part
 2. model connector compatibility and buildable relationships explicitly
@@ -14,10 +14,11 @@ The architecture is designed around eight core goals:
 4. support missing-CAD recovery through typed workflows
 5. determine and expose **part readiness** for engineering use
 6. allow export only when assets are truly ready and appropriately reviewed
-7. support planned project/BOM memory and where-used history
-8. support planned evidence-backed circuit reuse and BOM health/risk review
+7. support project/BOM memory and where-used history (shipped)
+8. support evidence-backed circuit reuse and BOM health/risk review (shipped)
+9. support **multi-engineer collaboration and governance** — accountable actions, scoped access, and controlled change — without weakening trust boundaries
 
-The shipped foundation helps users move from a raw manufacturer part number to an **engineer-ready internal part record** with explicit trust, compatibility, CAD readiness, risk visibility, and approval state. The planned project-memory expansion will let teams import BOMs, preserve usage history, review BOM risk, and reuse known-good evidence across projects.
+The shipped foundation helps users move from a raw manufacturer part number to an **engineer-ready internal part record** with explicit trust, compatibility, CAD readiness, risk visibility, and approval state, and from a raw BOM to durable project memory (usage, where-used, health, evidence, circuit reuse, export bundles). The next architectural expansion makes that memory safe for a **whole team**: scoped RBAC, SSO, audited change governance, and concurrency, building on the shipped audit log, approval gate, and document-control ACL foundation.
 
 ---
 
@@ -58,10 +59,10 @@ The architecture must support answering:
 
 This must be represented consistently across data model, worker pipelines, API projections, and UI surfaces.
 
-### 5. Project memory is a planned first-class concern
-The architecture must support planned project/BOM concepts without treating them as shipped before implementation.
+### 5. Project memory is a first-class concern (shipped)
+Project/BOM memory is implemented today; the architecture preserves its provenance and trust boundaries the same way it does for parts. (Remaining "planned project memory" mentions elsewhere in this document predate that work — defer to `docs/IMPLEMENTATION_STATUS.md`.)
 
-Future project memory must preserve:
+Project memory must preserve:
 
 - project and revision context
 - BOM import provenance and original row data
@@ -563,6 +564,32 @@ Rules:
 - partially complete bundles must be labeled as partial
 - export actions must reflect actual asset readiness, not optimistic intent
 - export readiness must not imply part approval for all engineering contexts unless the approval scope supports that claim
+
+---
+
+## Team Collaboration and Governance Subsystem
+
+This subsystem makes the engineering memory safe for a **whole team** to depend on. It is the next major architectural expansion; the accountability and change-control foundation is already shipped.
+
+Shipped foundation:
+
+- **Audit middleware** in the API request pipeline records every unsafe (mutating) method after the response is known — actor, role, action, target, method/path/operation, status outcome, and hashed IP/user-agent hints — and intentionally never persists request bodies, secrets, evidence bytes, or controlled-document contents. Reads expose a global admin timeline and per-entity activity strips.
+- **Project revision approval gate** — a single-stage review decision over the diff between two project revisions, pinned to the exact diff fingerprint reviewed.
+- **Document control** — controlled document revisions with lifecycle, access level (`public` / `internal` / `restricted` / `itar_controlled`), expiry, supersession, `user | team | role` ACL principals with `view | review | approve | admin` permissions, a per-asset download-grant resolver, and page-anchored redlines.
+
+Planned expansion:
+
+- **RBAC** — scoped roles beyond `admin | user` (viewer / contributor / reviewer / approver / exporter / admin) with per-project / per-program scope, generalizing the document-control ACL principal/permission model into platform-wide policy enforced at the API boundary.
+- **OIDC SSO** through the existing NextAuth shell.
+- **Multi-stage ECN/ECO** workflow on top of the approval gate and redlines.
+- **Concurrency** — optimistic version checks and presence, surfacing conflicts instead of last-write-wins.
+
+Rules:
+
+- authorization (who *may* act) and audit (what they *did*) stay separate concerns
+- access decisions deny by default when an access level or ACL does not grant
+- governance actions are themselves audited and provenance-bearing
+- no governance feature may collapse the imported → reviewed → approved → verified_for_export lineage; roles and gates sit beside it, never replace it
 
 ---
 

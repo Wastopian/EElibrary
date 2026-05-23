@@ -947,6 +947,114 @@ to document the design lineage.
 
 ---
 
+## Team collaboration and governance entities
+
+These entities make the engineering memory usable by a **team**: accountable actions, controlled
+change, and controlled documents. The first four are **shipped**; the role entities at the end are
+**planned**. Defer to `docs/IMPLEMENTATION_STATUS.md` for status.
+
+### AuditEvent (shipped — `infra/postgres/034_audit_events.sql`)
+Represents one recorded API user action for accountability.
+
+Fields:
+- `id`
+- `request_id`
+- `occurred_at`
+- `actor_id`
+- `actor_role`
+- `action`
+- `target_type` (`api_route`, `part`, `asset`, `project`, `project_revision`, `project_revision_approval_gate`, `bom_import`, `circuit_block`, `circuit_block_part`, `document_revision`, `evidence_attachment`, `follow_up`, `provider_acquisition_job`, `provider_import`, `substitution`, `vendor`)
+- `target_id`
+- `method`
+- `path`
+- `operation`
+- `status_code`
+- `outcome` (`succeeded`, `denied`, `failed`)
+- `request_ip_hash`
+- `user_agent_hash`
+- `metadata` (JSONB; scalar/string-array values only)
+
+Purpose:
+- records who did what, to which target, with what outcome — the governance spine for RBAC, ECN/ECO, and document control
+- intentionally never stores request bodies, secrets, evidence bytes, or controlled-document contents
+- writing an audit event never changes approval, validation, review, or export state
+
+### ProjectRevisionApprovalGate (shipped — `infra/postgres/033_project_revision_approval_gates.sql`)
+Represents a review decision over the diff between two project revisions.
+
+Fields:
+- `id`
+- `project_id`
+- `from_project_revision_id`
+- `to_project_revision_id`
+- `gate_status` (`pending_review`, `approved`, `changes_requested`)
+- `diff_fingerprint`
+- `diff_summary` (JSONB)
+- `decision_notes`
+- `created_by`
+- `decided_by`
+- `decided_at`
+- `created_at`
+- `updated_at`
+- unique on (`project_id`, `from_project_revision_id`, `to_project_revision_id`, `diff_fingerprint`)
+
+Purpose:
+- makes BOM change review visible and auditable, pinned to the exact diff reviewed so approval cannot silently cover later edits
+- single-stage today; multi-stage ECN/ECO is planned
+- the gate decides revision review only — it does not approve parts, validate assets, or unlock export
+
+### DocumentRevision / DocumentAclEntry / DocumentRedline (shipped — `infra/postgres/035_document_control.sql`)
+Controlled-document foundation attached to existing catalog assets.
+
+`DocumentRevision` fields:
+- `id`, `part_id`, `asset_id`
+- `document_type` (`datasheet`, `mechanical_drawing`, `controlled_drawing`, `specification`, `other`)
+- `revision_label`, `revision_date`
+- `lifecycle_status` (`draft`, `in_review`, `released`, `superseded`, `expired`, `archived`)
+- `access_level` (`public`, `internal`, `restricted`, `itar_controlled`)
+- `access_notes`, `effective_at`, `expires_at`
+- `supersedes_document_revision_id`
+- `source_asset_hash`, `created_by`, `created_at`, `updated_at`
+
+`DocumentAclEntry` fields:
+- `id`, `document_revision_id`
+- `principal_type` (`user`, `team`, `role`), `principal_id`
+- `permission` (`view`, `review`, `approve`, `admin`)
+- `granted_by`, `expires_at`, `created_at`
+
+`DocumentRedline` fields:
+- `id`, `document_revision_id`
+- `redline_status` (`open`, `resolved`, `rejected`, `superseded`)
+- `page_number`, `anchor_text`, `note`
+- `severity` (`info`, `review`, `blocker`)
+- `created_by`, `resolved_by`, `resolved_at`, `created_at`, `updated_at`
+
+Purpose:
+- gives datasheets/drawings revision, lifecycle, expiry, supersession, access control, and review history while preserving their stored file provenance
+- the `principal_type`/`permission` model is the seed for platform-wide RBAC; a per-asset download-grant resolver reads access level + ACL (the ITAR/EAR download-gating foundation)
+- document control never changes part approval or export readiness
+
+### Vendor (shipped)
+Represents a trusted supplier (fabrication, assembly, sheet metal, etc.) a team wants to remember.
+
+Purpose:
+- captures vendor trust as team memory, with per-vendor files and usage references back into project work
+- provider-neutral; vendor trust is not a procurement or part-approval signal
+
+### UserRole / RoleAssignment (planned)
+Represents scoped role-based access beyond the current `admin | user` model.
+
+Planned shape:
+- roles such as `viewer`, `contributor`, `reviewer`, `approver`, `exporter`, `admin`
+- assignments scoped globally or per project / per program
+- generalizes the shipped `DocumentAclEntry` principal/permission model into a platform-wide policy enforced at the API boundary
+
+Purpose:
+- lets access match responsibility so "who may approve" and "who may export" are first-class, enforced concepts
+- pairs with the shipped `AuditEvent`: roles decide who *may* act, audit records what they *did*
+
+---
+
 ## Derived platform concepts
 
 These do not always need to be stored as primary entities, but the system must resolve them consistently.

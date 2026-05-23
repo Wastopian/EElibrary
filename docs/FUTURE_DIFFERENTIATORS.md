@@ -1,9 +1,13 @@
 # Future differentiators
 
-Strategic items that came out of the 2026-05-12 "what makes us shine vs the big dogs" review.
-Item 1 (reusable circuit blocks as the headline feature) is currently in flight and tracked in
-[`TODO.md`](../TODO.md) plus [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); items 2–7
-below are captured here as forward-looking direction so the strategic context is not lost.
+Strategic items that came out of the 2026-05-12 "what makes us shine vs the big dogs" review,
+plus the 2026-05-23 "best tool for engineering teams" direction (item 8). Item 1 (reusable
+circuit blocks as the headline feature) has **shipped** (see `IMPLEMENTATION_STATUS.md`); item 6
+(cryptographic export provenance) has shipped; the governance spine under item 8 (audit log,
+approval gate, document control) has shipped. The remaining items below are captured as
+forward-looking direction so the strategic context is not lost. **Item 8 (multi-engineer trust
+governance) is now the headline strategic direction** and is tracked in [`TODO.md`](../TODO.md)
+§0 plus [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 These are strategic directions, not wholesale shipped capabilities. Keep future-only claims
 out of README "Current Capabilities" and out of the implementation-status matrix until real
@@ -241,6 +245,43 @@ living in someone else's tenant.
 **Honesty rules.** Never strip provenance during export. Never let an import silently
 overwrite a row with different provenance — surface conflicts the same way the existing
 multi-provider source reconciliation already does.
+
+---
+
+## 8. Multi-engineer trust governance (the team wedge)
+
+**Why it matters.** Everything above makes EE Library a great *single-operator* memory. The durable
+moat is making that memory safe for a whole **team** to depend on — and doing it without the
+trust-destroying habits of legacy PLM (opaque approvals, no provenance, "who changed this?"
+mysteries). The same honesty discipline that powers part trust lineage is exactly what makes
+multi-user governance credible: every action attributable, every approval scoped, nothing
+silently crossing a gate.
+
+**Already shipped (the spine).**
+
+- **Audit log + middleware** — request-pipeline middleware records every unsafe API method with
+  actor, role, target, outcome, and hashed source hints (`apps/api/src/audit-log.ts`,
+  `flushRequestAuditEvent`); per-entity activity strips + an admin timeline surface it.
+- **Single-stage project revision approval gate** — diff-fingerprint-pinned approve /
+  request-changes over two revisions (`ProjectRevisionApprovalGatePanel`).
+- **Controlled document revisions / ACL / redlines** — lifecycle, access levels (incl.
+  `itar_controlled`), `user|team|role` ACL principals × `view|review|approve|admin`, and a
+  per-asset download-grant resolver (`apps/api/src/document-control.ts`).
+
+**Concrete next slices.**
+
+- **RBAC expansion** — generalize the document-control ACL principal/permission model into a
+  platform-wide policy so scoped roles (viewer / contributor / reviewer / approver / exporter /
+  admin) and per-project/per-program scope are first-class. Auth is still `admin | user`
+  (`apps/web/src/auth.ts`) — this is the literal gate on team use.
+- **OIDC SSO** through the existing NextAuth shell.
+- **Concurrent editing** — optimistic version checks + presence indicators (no CRDT for v1).
+- **Multi-stage ECN/ECO** — grow the single-stage gate + redlines into a real change workflow
+  with effectivity dates, assignment, and notifications.
+
+**Honesty rules.** Roles decide who *may* act; the audit log records what they *did* — the two
+stay separate. A scoped approval never widens silently. Document/ITAR gating denies by default
+when access level or ACL does not grant. Concurrency surfaces conflicts rather than last-write-wins.
 
 ---
 

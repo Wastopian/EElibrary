@@ -17,13 +17,27 @@ The integrations (PLM bridges, CAD round-trips, ERP exports) serve both audience
 
 ---
 
+## Already shipped since this roadmap was first written
+
+These were named below as upcoming wedge/foundation work and are now **in the repo** (see `docs/IMPLEMENTATION_STATUS.md` for exact boundaries). They change what the "highest-leverage next piece" is.
+
+- **Audit log + middleware** — request-pipeline middleware records every unsafe API method (actor, role, target, outcome, hashed source hints); per-entity activity strips + an admin timeline exist. This was previously called the highest-leverage next piece; the **foundation is done**, so the lever has moved to RBAC.
+- **BOM revision approval gate (single-stage)** — reviewers approve / request-changes on the diff between two project revisions, pinned to the reviewed diff fingerprint. The multi-stage ECN/ECO version remains the larger lift.
+- **Controlled document revisions, ACLs, and redlines (foundation)** — datasheets/drawings carry revision label, lifecycle, access level (`public`/`internal`/`restricted`/`itar_controlled`), expiry, supersession, `user|team|role` ACL principals with `view|review|approve|admin`, a per-asset download-grant resolver (ITAR gating foundation), and page-anchored redlines.
+- **Vendor notebook** — `/vendors` remembers trusted fab/assembly/sheet-metal suppliers with files and usage references.
+- **Cryptographic export-bundle provenance** — deterministic archive + manifest SHA-256, optional Ed25519 signature, and an admin verify route (auditor-presentable bundles).
+
+What is still **not** shipped and gates real team use: **scoped RBAC** (auth is still `admin | user`), **OIDC SSO**, **concurrent editing**, **multi-stage ECN/ECO**, **real ECAD emission**, and **live distributor pricing**.
+
+---
+
 ## Wedge features (win the demo)
 
 These are visible, demo-able, and differentiate us from incumbents in a 30-minute call.
 
 | Feature | Why it wins | Rough size |
 |---|---|---|
-| **Versioned BOMs with side-by-side diff + approval gate** | Visceral, demo-able, makes "trust" visible. Builds on existing revision foundation. | 1–2 months for first-class |
+| **Versioned BOMs with side-by-side diff + approval gate** | Visceral, demo-able, makes "trust" visible. Builds on existing revision foundation. | 🟡 Revision compare + single-stage approval gate **shipped**; first-class multi-stage diff/approval remains |
 | **Live distributor data (Octopart)** | Closes the embarrassing "Pricing and stock are not shown here" gap. Octopart has a clean GraphQL API and fits the existing provider adapter pattern. | 3–4 weeks read-only |
 | **Concurrent editing baseline** | Modern delight that contrasts viscerally with Excel/Teamcenter. Optimistic locking + presence indicators ("Sarah is viewing this") + WebSocket-pushed updates is enough for v1 — we don't need full Figma-style CRDTs. | 1–2 months |
 | **ECN/ECO with multi-stage approval and redline diffs** | This is the workflow engineers complain about most in legacy PLM. A clean modern version is a real "wow" moment. | 2–3 months |
@@ -34,8 +48,8 @@ These get raised in security review and procurement; without them the demo doesn
 
 | Feature | Why it matters | Rough size |
 |---|---|---|
-| **Audit log with foundation middleware** | #1 thing security reviewers check. Trust lineage already gives the conceptual spine. Unlocks RBAC enforcement, ECN/ECO, document control, ITAR gating. | 1 week foundation; ongoing instrumentation |
-| **Document control with revision history & supersession** | Datasheets and drawings need controlled-access ACLs, expiry, "this rev replaces rev X" linkage. Asset model already has the bones. | 1 month |
+| **Audit log with foundation middleware** | #1 thing security reviewers check. Trust lineage already gives the conceptual spine. Unlocks RBAC enforcement, ECN/ECO, document control, ITAR gating. | ✅ **Shipped** (request-pipeline middleware + admin timeline + activity strips); ongoing instrumentation |
+| **Document control with revision history & supersession** | Datasheets and drawings need controlled-access ACLs, expiry, "this rev replaces rev X" linkage. Asset model already has the bones. | 🟡 **Foundation shipped** (revisions, lifecycle, access levels incl. `itar_controlled`, ACLs, redlines, download-grant resolver); UI depth + enforcement remain |
 | **Real ECAD library** (KiCad first, then Altium) | KiCad is fastest path — open format, growing defense adoption. Altium needs Concord Pro source integration; larger lift but defense is mostly Altium. | KiCad emission: 1 mo. KiCad round-trip: 3 mo. Altium Concord Pro: 3–6 mo. |
 | **SolidWorks add-in** | C# add-in using the SolidWorks API. New skill set on the team. The add-in pulls verified parts with metadata into the active design. | 3–4 mo (experienced SW dev), 6+ (learning) |
 | **PLM bridge — start with Aras** | Aras has the most modern REST/OData of the big three. Mapping schemas is the hard part. | 2–3 mo for read+write OData adapter |
@@ -53,12 +67,14 @@ Assumes a small team: founder + 1–2 senior engineers + part-time integrations 
 
 ### Months 1–3 — "It's real"
 
-- Versioned BOM diff + approval gate
+> Already shipped from the original months 1–3 list: **audit log foundation** (every mutation: who/when/what/why) and the **single-stage BOM revision approval gate**. The remaining months 1–3 work re-centers on the access model that makes a team real.
+
+- RBAC expansion (scoped roles beyond `admin | user`) + per-project scope
+- OIDC SSO (Okta / Azure AD / Ping)
 - Octopart live distributor data
-- Audit log foundation (every mutation: who/when/what/why)
 - Concurrent editing baseline (optimistic locking + presence indicators)
 
-**Outcome**: a first demo that doesn't have the "Pricing not shown" hole and shows the trust workflow in motion. Suitable for first design partner conversations.
+**Outcome**: more than one kind of user can work safely in the same instance, the demo doesn't have the "Pricing not shown" hole, and the audited trust workflow is visible. Suitable for first design partner conversations.
 
 ### Months 4–6 — "It's deep"
 
@@ -102,18 +118,22 @@ Sequence depends on first-customer pull:
 
 ## Highest-leverage next single piece
 
-**Audit log middleware + foundation**.
+**RBAC expansion (scoped roles beyond `admin | user`)**.
 
-- Small (1 week of focused work)
-- Unlocks every later feature: ECN/ECO, RBAC enforcement, document control, ITAR gating
-- #1 thing security reviewers check
-- Trust lineage already gives the conceptual spine — extending it to user actions is the natural next step
+The original highest-leverage pick — audit log middleware — is now **shipped**, so the lever has moved.
+
+- Auth is still only `admin | user` (`apps/web/src/auth.ts`, `apps/web/src/middleware.ts`); this is the literal gate on "more than one kind of person can use it."
+- The shipped document-control ACL already models `user | team | role` principals × `view | review | approve | admin` — generalize that model platform-wide rather than inventing a new one.
+- Unlocks enforced ECN/ECO approvals, document/ITAR download gating, and per-project/per-program scope.
+- Pairs naturally with the already-shipped audit log: roles decide who *may* act, audit records what they *did*.
 
 After that, in order of leverage:
 
-1. **Octopart provider adapter** — closes the most embarrassing gap, fits the existing pattern, ~3 weeks
-2. **BOM revision diff + approval gate** — extends an existing surface, demo-ready, ~3 weeks
-3. **Optimistic locking + presence indicators** — modern feel, prevents data loss, ~3 weeks
+1. **OIDC SSO** (Okta / Azure AD / Ping via NextAuth) — gates most enterprise adoption, ~1–2 weeks for basic
+2. **Optimistic locking + presence indicators** — modern feel, prevents data loss, ~3 weeks
+3. **Multi-stage ECN/ECO** — grows the shipped single-stage approval gate + redlines into a full change workflow
+4. **Octopart live distributor data** — closes the "pricing not shown" gap, fits the existing provider pattern, ~3 weeks
+5. **KiCad library emission** — makes "export" land in the engineer's tool, ~1 month deterministic emission
 
 ---
 
