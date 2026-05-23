@@ -1448,7 +1448,7 @@ export const users = pgTable(
   },
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
-    check("users_role_check", literalCheck(`role IN ('admin', 'user')`)),
+    check("users_role_check", literalCheck(`role IN ('admin', 'user', 'viewer', 'contributor', 'approver')`)),
   ]
 );
 

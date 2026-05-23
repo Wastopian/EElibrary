@@ -3282,8 +3282,28 @@ export interface ApiErrorEnvelope {
 // Security foundation: user action audit events
 // ---------------------------------------------------------------------------
 
+/**
+ * AppRole is the canonical authenticated role across web, API, DB, and audit.
+ *
+ * RBAC v1 (2026-05-23): the set is deliberately small — `viewer` (read-only),
+ * `contributor` (read + edit project memory), `approver` (contributor + sign-off),
+ * and `admin` (everything incl. role management). `user` is retained as the legacy
+ * full-power baseline so existing accounts are never restricted by the role widening;
+ * narrower roles are opt-in. Permission semantics are layered on top in a later phase —
+ * today only `admin` is gated differently, so any non-admin role behaves like `user`.
+ */
+export type AppRole = "admin" | "user" | "viewer" | "contributor" | "approver";
+
+/** APP_ROLES lists every valid role, for narrowing untrusted inputs (tokens, JWT claims, DB rows). */
+export const APP_ROLES: readonly AppRole[] = ["admin", "user", "viewer", "contributor", "approver"];
+
+/** isAppRole narrows an untrusted value to a known AppRole; everything else is rejected (fail closed). */
+export function isAppRole(value: unknown): value is AppRole {
+  return typeof value === "string" && (APP_ROLES as readonly string[]).includes(value);
+}
+
 /** AuditActorRole mirrors the authenticated role captured at the API boundary. */
-export type AuditActorRole = "admin" | "user";
+export type AuditActorRole = AppRole;
 
 /** AuditEventOutcome records whether a user action succeeded, failed validation, or was denied. */
 export type AuditEventOutcome = "succeeded" | "failed" | "denied";

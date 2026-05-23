@@ -5,11 +5,10 @@
 import { getToken } from "next-auth/jwt";
 import { NextResponse, type NextRequest } from "next/server";
 
-/** AppRole mirrors the narrow role values embedded by the NextAuth JWT callback. */
-type AppRole = "admin" | "user";
-
 /**
- * Redirects non-authenticated users to sign-in and keeps non-admin users out of admin routes.
+ * Redirects non-authenticated users to sign-in. Authorization (which role may do what) is enforced
+ * authoritatively at the API boundary, not here — this Edge middleware only checks that a session
+ * exists. See apps/api/src/auth.ts.
  */
 export default async function middleware(request: NextRequest) {
   const token = await readSessionToken(request);
@@ -49,13 +48,6 @@ async function readSessionToken(request: NextRequest): Promise<Record<string, un
   } catch {
     return null;
   }
-}
-
-/**
- * Narrows untrusted JWT role claims before making an admin routing decision.
- */
-function readAppRole(value: unknown): AppRole | null {
-  return value === "admin" || value === "user" ? value : null;
 }
 
 export const config = {

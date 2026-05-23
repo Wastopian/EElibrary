@@ -4,10 +4,11 @@
 
 import type { IncomingMessage } from "node:http";
 import { jwtVerify } from "jose";
+import { isAppRole, type AppRole } from "@ee-library/shared/types";
 
 export interface ApiSession {
   sub: string;
-  role: "admin" | "user";
+  role: AppRole;
 }
 
 /** apiSessionRequestKey stores the verified session on the current request for audit middleware. */
@@ -83,10 +84,7 @@ export async function verifyBearerToken(
     const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
     const role = payload["role"];
 
-    if (
-      typeof payload.sub !== "string" ||
-      (role !== "admin" && role !== "user")
-    ) {
+    if (typeof payload.sub !== "string" || !isAppRole(role)) {
       return null;
     }
 

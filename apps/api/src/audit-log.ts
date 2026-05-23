@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { CatalogStoreError } from "./catalog-store";
+import { isAppRole } from "@ee-library/shared/types";
 import type {
   AuditActorRole,
   AuditEvent,
@@ -304,7 +305,7 @@ function toIsoTimestamp(value: Date | string): string {
  * Narrows stored actor roles without inventing authentication state.
  */
 function toAuditActorRole(value: string | null): AuditActorRole | null {
-  return value === "admin" || value === "user" ? value : null;
+  return isAppRole(value) ? value : null;
 }
 
 /**

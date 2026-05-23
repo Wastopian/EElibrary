@@ -7,9 +7,7 @@ import { createDbPool, users } from "@ee-library/db";
 import { eq } from "drizzle-orm";
 import NextAuth, { type DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-
-/** AppRole keeps auth state explicit and narrow across callbacks. */
-type AppRole = "admin" | "user";
+import type { AppRole } from "@ee-library/shared/types";
 
 /** AppJwtClaims describes the extra JWT claims mirrored into the session. */
 type AppJwtClaims = {
