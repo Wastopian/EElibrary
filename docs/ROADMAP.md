@@ -76,7 +76,8 @@ EE Library is already a strong **single-operator** engineering memory with hones
 
 ### Pillar 6 — Export into the team's tools (ECAD/MCAD emission)
 
-- deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission first, then a SolidWorks add-in
+- **First slice shipped (2026-05-23, packaging-only):** deterministic KiCad library emission from a project's verified, file-backed assets (merged `.kicad_sym`, `.pretty` footprints, STEP 3D, generated lib tables + provenance README) packaged as `.kicad-lib.tar.gz` via the worker CLI. It packages, never generates geometry.
+- next: a web download action + async emission pipeline, then a SolidWorks add-in and KiCad round-trip
 - outcome: "export" stops being a file bundle and starts landing verified parts in the engineer's design tool
 
 ### Pillar 7 — Live commercial truth (distributor read)
