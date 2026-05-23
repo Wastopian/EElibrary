@@ -10,6 +10,7 @@ import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
+import { emitKicadLibraryForProject } from "./kicad-library-emission";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
 import { processFootprintGeometryValidations, processSymbolPinCountValidations } from "./asset-validation-jobs";
@@ -204,6 +205,7 @@ function buildUsageLines(): string[] {
     "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
     "npm run assemble-bundles -w @ee-library/worker -- [limit]",
     "npm run generate-three-d-previews -w @ee-library/worker -- [limit]",
+    "npm run emit-kicad-library -w @ee-library/worker -- <projectId> [revisionLabel]",
     "npm run validate-footprints -w @ee-library/worker -- [limit]",
     "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
@@ -361,6 +363,39 @@ async function assembleExportBundles(limitValue?: string): Promise<void> {
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.assemble_export_bundles", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Emits a drop-in KiCad library (`.kicad-lib.tar.gz`) from one project's verified, file-backed CAD
+ * assets and writes it to storage. Packaging only — never generates geometry — so the trust boundary
+ * is preserved. Prints an honest `empty` summary when the project has no verified CAD assets yet.
+ */
+async function emitKicadLibraryCommand(projectId?: string, revisionLabel?: string): Promise<void> {
+  const timings: WorkerTiming[] = [];
+
+  if (!projectId) {
+    throw new Error("Usage: emit-kicad-library <projectId> [revisionLabel]");
+  }
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const storage = getWorkerStorageClient();
+    const summary = await timeWorkerOperation(
+      "worker.emit_kicad_library",
+      () => emitKicadLibraryForProject(projectId, { revisionLabel, storage }),
+      timings,
+      (value) =>
+        value.status === "empty"
+          ? "no verified CAD assets to export"
+          : `${value.includedPartCount} part(s): ${value.symbolCount} symbol(s), ${value.footprintCount} footprint(s), ${value.modelCount} model(s)`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.emit_kicad_library", error, timings);
     throw error;
   }
 }
@@ -613,6 +648,11 @@ async function main(): Promise<void> {
 
   if (command === "generate-three-d-previews") {
     await generateThreeDPreviews(process.argv[3]);
+    return;
+  }
+
+  if (command === "emit-kicad-library") {
+    await emitKicadLibraryCommand(process.argv[3], process.argv[4]);
     return;
   }
 

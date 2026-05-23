@@ -59,7 +59,7 @@ export interface KicadEmissionInput {
   /** Library nickname (e.g. a project key); sanitized to a KiCad-safe identifier. */
   libraryName: string;
   /** Deterministic ISO timestamp recorded in the README (caller supplies for reproducibility). */
-  generatedAt?: string;
+  generatedAt?: string | undefined;
   parts: KicadEmissionPart[];
 }
 
