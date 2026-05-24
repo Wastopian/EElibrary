@@ -20,6 +20,7 @@
     "emit-kicad-library": "tsx src/index.ts emit-kicad-library",
     "enqueue-catalog": "tsx src/index.ts enqueue-catalog",
     "export-engineering-memory": "tsx src/index.ts export-engineering-memory",
+    "import-engineering-memory": "tsx src/index.ts import-engineering-memory",
     "dev": "tsx src/index.ts daemon",
     "enrichment-jobs": "tsx src/index.ts enrichment-jobs",
     "generate:drafts": "tsx src/index.ts generate-drafts",

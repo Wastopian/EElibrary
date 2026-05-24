@@ -13,6 +13,8 @@ import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { emitKicadLibraryForProject } from "./kicad-library-emission";
 import { processKicadAssetByteIngestion } from "./kicad-asset-ingestion";
 import { exportEngineeringMemoryArchive } from "./engineering-memory-archive";
+import { importEngineeringMemoryArchive } from "./engineering-memory-restore";
+import { readFile as fsReadFile } from "node:fs/promises";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
 import { processFootprintGeometryValidations, processSymbolPinCountValidations } from "./asset-validation-jobs";
@@ -210,6 +212,7 @@ function buildUsageLines(): string[] {
     "npm run emit-kicad-library -w @ee-library/worker -- <projectId> [revisionLabel]",
     "npm run ingest-kicad-assets -w @ee-library/worker -- [limit]",
     "npm run export-engineering-memory -w @ee-library/worker -- --out <path.tar.gz>",
+    "npm run import-engineering-memory -w @ee-library/worker -- --in <path.tar.gz> [--dry-run] [--allow-schema-mismatch]",
     "npm run validate-footprints -w @ee-library/worker -- [limit]",
     "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
@@ -397,6 +400,49 @@ async function exportEngineeringMemory(args: string[]): Promise<void> {
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.export_engineering_memory", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Restores a portable engineering-memory archive from `--in` into the database + storage.
+ *
+ * Never overwrites existing rows (`ON CONFLICT DO NOTHING`); refuses a schema-version mismatch unless
+ * `--allow-schema-mismatch`; `--dry-run` validates and plans without writing. An incompatible archive
+ * sets a non-zero exit code so a wrapping script notices.
+ */
+async function importEngineeringMemory(args: string[]): Promise<void> {
+  const timings: WorkerTiming[] = [];
+  const inPath = readFlagValue(args, "--in");
+
+  if (!inPath) {
+    throw new Error("Usage: import-engineering-memory --in <path.tar.gz> [--dry-run] [--allow-schema-mismatch]");
+  }
+
+  const dryRun = args.includes("--dry-run");
+  const allowSchemaMismatch = args.includes("--allow-schema-mismatch");
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const archive = await fsReadFile(inPath);
+    const summary = await timeWorkerOperation(
+      "worker.import_engineering_memory",
+      () => importEngineeringMemoryArchive({ allowSchemaMismatch, archive, dryRun }),
+      timings,
+      (value) =>
+        value.status === "incompatible"
+          ? `incompatible: ${value.reason ?? "unknown"}`
+          : `${value.status}: ${value.rowsInserted} inserted, ${value.rowsSkipped} skipped, ${value.storageWritten} files`
+    );
+
+    if (summary.status === "incompatible") {
+      process.exitCode = 1;
+    }
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.import_engineering_memory", error, timings);
     throw error;
   }
 }
@@ -742,6 +788,11 @@ async function main(): Promise<void> {
 
   if (command === "export-engineering-memory") {
     await exportEngineeringMemory(process.argv.slice(3));
+    return;
+  }
+
+  if (command === "import-engineering-memory") {
+    await importEngineeringMemory(process.argv.slice(3));
     return;
   }
 

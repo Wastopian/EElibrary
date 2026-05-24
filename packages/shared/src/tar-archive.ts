@@ -12,7 +12,7 @@
  * assembly, KiCad CLI) can package archives without crossing the web/api/worker boundary.
  */
 
-import { gzip, type ZlibOptions } from "node:zlib";
+import { gunzip, gzip, type ZlibOptions } from "node:zlib";
 
 /** TarFileEntry is one regular-file entry to write into the archive. */
 export interface TarFileEntry {
@@ -146,4 +146,74 @@ export function gzipBufferDeterministic(payload: Buffer): Promise<Buffer> {
       resolve(result);
     });
   });
+}
+
+/**
+ * Decompresses a gzip buffer. Inverse of {@link gzipBufferDeterministic} — used by the restore path
+ * to unwrap a `.tar.gz` archive before reading its entries.
+ */
+export function gunzipBuffer(payload: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    gunzip(payload, (error, result) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+/**
+ * Reads the regular-file entries out of a POSIX ustar archive — the inverse of
+ * {@link buildUstarTarBuffer}. Only the fields this codebase writes are interpreted (name, size,
+ * regular-file typeflag); the prefix field is unused because the writer keeps every path under the
+ * 100-byte name field. Non-regular entries and the trailing zero blocks are skipped.
+ */
+export function readUstarEntries(archive: Buffer): TarFileEntry[] {
+  const entries: TarFileEntry[] = [];
+  let offset = 0;
+
+  while (offset + TAR_BLOCK_SIZE <= archive.length) {
+    const header = archive.subarray(offset, offset + TAR_BLOCK_SIZE);
+
+    // A zero-filled block marks the end-of-archive padding; stop reading.
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
+
+    const name = readNulTerminatedAscii(header, 0, TAR_NAME_FIELD_BYTES);
+    const size = readOctalField(header, 124, 12);
+    const typeflag = header[156];
+
+    offset += TAR_BLOCK_SIZE;
+
+    // typeflag '0' (0x30) or NUL (0x00) is a regular file; skip anything else (we only write files).
+    if (typeflag === 0x30 || typeflag === 0x00) {
+      const content = Buffer.from(archive.subarray(offset, offset + size));
+      entries.push({ content, path: name });
+    }
+
+    // Advance past the content, rounded up to the next 512-byte block boundary.
+    offset += Math.ceil(size / TAR_BLOCK_SIZE) * TAR_BLOCK_SIZE;
+  }
+
+  return entries;
+}
+
+/**
+ * Reads a NUL-terminated ASCII string from a fixed-width header field.
+ */
+function readNulTerminatedAscii(header: Buffer, offset: number, length: number): string {
+  const slice = header.subarray(offset, offset + length);
+  const nulIndex = slice.indexOf(0);
+  return slice.subarray(0, nulIndex === -1 ? slice.length : nulIndex).toString("ascii");
+}
+
+/**
+ * Reads a zero-padded octal numeric field (e.g. the ustar size field) into a JS number.
+ */
+function readOctalField(header: Buffer, offset: number, length: number): number {
+  const text = readNulTerminatedAscii(header, offset, length).trim();
+  return text.length > 0 ? parseInt(text, 8) : 0;
 }

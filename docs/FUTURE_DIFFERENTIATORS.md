@@ -238,11 +238,15 @@ living in someone else's tenant.
   into a single deterministic `.tar.gz` via the shared `tar-archive` writer, with a `manifest.json`
   recording format version, schema (latest migration) version, per-table row counts, and per-file
   SHA-256. Faithful raw dump — provenance preserved, missing files recorded honestly.
-- ⏳ **Import (restore) is the remaining half.** `npm run import:engineering-memory -- --in path.tar.gz
-  --target-database-url=...` is deliberately deferred because it owns the conflict policy (see honesty
-  rules below). Kept separate from the read-only export so a backup can never accidentally mutate data.
-- Document the round-trip in `README.md` and name the schema versions covered by each archive once
-  restore lands.
+- ✅ **Import (restore) shipped 2026-05-23.** `npm run import:engineering-memory -- --in path.tar.gz
+  [--dry-run] [--allow-schema-mismatch]` (`apps/worker/src/engineering-memory-restore.ts`) un-tars the
+  archive (`readUstarEntries` + `gunzipBuffer` added to the shared tar writer), refuses a schema-version
+  mismatch by default, restores tables in **FK dependency order** with **per-column type-aware
+  coercion**, inserts in one transaction with **`ON CONFLICT DO NOTHING` (never overwrites)**, restores
+  storage files write-if-absent, and supports `--dry-run`. The export→import round trip is complete.
+- Remaining polish: a richer merge mode that *diffs* conflicting rows and surfaces provenance
+  differences (today a colliding row is safely skipped, not diffed), and naming the schema versions
+  covered by each archive in `README.md`.
 
 **Honesty rules.** Never strip provenance during export. Never let an import silently
 overwrite a row with different provenance — surface conflicts the same way the existing

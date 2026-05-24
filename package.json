@@ -27,6 +27,7 @@
     "operations:worker": "node scripts/with-local-env.mjs npm run operations -w @ee-library/worker",
     "emit:kicad-library": "node scripts/with-local-env.mjs npm run emit-kicad-library -w @ee-library/worker --",
     "export:engineering-memory": "node scripts/with-local-env.mjs npm run export-engineering-memory -w @ee-library/worker --",
+    "import:engineering-memory": "node scripts/with-local-env.mjs npm run import-engineering-memory -w @ee-library/worker --",
     "refresh:supply-offers": "node scripts/with-local-env.mjs npm run refresh-supply-offers -w @ee-library/worker",
     "lint": "npm run lint --workspaces",
     "seed:admin": "node scripts/with-local-env.mjs node scripts/seed-admin.mjs",
