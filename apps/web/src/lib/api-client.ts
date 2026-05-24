@@ -137,6 +137,7 @@ import type {
   WhereUsedTargetType
 } from "@ee-library/shared/types";
 import type { SystemHealthResponse } from "@ee-library/shared/system-health-types";
+import type { KicadLibraryEmissionSummary } from "@ee-library/shared/kicad-library-emission";
 
 /** ApiHealth describes the lightweight operational status response from the API. */
 export interface ApiHealth {
@@ -1893,6 +1894,30 @@ export async function createExportBundle(projectId: string, input: ExportBundleC
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ExportBundleCreateResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Emits a drop-in KiCad library (packaged `.kicad-lib.tar.gz`) from a project's verified, file-backed
+ * CAD assets and returns the emission summary. Packaging only — never generates geometry.
+ */
+export async function emitProjectKicadLibrary(
+  projectId: string,
+  input: { revisionLabel?: string | undefined } = {}
+): Promise<KicadLibraryEmissionSummary> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/kicad-library`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "KiCad library emit");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<KicadLibraryEmissionSummary>;
 
   return envelope.data;
 }

@@ -13,6 +13,7 @@ import {
   matchesCircuitBlockReuseReadinessFilter
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
+import { emitKicadLibraryForProjectWithDeps, type KicadLibraryEmissionSummary } from "@ee-library/shared/kicad-library-emission";
 import { CatalogStoreError } from "./catalog-store";
 import {
   buildMirrorAssetEvidenceNotes,
@@ -8554,6 +8555,48 @@ interface DatabaseBundleOmissionRow {
  * When `storage` is provided, an archive payload is also written so download links can
  * point at a concrete file. Storage write failures are surfaced as manifest warnings.
  */
+/** KicadLibraryEmitResult reports inline KiCad library emission or an explicit failure mode. */
+export type KicadLibraryEmitResult =
+  | { status: "ok"; response: KicadLibraryEmissionSummary }
+  | { status: "not_configured" }
+  | { status: "not_found" }
+  | { status: "storage_unavailable" };
+
+/**
+ * Emits a drop-in KiCad library archive for one project inline, using the project-memory pool and the
+ * supplied storage client. Packaging only — delegates to the shared emitter, which includes only
+ * verified, file-backed CAD assets, so the trust boundary is preserved. Returns an explicit
+ * `storage_unavailable` when no object storage is configured so the route can answer honestly rather
+ * than writing into a no-op backend.
+ */
+export async function emitProjectKicadLibraryInDatabase(
+  projectId: string,
+  options: { revisionLabel?: string | undefined },
+  storage: FileStorageClient
+): Promise<KicadLibraryEmitResult> {
+  const databasePool = getProjectMemoryDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  if (storage.backend === "not_configured") {
+    return { status: "storage_unavailable" };
+  }
+
+  const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+
+  if (projectCheck.rowCount === 0) {
+    return { status: "not_found" };
+  }
+
+  const summary = await emitKicadLibraryForProjectWithDeps(databasePool, storage, projectId, {
+    revisionLabel: options.revisionLabel
+  });
+
+  return { response: summary, status: "ok" };
+}
+
 export async function createExportBundleInDatabase(
   projectId: string,
   input: ExportBundleCreateInput,

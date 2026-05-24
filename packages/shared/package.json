@@ -73,6 +73,18 @@
     "./supply-offers": {
       "types": "./src/supply-offers.ts",
       "default": "./src/supply-offers.ts"
+    },
+    "./tar-archive": {
+      "types": "./src/tar-archive.ts",
+      "default": "./src/tar-archive.ts"
+    },
+    "./kicad-library": {
+      "types": "./src/kicad-library.ts",
+      "default": "./src/kicad-library.ts"
+    },
+    "./kicad-library-emission": {
+      "types": "./src/kicad-library-emission.ts",
+      "default": "./src/kicad-library-emission.ts"
     }
   },
   "scripts": {

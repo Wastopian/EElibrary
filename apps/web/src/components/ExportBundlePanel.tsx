@@ -6,9 +6,10 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
-import { buildExportBundleDownloadUrl, createExportBundle, fetchProjectExportBundles, isApiClientError } from "../lib/api-client";
+import { buildExportBundleDownloadUrl, createExportBundle, emitProjectKicadLibrary, fetchProjectExportBundles, isApiClientError } from "../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
 import type { ExportBundle, ExportBundleAssemblyStatus, ExportBundleFormat, ExportBundleListResponse, ExportBundleSignatureStatus, ExportBundleVerificationReason, ProjectRevision } from "@ee-library/shared/types";
+import type { KicadLibraryEmissionSummary } from "@ee-library/shared/kicad-library-emission";
 
 /**
  * BUNDLE_AUTO_REFRESH_INTERVAL_MS controls how often the panel re-fetches the bundle list while
@@ -43,6 +44,12 @@ type BundleCreateState =
   | { kind: "success"; bundle: ExportBundle }
   | { kind: "failed"; message: string };
 
+type KicadEmitState =
+  | { kind: "idle" }
+  | { kind: "emitting" }
+  | { kind: "done"; summary: KicadLibraryEmissionSummary }
+  | { kind: "failed"; message: string };
+
 const FORMAT_LABELS: Record<ExportBundleFormat, string> = {
   altium: "Altium (footprint + symbol)",
   neutral: "Neutral (all verified assets)",
@@ -57,6 +64,7 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
   const [bundleList, setBundleList] = useState<ExportBundle[]>(bundles.bundles);
   const [format, setFormat] = useState<ExportBundleFormat>("neutral");
   const [revisionLabel, setRevisionLabel] = useState<string>("");
+  const [kicadState, setKicadState] = useState<KicadEmitState>({ kind: "idle" });
   const [isAutoRefreshing, setIsAutoRefreshing] = useState<boolean>(false);
   const isFetchingRef = useRef<boolean>(false);
 
@@ -116,6 +124,22 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
       setCreateState({ kind: "failed", message });
     }
   }, [projectId, format, revisionLabel]);
+
+  const emitKicadLibrary = useCallback(async () => {
+    setKicadState({ kind: "emitting" });
+
+    try {
+      const summary = await emitProjectKicadLibrary(projectId, { revisionLabel: revisionLabel.trim() || undefined });
+      setKicadState({ kind: "done", summary });
+    } catch (error) {
+      const message = isApiClientError(error)
+        ? error.message.replace(/^.*failed \([^)]+\):\s*/u, "")
+        : "KiCad library emission failed.";
+      setKicadState({ kind: "failed", message });
+    }
+  }, [projectId, revisionLabel]);
+
+  const kicadDownloadUrl = kicadState.kind === "done" ? buildExportBundleDownloadUrl(kicadState.summary.storageKey) : null;
 
   return (
     <div className="export-bundle-panel">
@@ -181,6 +205,50 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
 
         {createState.kind === "failed" && (
           <div className="form-feedback form-feedback--error">{createState.message}</div>
+        )}
+      </div>
+
+      <div className="export-bundle-panel__form">
+        <h4 className="form-section-label">KiCad library</h4>
+        <p className="form-hint">
+          Packages this project's verified, file-backed KiCad assets into a drop-in library
+          (merged symbols, a footprint <code>.pretty</code>, 3D models, and library tables). Only
+          verified files are included; nothing is generated.
+        </p>
+
+        <div className="form-actions">
+          <button
+            className="button button--primary"
+            disabled={kicadState.kind === "emitting"}
+            type="button"
+            onClick={emitKicadLibrary}
+          >
+            {kicadState.kind === "emitting" ? "Building…" : "Build KiCad library"}
+          </button>
+        </div>
+
+        {kicadState.kind === "done" && kicadState.summary.status === "emitted" && (
+          <div className="form-feedback form-feedback--success">
+            Library built: {kicadState.summary.includedPartCount} part(s) — {kicadState.summary.symbolCount} symbol(s),{" "}
+            {kicadState.summary.footprintCount} footprint(s), {kicadState.summary.modelCount} 3D model(s).
+            {kicadState.summary.omittedPartCount > 0 && ` ${kicadState.summary.omittedPartCount} part(s) omitted (no verified KiCad asset).`}
+            {kicadDownloadUrl && (
+              <>
+                {" "}
+                <a href={kicadDownloadUrl}>Download KiCad library (.tar.gz)</a>
+              </>
+            )}
+          </div>
+        )}
+
+        {kicadState.kind === "done" && kicadState.summary.status === "empty" && (
+          <div className="form-feedback">
+            No verified file-backed KiCad assets in this project yet. Verify symbol/footprint/3D assets for export first.
+          </div>
+        )}
+
+        {kicadState.kind === "failed" && (
+          <div className="form-feedback form-feedback--error">{kicadState.message}</div>
         )}
       </div>
 

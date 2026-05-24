@@ -155,7 +155,7 @@ These remain product direction; they are **not** in the implementation-status ma
 - **OIDC single sign-on** (Okta / Azure AD / Ping).
 - **Concurrent editing safety** (optimistic locking + presence indicators).
 - **Multi-stage ECN/ECO** change workflow (the shipped approval gate is single-stage).
-- **Real ECAD/MCAD emission** — deterministic **KiCad library emission** (packaging verified assets into a drop-in `.kicad-lib.tar.gz`) is shipped via the worker CLI (`npm run emit:kicad-library <projectId>`); a web download action, async pipeline, and a SolidWorks add-in are still planned.
+- **Real ECAD/MCAD emission** — deterministic **KiCad library emission** (packaging verified assets into a drop-in `.kicad-lib.tar.gz`) is shipped: a one-click "Build KiCad library" download on the project export panel, an admin-gated API route, and the worker CLI (`npm run emit:kicad-library <projectId>`). An async pipeline for very large projects and a SolidWorks add-in are still planned.
 - **Live distributor pricing/stock** (read-only Octopart/Nexar beside the shipped supply-offer snapshots).
 - **PLM / ERP / requirements bridges** (Aras, ERP CSV/AVL export, Jama).
 
