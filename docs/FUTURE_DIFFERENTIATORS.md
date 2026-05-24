@@ -232,15 +232,17 @@ living in someone else's tenant.
 
 **Concrete first slice.**
 
-- Add a `npm run export:engineering-memory -- --out path.tar.gz` command in `apps/worker`
-  that streams every internal table (projects, BOMs, parts, assets, evidence, circuit blocks,
-  instantiations, follow-ups, approvals, validations, promotion audits, supply offers) plus
-  the local storage prefix into a single deterministic archive — using the existing
-  `tar-archive.ts` writer.
-- Add a `npm run import:engineering-memory -- --in path.tar.gz --target-database-url=...`
-  inverse command for the same archive shape.
-- Document the round-trip in `README.md` and add a short doc page that names the schema
-  versions covered by each archive.
+- ✅ **Export shipped 2026-05-23.** `npm run export:engineering-memory -- --out path.tar.gz`
+  (`apps/worker/src/engineering-memory-archive.ts`) streams **every public database table** to
+  `database/<table>.json` plus the storage files those tables reference (`*_storage_key` values)
+  into a single deterministic `.tar.gz` via the shared `tar-archive` writer, with a `manifest.json`
+  recording format version, schema (latest migration) version, per-table row counts, and per-file
+  SHA-256. Faithful raw dump — provenance preserved, missing files recorded honestly.
+- ⏳ **Import (restore) is the remaining half.** `npm run import:engineering-memory -- --in path.tar.gz
+  --target-database-url=...` is deliberately deferred because it owns the conflict policy (see honesty
+  rules below). Kept separate from the read-only export so a backup can never accidentally mutate data.
+- Document the round-trip in `README.md` and name the schema versions covered by each archive once
+  restore lands.
 
 **Honesty rules.** Never strip provenance during export. Never let an import silently
 overwrite a row with different provenance — surface conflicts the same way the existing

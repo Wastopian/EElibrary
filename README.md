@@ -143,6 +143,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - **Project revision approval gate** — a reviewer approves or requests changes on the diff between two project revisions, pinned to the exact diff fingerprint reviewed. Single-stage today; it decides revision review only and never approves parts or unlocks export.
 - **Controlled document revisions, ACLs, and redlines** — datasheets/drawings carry revision label, lifecycle, access level (`public` / `internal` / `restricted` / `itar_controlled`), expiry, and supersession; `user | team | role` ACL principals with `view | review | approve | admin` permissions back a per-asset download-grant resolver; page-anchored redlines capture review notes with severity and resolution.
 - **Vendor notebook** — `/vendors` remembers trusted fab/assembly/sheet-metal suppliers with files and usage references back into project work.
+- **Portable engineering-memory archive (you own your data)** — `npm run export:engineering-memory -- --out backup.tar.gz` streams every database table plus referenced storage files into one deterministic `.tar.gz` with a manifest (format/schema version, row counts, per-file hashes). A one-command, point-in-time backup of the whole engineering memory for a self-hosted team. Restore (`import-engineering-memory`) is the planned follow-up.
 
 Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
 
@@ -248,6 +249,9 @@ npm run ingest:octopart
 npm run imports:providers
 npm run operations:worker
 npm run refresh:supply-offers
+npm run ingest:kicad-assets
+npm run emit:kicad-library -- <projectId>
+npm run export:engineering-memory -- --out backup.tar.gz
 ```
 
 The web app defaults to `http://127.0.0.1:3000`; the API defaults to `http://127.0.0.1:4000`. DB-backed search and import flows require `DATABASE_URL` to point at a reachable Postgres database. If the database is unavailable, the UI stays honest and does not invent catalog records.

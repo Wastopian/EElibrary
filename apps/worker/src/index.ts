@@ -12,6 +12,7 @@ import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { emitKicadLibraryForProject } from "./kicad-library-emission";
 import { processKicadAssetByteIngestion } from "./kicad-asset-ingestion";
+import { exportEngineeringMemoryArchive } from "./engineering-memory-archive";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
 import { processFootprintGeometryValidations, processSymbolPinCountValidations } from "./asset-validation-jobs";
@@ -208,6 +209,7 @@ function buildUsageLines(): string[] {
     "npm run generate-three-d-previews -w @ee-library/worker -- [limit]",
     "npm run emit-kicad-library -w @ee-library/worker -- <projectId> [revisionLabel]",
     "npm run ingest-kicad-assets -w @ee-library/worker -- [limit]",
+    "npm run export-engineering-memory -w @ee-library/worker -- --out <path.tar.gz>",
     "npm run validate-footprints -w @ee-library/worker -- [limit]",
     "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
@@ -367,6 +369,52 @@ async function assembleExportBundles(limitValue?: string): Promise<void> {
     logWorkerFailure("worker.assemble_export_bundles", error, timings);
     throw error;
   }
+}
+
+/**
+ * Exports the entire engineering memory (all database tables + referenced storage files) to one
+ * portable, deterministic `.tar.gz` snapshot at `--out`. Read-only — the "you own your data" backup.
+ */
+async function exportEngineeringMemory(args: string[]): Promise<void> {
+  const timings: WorkerTiming[] = [];
+  const outPath = readFlagValue(args, "--out");
+
+  if (!outPath) {
+    throw new Error("Usage: export-engineering-memory --out <path.tar.gz>");
+  }
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const summary = await timeWorkerOperation(
+      "worker.export_engineering_memory",
+      () => exportEngineeringMemoryArchive({ outPath }),
+      timings,
+      (value) =>
+        `${value.tableCount} tables, ${value.totalRows} rows, ${value.storageFilesIncluded} files (${value.storageFilesMissing} missing) -> ${value.outPath}`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.export_engineering_memory", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Reads a `--flag value` or `--flag=value` style argument from a CLI arg list.
+ */
+function readFlagValue(args: string[], flag: string): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    if (current === flag) {
+      return args[index + 1];
+    }
+    if (current?.startsWith(`${flag}=`)) {
+      return current.slice(flag.length + 1);
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -689,6 +737,11 @@ async function main(): Promise<void> {
 
   if (command === "ingest-kicad-assets") {
     await ingestKicadAssets(process.argv[3]);
+    return;
+  }
+
+  if (command === "export-engineering-memory") {
+    await exportEngineeringMemory(process.argv.slice(3));
     return;
   }
 
