@@ -117,6 +117,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - Part detail can show source-linked **supply offer snapshots** when persisted (`supply_offerings` / `price_breaks`), with supplier identity where captured, provider-spread merge summaries, current/stale split, best current in-stock price tier, stale refresh scheduling, retired-row handling, and no live-stock claim.
 - Asset truth, validation, review, and verified-for-export promotion stay separate from whole-part approval.
 - **File-grounded asset validators** (worker jobs): footprint geometry sanity (pad count vs pin count, body bounding box) and symbol pin-count cross-check against high-confidence datasheet extraction. Results write `asset_validation_records` with `provenance = 'generated'`; validators never auto-promote `validation_status`, `review_status`, or `export_status`. Part detail surfaces plain trust-check badges in the files area, and `/admin` has a CAD trust-check worklist for failed or review-required checks.
+- **KiCad CAD byte ingestion** (worker job + 60s daemon tick): turns the KiCad provider's discovered `.kicad_sym` / `.kicad_mod` / `.step` *references* into stored, file-backed assets (`downloaded`, `trusted_external`), reading only files under `KICAD_LIBRARY_ROOT`. It never changes review/validation/export state — ingested assets still pass the validators and verified-for-export promotion before any export or KiCad library emission uses them. Run on demand with `npm run ingest:kicad-assets`.
 
 **Project and BOM memory**
 
