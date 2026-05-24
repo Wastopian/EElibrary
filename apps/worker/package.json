@@ -26,6 +26,7 @@
     "ingest": "tsx src/index.ts ingest",
     "ingest:jlcparts": "tsx src/index.ts ingest jlcparts",
     "ingest:octopart": "tsx src/index.ts ingest octopart",
+    "ingest-kicad-assets": "tsx src/index.ts ingest-kicad-assets",
     "imports": "tsx src/index.ts imports",
     "lint": "tsc -p tsconfig.json --noEmit",
     "operations": "tsx src/index.ts operations",

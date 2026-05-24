@@ -88,9 +88,10 @@ export const kicadProviderAdapter: ProviderAdapter = {
 };
 
 /**
- * Reads the configured KiCad library root.
+ * Reads the configured KiCad library root. Exported so the asset byte-ingestion job validates that a
+ * referenced KiCad file actually lives under the trusted root before reading it.
  */
-function readKicadLibraryRoot(): string {
+export function readKicadLibraryRoot(): string {
   return normalizeOptionalText(process.env.KICAD_LIBRARY_ROOT) ?? DEFAULT_KICAD_LIBRARY_ROOT;
 }
 

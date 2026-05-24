@@ -11,6 +11,7 @@ import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } fr
 import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { emitKicadLibraryForProject } from "./kicad-library-emission";
+import { processKicadAssetByteIngestion } from "./kicad-asset-ingestion";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
 import { processFootprintGeometryValidations, processSymbolPinCountValidations } from "./asset-validation-jobs";
@@ -206,6 +207,7 @@ function buildUsageLines(): string[] {
     "npm run assemble-bundles -w @ee-library/worker -- [limit]",
     "npm run generate-three-d-previews -w @ee-library/worker -- [limit]",
     "npm run emit-kicad-library -w @ee-library/worker -- <projectId> [revisionLabel]",
+    "npm run ingest-kicad-assets -w @ee-library/worker -- [limit]",
     "npm run validate-footprints -w @ee-library/worker -- [limit]",
     "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
@@ -363,6 +365,35 @@ async function assembleExportBundles(limitValue?: string): Promise<void> {
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.assemble_export_bundles", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Ingests referenced KiCad CAD bytes (`.kicad_sym` / `.kicad_mod` / `.step`) discovered by the KiCad
+ * provider into storage, marking each asset downloaded + file-backed. Never changes review/validation/
+ * export state — the trust gate still applies before any export or library emission uses the bytes.
+ */
+async function ingestKicadAssets(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const summary = await timeWorkerOperation(
+      "worker.ingest_kicad_assets",
+      () => processKicadAssetByteIngestion(Number.isFinite(limit) ? limit : 20),
+      timings,
+      (value) => {
+        const ingested = value.processed.filter((row) => row.status === "ingested").length;
+        return `${ingested} ingested, ${value.processed.length - ingested} skipped`;
+      }
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.ingest_kicad_assets", error, timings);
     throw error;
   }
 }
@@ -656,6 +687,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "ingest-kicad-assets") {
+    await ingestKicadAssets(process.argv[3]);
+    return;
+  }
+
   if (command === "validate-footprints") {
     await runFootprintGeometryValidationCommand(process.argv[3]);
     return;
@@ -722,6 +758,12 @@ const DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS = 30_000;
  * backlog does not block heartbeats or other daemon work.
  */
 const DEFAULT_BUNDLE_ASSEMBLY_BATCH_LIMIT = 5;
+
+/** DEFAULT_KICAD_INGESTION_INTERVAL_MS controls how often the daemon ingests referenced KiCad CAD bytes. */
+const DEFAULT_KICAD_INGESTION_INTERVAL_MS = 60_000;
+
+/** DEFAULT_KICAD_INGESTION_BATCH_LIMIT caps how many referenced KiCad assets one ingestion tick reads. */
+const DEFAULT_KICAD_INGESTION_BATCH_LIMIT = 10;
 
 /**
  * DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS controls how often the daemon asks providers to
@@ -803,12 +845,17 @@ async function runDaemon(): Promise<void> {
     void safeRunAssetValidations();
   }, DEFAULT_ASSET_VALIDATION_INTERVAL_MS);
 
-  // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
+  const kicadIngestionInterval = setInterval(() => {
+    void safeProcessKicadAssetIngestion();
+  }, DEFAULT_KICAD_INGESTION_INTERVAL_MS);
+
+  // Run one pass of each queue right after startup so work queued while the daemon was offline does
   // not have to wait a full interval before the worker picks it up.
   void safeProcessPendingExportBundleAssembly();
   void safeRefreshStaleSupplyOffers();
   void safeProcessPendingThreeDPreviews();
   void safeRunAssetValidations();
+  void safeProcessKicadAssetIngestion();
 
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -817,6 +864,7 @@ async function runDaemon(): Promise<void> {
       clearInterval(supplyOfferRefreshInterval);
       clearInterval(threeDPreviewInterval);
       clearInterval(assetValidationInterval);
+      clearInterval(kicadIngestionInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -849,6 +897,29 @@ async function safeProcessPendingExportBundleAssembly(): Promise<void> {
     );
   } catch (error) {
     console.error("Bundle assembly tick failed.", error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Ingests referenced KiCad CAD bytes into storage without crashing the daemon on fs / storage / DB
+ * failures. Logs only when the tick actually ingested or skipped something so an idle daemon (no
+ * referenced KiCad assets pending) stays quiet.
+ */
+async function safeProcessKicadAssetIngestion(): Promise<void> {
+  try {
+    const summary = await processKicadAssetByteIngestion(DEFAULT_KICAD_INGESTION_BATCH_LIMIT);
+
+    if (summary.processed.length === 0) {
+      return;
+    }
+
+    const ingested = summary.processed.filter((row) => row.status === "ingested").length;
+    const skipped = summary.processed.length - ingested;
+    console.log(
+      `Worker daemon: KiCad asset ingestion ${ingested} ingested` + (skipped > 0 ? `, ${skipped} skipped` : "")
+    );
+  } catch (error) {
+    console.error("KiCad asset ingestion tick failed.", error instanceof Error ? error.message : error);
   }
 }
 
