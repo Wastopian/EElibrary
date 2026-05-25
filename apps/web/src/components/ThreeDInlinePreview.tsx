@@ -129,7 +129,6 @@ export function ThreeDInlinePreview({ artifactUrl, altText }: ThreeDInlinePrevie
         reveal="auto"
         shadow-intensity="0.4"
         src={artifactUrl}
-        style={{ width: "100%", height: "320px", background: "var(--surface-1, #f4f1ec)" }}
       />
       <p className="asset-inline-preview__fallback muted-copy">
         This is a derived viewer-only model. The original STEP file is unchanged and unaffected by this preview.

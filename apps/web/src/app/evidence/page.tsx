@@ -59,16 +59,16 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
   ];
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">Evidence vault</p>
-            <h1>Supporting evidence</h1>
-            <p className="projects-hero__lede">
+            <h1>Show your work</h1>
+            <p className="page-hero__lede">
               Add and review supporting links, notes, and files. Evidence is reference material — it does not approve a part or make export available on its own.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label="Evidence is provenance" tone="review" />
               <StatusBadge label={pageState.health ? `API ${pageState.health.status}` : "API health unavailable"} tone={pageState.health ? "info" : "review"} />
               <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
@@ -81,28 +81,28 @@ export default async function EvidencePage({ searchParams }: EvidencePageProps) 
       <WorkspaceJumpNav ariaLabel="Evidence vault sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="evidence-filters-heading">
-        <SectionHeading id="evidence-filters-heading" index="01" subtitle="Filter by what the evidence is attached to, type, review state, source, storage, or any text." title="Vault filters" />
+        <SectionHeading id="evidence-filters-heading" subtitle="Filter by what the evidence is attached to, type, review state, source, storage, or any text." title="Vault filters" />
         <SectionPanel description="Filters shape the evidence list only. They do not imply evidence has been accepted or validated." title="Search evidence">
           <EvidenceFilterForm filters={filters} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-attach-heading">
-        <SectionHeading id="evidence-attach-heading" index="02" subtitle={pageState.status === "ready" ? "Attach a link, note, or local file to a saved target." : "Projects must be connected before evidence can be attached."} title="Attach evidence" />
+        <SectionHeading id="evidence-attach-heading" subtitle={pageState.status === "ready" ? "Attach a link, note, or local file to a saved target." : "Projects must be connected before evidence can be attached."} title="Attach evidence" />
         <SectionPanel description={pageState.status === "ready" ? "File uploads are saved with their hash, type, storage key, source, and review status." : "Attachments are paused because the project database is not reachable right now."} title={pageState.status === "ready" ? "New evidence" : "Attachment unavailable"}>
           {pageState.status === "ready" ? <EvidenceVaultAttachPanel initialOptions={targetOptions} /> : <EvidenceAttachSetupState state={pageState} />}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-results-heading">
-        <SectionHeading id="evidence-results-heading" index="03" subtitle="Edit review notes here. Editing does not change part approval or export readiness." title="Evidence rows" />
+        <SectionHeading id="evidence-results-heading" subtitle="Edit review notes here. Editing does not change part approval or export readiness." title="Evidence rows" />
         <SectionPanel description={pageState.status === "ready" ? pageState.response.boundary : "Projects must be connected before evidence can be listed."} title={getEvidenceResultsTitle(pageState)}>
           <EvidenceResults state={pageState} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="evidence-boundaries-heading">
-        <SectionHeading id="evidence-boundaries-heading" index="04" subtitle="Evidence supports a decision. It does not replace validation or approval." title="What evidence does and does not do" />
+        <SectionHeading id="evidence-boundaries-heading" subtitle="Evidence supports a decision. It does not replace validation or approval." title="What evidence does and does not do" />
         <div className="projects-truth-rail projects-truth-rail--compact">
           <div>
             <span>Stored file</span>

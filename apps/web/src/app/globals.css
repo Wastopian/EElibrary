@@ -99,6 +99,7 @@ a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 .button-link:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
@@ -118,7 +119,7 @@ button,
   font-weight: 600;
   justify-content: center;
   letter-spacing: 0.01em;
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 16px;
   text-transform: none;
   transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
@@ -171,6 +172,18 @@ select {
   font: inherit;
   min-height: 44px;
   padding: 0 14px;
+  width: 100%;
+}
+
+textarea {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font: inherit;
+  min-height: 80px;
+  padding: 10px 14px;
+  resize: vertical;
   width: 100%;
 }
 
@@ -2533,7 +2546,7 @@ details[open] .trust-breakdown__toggle::before {
   border: none;
   border-radius: 0;
   color: var(--color-text-muted);
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 14px;
 }
 
@@ -3112,7 +3125,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 /* --- Project memory workspace --- */
-.projects-layout {
+.page-layout {
   display: grid;
   gap: 24px;
   min-width: 0;
@@ -3127,7 +3140,7 @@ details[open] .trust-breakdown__toggle::before {
   margin-bottom: 4px;
 }
 
-.projects-hero {
+.page-hero {
   background: linear-gradient(135deg, rgba(253, 252, 250, 0.98) 0%, rgba(239, 244, 236, 0.96) 100%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -3137,19 +3150,19 @@ details[open] .trust-breakdown__toggle::before {
   padding: 24px 28px;
 }
 
-.projects-hero__layout {
+.page-hero__layout {
   align-items: start;
   display: grid;
   gap: 18px;
   grid-template-columns: minmax(0, 1.12fr) minmax(280px, 0.88fr);
 }
 
-.projects-hero__copy {
+.page-hero__copy {
   display: grid;
   gap: 12px;
 }
 
-.projects-hero h1 {
+.page-hero h1 {
   font-family: var(--font-display);
   font-size: clamp(1.45rem, 2.3vw, 1.95rem);
   font-weight: 800;
@@ -3157,20 +3170,20 @@ details[open] .trust-breakdown__toggle::before {
   margin: 0;
 }
 
-.projects-hero__lede {
+.page-hero__lede {
   color: var(--color-text-muted);
   line-height: 1.5;
   margin: 0;
   max-width: 65ch;
 }
 
-.projects-hero__status {
+.page-hero__status {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.projects-hero__snapshot {
+.page-hero__snapshot {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3473,11 +3486,11 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 /* Slim hero variant: shorter, no large stats grid; used on cleaned project pages. */
-.projects-hero--slim {
+.page-hero--slim {
   padding-block: 18px 14px;
 }
 
-.projects-hero--slim .projects-hero__lede {
+.page-hero--slim .page-hero__lede {
   margin-block-end: 12px;
 }
 
@@ -5445,7 +5458,7 @@ details[open] .trust-breakdown__toggle::before {
 .evidence-vault-table button,
 .follow-up-table button {
   border-radius: 3px;
-  min-height: 34px;
+  min-height: 36px;
   white-space: nowrap;
 }
 
@@ -5967,7 +5980,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .bom-match-panel button {
   justify-self: start;
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 10px;
 }
 
@@ -6026,7 +6039,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .admin-action-row button {
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 10px;
 }
 
@@ -6464,7 +6477,7 @@ details[open] .trust-breakdown__toggle::before {
   border-radius: var(--radius-sm);
   color: var(--color-text);
   font: inherit;
-  min-height: 38px;
+  min-height: 44px;
   padding: 8px 10px;
   width: 100%;
 }
@@ -7158,7 +7171,7 @@ details[open] .trust-breakdown__toggle::before {
   gap: 24px;
 }
 
-.tools-hero .projects-hero__lede {
+.tools-hero .page-hero__lede {
   max-width: 760px;
 }
 
@@ -8648,7 +8661,7 @@ details.detail-context-panel[open] > summary::after {
   font-size: 0.84rem;
   font-weight: 600;
   letter-spacing: 0.04em;
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 14px;
   text-transform: lowercase;
 }
@@ -8908,7 +8921,7 @@ details.detail-context-panel[open] > summary::after {
 
 .review-action-panel button {
   font-size: 0.82rem;
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 10px;
 }
 
@@ -9275,6 +9288,27 @@ details.detail-context-panel[open] > summary::after {
 
 .muted-copy {
   color: var(--color-text-muted);
+}
+
+.muted-copy--fine {
+  font-size: 0.82rem;
+}
+
+/* One-off vertical spacing helpers for dense detail pages (replaces inline styles). */
+.detail-flow-top {
+  margin-top: 12px;
+}
+
+.detail-flow-top--sm {
+  margin-top: 8px;
+}
+
+.detail-flow-top--lg {
+  margin-top: 18px;
+}
+
+.detail-flow-bottom {
+  margin-bottom: 12px;
 }
 
 .part-files-list {
@@ -9797,7 +9831,7 @@ details.detail-context-panel[open] > summary::after {
   .app-shell,
   .quick-check-workspace__layout,
   .admin-hero__layout,
-  .projects-hero__layout,
+  .page-hero__layout,
   .detail-two-col,
   .detail-overview-grid,
   .detail-audit-disclosure__grid,
@@ -9835,7 +9869,7 @@ details.detail-context-panel[open] > summary::after {
   .quick-check-rail__metrics,
   .result-row__signals,
   .admin-hero__snapshot,
-  .projects-hero__snapshot {
+  .page-hero__snapshot {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -10032,7 +10066,7 @@ details.detail-context-panel[open] > summary::after {
   .quick-check-rail__metrics,
   .result-row__signals,
   .admin-hero__snapshot,
-  .projects-hero__snapshot,
+  .page-hero__snapshot,
   .tools-tablist,
   .tools-fieldset,
   .tools-fieldset--dense,
@@ -10606,6 +10640,12 @@ details.detail-context-panel[open] > summary::after {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.asset-inline-preview__three-d {
+  background: var(--color-surface-muted);
+  height: 320px;
+  width: 100%;
 }
 
 .asset-inline-preview__caption {

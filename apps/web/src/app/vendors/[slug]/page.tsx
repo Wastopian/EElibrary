@@ -45,13 +45,13 @@ export default async function VendorDetailPage({ params }: { params: Promise<{ s
   if (state.status === "setup_required") {
     const copy = getSetupStateCopy(state.code);
     return (
-      <main className="projects-layout">
+      <main className="page-layout">
         <Link className="back-link" href="/vendors">&larr; All suppliers</Link>
-        <section className="projects-hero projects-hero--slim">
-          <div className="projects-hero__copy">
+        <section className="page-hero page-hero--slim">
+          <div className="page-hero__copy">
             <p className="app-kicker">Suppliers</p>
             <h1>{copy.headline}</h1>
-            <p className="projects-hero__lede">{copy.body}</p>
+            <p className="page-hero__lede">{copy.body}</p>
             <details className="import-guide">
               <summary>Show technical details</summary>
               <p className="mode-warning">{state.message}</p>
@@ -67,13 +67,13 @@ export default async function VendorDetailPage({ params }: { params: Promise<{ s
 
   if (response.availability === "configured" && !response.vendor) {
     return (
-      <main className="projects-layout">
+      <main className="page-layout">
         <Link className="back-link" href="/vendors">&larr; All suppliers</Link>
-        <section className="projects-hero projects-hero--slim">
-          <div className="projects-hero__copy">
+        <section className="page-hero page-hero--slim">
+          <div className="page-hero__copy">
             <p className="app-kicker">Suppliers</p>
             <h1>We couldn&apos;t find that supplier</h1>
-            <p className="projects-hero__lede">Check the list — the name may have changed, or the record was removed.</p>
+            <p className="page-hero__lede">Check the list — the name may have changed, or the record was removed.</p>
             <div className="empty-recovery-actions">
               <Link className="button-link button-link--quiet" href="/vendors">Open supplier list</Link>
             </div>
@@ -89,16 +89,16 @@ export default async function VendorDetailPage({ params }: { params: Promise<{ s
     : ({ slug, vendorName: null, parts: [] } satisfies VendorUsageResponse);
 
   return (
-    <main className="projects-layout">
+    <main className="page-layout">
       <Link className="back-link" href="/vendors">&larr; All suppliers</Link>
 
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Supplier</p>
           <h1>{vendor?.name ?? slug}</h1>
-          {vendor?.summary ? <p className="projects-hero__lede">{vendor.summary}</p> : null}
+          {vendor?.summary ? <p className="page-hero__lede">{vendor.summary}</p> : null}
           {vendor ? (
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label={VENDOR_CATEGORY_LABELS[vendor.category]} tone="info" />
               <StatusBadge label={`${response.notes.length} note${response.notes.length === 1 ? "" : "s"}`} tone="neutral" />
               <StatusBadge label={`${response.files.length} file${response.files.length === 1 ? "" : "s"}`} tone="neutral" />
@@ -159,7 +159,7 @@ async function loadVendorDetail(slug: string): Promise<VendorDetailState> {
     return {
       status: "setup_required",
       code: "API_UNAVAILABLE",
-      message: "The API could not be reached, so vendor detail cannot be read."
+      message: "The API could not be reached, so supplier detail cannot be read."
     };
   }
 }

@@ -14,22 +14,22 @@ import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
 /** ToolsPage renders local engineering scratchpads without requiring API data. */
 export default function ToolsPage() {
   return (
-    <main className="projects-layout tools-page">
-      <section className="projects-hero tools-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+    <main className="page-layout tools-page">
+      <section className="page-hero tools-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">Engineering tools</p>
             <h1>Calculators that leave a trail</h1>
-            <p className="projects-hero__lede">
+            <p className="page-hero__lede">
               Run common EE checks, then carry the result into project evidence, part notes, or review follow-ups. The math is local scratchpad context, not approval.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label="Local scratchpad" tone="info" />
               <StatusBadge label="Evidence-note draft" tone="review" />
               <StatusBadge label="No gate changes" tone="neutral" />
             </div>
           </div>
-          <div className="projects-hero__snapshot" aria-label="Tools summary">
+          <div className="page-hero__snapshot" aria-label="Tools summary">
             <ToolHeroStat label="Tools" tone="info" value="3" />
             <ToolHeroStat label="Writes" tone="neutral" value="0" />
             <ToolHeroStat label="Evidence" tone="review" value="Draft" />
@@ -50,7 +50,6 @@ export default function ToolsPage() {
       <section className="detail-section" aria-labelledby="tools-workbench-heading">
         <SectionHeading
           id="tools-workbench-heading"
-          index="01"
           subtitle="Load-aware divider, pull-up edge, and power-derating checks with copyable calculation records."
           title="Tool workbench"
         />
@@ -62,7 +61,6 @@ export default function ToolsPage() {
       <section className="detail-section" aria-labelledby="tools-handoff-heading">
         <SectionHeading
           id="tools-handoff-heading"
-          index="02"
           subtitle="Move from a calculation into the existing memory surfaces that preserve decisions."
           title="Project handoff"
         />
@@ -93,7 +91,6 @@ export default function ToolsPage() {
       <section className="detail-section" aria-labelledby="tools-boundaries-heading">
         <SectionHeading
           id="tools-boundaries-heading"
-          index="03"
           subtitle="The route is intentionally useful without becoming another hidden approval path."
           title="Trust boundaries"
         />

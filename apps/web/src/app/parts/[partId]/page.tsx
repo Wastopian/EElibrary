@@ -310,7 +310,7 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
 
       <details className="audit-disclosure">
         <summary>Source rows and import audit</summary>
-        <div className="source-list" style={{ marginTop: 8 }}>
+        <div className="source-list detail-flow-top--sm">
           {record.sources.length > 0 ? (
             record.sources.map((sourceRow) => (
               <article key={sourceRow.id}>
@@ -378,7 +378,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="overview-heading">
         <SectionHeading
           id="overview-heading"
-          index="01"
           subtitle="Part identity, key specs, package, and datasheet."
           title="Overview"
         />
@@ -595,7 +594,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="where-used-heading">
         <SectionHeading
           id="where-used-heading"
-          index="02"
           subtitle={
             projectContext
               ? `Projects using ${record.part.mpn}, including ${projectContext.projectName}.`
@@ -611,7 +609,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="mates-heading">
         <SectionHeading
           id="mates-heading"
-          index="03"
           subtitle="Mating connectors, accessories, tools, and cables for this part."
           title="Mates and accessories"
         />
@@ -624,7 +621,7 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
                     <RelatedPartLine relation={bestMate} related={findRelatedPart(bestMate.matePartId, relatedPartSummaries)} />
                     {record.buildableMatingSet.alternateMates.length > 0 ? (
                       <>
-                        <p className="muted-copy" style={{ marginTop: 12 }}>Alternate mates that stay visible for family and keying review:</p>
+                        <p className="muted-copy detail-flow-top">Alternate mates that stay visible for family and keying review:</p>
                         <div className="related-inline">
                           {record.buildableMatingSet.alternateMates.map((relation) => (
                             <RelatedPartLine key={relation.id} relation={relation} related={findRelatedPart(relation.matePartId, relatedPartSummaries)} />
@@ -663,7 +660,7 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
                 </ul>
                 {record.buildableMatingSet.warningDetails.length > 0 ? (
                   <>
-                    <p className="muted-copy" style={{ marginTop: 12 }}>Connector review cues stay separate from the base relationship list:</p>
+                    <p className="muted-copy detail-flow-top">Connector review cues stay separate from the base relationship list:</p>
                     <ul className="connector-list">
                       {record.buildableMatingSet.warningDetails.map((warning) => (
                         <li key={warning.code}>
@@ -684,7 +681,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="alternates-heading">
         <SectionHeading
           id="alternates-heading"
-          index="04"
           subtitle="Possible substitutes and parts often used alongside this one."
           title="Alternates and companions"
         />
@@ -705,7 +701,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="substitutions-heading">
         <SectionHeading
           id="substitutions-heading"
-          index="04b"
           subtitle="Engineer-approved alternates that other engineers can pick when this part is not available."
           title="Approved substitutes"
         />
@@ -720,7 +715,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="engineering-memory-heading">
         <SectionHeading
           id="engineering-memory-heading"
-          index="04c"
           subtitle="The private answers a public catalog cannot give: did it work or bite us, what mated in the real harness, which CAD was verified against the physical part, what depended on it, and why it was blocked."
           title="Engineering memory"
         />
@@ -735,7 +729,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="sourcing-heading">
         <SectionHeading
           id="sourcing-heading"
-          index="05"
           subtitle="Lifecycle status, source provenance, and recorded commercial snapshots."
           title="Sourcing and lifecycle"
         />
@@ -781,7 +774,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section detail-section--technical" aria-labelledby="files-models-heading">
         <SectionHeading
           id="files-models-heading"
-          index="06"
           subtitle="Inline PDF preview, 3D viewer, and per-file review when catalog assets are on file."
           title="File previews and review"
         />
@@ -795,9 +787,9 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
           </div>
         </SectionPanel>
         {populatedAssetGroups.length > 0 ? (
-          <details className="audit-disclosure" style={{ marginTop: 12 }}>
+          <details className="audit-disclosure detail-flow-top">
             <summary>Per-file detail, previews, and review ({populatedAssetGroups.length} on file)</summary>
-            <div className="asset-grid" style={{ marginTop: 12 }}>
+            <div className="asset-grid detail-flow-top">
               {populatedAssetGroups.map((group) => (
                 <EngineeringAssetSummary
                   group={group}
@@ -812,7 +804,7 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
               ))}
             </div>
             {missingAssetGroups.length > 0 ? (
-              <ul className="info-list" style={{ marginTop: 12 }}>
+              <ul className="info-list detail-flow-top">
                 {missingAssetGroups.map((group) => (
                   <li key={`missing-${group.assetType}`}>
                     <span>{assetTypeLabel(group.assetType)}: no file rows yet.</span>
@@ -822,10 +814,10 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
             ) : null}
             {record.generationWorkflows.length > 0 ? (
               <>
-                <h3 className="ui-section-heading__title" style={{ marginTop: 18 }}>
+                <h3 className="ui-section-heading__title detail-flow-top--lg">
                   Generation workflow status
                 </h3>
-                <p className="muted-copy" style={{ fontSize: "0.88rem", marginBottom: 12 }}>
+                <p className="muted-copy muted-copy--fine detail-flow-bottom">
                   Tracks async work separately from stored official or verified file assets.
                 </p>
                 <ul className="info-list">
@@ -858,7 +850,6 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
       <section className="detail-section" aria-labelledby="approval-heading">
         <SectionHeading
           id="approval-heading"
-          index="07"
           subtitle="Track reviews, file generation requests, and approval to export."
           title="Approval and export"
         />
@@ -872,10 +863,10 @@ export default async function PartDetailPage({ params, searchParams }: DetailPag
                     <div>
                       <strong>{option.label}</strong>
                       <p>{option.reason}</p>
-                      <p className="muted-copy" style={{ fontSize: "0.82rem" }}>
+                      <p className="muted-copy muted-copy--fine">
                         Source check: {option.sourceReadiness.reasons.join(" ")}
                       </p>
-                      <p className="muted-copy" style={{ fontSize: "0.82rem" }}>
+                      <p className="muted-copy muted-copy--fine">
                         Structured signals: {formatExtractionSupport(option.sourceReadiness)}
                       </p>
                     </div>
@@ -1055,7 +1046,6 @@ function PartDetailSetupState({ state }: { state: Extract<PartDetailPageState, {
       <section className="detail-section" aria-labelledby="part-detail-setup-heading">
         <SectionHeading
           id="part-detail-setup-heading"
-          index="01"
           subtitle={copy.body}
           title={copy.headline}
         />
@@ -2180,7 +2170,7 @@ function DetailContextPanel({
           {record.buildableMatingSet.confidenceScore !== null ? ` ${buildConnectorConfidenceSummary(record.buildableMatingSet)}` : ""}
         </p>
         {record.buildableMatingSet.warningDetails.length > 0 ? (
-          <ul className="connector-list" style={{ marginBottom: 12 }}>
+          <ul className="connector-list detail-flow-bottom">
             {record.buildableMatingSet.warningDetails.map((warning) => (
               <li key={warning.code}>
                 <strong>{warning.summary}</strong> {warning.detail}

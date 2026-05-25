@@ -23,16 +23,16 @@ export default async function SystemPage() {
   const isLocalDev = process.env.NODE_ENV !== "production";
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">System</p>
-            <h1>System health</h1>
-            <p className="projects-hero__lede">
+            <h1>Is everything running?</h1>
+            <p className="page-hero__lede">
               See what is online and what is offline. Open this when something will not load or an action keeps failing.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label={health ? "API ok" : "API health unavailable"} tone={health ? "verified" : "danger"} />
               <StatusBadge label={`Database ${health ? formatConnectionLabel(health.database.status) : "unknown"}`} tone={health ? toneForConnection(health.database.status) : "review"} />
               <StatusBadge label={`Worker ${health ? formatWorkerLabel(health.worker.status) : "unknown"}`} tone={health ? toneForWorker(health.worker.status) : "review"} />
@@ -45,21 +45,21 @@ export default async function SystemPage() {
       <WorkerStatusBanner apiBaseUrl={apiBaseUrl} databaseUrlConfigured={databaseUrlConfigured} health={health} isLocalDev={isLocalDev} />
 
       <section className="detail-section" aria-labelledby="system-current-heading">
-        <SectionHeading id="system-current-heading" index="01" subtitle="Live service status." title="Current status" />
+        <SectionHeading id="system-current-heading" subtitle="Live service status." title="Current status" />
         <SectionPanel description="These states show what is reachable. They do not change part approval, evidence review, or export readiness." title="Service readiness">
           {health ? <SystemHealthOverview health={health} /> : <SystemUnavailableState apiBaseUrl={apiBaseUrl} />}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="system-queues-heading">
-        <SectionHeading id="system-queues-heading" index="02" subtitle="Pending and failed background work." title="Background work" />
+        <SectionHeading id="system-queues-heading" subtitle="Pending and failed background work." title="Background work" />
         <SectionPanel description="Pending work can still be moving when the worker is online. Failed work needs a look before its results are trusted." title="Queue status">
           {health ? <SystemQueueTable health={health} /> : <SystemUnavailableState apiBaseUrl={apiBaseUrl} />}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="system-recovery-heading">
-        <SectionHeading id="system-recovery-heading" index="03" subtitle="What to do when something is offline." title="What to check next" />
+        <SectionHeading id="system-recovery-heading" subtitle="What to do when something is offline." title="What to check next" />
         <SectionPanel description="Use these when a page says it is paused, the API is down, or background work has failed." title="Recovery paths">
           <SystemRecoveryPanel apiBaseUrl={apiBaseUrl} health={health} />
         </SectionPanel>

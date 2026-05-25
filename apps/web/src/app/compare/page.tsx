@@ -68,7 +68,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
       <header className="compare-hero">
         <div>
           <p className="app-kicker">Compare parts</p>
-          <h1>Part comparison</h1>
+          <h1>See parts side by side</h1>
           <p className="compare-hero__lede">
             Look at up to {MAX_PARTS} parts side by side. Add parts from the catalog, from a part page, or in the box below. A blank cell means that metric is not recorded for that part.
           </p>

@@ -349,7 +349,7 @@ export default async function AdminPage(props: AdminPageProps) {
         <div className="admin-hero__layout">
           <div className="admin-hero__copy">
             <p className="app-kicker">Admin workspace</p>
-            <h1>Review and trust maintenance</h1>
+            <h1>Keep the library trustworthy</h1>
             <p className="admin-hero__lede">
               Review pending drafts, clear blockers, and promote files to verified for export. Promotion stays explicit so nothing slips through unreviewed.
             </p>
@@ -388,7 +388,6 @@ export default async function AdminPage(props: AdminPageProps) {
       <section className="detail-section" aria-labelledby="assistant-triage-heading">
         <SectionHeading
           id="assistant-triage-heading"
-          index="00"
           subtitle="Evidence packets for assistant-aided review prep. They summarize existing records only and never advance trust state."
           title="Assistant triage prep"
         />
@@ -440,7 +439,6 @@ export default async function AdminPage(props: AdminPageProps) {
       <section className="detail-section" aria-labelledby="issue-ops-heading">
         <SectionHeading
           id="issue-ops-heading"
-          index="01"
           subtitle="Assign, resolve, and reopen open issues. These stay separate from asset review and promotion."
           title="Issue operations"
         />
@@ -553,7 +551,6 @@ export default async function AdminPage(props: AdminPageProps) {
       <section className="detail-section" aria-labelledby="import-by-mpn-heading">
         <SectionHeading
           id="import-by-mpn-heading"
-          index="02"
           subtitle="Pull one part from a registered provider into the catalog database, then continue in part detail or the queues below."
           title="Import by MPN"
         />
@@ -567,7 +564,7 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="review-queue-heading">
-        <SectionHeading id="review-queue-heading" index="03" title="Review queue" subtitle="Generated drafts and review-required outputs that need approve/reject/changes decisions." />
+        <SectionHeading id="review-queue-heading" title="Review queue" subtitle="Generated drafts and review-required outputs that need approve/reject/changes decisions." />
         <SectionPanel description="Review state and actions are explicit. Approval alone does not verify export." title={`${reviewQueue.length} review items`}>
           {reviewQueue.length > 0 ? (
             <div className="admin-table-wrap">
@@ -630,7 +627,7 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="promotion-queue-heading">
-        <SectionHeading id="promotion-queue-heading" index="04" title="Promotion queue" subtitle="Approved assets that are ready or blocked for the final verification step." />
+        <SectionHeading id="promotion-queue-heading" title="Promotion queue" subtitle="Approved assets that are ready or blocked for the final verification step." />
         <SectionPanel description="Promotion remains separate from review. Blocker reasons are shown before action." title={`${promotionQueue.length} promotion candidates`}>
           {promotionQueue.length > 0 ? (
             <div className="admin-table-wrap">
@@ -696,7 +693,7 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="ops-health-heading">
-        <SectionHeading id="ops-health-heading" index="05" title="Imports and validation" subtitle="Recent import results and validation evidence." />
+        <SectionHeading id="ops-health-heading" title="Imports and validation" subtitle="Recent import results and validation evidence." />
         <div className="detail-two-col">
           <SectionPanel title="Recent imports" description="Newest source imports.">
             {recentImportRows.length > 0 ? (
@@ -842,7 +839,7 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="audit-heading">
-        <SectionHeading id="audit-heading" index="06" title="Promotion audit history" subtitle="Recent promotion attempts with actor, outcome, and blocker reasons." />
+        <SectionHeading id="audit-heading" title="Promotion audit history" subtitle="Recent promotion attempts with actor, outcome, and blocker reasons." />
         <SectionPanel title="Recent promotion audits" description="Promotion outcomes remain auditable even when denied by blocker rules.">
           {promotionAudits.length > 0 ? (
             <div className="admin-table-wrap">
@@ -912,7 +909,6 @@ function AdminProjectFilesRootSection({
     <section className="detail-section" aria-labelledby="project-folder-heading">
       <SectionHeading
         id="project-folder-heading"
-        index="CFG"
         subtitle="Choose the operating-system folder watched by project workspaces."
         title="Project file folder"
       />
@@ -993,7 +989,6 @@ function AdminUserActionAuditSection({ auditEventState }: { auditEventState: Adm
     <section className="detail-section" aria-labelledby="user-action-audit-heading">
       <SectionHeading
         id="user-action-audit-heading"
-        index="07"
         title="User action audit trail"
         subtitle="Recent API write attempts with actor, target, outcome, and request correlation."
       />

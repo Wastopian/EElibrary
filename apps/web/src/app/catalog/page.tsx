@@ -157,7 +157,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       <section aria-label="Catalog context" className="site-intro site-intro--compact site-intro--catalog">
         <div>
           <p className="app-kicker">Catalog</p>
-          <h1>{hasActiveCatalogContext ? "Parts catalog" : "Part lookup and review queue"}</h1>
+          <h1>{hasActiveCatalogContext ? "Browse the parts library" : "Look up a part or review the queue"}</h1>
           <p className="site-intro__lede">
             {hasActiveCatalogContext
               ? "Use the filters to narrow the list, or open a part to see its full record."

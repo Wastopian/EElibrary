@@ -52,16 +52,16 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
   const { health, resolution, response } = pageState;
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">Connector sets</p>
-            <h1>Connector set catalog</h1>
-            <p className="projects-hero__lede">
+            <h1>Find connectors that mate</h1>
+            <p className="page-hero__lede">
               Find connectors with their matching mates and accessories. Each row shows the best mate, any alternates, and how many projects already use it.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label="Database connected" tone="verified" />
               <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
               <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
@@ -83,7 +83,6 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
       <section className="detail-section" aria-labelledby="connector-sets-filter-heading">
         <SectionHeading
           id="connector-sets-filter-heading"
-          index="01"
           subtitle="Filter by connector class or search by MPN/manufacturer."
           title="Filter connector catalog"
         />
@@ -96,7 +95,6 @@ export default async function ConnectorSetsPage({ searchParams }: ConnectorSetsP
         <section className="detail-section" aria-labelledby="connector-sets-intent-heading">
           <SectionHeading
             id="connector-sets-intent-heading"
-            index="02"
             subtitle={`${resolution.candidates.length} candidate${resolution.candidates.length === 1 ? "" : "s"} with buildability state and warnings.`}
             title="Intent resolver"
           />
@@ -209,13 +207,13 @@ async function loadConnectorSetsPage(
  */
 function ConnectorSetsSetupState({ pageState }: { pageState: Extract<ConnectorSetsPageState, { status: "setup_required" }> }) {
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__copy">
           <p className="app-kicker">Connector sets</p>
           <h1>{getSetupStateCopy(pageState.code).headline}</h1>
-          <p className="projects-hero__lede">{getSetupStateCopy(pageState.code).body} Connector set browsing needs persisted connector parts and mate_relations rows.</p>
-          <div className="projects-hero__status">
+          <p className="page-hero__lede">{getSetupStateCopy(pageState.code).body} Connector set browsing needs persisted connector parts and mate_relations rows.</p>
+          <div className="page-hero__status">
             <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
           <details className="audit-disclosure">
@@ -237,7 +235,7 @@ function ConnectorSetsSnapshot({ response }: { response: ConnectorSetListRespons
     , 0);
 
   return (
-    <div className="projects-hero__snapshot" aria-label="Connector set summary">
+    <div className="page-hero__snapshot" aria-label="Connector set summary">
       <ConnectorSetStat label="Connectors" tone="info" value={response.totalConnectorCount.toString()} />
       <ConnectorSetStat label="Mate pairs" tone="neutral" value={response.totalMatePairCount.toString()} />
       <ConnectorSetStat label="Classes" tone="neutral" value={response.groups.length.toString()} />
@@ -306,7 +304,7 @@ function ConnectorIntentCandidates({ candidates }: { candidates: ConnectorSetInt
           <header>
             <Link href={`/parts/${encodeURIComponent(candidate.connector.partId)}`} className="ui-mono">{candidate.connector.mpn}</Link>
             <p className="muted-copy">{candidate.connector.manufacturerName} - {candidate.connector.connectorFamilyName ?? "No family"} - {candidate.connector.packagePinCount ?? "?"} pins</p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label={candidate.buildabilityState.replace(/_/gu, " ")} tone={candidate.buildabilityState === "buildable" ? "verified" : candidate.buildabilityState === "pending" ? "review" : "danger"} />
               <StatusBadge label={`${Math.round(candidate.confidenceScore * 100)}% confidence`} tone={candidate.confidenceScore >= 0.8 ? "verified" : "review"} />
             </div>

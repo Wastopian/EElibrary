@@ -12,8 +12,8 @@ export default function NotFound() {
     <section className="workspace-state">
       <div className="workspace-state__card">
         <p className="workspace-state__eyebrow">Page not found</p>
-        <h1>We could not find that part.</h1>
-        <p>It may have been removed, the link may be wrong, or the part has not been imported yet. Open your projects or search the catalog for the manufacturer part number.</p>
+        <h1>We can't find that page.</h1>
+        <p>The link may be wrong, or the page may have moved. Head back to your projects, or search the catalog if you are looking for a part.</p>
         <div className="workspace-state__actions">
           <Link className="button-link" href="/">
             Open projects

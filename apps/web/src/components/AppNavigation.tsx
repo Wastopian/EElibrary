@@ -76,7 +76,7 @@ const MORE_NAVIGATION_ITEMS: NavigationItem[] = [
   {
     description: "Remember PCB shops, sheet metal, and who you trust.",
     href: "/vendors",
-    label: "Vendors",
+    label: "Suppliers",
     match: { path: "/vendors", type: "path" }
   },
   {

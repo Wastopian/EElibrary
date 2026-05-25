@@ -72,19 +72,19 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
   const metricRollup = getCircuitBlockMetricRollup(detail);
 
   return (
-    <main className="projects-layout">
+    <main className="page-layout">
       <Link className="back-link" href="/circuit-blocks">
         &larr; Back to circuit blocks
       </Link>
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+      <section className="page-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">Circuit block detail</p>
             <h1>{detail.circuitBlock.name}</h1>
-            <p className="projects-hero__lede">
+            <p className="page-hero__lede">
               <span className="ui-mono">{detail.circuitBlock.blockKey}</span> preserves part roles, constraints, reuse scope, and evidence for this circuit pattern. Linked parts keep their own approval, readiness, and export truth.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label={formatCircuitBlockStatus(detail.circuitBlock.status)} tone={circuitBlockStatusTone(detail.circuitBlock.status)} />
               <StatusBadge label={formatCircuitBlockType(detail.circuitBlock.blockType)} tone="info" />
               <StatusBadge label={`${detail.summary.readinessGapCount} readiness gaps`} tone={detail.summary.readinessGapCount > 0 ? "review" : "verified"} />
@@ -110,7 +110,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <CircuitBlockReuseReadinessStrip detail={detail} />
 
       <section className="detail-section" aria-labelledby="circuit-block-summary-heading">
-        <SectionHeading id="circuit-block-summary-heading" index="01" subtitle="Block details and reuse constraints." title="Block summary" />
+        <SectionHeading id="circuit-block-summary-heading" subtitle="Block details and reuse constraints." title="Block summary" />
         <SectionPanel description={detail.boundary} title={detail.circuitBlock.blockKey}>
           <dl className="projects-summary-grid">
             <div>
@@ -150,7 +150,6 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <section className="detail-section" aria-labelledby="circuit-block-metrics-heading">
         <SectionHeading
           id="circuit-block-metrics-heading"
-          index="02"
           subtitle="Datasheet-style metrics from the parts linked into this block, with source confidence."
           title="Linked-part metrics"
         />
@@ -160,7 +159,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       </section>
 
       <section className="detail-section" aria-labelledby="circuit-block-parts-heading">
-        <SectionHeading id="circuit-block-parts-heading" index="03" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
+        <SectionHeading id="circuit-block-parts-heading" subtitle="Part roles stay tied to current catalog readiness and approval state." title="Part roles" />
         <SectionPanel description="Required and optional roles are saved separately. A block can be approved while a linked part still needs review." title={detail.parts.length > 0 ? `${detail.parts.length} part roles` : "No part roles"}>
           {detail.parts.length > 0 ? <CircuitBlockPartEditTable circuitBlockId={detail.circuitBlock.id} parts={detail.parts} /> : <EmptyState title="No part roles yet" body="Add internal part roles before this circuit block can support reuse review." />}
         </SectionPanel>
@@ -169,7 +168,6 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <section className="detail-section" aria-labelledby="circuit-block-instantiations-heading">
         <SectionHeading
           id="circuit-block-instantiations-heading"
-          index="04"
           subtitle="Engineering memory: every time this reusable block was dropped into a project BOM."
           title="Reuse history"
         />
@@ -186,7 +184,6 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
       <section className="detail-section" aria-labelledby="circuit-block-known-risks-heading">
         <SectionHeading
           id="circuit-block-known-risks-heading"
-          index="05"
           subtitle="Engineering memory the team learned the hard way: errata, limitations, and cautions tied to this reusable pattern."
           title="Known risks &amp; limitations"
         />
@@ -207,21 +204,21 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </p>
 
         <section className="detail-section" aria-labelledby="circuit-block-edit-heading">
-          <SectionHeading id="circuit-block-edit-heading" index="06" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
+          <SectionHeading id="circuit-block-edit-heading" subtitle="Update the block's name, notes, and constraints. Linked parts are not affected." title="Edit circuit block" />
           <SectionPanel description="These edits update block metadata only. Block status, scope, and constraints do not approve linked parts or verify export assets." title="Metadata maintenance">
             <CircuitBlockEditPanel circuitBlock={detail.circuitBlock} />
           </SectionPanel>
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-add-part-heading">
-          <SectionHeading id="circuit-block-add-part-heading" index="07" subtitle="Link known internal parts to required or optional roles." title="Add part role" />
+          <SectionHeading id="circuit-block-add-part-heading" subtitle="Link known internal parts to required or optional roles." title="Add part role" />
           <SectionPanel description="Part roles record reuse structure and substitution policy. They do not change part approval or export readiness." title="New part role">
             <CircuitBlockPartAddPanel circuitBlockId={detail.circuitBlock.id} />
           </SectionPanel>
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-deps-heading">
-          <SectionHeading id="circuit-block-deps-heading" index="08" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
+          <SectionHeading id="circuit-block-deps-heading" subtitle="Projects with confirmed usages of parts in this block's roles." title="Dependent projects" />
           <SectionPanel description="Dependency context comes from confirmed project usage records. It does not approve the block, validate parts, or make export available." title={detail.projectDependencies.length > 0 ? `${detail.projectDependencies.length} dependent project${detail.projectDependencies.length === 1 ? "" : "s"}` : "No dependent projects"}>
             {detail.projectDependencies.length > 0
               ? <CircuitBlockProjectDependencyTable dependencies={detail.projectDependencies} />
@@ -230,14 +227,14 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-follow-ups-heading">
-          <SectionHeading id="circuit-block-follow-ups-heading" index="09" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
+          <SectionHeading id="circuit-block-follow-ups-heading" subtitle="Open work items captured from gaps in required part roles." title="Follow-up work" />
           <SectionPanel description="Follow-up workflow state does not approve linked parts or make this circuit export-ready. Refresh creates or updates records from current required-role readiness gaps." title={followUps.followUps.length > 0 ? `${followUps.followUps.length} follow-up records` : "No follow-up records"}>
             <FollowUpPanel followUps={followUps} targetId={detail.circuitBlock.id} targetType="circuit_block" />
           </SectionPanel>
         </section>
 
         <section className="detail-section" aria-labelledby="circuit-block-evidence-heading">
-          <SectionHeading id="circuit-block-evidence-heading" index="10" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
+          <SectionHeading id="circuit-block-evidence-heading" subtitle="Supporting links, notes, and files for this block. Reference material only." title="Evidence" />
           <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or make export available." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
             <div className="project-evidence-panel">
               <div className="project-evidence-panel__boundary">
@@ -252,7 +249,6 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         <section className="detail-section" aria-labelledby="circuit-block-next-workspaces-heading">
           <SectionHeading
             id="circuit-block-next-workspaces-heading"
-            index="11"
             subtitle="Cross-link into the workspaces that work alongside this block. Each link is read-only context — none of these change reuse readiness or part approval."
             title="Next workspaces"
           />
@@ -301,15 +297,15 @@ async function loadCircuitBlockDetail(blockId: string): Promise<CircuitBlockDeta
  */
 function CircuitBlockDetailSetupState({ pageState }: { pageState: Extract<CircuitBlockDetailState, { status: "setup_required" }> }) {
   return (
-    <main className="projects-layout">
+    <main className="page-layout">
       <Link className="back-link" href="/circuit-blocks">
         &larr; Back to circuit blocks
       </Link>
-      <section className="projects-hero">
-        <div className="projects-hero__copy">
+      <section className="page-hero">
+        <div className="page-hero__copy">
           <p className="app-kicker">Circuit block detail</p>
           <h1>{getSetupStateCopy(pageState.code).headline}</h1>
-          <p className="projects-hero__lede">{getSetupStateCopy(pageState.code).body} Circuit block detail needs persisted block, part-role, and evidence tables.</p>
+          <p className="page-hero__lede">{getSetupStateCopy(pageState.code).body} Circuit block detail needs persisted block, part-role, and evidence tables.</p>
           <details className="audit-disclosure">
             <summary>Show technical details</summary>
             <p className="muted-copy">{pageState.code}: {pageState.message}</p>
@@ -325,7 +321,7 @@ function CircuitBlockDetailSetupState({ pageState }: { pageState: Extract<Circui
  */
 function CircuitBlockDetailSnapshot({ detail, followUpCount }: { detail: CircuitBlockDetailResponse; followUpCount: number }) {
   return (
-    <div className="projects-hero__snapshot" aria-label="Circuit block detail summary">
+    <div className="page-hero__snapshot" aria-label="Circuit block detail summary">
       <CircuitBlockStat label="Part roles" tone="neutral" value={detail.summary.totalPartCount.toString()} />
       <CircuitBlockStat label="Required" tone="info" value={detail.summary.requiredPartCount.toString()} />
       <CircuitBlockStat label="Approved parts" tone={detail.summary.approvedPartCount === detail.summary.totalPartCount && detail.summary.totalPartCount > 0 ? "verified" : "review"} value={detail.summary.approvedPartCount.toString()} />
@@ -563,7 +559,6 @@ function CircuitBlockReuseReadinessStrip({ detail }: { detail: CircuitBlockDetai
     <section className="detail-section" aria-labelledby="circuit-block-reuse-readiness-heading">
       <SectionHeading
         id="circuit-block-reuse-readiness-heading"
-        index="00"
         subtitle="Defined → roles complete → parts ready → reusable. Each gate is independent."
         title="Reuse readiness"
       />

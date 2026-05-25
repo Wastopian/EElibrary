@@ -4,11 +4,10 @@
 
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { DM_Mono, DM_Sans, Syne } from "next/font/google";
+import { DM_Mono, DM_Sans } from "next/font/google";
 import { RootLayoutShell } from "./RootLayoutShell";
 import "./globals.css";
 
-const syne = Syne({ subsets: ["latin"], variable: "--font-syne", weight: ["400", "600", "700", "800"] });
 const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans", weight: ["400", "500", "600", "700"] });
 const dmMono = DM_Mono({ subsets: ["latin"], variable: "--font-dm-mono", weight: ["400", "500"] });
 
@@ -22,5 +21,5 @@ export const metadata: Metadata = {
  * Renders the desktop-first application shell around every route with global CSS loaded.
  */
 export default function RootLayout({ children }: { children: ReactNode }) {
-  return <RootLayoutShell fontClassName={`${syne.variable} ${dmSans.variable} ${dmMono.variable}`}>{children}</RootLayoutShell>;
+  return <RootLayoutShell fontClassName={`${dmSans.variable} ${dmMono.variable}`}>{children}</RootLayoutShell>;
 }

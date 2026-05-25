@@ -51,7 +51,7 @@ test("catalog page renders compact filter bar and explanation-first list results
     assert.match(html, /1 matches/u);
     assert.match(html, /Live catalog/u);
     assert.match(html, /Catalog search/u);
-    assert.match(html, /Part lookup and review queue/u);
+    assert.match(html, /Look up a part or review the queue/u);
     assert.match(html, /Back to projects/u);
     assert.match(html, /CAD\/export/u);
     assert.match(html, /Verification steps/u);

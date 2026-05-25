@@ -66,12 +66,12 @@ export default async function ProjectsPage(props: ProjectsPageProps) {
   const fleetRows = fleetRisk?.rows ?? [];
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Projects</p>
           <h1>Your projects</h1>
-          <p className="projects-hero__lede">
+          <p className="page-hero__lede">
             Pick a project to see its parts. Use Search by part to find where a part is used.
           </p>
           <div className="empty-recovery-actions" aria-label="Project quick actions">
@@ -321,13 +321,13 @@ function ProjectsSetupState({ dashboardState }: { dashboardState: Extract<Projec
   const copy = getSetupStateCopy(dashboardState.code);
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__copy">
           <p className="app-kicker">Projects</p>
           <h1>{copy.headline}</h1>
-          <p className="projects-hero__lede">{copy.body}</p>
-          <div className="projects-hero__status">
+          <p className="page-hero__lede">{copy.body}</p>
+          <div className="page-hero__status">
             <StatusBadge label="Projects paused" tone="review" />
             <StatusBadge label={`Database ${databaseStatus ?? "unknown"}`} tone={databaseStatus === "connected" ? "verified" : "review"} />
           </div>
@@ -377,7 +377,7 @@ function ProjectMemorySnapshot({ projects }: { projects: ProjectSummary[] }) {
   const totalUsages = projects.reduce((total, project) => total + project.usageCount, 0);
 
   return (
-    <div className="projects-hero__snapshot" aria-label="Project memory summary">
+    <div className="page-hero__snapshot" aria-label="Project memory summary">
       <ProjectMemoryStat label="Projects" tone="info" value={projects.length.toString()} />
       <ProjectMemoryStat label="Revisions" tone="neutral" value={totalRevisions.toString()} />
       <ProjectMemoryStat label="Parts list uploads" tone="review" value={totalBomImports.toString()} />

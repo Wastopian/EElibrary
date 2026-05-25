@@ -29,7 +29,7 @@ test("system page renders health summary, worker warning, and queue recovery", a
   try {
     const html = renderToStaticMarkup(await SystemPage());
 
-    assert.match(html, /System health/u);
+    assert.match(html, /Is everything running/u);
     assert.match(html, /API ok/u);
     assert.match(html, /Database Connected/u);
     assert.match(html, /Object storage/u);

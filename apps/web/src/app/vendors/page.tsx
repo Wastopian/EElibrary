@@ -44,12 +44,12 @@ export default async function VendorsPage() {
   }
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Suppliers</p>
           <h1>Who we use</h1>
-          <p className="projects-hero__lede">
+          <p className="page-hero__lede">
             PCB shops, sheet metal, machining, finishing, assembly — one place for quality notes and reference files.
           </p>
           <div className="empty-recovery-actions" aria-label="Supplier quick actions">
@@ -147,12 +147,12 @@ async function loadVendors(): Promise<VendorsDashboardState> {
  */
 function VendorsNotConfiguredState() {
   return (
-    <main className="projects-layout">
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Suppliers</p>
           <h1>Supplier list is not set up</h1>
-          <p className="projects-hero__lede">
+          <p className="page-hero__lede">
             Ask whoever runs the EE Library app to turn on the supplier folder. Then reload this page.
           </p>
           <details className="import-guide">
@@ -171,12 +171,12 @@ function VendorsNotConfiguredState() {
 /** Renders the generic "filesystem read failed" state. */
 function VendorsErrorState({ message }: { message: string }) {
   return (
-    <main className="projects-layout">
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Suppliers</p>
           <h1>Could not read the supplier folder</h1>
-          <p className="projects-hero__lede">{message}</p>
+          <p className="page-hero__lede">{message}</p>
         </div>
       </section>
     </main>
@@ -187,12 +187,12 @@ function VendorsErrorState({ message }: { message: string }) {
 function VendorsSetupState({ code, message }: { code: string; message: string }) {
   const copy = getSetupStateCopy(code);
   return (
-    <main className="projects-layout">
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Suppliers</p>
           <h1>{copy.headline}</h1>
-          <p className="projects-hero__lede">{copy.body}</p>
+          <p className="page-hero__lede">{copy.body}</p>
           <details className="import-guide">
             <summary>Show technical details</summary>
             <p className="mode-warning">{message}</p>

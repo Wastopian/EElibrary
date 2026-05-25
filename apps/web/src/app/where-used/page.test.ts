@@ -33,7 +33,7 @@ test("where-used page renders part usage and circuit block dependencies", async 
   try {
     const html = await renderWhereUsedPage({ q: "TPS7A02DBVR", targetType: "part" });
 
-    assert.match(html, /Usage and dependency search/u);
+    assert.match(html, /See where anything is used/u);
     assert.match(html, /Query examples/u);
     assert.match(html, /Part id/u);
     assert.match(html, /ALPHA/u);

@@ -111,16 +111,16 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const hasPartKits = partKitsState.kits.length > 0;
 
   return (
-    <main className="projects-layout">
+    <main className="page-layout">
       <Link className="back-link" href="/projects">
         &larr; Back to projects
       </Link>
 
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Project</p>
           <h1>{project.name}</h1>
-          <p className="projects-hero__lede">
+          <p className="page-hero__lede">
             <span className="ui-mono">{project.projectKey}</span>
             {project.description ? <> &mdash; {project.description}</> : null}
           </p>
@@ -130,7 +130,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             <a className="button-link button-link--quiet" href="#project-parts-list-heading">Parts list setup</a>
             <a className="button-link button-link--quiet" href="#advanced-project-tools">More tools</a>
           </div>
-          <div className="projects-hero__status">
+          <div className="page-hero__status">
             <StatusBadge label={formatProjectStatus(project.status)} tone={projectStatusTone(project.status)} />
             <StatusBadge label={`${summary.usageCount} part${summary.usageCount === 1 ? "" : "s"}`} tone={summary.usageCount > 0 ? "verified" : "neutral"} />
             <StatusBadge label={`${summary.bomImportCount} parts list upload${summary.bomImportCount === 1 ? "" : "s"}`} tone="info" />
@@ -563,16 +563,16 @@ async function loadProjectDetail(projectId: string): Promise<ProjectDetailState>
  */
 function ProjectDetailSetupState({ detailState }: { detailState: Extract<ProjectDetailState, { status: "setup_required" }> }) {
   return (
-    <main className="projects-layout">
+    <main className="page-layout">
       <Link className="back-link" href="/projects">
         &larr; Back to projects
       </Link>
-      <section className="projects-hero">
-        <div className="projects-hero__copy">
+      <section className="page-hero">
+        <div className="page-hero__copy">
           <p className="app-kicker">Project</p>
           <h1>{getSetupStateCopy(detailState.code).headline}</h1>
-          <p className="projects-hero__lede">{getSetupStateCopy(detailState.code).body}</p>
-          <div className="projects-hero__status">
+          <p className="page-hero__lede">{getSetupStateCopy(detailState.code).body}</p>
+          <div className="page-hero__status">
             <StatusBadge label={`Database ${detailState.health?.dependencies.database ?? "unknown"}`} tone={detailState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
           <details className="audit-disclosure">
@@ -781,7 +781,7 @@ function ProjectDetailSnapshot({
   usageCount: number;
 }) {
   return (
-    <div className="projects-hero__snapshot" aria-label="Project detail summary">
+    <div className="page-hero__snapshot" aria-label="Project detail summary">
       <ProjectMemoryStat label="Revisions" tone="neutral" value={revisionCount.toString()} />
       <ProjectMemoryStat label="BOM imports" tone="review" value={bomImportCount.toString()} />
       <ProjectMemoryStat label="Confirmed usage" tone="verified" value={usageCount.toString()} />

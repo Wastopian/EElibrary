@@ -64,16 +64,16 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
   ];
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">Where-used</p>
-            <h1>Usage and dependency search</h1>
-            <p className="projects-hero__lede">
+            <h1>See where anything is used</h1>
+            <p className="page-hero__lede">
               Find every place a part, asset, or circuit block has been used. Past use does not approve a part for a new project.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label="Historical context only" tone="review" />
               <StatusBadge label={pageState.health ? `API ${pageState.health.status}` : "API health unavailable"} tone={pageState.health ? "info" : "review"} />
               <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
@@ -86,7 +86,7 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
       <WorkspaceJumpNav ariaLabel="Where-used sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="where-used-search-heading">
-        <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Connect project memory to search where things are used." : "Find a part, circuit block, connector set, or exported asset and see where it appears."} title="Search memory" />
+        <SectionHeading id="where-used-search-heading" subtitle={pageState.status === "setup_required" ? "Connect project memory to search where things are used." : "Find a part, circuit block, connector set, or exported asset and see where it appears."} title="Search memory" />
         <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is paused until projects are connected." : "Search by part id, part number, circuit block id, or block key."} title={pageState.status === "setup_required" ? "Projects unavailable" : "Where-used lookup"}>
           {pageState.status === "setup_required"
             ? <WhereUsedSearchSetupState state={pageState} />
@@ -95,14 +95,14 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
       </section>
 
       <section className="detail-section" aria-labelledby="where-used-results-heading">
-        <SectionHeading id="where-used-results-heading" index="02" subtitle="Grouped by project usage and reusable circuit roles." title="Results" />
+        <SectionHeading id="where-used-results-heading" subtitle="Grouped by project usage and reusable circuit roles." title="Results" />
         <SectionPanel description="Past use is information only. It does not approve parts or files." title={getResultsTitle(pageState)}>
           <WhereUsedResults state={pageState} />
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="where-used-boundaries-heading">
-        <SectionHeading id="where-used-boundaries-heading" index="03" subtitle="Where-used is reference info. It does not approve parts or files on its own." title="Boundaries" />
+        <SectionHeading id="where-used-boundaries-heading" subtitle="Where-used is reference info. It does not approve parts or files on its own." title="Boundaries" />
         <div className="projects-truth-rail projects-truth-rail--compact">
           <div>
             <span>Confirmed usage</span>

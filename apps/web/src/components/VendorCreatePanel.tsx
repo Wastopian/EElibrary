@@ -49,7 +49,7 @@ export function VendorCreatePanel(): React.ReactElement {
 
       const trimmedName = name.trim();
       if (!trimmedName) {
-        setStatus({ kind: "failed", message: "Vendor name is required." });
+        setStatus({ kind: "failed", message: "Supplier name is required." });
         return;
       }
 

@@ -102,16 +102,16 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
   const headlines = response.circuitBlocks.map((summary) => getCircuitBlockReuseHeadline(summary));
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__layout">
-          <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__layout">
+          <div className="page-hero__copy">
             <p className="app-kicker">Circuit blocks</p>
-            <h1>Reusable circuit blocks</h1>
-            <p className="projects-hero__lede">
+            <h1>Save a circuit, reuse it later</h1>
+            <p className="page-hero__lede">
               Save reusable circuit patterns so a future project can drop them in. Block approval is separate from part approval and from export readiness.
             </p>
-            <div className="projects-hero__status">
+            <div className="page-hero__status">
               <StatusBadge label="Database connected" tone="verified" />
               <StatusBadge label={health ? `API ${health.status}` : "API health unavailable"} tone={health ? "info" : "review"} />
               <StatusBadge label={`Database ${health?.dependencies.database ?? "unknown"}`} tone={health?.dependencies.database === "connected" ? "verified" : "review"} />
@@ -134,7 +134,6 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
       <section className="detail-section" aria-labelledby="circuit-block-filters-heading">
         <SectionHeading
           id="circuit-block-filters-heading"
-          index="01"
           subtitle="Narrow the library by name, type, status, owner, or reuse readiness."
           title="Find a circuit block"
         />
@@ -149,7 +148,6 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
       <section className="detail-section" aria-labelledby="circuit-block-list-heading">
         <SectionHeading
           id="circuit-block-list-heading"
-          index="02"
           subtitle="Saved circuit patterns with their part roles and reuse status."
           title="Circuit block library"
         />
@@ -168,7 +166,6 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
       <section className="detail-section" aria-labelledby="circuit-block-create-heading">
         <SectionHeading
           id="circuit-block-create-heading"
-          index="03"
           subtitle="Create the pattern first. You can add the parts it uses on its detail page."
           title="Create circuit block"
         />
@@ -183,7 +180,6 @@ export default async function CircuitBlocksPage({ searchParams }: CircuitBlocksP
       <section className="detail-section" aria-labelledby="circuit-block-boundaries-heading">
         <SectionHeading
           id="circuit-block-boundaries-heading"
-          index="04"
           subtitle="A block's status describes the circuit pattern. The parts it uses keep their own status."
           title="How blocks relate to parts"
         />
@@ -288,13 +284,13 @@ function isAnyFilterApplied(filters: CircuitBlockListFilters): boolean {
  */
 function CircuitBlocksSetupState({ pageState }: { pageState: Extract<CircuitBlocksPageState, { status: "setup_required" }> }) {
   return (
-    <main className="projects-layout">
-      <section className="projects-hero">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero">
+        <div className="page-hero__copy">
           <p className="app-kicker">Circuit blocks</p>
           <h1>{getSetupStateCopy(pageState.code).headline}</h1>
-          <p className="projects-hero__lede">{getSetupStateCopy(pageState.code).body} Circuit block reads need persisted circuit block and linked part-role tables — no seed fallback is used for reusable circuit knowledge.</p>
-          <div className="projects-hero__status">
+          <p className="page-hero__lede">{getSetupStateCopy(pageState.code).body} Circuit block reads need persisted circuit block and linked part-role tables — no seed fallback is used for reusable circuit knowledge.</p>
+          <div className="page-hero__status">
             <StatusBadge label={`Database ${pageState.health?.dependencies.database ?? "unknown"}`} tone={pageState.health?.dependencies.database === "connected" ? "verified" : "review"} />
           </div>
           <details className="audit-disclosure">
@@ -391,7 +387,7 @@ function CircuitBlocksSnapshot({
   const blockedCount = headlines.filter((headline) => headline.state === "blocked").length;
 
   return (
-    <div className="projects-hero__snapshot" aria-label="Circuit block summary">
+    <div className="page-hero__snapshot" aria-label="Circuit block summary">
       <CircuitBlockStat label="Blocks" tone="info" value={response.circuitBlocks.length.toString()} />
       <CircuitBlockStat label="Ready to reuse" tone={readyCount > 0 ? "verified" : "neutral"} value={readyCount.toString()} />
       <CircuitBlockStat label="Blocked" tone={blockedCount > 0 ? "review" : "verified"} value={blockedCount.toString()} />

@@ -326,9 +326,9 @@ function formatUploadError(error: unknown): string {
   if (isApiClientError(error)) {
     if (error.code === "VENDOR_FILE_TOO_LARGE") return "That file is larger than the upload limit.";
     if (error.code === "INVALID_VENDOR_FILE_NAME") return "That filename is not supported. Use letters, numbers, dashes, or dots.";
-    if (error.code === "VENDOR_NOTES_NOT_CONFIGURED") return "The vendor notebook is turned off on the API host.";
+    if (error.code === "VENDOR_NOTES_NOT_CONFIGURED") return "The supplier notebook is turned off on the API host.";
     if (error.code === "INVALID_VENDOR_FILE_CONTENT") return "The file could not be read. Pick the file again and retry.";
-    if (error.code === "VENDOR_NOT_FOUND") return "This vendor was deleted on disk. Reload the list.";
+    if (error.code === "VENDOR_NOT_FOUND") return "This supplier was deleted on disk. Reload the list.";
     return `${error.code}: ${error.message}`;
   }
   return "Could not save the upload. Try again or refresh the page.";

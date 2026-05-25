@@ -68,7 +68,7 @@ test("app navigation does not mark catalog active on part detail pages", () => {
 test("app navigation marks the vendors route as active inside vendor notebook pages", () => {
   const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/vendors/jlcpcb" />);
 
-  assert.match(html, /Vendors/u);
+  assert.match(html, /Suppliers/u);
   assert.match(html, /Remember PCB shops, sheet metal, and who you trust/u);
   assert.match(html, /aria-current="page"/u);
 });

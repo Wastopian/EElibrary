@@ -105,12 +105,12 @@ export default async function ProjectFromCsvPage({
   }
 
   return (
-    <main className="projects-layout">
-      <section className="projects-hero projects-hero--slim">
-        <div className="projects-hero__copy">
+    <main className="page-layout">
+      <section className="page-hero page-hero--slim">
+        <div className="page-hero__copy">
           <p className="app-kicker">Day-zero onboarding</p>
           <h1>Drop a BOM, see your project</h1>
-          <p className="projects-hero__lede">
+          <p className="page-hero__lede">
             Upload one CSV or XLSX parts list. We will create a project,
             persist the rows, and run deterministic matching against your
             internal catalog. You land on the diagnostics view to see what

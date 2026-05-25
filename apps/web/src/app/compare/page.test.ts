@@ -51,7 +51,7 @@ test("compare page renders setup guidance when detail records are unavailable", 
   try {
     const html = renderToStaticMarkup(await ComparePage({ searchParams: Promise.resolve({ parts: "part-tps7a02dbvr" }) }));
 
-    assert.match(html, /Part comparison/u);
+    assert.match(html, /See parts side by side/u);
     assert.match(html, /Connect the catalog database/u);
     assert.match(html, /Compare unavailable/u);
     assert.match(html, /DB_NOT_CONFIGURED/u);
