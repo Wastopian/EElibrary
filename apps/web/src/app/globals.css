@@ -8,7 +8,27 @@
  *                                       do not visually collapse into verified badges
  *   --color-verified = PLUM           → unchanged (verified status keeps its emphatic plum)
  *
- * Token names are kept stable to avoid renaming across ~3.2k lines of rules; the values flip.
+ * Token names are kept stable to avoid renaming across the rule set; the values flip.
+ *
+ * ─── Table of contents ─────────────────────────────────────────────────────
+ * Search for the marker (the leading "/* ───") to jump to a section:
+ *
+ *   • Design tokens & base               → `:root` (line 14)
+ *   • Body, anchors, focus ring          → `body {` (~line 70)
+ *   • Buttons, inputs, recovery actions  → "button," (~line 99)
+ *   • Unauthenticated shell              → "Unauthenticated shell" (~line 169)
+ *   • Auth pages (sign-in / sign-up)     → "Auth pages" (~line 209)
+ *   • App shell + sidebar + nav          → ".app-shell {" (~line 305)
+ *   • Editorial hero + EE ornament       → "Editorial hero" (~line 719)
+ *   • Setup states                       → "--- Setup ---" (~line 2800)
+ *   • Admin workspace                    → "--- Admin workspace ---" (~line 2857)
+ *   • Project memory dashboard           → "--- Project memory workspace ---" (~line 3033)
+ *   • Part detail page                   → "--- Detail page ---" (~line 5900)
+ *   • Shared UI primitives               → "--- Shared UI primitives ---" (~line 8337)
+ *   • WorkerStatusBanner (system page)   → "WorkerStatusBanner" (~line 8790)
+ *   • Part-detail PDF / compare / system → "Inline PDF preview" (~line 8833)
+ *
+ * Line numbers drift; the section headers do not. Always grep the marker.
  */
 
 :root {
@@ -166,6 +186,46 @@ select {
   width: 100%;
 }
 
+/* Unauthenticated shell: minimal layout shown to visitors on /sign-in and /sign-up.
+   Renders the brand strip + the auth form content only — no workspace sidebar,
+   no nav, no release reminder. A first visit shouldn't face a wall of links it
+   cannot click. */
+.app-shell--auth {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0 auto;
+  max-width: 720px;
+  min-height: 100vh;
+  padding: 32px 24px;
+}
+
+.app-shell__auth-header {
+  align-items: center;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.app-shell__auth-brand {
+  color: inherit;
+  display: grid;
+  gap: 4px;
+  text-decoration: none;
+}
+
+.app-shell__auth-title {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.app-main--auth {
+  align-items: start;
+  display: grid;
+  justify-items: start;
+}
+
 /* Auth pages: compact workstation access panels with clear form rhythm and recovery messages. */
 .auth-page {
   align-items: start;
@@ -217,7 +277,7 @@ select {
 
 .auth-form label {
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -350,7 +410,7 @@ select {
 .app-sidebar__search-label {
   color: var(--color-sidebar-active);
   font-family: var(--font-display);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -406,12 +466,8 @@ select {
 
 .app-sidebar__subtitle {
   color: var(--color-technical-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   line-height: 1.35;
-}
-
-.app-shell:has(.landing) .app-sidebar__note {
-  display: none;
 }
 
 .app-sidebar__note {
@@ -427,7 +483,7 @@ select {
 
 .app-sidebar__note span {
   color: var(--color-sidebar-active);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -441,7 +497,7 @@ select {
 
 .app-sidebar__note p {
   color: var(--color-technical-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   line-height: 1.35;
 }
 
@@ -492,7 +548,7 @@ select {
 
 .app-main-header__panel span {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -526,7 +582,7 @@ select {
 
 .app-nav__group-label {
   color: var(--color-sidebar-active);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.12em;
   margin: 0;
@@ -571,7 +627,7 @@ select {
 
 .app-nav__link-description {
   color: var(--color-technical-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   line-height: 1.35;
 }
 
@@ -608,7 +664,7 @@ select {
 }
 
 .app-nav__link--filter .app-nav__link-description {
-  font-size: 0.7rem;
+  font-size: 0.82rem;
 }
 
 #page-content,
@@ -646,7 +702,7 @@ main > .workspace-jump-nav {
 
 .workspace-jump-nav__label {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -900,7 +956,7 @@ main > .workspace-jump-nav {
 
 .quick-check-rail__card p {
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   line-height: 1.4;
 }
 
@@ -926,7 +982,7 @@ main > .workspace-jump-nav {
 .quick-check-rail__metrics span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 6px;
@@ -1131,7 +1187,7 @@ main > .workspace-jump-nav {
 .quick-check-form label {
   color: var(--color-text-muted);
   display: grid;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   gap: 4px;
   letter-spacing: 0.06em;
@@ -1229,7 +1285,7 @@ main > .workspace-jump-nav {
 .quick-check-form__advanced-toggle::before {
   content: "▸";
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.78rem;
   transition: transform 0.15s ease;
 }
 
@@ -1489,7 +1545,7 @@ main > .workspace-jump-nav {
 
 .quick-readiness-result__trust p {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   margin: 0;
@@ -1506,7 +1562,7 @@ main > .workspace-jump-nav {
 .trust-breakdown__toggle {
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   list-style: none;
@@ -1521,7 +1577,7 @@ main > .workspace-jump-nav {
 .trust-breakdown__toggle::before {
   color: var(--color-text-x-muted);
   content: "▸  ";
-  font-size: 0.55rem;
+  font-size: 0.78rem;
 }
 
 details[open] .trust-breakdown__toggle::before {
@@ -1542,7 +1598,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .trust-breakdown__row p {
   color: var(--color-text-muted);
-  font-size: 0.75rem;
+  font-size: 0.82rem;
   line-height: 1.4;
   margin: 0;
 }
@@ -1620,7 +1676,7 @@ details[open] .trust-breakdown__toggle::before {
 .quick-readiness-details summary {
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   list-style: none;
@@ -1666,7 +1722,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .quick-readiness-card__header > span:first-child {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1674,7 +1730,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .quick-readiness-card__header > span:last-child {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1730,7 +1786,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .quick-mates-preview__item strong {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1750,7 +1806,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .quick-action-row__priority {
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1833,7 +1889,7 @@ details[open] .trust-breakdown__toggle::before {
   align-items: center;
   border-radius: 3px;
   display: inline-flex;
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   height: 16px;
   justify-content: center;
@@ -1944,7 +2000,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .workspace-action-card__signal {
   color: var(--color-accent-hover);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2486,7 +2542,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .catalog-result-trust-gates__label {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -2527,7 +2583,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .results-filter-summary > span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-top: 4px;
@@ -2617,7 +2673,7 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border);
   border-radius: 999px;
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 700;
   padding: 4px 8px;
 }
@@ -2671,7 +2727,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .result-row__signals span:first-child {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -2720,7 +2776,7 @@ details[open] .trust-breakdown__toggle::before {
 .result-row__next span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 5px;
@@ -2904,7 +2960,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .admin-hero-stat span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2935,7 +2991,7 @@ details[open] .trust-breakdown__toggle::before {
 .admin-truth-rail span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-bottom: 8px;
@@ -2977,7 +3033,7 @@ details[open] .trust-breakdown__toggle::before {
 .admin-table th {
   background: var(--color-surface-elevated);
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   position: sticky;
@@ -3084,7 +3140,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .projects-stat span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3116,7 +3172,7 @@ details[open] .trust-breakdown__toggle::before {
 .projects-truth-rail span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-bottom: 8px;
@@ -3162,7 +3218,7 @@ details[open] .trust-breakdown__toggle::before {
 .projects-table th {
   background: var(--color-surface-elevated);
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   position: sticky;
@@ -3253,7 +3309,7 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 700;
   padding: 3px 6px;
 }
@@ -3464,7 +3520,7 @@ details[open] .trust-breakdown__toggle::before {
 .project-reentry-brief__status {
   border: 1px solid var(--color-border);
   border-radius: 4px;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   padding: 3px 8px;
   text-transform: uppercase;
@@ -3500,7 +3556,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .project-reentry-brief__metric span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -3568,7 +3624,7 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border);
   border-radius: 4px;
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   padding: 3px 8px;
   text-transform: uppercase;
@@ -3614,7 +3670,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .project-review-panel__existing span {
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
 }
 
 .project-review-panel__empty {
@@ -3699,7 +3755,7 @@ details[open] .trust-breakdown__toggle::before {
 .project-files-card__path-label {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   margin-block-end: 2px;
@@ -3751,7 +3807,7 @@ details[open] .trust-breakdown__toggle::before {
   background: var(--color-surface-elevated);
   border-radius: 4px;
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   padding: 1px 6px;
@@ -3778,7 +3834,7 @@ details[open] .trust-breakdown__toggle::before {
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 600;
   line-height: 1;
   padding: 5px 8px;
@@ -3790,7 +3846,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .project-files-card__fingerprint-status {
-  font-size: 0.76rem;
+  font-size: 0.82rem;
 }
 
 .project-files-card__empty {
@@ -3969,7 +4025,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .custom-hardware-panel__summary-item span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -4026,7 +4082,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .custom-hardware-panel__source code {
-  font-size: 0.76rem;
+  font-size: 0.82rem;
 }
 
 @media (max-width: 760px) {
@@ -4368,7 +4424,7 @@ details[open] .trust-breakdown__toggle::before {
 .vendor-section-card__path-label {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   margin-block-end: 2px;
@@ -4420,7 +4476,7 @@ details[open] .trust-breakdown__toggle::before {
   background: var(--color-surface-elevated);
   border-radius: 4px;
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   padding: 1px 6px;
@@ -4567,7 +4623,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .projects-summary-grid dt {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 5px;
@@ -4624,7 +4680,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .project-health-metric dt {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 4px;
@@ -4702,7 +4758,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .project-risk-card__records dt {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 4px;
@@ -4749,7 +4805,7 @@ details[open] .trust-breakdown__toggle::before {
 .evidence-attachment-panel__form label {
   color: var(--color-text-muted);
   display: grid;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   gap: 5px;
   letter-spacing: 0.06em;
@@ -4808,7 +4864,7 @@ details[open] .trust-breakdown__toggle::before {
 .evidence-vault-attach__target label {
   color: var(--color-text-muted);
   display: grid;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   gap: 5px;
   letter-spacing: 0.06em;
@@ -4849,7 +4905,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .evidence-vault-attach__selection span {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -4932,7 +4988,7 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border);
   border-radius: 999px;
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 800;
   padding: 5px 9px;
 }
@@ -4952,7 +5008,7 @@ details[open] .trust-breakdown__toggle::before {
 .revision-gate-panel__controls label {
   color: var(--color-text-muted);
   display: grid;
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 800;
   gap: 5px;
   letter-spacing: 0.06em;
@@ -5153,7 +5209,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .known-risks-badge {
   border-radius: 4px;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.04em;
   padding: 2px 8px;
@@ -5310,7 +5366,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .circuit-block-part-edit-table__status {
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   line-height: 1.35;
   margin: 6px 0 0;
 }
@@ -5396,7 +5452,7 @@ details[open] .trust-breakdown__toggle::before {
 .bom-import-panel__preview-table th {
   background: var(--color-surface-elevated);
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -5615,7 +5671,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .admin-queue-scope-controls span {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -5690,7 +5746,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .admin-queue-stat span {
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 700;
 }
 
@@ -5840,7 +5896,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .admin-issue-form label span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -5910,7 +5966,7 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 700;
   padding: 4px 7px;
 }
@@ -5940,7 +5996,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .signal-strip__cell-label {
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -5977,7 +6033,7 @@ details[open] .trust-breakdown__toggle::before {
 .detail-use-decision__header span,
 .detail-use-decision__facts dt {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -6034,7 +6090,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-workbench-rail__card span {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -6075,7 +6131,7 @@ details[open] .trust-breakdown__toggle::before {
 .detail-hero-facts span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.66rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-bottom: 5px;
@@ -6091,7 +6147,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-hero-facts p {
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   line-height: 1.35;
   margin: 0;
 }
@@ -6127,7 +6183,7 @@ details[open] .trust-breakdown__toggle::before {
   border-radius: 999px;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   line-height: 1;
   min-width: 1.35rem;
   padding: 3px 6px;
@@ -6231,7 +6287,7 @@ details[open] .trust-breakdown__toggle::before {
 .detail-readiness-summary__grid span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-bottom: 8px;
@@ -6256,7 +6312,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-readiness-summary__grid strong {
   color: var(--color-review);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -6325,7 +6381,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .where-used-search-form span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -6360,7 +6416,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .circuit-block-library-filters__field span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -6484,7 +6540,7 @@ details[open] .trust-breakdown__toggle::before {
 .where-used-recovery-hint span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 4px;
@@ -6547,7 +6603,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .where-used-match span {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -6636,7 +6692,7 @@ details[open] .trust-breakdown__toggle::before {
 .where-used-table th {
   background: var(--color-surface-elevated);
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -6675,7 +6731,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-sourcing-grid span {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-bottom: 6px;
@@ -6745,7 +6801,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-context-list strong {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -6765,7 +6821,7 @@ details[open] .trust-breakdown__toggle::before {
 .detail-action-rail__card > span {
   color: var(--color-text-muted);
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   margin-bottom: 10px;
@@ -6800,7 +6856,7 @@ details[open] .trust-breakdown__toggle::before {
 .detail-action-rail__card strong {
   color: var(--color-review);
   display: inline-block;
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   letter-spacing: 0.1em;
   margin-bottom: 4px;
   text-transform: uppercase;
@@ -7012,7 +7068,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-acquisition-grid dt {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin-bottom: 6px;
@@ -7369,7 +7425,7 @@ details[open] .trust-breakdown__toggle::before {
 .catalog-trust-gates-cell > summary {
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   list-style: none;
@@ -7514,7 +7570,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .ui-asset-card__eyebrow {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7531,7 +7587,7 @@ details[open] .trust-breakdown__toggle::before {
   border-radius: 999px;
   color: var(--color-text);
   flex-shrink: 0;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   line-height: 1;
   padding: 7px 10px;
   white-space: nowrap;
@@ -7555,7 +7611,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .ui-asset-card__status-label {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -7576,7 +7632,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .ui-asset-card__meta dt {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -7615,7 +7671,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .asset-review-card__snapshot span {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7799,7 +7855,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .detail-export-summary__grid span {
   color: var(--color-technical-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7845,7 +7901,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .export-action__eyebrow {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -8139,7 +8195,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .bundle-signature-cell .ui-mono {
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   line-height: 1.35;
 }
 
@@ -8227,7 +8283,7 @@ details[open] .trust-breakdown__toggle::before {
 .document-revision-card__facts dt,
 .document-revision-card__subgrid h4 {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin: 0 0 5px;
@@ -8344,7 +8400,7 @@ details[open] .trust-breakdown__toggle::before {
   border: 1px solid var(--color-border);
   border-radius: 2px;
   display: inline-flex;
-  font-size: 0.74rem;
+  font-size: 0.82rem;
   font-weight: 600;
   gap: 6px;
   letter-spacing: 0.04em;
@@ -8528,7 +8584,7 @@ details[open] .trust-breakdown__toggle::before {
 
 .workspace-state__eyebrow {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -8750,413 +8806,11 @@ details[open] .trust-breakdown__toggle::before {
   }
 }
 
-/* ─── Landing page ─────────────────────────────────────────────────────────── */
 
-.landing {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-/* Hero */
-
-.landing-hero {
-  align-items: center;
-  display: grid;
-  gap: 48px;
-  grid-template-columns: 1fr 1fr;
-  min-height: calc(100vh - 40px);
-  padding: 72px 56px 80px;
-}
-
-.landing-hero__inner {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  max-width: 520px;
-}
-
-.landing-hero__eyebrow {
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  margin: 0;
-  text-transform: uppercase;
-}
-
-.landing-hero__headline {
-  color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: clamp(2rem, 4vw, 3rem);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  line-height: 1.08;
-  margin: 0;
-}
-
-.landing-hero__headline-accent {
-  color: var(--color-plum-hover);
-}
-
-.landing-hero__lede {
-  color: var(--color-text-muted);
-  font-size: 1rem;
-  line-height: 1.65;
-  margin: 0;
-  max-width: 44ch;
-}
-
-.landing-hero__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.landing-hero__cta-primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: #fff;
-  font-weight: 600;
-  padding: 10px 22px;
-}
-
-.landing-hero__cta-primary:hover {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-  color: #fff;
-}
-
-.landing-hero__cta-secondary {
-  color: var(--color-text-muted);
-}
-
-.landing-hero__status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-/* Hero diagram */
-
-.landing-hero__diagram {
-  align-items: center;
-  display: flex;
-  justify-content: center;
-}
-
-.landing-catalog-snapshot {
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-soft);
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  padding: 28px 32px;
-  width: 100%;
-}
-
-.landing-catalog-snapshot__label {
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
-  margin: 0;
-  text-transform: uppercase;
-}
-
-.landing-catalog-snapshot__rows {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.landing-snapshot-row {
-  align-items: center;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 10px 1fr auto;
-}
-
-.landing-snapshot-row__dot {
-  border-radius: 50%;
-  display: block;
-  height: 10px;
-  width: 10px;
-}
-
-.landing-snapshot-row--verified .landing-snapshot-row__dot  { background: var(--color-plum); }
-.landing-snapshot-row--review .landing-snapshot-row__dot    { background: var(--color-info); }
-.landing-snapshot-row--generated .landing-snapshot-row__dot { background: var(--color-caution); }
-.landing-snapshot-row--blocked .landing-snapshot-row__dot   { background: var(--color-danger); }
-
-.landing-snapshot-row__name {
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
-}
-
-.landing-snapshot-row__count {
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 1rem;
-  font-weight: 500;
-  min-width: 28px;
-  text-align: right;
-}
-
-.landing-catalog-snapshot__cta {
-  border-top: 1px solid var(--color-border-light);
-  color: var(--color-accent);
-  font-size: 0.8rem;
-  font-weight: 500;
-  padding-top: 16px;
-  text-decoration: none;
-}
-
-.landing-catalog-snapshot__cta:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
-}
-
-/* Pillars */
-
-.landing-pillars {
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border-light);
-  display: grid;
-  gap: 0;
-  grid-template-columns: repeat(3, 1fr);
-}
-
-.landing-pillar {
-  border-right: 1px solid var(--color-border-light);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 40px 36px;
-}
-
-.landing-pillar:last-child {
-  border-right: none;
-}
-
-.landing-pillar__icon {
-  color: var(--color-plum-hover);
-  margin-bottom: 2px;
-}
-
-.landing-pillar__title {
-  color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: 0.95rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  margin: 0;
-}
-
-.landing-pillar__body {
-  color: var(--color-text-muted);
-  font-size: 0.83rem;
-  line-height: 1.6;
-  margin: 0;
-}
-
-.landing-pillar__link {
-  color: var(--color-accent);
-  font-size: 0.8rem;
-  font-weight: 500;
-  margin-top: auto;
-  padding-top: 8px;
-  text-decoration: none;
-}
-
-.landing-pillar__link:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
-}
-
-/* Trust model */
-
-.landing-trust-model {
-  background: var(--color-bg);
-  border-top: 1px solid var(--color-border-light);
-  padding: 72px 56px;
-}
-
-.landing-trust-model__inner {
-  display: grid;
-  gap: 64px;
-  grid-template-columns: 1fr 1fr;
-  margin: 0 auto;
-  max-width: 960px;
-}
-
-.landing-trust-model__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  justify-content: center;
-}
-
-.landing-trust-model__copy h2 {
-  color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: 1.6rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-
-.landing-trust-model__copy p {
-  color: var(--color-text-muted);
-  font-size: 0.9rem;
-  line-height: 1.65;
-  margin: 0;
-}
-
-.landing-trust-model__items {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  justify-content: center;
-}
-
-.landing-trust-item {
-  border-left: 2px solid var(--color-plum-border);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-left: 16px;
-}
-
-.landing-trust-item strong {
-  color: var(--color-text);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.landing-trust-item p {
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  line-height: 1.55;
-  margin: 0;
-}
-
-/* Entry cards */
-
-.landing-entry {
-  background: var(--color-surface-elevated);
-  border-top: 1px solid var(--color-border-light);
-  padding: 56px 56px 80px;
-}
-
-.landing-entry__inner {
-  display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(3, 1fr);
-  margin: 0 auto;
-  max-width: 960px;
-}
-
-.landing-entry__card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 28px 24px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.landing-entry__card:hover {
-  border-color: var(--color-plum-border);
-  box-shadow: var(--shadow-soft);
-}
-
-.landing-entry__card .app-kicker {
-  color: var(--color-plum-hover);
-  font-size: 0.68rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.landing-entry__card h3 {
-  color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  margin: 0;
-}
-
-.landing-entry__card p {
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  line-height: 1.6;
-  margin: 0;
-}
-
-.landing-entry__card .button-link {
-  align-self: flex-start;
-  font-size: 0.8rem;
-  margin-top: 8px;
-  padding: 7px 16px;
-}
-
-/* Landing responsive */
-
-@media (max-width: 1024px) {
-  .landing-hero {
-    grid-template-columns: 1fr;
-    min-height: auto;
-    padding: 48px 32px 56px;
-  }
-
-  .landing-hero__diagram {
-    display: none;
-  }
-
-  .landing-hero__inner {
-    max-width: none;
-  }
-
-  .landing-pillars {
-    grid-template-columns: 1fr;
-  }
-
-  .landing-pillar {
-    border-bottom: 1px solid var(--color-border-light);
-    border-right: none;
-  }
-
-  .landing-pillar:last-child {
-    border-bottom: none;
-  }
-
-  .landing-trust-model {
-    padding: 48px 32px;
-  }
-
-  .landing-trust-model__inner {
-    grid-template-columns: 1fr;
-    gap: 40px;
-  }
-
-  .landing-entry {
-    padding: 40px 32px 56px;
-  }
-
-  .landing-entry__inner {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* WorkerStatusBanner — local-stack-reliability banner shown on the landing page when
-   the API is unreachable, the database is unconfigured/unavailable, or the worker
-   daemon is offline. Each tone is a flat info card with a left-edge accent. */
+/* WorkerStatusBanner — local-stack reliability banner shown on the system health
+   workspace when the API is unreachable, the database is unconfigured/unavailable,
+   or the worker daemon is offline. Each tone is a flat info card with a left-edge
+   accent. */
 .status-banner {
   display: flex;
   flex-direction: column;
@@ -9205,7 +8859,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .asset-inline-preview__caption {
-  font-size: 0.75rem;
+  font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: rgba(255, 255, 255, 0.55);
@@ -9404,7 +9058,7 @@ details[open] .trust-breakdown__toggle::before {
 .system-health-card__header span,
 .system-recovery-card span {
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
