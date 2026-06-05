@@ -42,7 +42,7 @@ export function DetailContextPanel({
         <div className="detail-context-panel__header">
           <div>
             <p className="app-kicker">Connector build set</p>
-            <h3>Implementation-friendly mate and accessory context</h3>
+            <h3>Mates and accessories you need to build with this connector</h3>
           </div>
           <StatusBadge
             label={
@@ -56,7 +56,7 @@ export function DetailContextPanel({
           />
         </div>
         <p className="muted-copy">
-          Buildable set reflects stored relationship mapping. Verify pitch, family, and mechanical fit before layout.
+          Based on the mate and accessory relationships we have on file. Double-check pitch, family, and mechanical fit before layout.
           {record.buildableMatingSet.confidenceScore !== null ? ` ${buildConnectorConfidenceSummary(record.buildableMatingSet)}` : ""}
         </p>
         {record.buildableMatingSet.warningDetails.length > 0 ? (
@@ -71,7 +71,7 @@ export function DetailContextPanel({
         <ul className="detail-context-list">
           <li>
             <strong>Best mate</strong>
-            <span>{bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "No best mate stored"}</span>
+            <span>{bestMate ? renderPart(bestMate.matePartId, relatedPartSummaries) : "No best mate on file"}</span>
           </li>
           <li>
             <strong>Alternate mates</strong>
@@ -115,7 +115,7 @@ export function DetailContextPanel({
         </div>
         <StatusBadge label={datasheetAssetLabel(datasheetAsset)} tone={datasheetAsset && isFileBackedAsset(datasheetAsset) ? "verified" : "review"} />
       </div>
-      <p className="muted-copy">This panel keeps package, lifecycle, and source evidence visible before scrolling into deeper audit detail.</p>
+      <p className="muted-copy">Keeps package, lifecycle, and source info visible before the deeper audit details below.</p>
       <ul className="detail-context-list">
         <li>
           <strong>Package</strong>
@@ -127,11 +127,11 @@ export function DetailContextPanel({
         </li>
         <li>
           <strong>Latest source</strong>
-          <span>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source row stored"}</span>
+          <span>{latestSource ? `${latestSource.providerId} / ${latestSource.providerPartKey}` : "No source on file"}</span>
         </li>
         <li>
           <strong>Datasheet revision</strong>
-          <span>{record.datasheetRevision?.revisionLabel ?? "No revision metadata"}</span>
+          <span>{record.datasheetRevision?.revisionLabel ?? "No revision recorded"}</span>
         </li>
       </ul>
     </section>

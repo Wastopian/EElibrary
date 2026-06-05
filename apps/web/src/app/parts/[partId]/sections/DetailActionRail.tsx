@@ -28,7 +28,7 @@ export function DetailActionRail({
   reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
-    <aside className="detail-action-rail" aria-label="Readiness blockers and next actions">
+    <aside className="detail-action-rail" aria-label="Blockers and next actions">
       <div className="detail-action-rail__card">
         <span>Next action</span>
         {nextActions.length > 0 ? (
@@ -42,12 +42,12 @@ export function DetailActionRail({
             ))}
           </ul>
         ) : (
-          <p>No next action is currently derived for this record.</p>
+          <p>No next action recorded.</p>
         )}
       </div>
 
       <div className="detail-action-rail__card">
-        <span>Top blockers</span>
+        <span>What is blocking this part</span>
         {issues.length > 0 ? (
           <ul>
             {issues.map((issue) => (
@@ -58,7 +58,7 @@ export function DetailActionRail({
             ))}
           </ul>
         ) : (
-          <p>No part-level blockers are currently recorded.</p>
+          <p>No blockers recorded.</p>
         )}
       </div>
 
@@ -74,12 +74,12 @@ export function DetailActionRail({
             ))}
           </ul>
         ) : (
-          <p>No part-level risk flags are currently recorded.</p>
+          <p>No risks flagged.</p>
         )}
       </div>
 
       <div className="detail-action-rail__card">
-        <span>Review and export state</span>
+        <span>Review and export status</span>
         <div className="detail-action-rail__badges">
           <StatusBadge label={approval.summary} tone={approvalStatusTone(approval.status)} />
           <StatusBadge label={reviewWorkflowSummary.label} tone={mapViewToneToBadge(reviewWorkflowSummary.tone)} />
@@ -88,8 +88,8 @@ export function DetailActionRail({
         <p>{approval.detail}</p>
         <p>{bundleReadiness.reason}</p>
         <div className="detail-action-rail__links">
-          <a href="#files-heading">Inspect assets</a>
-          <a href="#approval-heading">Review export blockers</a>
+          <a href="#files-heading">Review files</a>
+          <a href="#approval-heading">See what is blocking export</a>
         </div>
       </div>
     </aside>

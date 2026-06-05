@@ -135,7 +135,7 @@ function formatPartFileUnavailableLabel(asset: Asset, source: CatalogDataSource 
   }
 
   if (asset.availabilityStatus === "downloaded" || asset.availabilityStatus === "validated") {
-    return "File evidence incomplete";
+    return "Verification incomplete";
   }
 
   return "No file yet";

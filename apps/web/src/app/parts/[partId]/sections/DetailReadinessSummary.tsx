@@ -33,10 +33,10 @@ export function DetailReadinessSummary({
   reviewWorkflowSummary: ReturnType<typeof getReviewWorkflowSummary>;
 }) {
   return (
-    <section aria-label="Readiness summary" className={`detail-readiness-summary detail-readiness-summary--${quickReadinessSummary.tone}`}>
+    <section aria-label="Part status summary" className={`detail-readiness-summary detail-readiness-summary--${quickReadinessSummary.tone}`}>
       <div className="detail-readiness-summary__lead">
         <div>
-          <p className="app-kicker">Readiness record</p>
+          <p className="app-kicker">Where this part stands</p>
           <h2>{readinessSummary.label}</h2>
           <p className="detail-readiness-summary__subhead">{approval.summary}</p>
           <p>{readinessSummary.detail}</p>
@@ -52,7 +52,7 @@ export function DetailReadinessSummary({
 
       <div className="detail-readiness-summary__grid">
         <div>
-          <span>Blockers and next actions</span>
+          <span>What to do next</span>
           {readinessSummary.recommendedActions.length > 0 ? (
             <ul>
               {readinessSummary.recommendedActions.map((action, index) => (
@@ -63,13 +63,13 @@ export function DetailReadinessSummary({
               ))}
             </ul>
           ) : (
-            <p>No readiness actions are currently recorded for this part.</p>
+            <p>No follow-up actions are recorded for this part.</p>
           )}
         </div>
         <div>
           <span>Approval</span>
           <p>{approval.detail}</p>
-          <p>Whole-part approval remains separate from generated asset review and explicit export promotion.</p>
+          <p>Approving the part does not review its files or mark them ready for export.</p>
         </div>
         <div>
           <span>File status</span>

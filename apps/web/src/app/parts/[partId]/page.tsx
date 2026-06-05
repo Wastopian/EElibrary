@@ -390,7 +390,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             <details className="detail-trust-callout" id="how-verification-works">
               <summary>How verification works</summary>
               <p>
-                <strong>Approved drafts are not yet verified for export.</strong> Generated CAD stays labeled as a generated draft until it has been reviewed, has validation evidence on file, and is explicitly marked verified. Export buttons stay disabled until then.
+                <strong>Approving a draft is not the same as verifying it for export.</strong> Generated CAD stays a draft until someone reviews it, validation evidence is recorded, and it is explicitly marked verified. Export buttons stay disabled until then.
               </p>
             </details>
             <div className="signal-strip" role="group" aria-label="Engineering signals">
@@ -426,7 +426,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             <details className="detail-hero__trust-meter">
               <summary>Confidence score</summary>
               <TrustMeter label="Confidence" score={record.part.trustScore} tone={scoreTone(record.part.trustScore)} />
-              <p className="muted-copy">A rough blended score from imported sources. The verification steps above are what actually gate export.</p>
+              <p className="muted-copy">A rough score blended from imported sources. The verification steps above actually decide what can be exported.</p>
             </details>
             {record.engineeringMemoryWarning && record.engineeringMemoryWarning.warningCount > 0 && (
               <div className="detail-memory-warning" role="alert">
@@ -621,7 +621,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           subtitle="Where this part appears in saved projects. Past use does not mean it is approved."
           title="Where-used"
         />
-        <SectionPanel description="Past project use of this part." title="Confirmed usage history">
+        <SectionPanel description="Where this part has been used." title="Confirmed usage history">
           <PartWhereUsedPanel state={whereUsedState} />
         </SectionPanel>
       </section>
@@ -760,7 +760,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="sourcing-heading"
           index="05"
-          subtitle="Lifecycle status, source provenance, and recorded commercial snapshots."
+          subtitle="Lifecycle status, where info came from, and recorded distributor prices."
           title="Sourcing and lifecycle"
         />
         <div className="detail-two-col">
@@ -769,21 +769,21 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
               <div>
                 <span>Lifecycle</span>
                 <strong>{record.part.lifecycleStatus}</strong>
-                <p>Library readiness does not override lifecycle risk. Treat non-active parts carefully.</p>
+                <p>A &quot;ready&quot; library record does not override lifecycle risk. Treat non-active parts carefully.</p>
               </div>
               <div>
                 <span>Latest provider</span>
-                <strong>{latestSource?.providerId ?? "No source row"}</strong>
-                <p>{latestSource?.sourceLastImportedAt ? `Last import ${formatDateTime(latestSource.sourceLastImportedAt)}` : "No successful import is recorded for this part yet."}</p>
+                <strong>{latestSource?.providerId ?? "No source on file"}</strong>
+                <p>{latestSource?.sourceLastImportedAt ? `Last import ${formatDateTime(latestSource.sourceLastImportedAt)}` : "No successful import recorded for this part yet."}</p>
               </div>
               <div>
-                <span>Source URL</span>
+                <span>Source link</span>
                 <strong>{latestSource?.sourceUrl ? "Stored" : "Unavailable"}</strong>
-                <p>{latestSource?.sourceUrl ?? "The current provider row does not include a source URL."}</p>
+                <p>{latestSource?.sourceUrl ?? "The current provider record has no source link."}</p>
               </div>
             </div>
           </SectionPanel>
-          <SectionPanel description="Source-linked commercial snapshots; refresh imports before buying." title="Distributor offers">
+          <SectionPanel description="Distributor prices and stock. Refresh imports before buying." title="Distributor offers">
             <SupplyOffersPanel state={supplyOffersState} />
           </SectionPanel>
         </div>
@@ -793,12 +793,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="files-heading"
           index="06"
-          subtitle="Open usable files first. Missing classes are listed separately below."
+          subtitle="Open usable files first. Missing file types are listed separately below."
           title="Files and models"
         />
         <SectionPanel
           title="File coverage"
-          description={`${populatedAssetGroups.length} class${populatedAssetGroups.length === 1 ? "" : "es"} with files · ${missingAssetGroups.length} missing`}
+          description={`${populatedAssetGroups.length} file type${populatedAssetGroups.length === 1 ? "" : "s"} with files · ${missingAssetGroups.length} missing`}
         >
           <div className="empty-recovery-actions">
             <a className="button-link" href="#approval-heading">Request missing files</a>
@@ -826,11 +826,11 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         )}
         {missingAssetGroups.length > 0 ? (
           <details className="audit-disclosure" style={{ marginTop: 12 }}>
-            <summary>Show missing file classes ({missingAssetGroups.length})</summary>
+            <summary>Show missing file types ({missingAssetGroups.length})</summary>
             <ul className="info-list">
               {missingAssetGroups.map((group) => (
                 <li key={`missing-${group.assetType}`}>
-                  <span>{assetTypeLabel(group.assetType)}: no file rows yet.</span>
+                  <span>{assetTypeLabel(group.assetType)}: no files yet.</span>
                 </li>
               ))}
             </ul>
@@ -840,10 +840,10 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         {record.generationWorkflows.length > 0 ? (
           <>
             <h3 className="ui-section-heading__title" style={{ marginTop: 18 }}>
-              Generation workflow status
+              File generation status
             </h3>
             <p className="muted-copy" style={{ fontSize: "0.88rem", marginBottom: 12 }}>
-              Tracks async work separately from stored official or verified file assets.
+              Tracks background work separately from stored official or verified files.
             </p>
             <ul className="info-list">
               {record.generationWorkflows.map((workflow) => {
@@ -873,12 +873,12 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         <SectionHeading
           id="approval-heading"
           index="07"
-          subtitle="Track reviews, file generation requests, and approval to export."
+          subtitle="Review files, request new ones, and approve for export."
           title="Approval and export"
         />
 
         {shouldRenderGenerationOptions(generationOptions) ? (
-          <SectionPanel description="Request a draft from existing data. Drafts must be reviewed before export." title="Request draft generation">
+          <SectionPanel description="Request a generated draft from what we already know. Drafts must be reviewed before export." title="Request draft generation">
             <ul className="info-list">
               {generationOptions.map((option) => (
                 <li key={`req-${option.targetAssetType}`}>
@@ -890,17 +890,17 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
                         Source check: {option.sourceReadiness.reasons.join(" ")}
                       </p>
                       <p className="muted-copy" style={{ fontSize: "0.82rem" }}>
-                        Structured signals: {formatExtractionSupport(option.sourceReadiness)}
+                        Available info: {formatExtractionSupport(option.sourceReadiness)}
                       </p>
                     </div>
                     <div className="datasheet-panel__badges">
                       <StatusBadge label={option.workflowStatusLabel} tone={generationWorkflowTone(option.workflowStatus)} />
-                      <StatusBadge label={option.sourceReadiness.ready ? "Signals sufficient" : "Signals incomplete"} tone={option.sourceReadiness.ready ? "info" : "review"} />
+                      <StatusBadge label={option.sourceReadiness.ready ? "Enough info to generate" : "Not enough info yet"} tone={option.sourceReadiness.ready ? "info" : "review"} />
                       <form action={requestGenerationAction}>
                         <input name="targetAssetType" type="hidden" value={option.targetAssetType} />
                         <button className="export-action" disabled={!option.canRequest} type="submit">
                           <span>{option.canRequest ? option.actionLabel : option.workflowStatusLabel}</span>
-                          <small>{option.sourceReadiness.ready ? "Creates a tracked request in the catalog" : "Blocked until source signals are sufficient"}</small>
+                          <small>{option.sourceReadiness.ready ? "Adds a tracked request to the catalog" : "Blocked until we have enough info"}</small>
                         </button>
                       </form>
                     </div>
@@ -911,7 +911,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
           </SectionPanel>
         ) : null}
 
-        <SectionPanel description="Only verified files can power export bundles." title="Export bundles" tone="technical">
+        <SectionPanel description="Only verified files can be downloaded as exports." title="Export packages" tone="technical">
           <div id="export-bundles" />
           <ExportBundleSummary bundleReadiness={bundleReadiness} />
         </SectionPanel>
@@ -964,35 +964,35 @@ function buildPartWorkspaceActions(record: PartDetailPageRecord, bundleReadiness
 
   return [
     {
-      body: "Open this part in the side-by-side compare workspace.",
+      body: "Open this part next to others to compare.",
       href: buildCompareUrl([record.part.id]),
       label: "Compare this part",
       signal: "Side-by-side"
     },
     {
-      body: "Find confirmed project usage and BOM history for this exact internal part.",
+      body: "Find every project and BOM that uses this part.",
       href: buildWhereUsedHref("part", record.part.id),
       label: "Check where-used",
       signal: whereUsedCount === null ? "Projects" : `${whereUsedCount} known`
     },
     {
-      body: "Attach review notes, links, or file evidence to this part without changing approval.",
+      body: "Attach review notes, links, or files without changing approval.",
       href: buildEvidenceHref("part", record.part.id),
       label: "Attach evidence",
       signal: "Part target"
     },
     {
       body: connectorClass === "non_connector"
-        ? "Browse connector sets if this part becomes part of a reusable connector set."
+        ? "Browse connector sets in case this part joins a reusable connector set."
         : "Open connector sets filtered to this connector class and MPN.",
       href: buildConnectorSetHref(record),
       label: connectorClass === "non_connector" ? "Browse connector sets" : "Review connector set",
       signal: formatConnectorClassSignal(connectorClass)
     },
     {
-      body: "Jump to the export gate and see which files are verified, missing, or blocked.",
+      body: "Jump to export readiness and see what is verified, missing, or blocked.",
       href: "#approval-heading",
-      label: "Review export blockers",
+      label: "See what is blocking export",
       signal: bundleReadiness.label
     }
   ];

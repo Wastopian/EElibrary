@@ -63,7 +63,7 @@ export function DocumentControlPanel({
   return (
     <div className="document-control-panel">
       <p className="document-control-panel__boundary">
-        <strong>Admin-gated foundation.</strong> ACL entries are recorded for future RBAC and ITAR enforcement; asset review, validation, and export promotion remain separate workflows.
+        <strong>Admin only.</strong> Access notes are recorded for future role-based and export-control rules. Review, validation, and export readiness are handled separately.
       </p>
 
       <form action={createRevisionAction} className="document-control-form">
@@ -160,13 +160,13 @@ export function DocumentControlPanel({
           <textarea className="form-textarea" id="document-access-notes" name="accessNotes" placeholder="Distribution limits, customer program, or review instructions." />
         </div>
         <div className="document-control-form__actions">
-          <button className="button-link" type="submit">Create controlled revision</button>
+          <button className="button-link" type="submit">Save controlled revision</button>
         </div>
       </form>
 
       {state.status === "not_found" || revisions.length === 0 ? (
         <EmptyState
-          body="No controlled revisions have been recorded for this part yet. Create one from a datasheet or drawing asset above."
+          body="No controlled revisions have been saved for this part yet. Save one from a datasheet or drawing file above."
           title="No controlled revisions"
         />
       ) : (
@@ -205,7 +205,7 @@ function DocumentRevisionCard({
         <div>
           <p className="app-kicker">{formatDocumentType(revision.documentType)}</p>
           <h3>{revision.revisionLabel}</h3>
-          <p className="muted-copy">{revision.revisionDate ? `Revision date ${formatDateOnly(revision.revisionDate)}` : "Revision date not recorded"}</p>
+          <p className="muted-copy">{revision.revisionDate ? `Revision date ${formatDateOnly(revision.revisionDate)}` : "No revision date recorded"}</p>
         </div>
         <div className="document-revision-card__badges">
           <StatusBadge label={formatDocumentLifecycle(revision.lifecycleStatus)} tone={documentLifecycleTone(revision.lifecycleStatus)} />

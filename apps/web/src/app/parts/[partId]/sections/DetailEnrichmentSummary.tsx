@@ -28,7 +28,7 @@ export function DetailEnrichmentSummary({
     <div className="detail-acquisition-summary">
       <div className="detail-acquisition-summary__lead">
         <div>
-          <p className="app-kicker">Background enrichment</p>
+          <p className="app-kicker">Background data updates</p>
           <h3>{summarySignal.label}</h3>
           <p>{summarySignal.detail}</p>
         </div>
@@ -41,7 +41,7 @@ export function DetailEnrichmentSummary({
 
       {boundaryCopy ? (
         <p className="detail-acquisition-summary__boundary">
-          <strong>{boundaryCopy}</strong> The completeness checklist below still reflects only currently stored review, asset, and export truth.
+          <strong>{boundaryCopy}</strong> The checklist below only counts what we already have on file — review state, asset state, and export state.
         </p>
       ) : null}
 
@@ -55,13 +55,13 @@ export function DetailEnrichmentSummary({
           <dd>{summary.activeJobCount}</dd>
         </div>
         <div className="detail-acquisition-grid__wide">
-          <dt>Enrichment note</dt>
-          <dd>{summary.reason ?? "Background enrichment can improve source evidence, but it does not imply parsing, verification, approval, or export readiness."}</dd>
+          <dt>Update note</dt>
+          <dd>{summary.reason ?? "Background updates can fill in source details, but they do not review, approve, or verify any files."}</dd>
         </div>
       </dl>
 
       {items.length > 0 ? (
-        <div className="detail-completeness-list" aria-label="Enrichment jobs">
+        <div className="detail-completeness-list" aria-label="Background updates">
           {items.map((item) => (
             <article className={`detail-completeness-item detail-completeness-item--${item.state}`} key={item.id}>
               <div className="detail-completeness-item__lead">

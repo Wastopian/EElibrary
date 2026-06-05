@@ -58,7 +58,7 @@ export function EngineeringAssetSummary({ group, promotionAction, promotionSumma
       <article className="ui-asset-card ui-asset-card--missing">
         <div className="ui-asset-card__header">
           <div className="ui-asset-card__identity">
-            <span className="ui-asset-card__eyebrow">Asset class</span>
+            <span className="ui-asset-card__eyebrow">File type</span>
             <h3>{assetTypeLabel(group.assetType)}</h3>
           </div>
           <span className="ui-asset-card__format ui-mono">No file</span>
@@ -78,13 +78,13 @@ export function EngineeringAssetSummary({ group, promotionAction, promotionSumma
           </div>
           <div className="ui-asset-card__status-item">
             <span className="ui-asset-card__status-label">Coverage</span>
-            <StatusBadge label="No candidate rows" tone="neutral" />
+            <StatusBadge label="No files yet" tone="neutral" />
           </div>
         </div>
         <dl className="ui-asset-card__meta">
           <div>
             <dt>Detail</dt>
-            <dd>No asset rows are attached to this class yet, so it cannot contribute to review or export readiness.</dd>
+            <dd>No files are attached to this type yet, so it cannot count toward review or export readiness.</dd>
           </div>
         </dl>
       </article>
@@ -117,12 +117,12 @@ export function EngineeringAssetSummary({ group, promotionAction, promotionSumma
       <AssetInlinePreview asset={bestAsset} partId={bestAsset.partId} />
       <div className="asset-review-card__snapshot">
         <div>
-          <span>Class state</span>
+          <span>File status</span>
           <strong>{formatAssetClassReadinessLabel(group.readiness)}</strong>
           <p>{formatAssetClassReadinessDetail(group.readiness, group.assets.length)}</p>
         </div>
         <div>
-          <span>Review lane</span>
+          <span>Review step</span>
           <strong>{workflowSummary.title}</strong>
           <p>{workflowSummary.detail}</p>
         </div>
@@ -136,11 +136,11 @@ export function EngineeringAssetSummary({ group, promotionAction, promotionSumma
         </div>
       </div>
       <details className="audit-disclosure audit-disclosure--asset">
-        <summary>Detailed validation evidence and promotion history</summary>
+        <summary>Validation details and history</summary>
         <div className="asset-review-card__evidence">
           <p>Validation evidence: {formatAssetValidationEvidence(validationSummary)}</p>
-          <p>Promotion audit: {formatAssetPromotionHistory(promotionSummary)}</p>
-          <p>Promotion blockers: {formatAssetPromotionBlockers(promotionSummary)}</p>
+          <p>Verification history: {formatAssetPromotionHistory(promotionSummary)}</p>
+          <p>What is blocking verification: {formatAssetPromotionBlockers(promotionSummary)}</p>
         </div>
       </details>
       <div className="asset-review-card__actions">
@@ -148,7 +148,7 @@ export function EngineeringAssetSummary({ group, promotionAction, promotionSumma
           <div className="asset-gating-notice">
             <StatusBadge label={gatedAccessBadge(gatedRevision.accessLevel).label} tone={gatedAccessBadge(gatedRevision.accessLevel).tone} />
             <p className="muted-copy">
-              Active controlled revision <strong className="ui-mono">{gatedRevision.revisionLabel}</strong> ({gatedRevision.documentType}). Downloading requires explicit acknowledgment.
+              Active controlled revision <strong className="ui-mono">{gatedRevision.revisionLabel}</strong> ({gatedRevision.documentType}). You must acknowledge access before downloading.
             </p>
           </div>
         ) : null}

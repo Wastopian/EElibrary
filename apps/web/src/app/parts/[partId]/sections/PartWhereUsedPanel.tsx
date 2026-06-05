@@ -33,7 +33,7 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   if (state.status === "unavailable") {
     return (
       <EmptyState
-        body={`Confirmed where-used history requires projects to be available. ${state.message}`}
+        body={`Where-used history needs projects to be available. ${state.message}`}
         title="Where-used unavailable"
       />
     );
@@ -42,7 +42,7 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   if (state.status === "not_found") {
     return (
       <EmptyState
-        body="The detail source did not return a project-memory part identity for this where-used request."
+        body="This part has no project-memory entry yet, so where-used history is empty."
         title="No where-used history"
       />
     );
@@ -53,7 +53,7 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   if (usages.length === 0 && circuitBlockDependencies.length === 0) {
     return (
       <EmptyState
-        body="No confirmed project usage records and no circuit block dependencies exist for this part. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
+        body="No confirmed project uses and no circuit-block references for this part yet. Weak, ambiguous, and unmatched BOM rows are intentionally excluded."
         title="No confirmed project usage"
       />
     );
@@ -62,7 +62,7 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
   return (
     <div className="where-used-panel">
       <p className="where-used-panel__boundary">
-        <strong>Usage evidence only.</strong> Project usage and circuit-block dependency do not approve this part or make exports available.
+        <strong>Usage history only.</strong> Showing this part in projects or circuit blocks does not approve it or make it ready to export.
       </p>
 
       <section aria-labelledby="part-where-used-projects-heading" className="where-used-panel__section">
@@ -70,12 +70,12 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
           <h3 id="part-where-used-projects-heading">Projects</h3>
           <p className="muted-copy">
             {usages.length > 0
-              ? `Confirmed in ${usages.length} ${usages.length === 1 ? "project usage row" : "project usage rows"}.`
-              : "No confirmed project usage rows. Weak, ambiguous, and unmatched BOM rows are excluded."}
+              ? `Used in ${usages.length} ${usages.length === 1 ? "confirmed project row" : "confirmed project rows"}.`
+              : "No confirmed project usage. Weak, ambiguous, and unmatched BOM rows are excluded."}
           </p>
         </header>
         {usages.length === 0
-          ? <EmptyState title="No confirmed project usage" body="Once a matching BOM row promotes to a confirmed usage record, it will appear here." />
+          ? <EmptyState title="No confirmed project usage" body="Once a BOM row matches this part and is confirmed, it will appear here." />
           : (
             <div className="where-used-table-wrap">
               <table className="where-used-table">
@@ -107,7 +107,7 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
                       <td className="ui-mono">{formatDesignators(usage.designators)}</td>
                       <td>{formatQuantity(usage.quantity)}</td>
                       <td>
-                        <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage context recorded"}</span>
+                        <span>{usage.usageContext ?? bomLine?.rawDescription ?? "No usage notes recorded"}</span>
                         {bomLine ? <p className="ui-mono">BOM row {bomLine.rowNumber}</p> : <p>No BOM row linked</p>}
                       </td>
                       <td>{formatDateTime(usage.updatedAt)}</td>
@@ -124,12 +124,12 @@ export function PartWhereUsedPanel({ state }: { state: PartWhereUsedState }) {
           <h3 id="part-where-used-blocks-heading">Circuit blocks</h3>
           <p className="muted-copy">
             {circuitBlockDependencies.length > 0
-              ? `Linked to ${circuitBlockDependencies.length} reusable ${circuitBlockDependencies.length === 1 ? "block" : "blocks"}. Reuse readiness here mirrors the block detail strip and does not approve this part.`
-              : "No reusable block references this part yet. Promoting a working circuit into a reusable block is how engineering memory grows."}
+              ? `Linked to ${circuitBlockDependencies.length} reusable ${circuitBlockDependencies.length === 1 ? "block" : "blocks"}. Reuse status here matches the block detail page and does not approve this part.`
+              : "No reusable block references this part yet. Saving a working circuit as a reusable block is how engineering memory grows."}
           </p>
         </header>
         {circuitBlockDependencies.length === 0
-          ? <EmptyState title="No circuit block dependencies" body="When this part is added to a role in a reusable circuit block, that block will appear here with its reuse-readiness verdict." />
+          ? <EmptyState title="No circuit block dependencies" body="When this part fills a role in a reusable circuit block, that block will appear here with its reuse status." />
           : <PartCircuitBlockDependencyTable dependencies={circuitBlockDependencies} />}
       </section>
     </div>
