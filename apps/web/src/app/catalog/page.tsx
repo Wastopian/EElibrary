@@ -251,7 +251,13 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </section>
 
-      <details className="catalog-getting-started">
+      {/*
+        First-run checklist auto-opens on a fresh visit (no query, no filters, no
+        explicit page) so non-savvy operators see the three-step flow without
+        having to discover the disclosure. Once an engineer is mid-task — filters
+        applied or paginating — the disclosure collapses to stay out of their way.
+      */}
+      <details className="catalog-getting-started" open={!hasActiveCatalogContext && quickLookupState.status === "idle"}>
         <summary>First time here? See 3 quick steps</summary>
         <OperatorChecklist
           primaryActionHref={primaryAction.href}
