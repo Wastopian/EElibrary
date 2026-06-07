@@ -135,7 +135,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/connector-sets`: browse connector families, mate pairs, and project usage counts.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in`; raw API health remains available at `/system/health`.
 
-Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md). User-facing copy follows [`docs/COPY_GLOSSARY.md`](docs/COPY_GLOSSARY.md) — review every PR diff against it before merging.
 
 ## Still Planned (not shipped)
 
