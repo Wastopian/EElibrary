@@ -57,7 +57,11 @@ test("catalog page renders compact filter bar and explanation-first list results
     assert.match(html, /Rows per page/u);
     assert.match(html, /First time here\?/u);
     assert.match(html, /Catalog first-run checklist/u);
-    assert.doesNotMatch(html, /<details class="catalog-getting-started" open="">/u);
+    // A fresh visit (no query, no filters) auto-opens the first-run checklist so
+    // non-savvy operators see the three-step flow without having to discover the
+    // disclosure. Once filters are applied or a query is typed, the disclosure
+    // closes (covered by the next test).
+    assert.match(html, /<details class="catalog-getting-started" open="">/u);
   } finally {
     restoreFetch();
   }
