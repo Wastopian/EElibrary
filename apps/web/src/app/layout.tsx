@@ -1,10 +1,15 @@
-﻿/**
+/**
  * File header: Defines the global web app shell for EE Library.
+ *
+ * The layout reads the current session so unauthenticated routes (`/sign-in`,
+ * `/sign-up`) render a minimal shell with no workspace navigation. Authenticated
+ * routes get the full workstation shell.
  */
 
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { DM_Mono, DM_Sans, Syne } from "next/font/google";
+import { auth } from "@/auth";
 import { RootLayoutShell } from "./RootLayoutShell";
 import "./globals.css";
 
@@ -20,7 +25,37 @@ export const metadata: Metadata = {
 
 /**
  * Renders the desktop-first application shell around every route with global CSS loaded.
+ *
+ * The session check is best-effort: any failure (DB unreachable, malformed JWT)
+ * degrades to the authenticated shell so signed-in operators are never accidentally
+ * stripped of their workspace nav when auth probing fails.
  */
-export default function RootLayout({ children }: { children: ReactNode }) {
-  return <RootLayoutShell fontClassName={`${syne.variable} ${dmSans.variable} ${dmMono.variable}`}>{children}</RootLayoutShell>;
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const isAuthenticated = await detectSession();
+
+  return (
+    <RootLayoutShell
+      fontClassName={`${syne.variable} ${dmSans.variable} ${dmMono.variable}`}
+      isAuthenticated={isAuthenticated}
+    >
+      {children}
+    </RootLayoutShell>
+  );
+}
+
+/**
+ * Reads the session without crashing the layout if auth dependencies are degraded.
+ *
+ * Returns `true` when a session is present, `false` when not. Any thrown error is
+ * treated as authenticated so the full shell renders — losing the workspace nav
+ * silently would be worse than briefly showing it to an unauthenticated user
+ * (middleware still gates the actual routes).
+ */
+async function detectSession(): Promise<boolean> {
+  try {
+    const session = await auth();
+    return Boolean(session);
+  } catch {
+    return true;
+  }
 }
