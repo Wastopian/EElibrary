@@ -319,7 +319,7 @@ export function derivePartProjection(source: PartProjectionSource): PartProjecti
         source.part.id,
         "generated_assets_present",
         "Generated CAD present",
-        `${generatedDraftAssets.length} generated CAD ${pluralize("draft", generatedDraftAssets.length)} remain outside export truth until review and promotion are complete.`,
+        `${generatedDraftAssets.length} generated CAD ${pluralize("draft", generatedDraftAssets.length)} cannot be exported until review is complete and the file is marked verified.`,
         "review",
         lastEvaluatedAt
       )
@@ -332,7 +332,7 @@ export function derivePartProjection(source: PartProjectionSource): PartProjecti
         source.part.id,
         "source_conflict",
         "Mixed import health",
-        "At least one attached provider import failed, so source provenance needs review.",
+        "At least one attached provider import failed, so the source needs review.",
         "review",
         lastEvaluatedAt
       )
@@ -487,7 +487,7 @@ function buildPartApproval(
     return {
       decidedAt: null,
       decidedBy: null,
-      detail: "This connector-support part does not currently require the same whole-part approval gate as a CAD-exportable design component.",
+      detail: "This connector-support part does not need the same approval step as a CAD-exportable design part.",
       evidence,
       lastUpdatedAt: evidenceSource.lastEvaluatedAt,
       partId,
@@ -632,18 +632,18 @@ function buildMissingCadSummary(fileBackedCadCount: number, referencedAssetCount
  */
 function buildMissingCadDetail(fileBackedCadCount: number, referencedAssetCount: number, generatedDraftCount: number): string {
   if (fileBackedCadCount > 0) {
-    return "File-backed CAD assets exist, but no bundle has every required asset verified for export yet.";
+    return "Stored CAD files exist, but no export package has every required file marked verified yet.";
   }
 
   if (generatedDraftCount > 0) {
-    return `${generatedDraftCount} generated CAD ${pluralize("draft", generatedDraftCount)} exist, but generated assets stay outside export truth until review and promotion complete.`;
+    return `${generatedDraftCount} generated CAD ${pluralize("draft", generatedDraftCount)} exist, but generated files cannot be exported until review is complete and they are marked verified.`;
   }
 
   if (referencedAssetCount > 0) {
-    return "CAD-related references exist, but referenced URLs do not count as verified downloadable export assets.";
+    return "CAD-related links exist, but linked URLs cannot be downloaded as part of an export.";
   }
 
-  return "No stored CAD file is attached for export or downstream design handoff.";
+  return "No stored CAD file is attached for export or handoff.";
 }
 
 /**
