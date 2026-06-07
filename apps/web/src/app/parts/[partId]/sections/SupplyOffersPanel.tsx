@@ -27,7 +27,7 @@ export function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
   if (state.status === "unavailable") {
     return (
       <EmptyState
-        body={`Supply snapshots require the database-backed catalog. ${state.message}`}
+        body={`Supply snapshots need the database-backed catalog. ${state.message}`}
         title="Supply offers unavailable"
       />
     );
@@ -36,7 +36,7 @@ export function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
   if (state.status === "not_found") {
     return (
       <EmptyState
-        body="The detail source did not return a catalog part identity for this supply-offer request."
+        body="This part has no catalog entry yet, so no distributor offers are available."
         title="No distributor offers recorded"
       />
     );
@@ -45,7 +45,7 @@ export function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
   if (state.response.offers.length === 0) {
     return (
       <EmptyState
-        body="No source-record-linked distributor offers are recorded for this part yet. Run a provider import that captures commercial snapshots before using this workspace for sourcing decisions."
+        body="No distributor offers are recorded for this part yet. Run a provider import that captures prices and stock before using this panel for sourcing."
         title="No distributor offers recorded"
       />
     );
@@ -64,12 +64,12 @@ export function SupplyOffersPanel({ state }: { state: PartSupplyOffersState }) {
         <div>
           <span>Recorded offers</span>
           <strong>{summary.offerCount}</strong>
-          <p>{summary.inStockOfferCount} in-stock snapshot{summary.inStockOfferCount === 1 ? "" : "s"} recorded.</p>
+          <p>{summary.inStockOfferCount} in-stock offer{summary.inStockOfferCount === 1 ? "" : "s"} recorded.</p>
         </div>
         <div>
           <span>Lowest price tier</span>
           <strong>{summary.lowestUnitPrice ? formatSupplyPrice(summary.lowestUnitPrice.unitPrice, summary.lowestUnitPrice.currencyCode) : "No price tiers"}</strong>
-          <p>{summary.lowestUnitPrice ? `${formatSupplySourceLabel(summary.lowestUnitPrice)} at ${summary.lowestUnitPrice.minQuantity}+ units.` : "No provider price breaks are attached yet."}</p>
+          <p>{summary.lowestUnitPrice ? `${formatSupplySourceLabel(summary.lowestUnitPrice)} at ${summary.lowestUnitPrice.minQuantity}+ units.` : "No price tiers recorded yet."}</p>
         </div>
         <div>
           <span>Freshness</span>
@@ -113,19 +113,19 @@ function SupplyOfferRow({ offer, staleAfterDays }: { offer: SupplyOffering; stal
         <strong>{supplierLabel}</strong>
         <p>{offer.supplierName ? `via ${offer.providerId}` : `Provider ${offer.providerId}`}</p>
         <p>{offer.providerSku ? `SKU ${offer.providerSku}` : `Provider key ${offer.providerPartKey}`}</p>
-        {offer.sourceUrl ? <a href={offer.sourceUrl}>Source record</a> : <span className="muted-copy">No source URL</span>}
+        {offer.sourceUrl ? <a href={offer.sourceUrl}>Source record</a> : <span className="muted-copy">No source link</span>}
       </td>
       <td>
         <StatusBadge label={formatInventoryStatus(offer.inventoryStatus)} tone={inventoryStatusTone(offer.inventoryStatus)} />
-        <p>{offer.inventoryQuantity === null ? "Quantity not captured" : `${formatInteger(offer.inventoryQuantity)} available`}</p>
+        <p>{offer.inventoryQuantity === null ? "Quantity not recorded" : `${formatInteger(offer.inventoryQuantity)} available`}</p>
       </td>
       <td>
         <strong>{formatSupplyTerms(offer)}</strong>
-        <p>{offer.packaging ?? "Packaging not captured"}{offer.preferredRank ? ` / preferred rank ${offer.preferredRank}` : ""}</p>
+        <p>{offer.packaging ?? "Packaging not recorded"}{offer.preferredRank ? ` / preferred rank ${offer.preferredRank}` : ""}</p>
       </td>
       <td>
         <strong>{bestBreak ? formatPriceBreak(bestBreak) : "No price tier"}</strong>
-        <p>{offer.priceBreaks.length > 1 ? `${offer.priceBreaks.length} tiers captured` : "Single or no tier captured"}</p>
+        <p>{offer.priceBreaks.length > 1 ? `${offer.priceBreaks.length} tiers recorded` : "One or no tier recorded"}</p>
       </td>
       <td>
         <StatusBadge label={isSupplyOfferStale(offer.lastSeenAt, staleAfterDays) ? "Stale" : "Current"} tone={isSupplyOfferStale(offer.lastSeenAt, staleAfterDays) ? "review" : "info"} />

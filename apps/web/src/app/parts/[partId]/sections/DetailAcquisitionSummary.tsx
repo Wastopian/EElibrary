@@ -26,7 +26,7 @@ export function DetailAcquisitionSummary({
     <div className="detail-acquisition-summary">
       <div className="detail-acquisition-summary__lead">
         <div>
-          <p className="app-kicker">Acquisition provenance</p>
+          <p className="app-kicker">Where this part came from</p>
           <h3>{summarySignal.label}</h3>
           <p>{summarySignal.detail}</p>
         </div>
@@ -38,7 +38,7 @@ export function DetailAcquisitionSummary({
 
       {boundaryCopy ? (
         <p className="detail-acquisition-summary__boundary">
-          <strong>{boundaryCopy}</strong> Use the completeness checklist below to confirm what still needs review before engineering use or export.
+          <strong>{boundaryCopy}</strong> Use the checklist below to see what still needs review before you use or export this part.
         </p>
       ) : null}
 
@@ -48,11 +48,11 @@ export function DetailAcquisitionSummary({
           <dd>{acquisitionSummary.providerId ?? "Not recorded"}</dd>
         </div>
         <div>
-          <dt>Supplier part key</dt>
+          <dt>Supplier&apos;s ID for this part</dt>
           <dd className="ui-mono">{acquisitionSummary.providerPartKey ?? "Not recorded"}</dd>
         </div>
         <div>
-          <dt>Requested lookup</dt>
+          <dt>What we searched for</dt>
           <dd className="ui-mono">{acquisitionSummary.requestedLookup ?? "Not recorded"}</dd>
         </div>
         <div>
@@ -81,13 +81,13 @@ export function DetailAcquisitionSummary({
             {acquisitionSummary.sourceUrl ? (
               <a href={acquisitionSummary.sourceUrl}>{acquisitionSummary.sourceUrl}</a>
             ) : (
-              "No source URL recorded"
+              "No source link recorded"
             )}
           </dd>
         </div>
         {acquisitionSummary.reason ? (
           <div className="detail-acquisition-grid__wide">
-            <dt>Acquisition note</dt>
+            <dt>Import note</dt>
             <dd>{acquisitionSummary.reason}</dd>
           </div>
         ) : null}

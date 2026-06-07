@@ -17,8 +17,8 @@ export function AssetPromotionPanel({ asset, promotionAction, promotionSummary }
   return (
     <form action={promotionAction} className="review-action-panel">
       <input name="assetId" type="hidden" value={asset.id} />
-      <span>Export promotion</span>
-      <button type="submit">Promote to verified for export</button>
+      <span>Mark verified for export</span>
+      <button type="submit">Mark this file verified</button>
     </form>
   );
 }

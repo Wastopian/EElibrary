@@ -277,14 +277,14 @@ export function previewLabel(status: PreviewStatus): string {
  */
 export function datasheetAssetLabel(asset: Asset | undefined): string {
   if (!asset) {
-    return "No datasheet asset";
+    return "No datasheet on file";
   }
 
   if (isFileBackedAsset(asset)) {
     return "Stored datasheet file";
   }
 
-  return asset.sourceUrl ? "Referenced datasheet only" : "Datasheet metadata only";
+  return asset.sourceUrl ? "Link to datasheet only" : "Datasheet info only — no file";
 }
 
 /**
@@ -293,8 +293,8 @@ export function datasheetAssetLabel(asset: Asset | undefined): string {
 export function buildUseDecision(record: PartDetailPageRecord): { detail: string; headline: string; label: string; tone: BadgeTone } {
   if (record.readinessSummary.status === "ready_for_export_review") {
     return {
-      detail: "Core evidence is strong enough to review for use. Still inspect export assets before committing CAD to a design.",
-      headline: "Usable after export review",
+      detail: "Looks good. Still check the CAD files before adding to a design.",
+      headline: "Usable after a quick file check",
       label: "Review-ready",
       tone: "verified"
     };
@@ -319,8 +319,8 @@ export function buildUseDecision(record: PartDetailPageRecord): { detail: string
   }
 
   return {
-    detail: "Readiness evidence is incomplete, so this record needs inspection before design use.",
-    headline: "Evidence incomplete",
+    detail: "We do not have enough info yet to say this is safe to use. Review the part before adding to a design.",
+    headline: "Not enough info yet",
     label: "Unknown",
     tone: "neutral"
   };
@@ -374,7 +374,7 @@ export function buildConnectorConfidenceSummary(buildableMatingSet: PartDetailPa
   }
 
   if (detailParts.length === 0) {
-    return "No connector confidence evidence is stored.";
+    return "No connector confidence info is stored.";
   }
 
   return `${detailParts.join("; ")} from ${buildableMatingSet.confidenceBreakdown.evidenceCount} mapped relationship signals${evidenceParts.length > 0 ? ` (${evidenceParts.join(", ")})` : ""}.`;

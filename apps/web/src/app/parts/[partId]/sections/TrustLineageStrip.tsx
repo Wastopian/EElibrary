@@ -15,7 +15,7 @@ export function TrustLineageStrip({ summary }: { summary: TrustLineageSummary })
   const guidance = summarizeTrustGuidance(summary);
 
   return (
-    <section className="trust-lineage-strip" role="group" aria-label="Trust lineage">
+    <section className="trust-lineage-strip" role="group" aria-label="Verification steps">
       <div className="trust-lineage-strip__guidance">
         <strong>{guidance.title}</strong>
         <p>{guidance.detail}</p>

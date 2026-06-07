@@ -16,10 +16,10 @@ export function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: Bund
 
   return (
     <>
-      <section aria-label="Export bundle summary" className={`detail-export-summary detail-export-summary--${bundleReadiness.state}`}>
+      <section aria-label="Export readiness" className={`detail-export-summary detail-export-summary--${bundleReadiness.state}`}>
         <div className="detail-export-summary__lead">
           <div>
-            <p className="app-kicker">Bundle gate</p>
+            <p className="app-kicker">Export readiness</p>
             <h3 className="ui-mono">{bundleReadiness.label}</h3>
             <p>{bundleReadiness.reason}</p>
           </div>
@@ -27,36 +27,36 @@ export function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: Bund
             <StatusBadge label={bundleReadiness.label} tone={bundleReadinessTone(bundleReadiness.state)} />
             <StatusBadge label={`${bundleReadiness.verifiedCadAssetCount} verified CAD`} tone={bundleReadiness.verifiedCadAssetCount > 0 ? "verified" : "neutral"} />
             <StatusBadge label={`${bundleReadiness.fileBackedCadAssetCount} stored CAD file${bundleReadiness.fileBackedCadAssetCount === 1 ? "" : "s"}`} tone={bundleReadiness.fileBackedCadAssetCount > 0 ? "info" : "neutral"} />
-            <StatusBadge label={`${bundleReadiness.referencedAssetCount} URL-only references`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
+            <StatusBadge label={`${bundleReadiness.referencedAssetCount} link-only`} tone={bundleReadiness.referencedAssetCount > 0 ? "review" : "neutral"} />
           </div>
         </div>
         <div className="detail-export-summary__grid">
           <div>
-            <span>Ready bundles</span>
+            <span>Ready to download</span>
             <strong>{availableBundleCount}</strong>
-            <p>{availableBundleCount > 0 ? "These bundles have every required stored and verified file." : "No bundle has every required stored and verified file yet."}</p>
+            <p>{availableBundleCount > 0 ? "These export packages have every file we need." : "No export package has every file we need yet."}</p>
           </div>
           <div>
-            <span>Blocked bundles</span>
+            <span>Not ready yet</span>
             <strong>{blockedBundleCount}</strong>
-            <p>{blockedBundleCount > 0 ? "These bundle targets still need missing review, validation, or promotion steps." : "Every supported bundle target is currently open."}</p>
+            <p>{blockedBundleCount > 0 ? "These packages still need a file checked or marked verified." : "Every supported package is ready or in progress."}</p>
           </div>
           <div>
-            <span>Verified CAD</span>
+            <span>Verified CAD files</span>
             <strong>{bundleReadiness.verifiedCadAssetCount}</strong>
-            <p>Verified CAD is the only asset class that can satisfy bundle export gates.</p>
+            <p>Only files we've verified count toward an export-ready package.</p>
           </div>
           <div>
-            <span>Reference-only rows</span>
+            <span>Link-only records</span>
             <strong>{bundleReadiness.referencedAssetCount}</strong>
-            <p>Referenced metadata stays visible for provenance, but it never unlocks export actions on its own.</p>
+            <p>Links to outside sources stay visible for traceability, but they cannot be downloaded as part of an export.</p>
           </div>
         </div>
       </section>
       <div className="export-list">
         {bundleReadiness.exportActions.map((action) => (
           <button className={`export-action ${action.available ? "export-action--available" : "export-action--blocked"}`} disabled={!action.available} key={action.id} title={action.reason} type="button">
-            <span className="export-action__eyebrow">{action.available ? "Export lane open" : "Export lane blocked"}</span>
+            <span className="export-action__eyebrow">{action.available ? "Ready to download" : "Not ready"}</span>
             <strong>{action.label}</strong>
             <small>{action.reason}</small>
           </button>

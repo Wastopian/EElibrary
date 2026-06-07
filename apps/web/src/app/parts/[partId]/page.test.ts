@@ -33,7 +33,7 @@ test("part detail renders readiness record summary from detail response", async 
   try {
     const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
 
-    assert.match(html, /Readiness record/u);
+    assert.match(html, /Where this part stands/u);
     assert.match(html, /Use decision/u);
     assert.match(html, /Do not use yet/u);
     assert.match(html, /CAD\/export/u);
@@ -41,32 +41,31 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /Next action/u);
     assert.match(html, /Resolve CAD\/export assets/u);
     assert.match(html, /Blocked/u);
-    assert.match(html, /Bundle gate/u);
+    assert.match(html, /Export readiness/u);
     assert.match(html, /Alternates and companions/u);
     assert.match(html, /Sourcing and lifecycle/u);
     assert.match(html, /Distributor offers/u);
     assert.match(html, /No distributor offers recorded/u);
-    assert.match(html, /Top blockers/u);
+    assert.match(html, /What is blocking this part/u);
     assert.match(html, /Risk flags/u);
-    assert.match(html, /Review and export state/u);
+    assert.match(html, /Review and export status/u);
     assert.match(html, /Where-used/u);
     assert.match(html, /Document control/u);
     assert.match(html, /Next workspaces/u);
     assert.match(html, /Compare this part/u);
     assert.match(html, /Check where-used/u);
     assert.match(html, /Attach evidence/u);
-    assert.match(html, /Review export blockers/u);
+    assert.match(html, /See what is blocking export/u);
     assert.match(html, /No confirmed project usage/u);
     assert.match(html, /No controlled revisions/u);
     assert.match(html, /draft CAD needs review/u);
-    assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
+    assert.match(html, /Approving the part does not review its files or mark them ready for export/u);
     assert.match(html, /Files and models/u);
-    assert.match(html, /Class state/u);
-    assert.match(html, /Review lane/u);
+    assert.match(html, /File status/u);
+    assert.match(html, /Review step/u);
     assert.match(html, /Trust check/u);
-    assert.match(html, /Ready bundles/u);
-    assert.match(html, /Blocked bundles/u);
-    assert.match(html, /Export lane/u);
+    assert.match(html, /Ready to download/u);
+    assert.match(html, /Not ready yet/u);
     assert.doesNotMatch(html, /approved part/u);
   } finally {
     restoreFetch();
@@ -233,14 +232,14 @@ test("part detail renders confirmed where-used project usage", async () => {
     assert.match(html, /U1/u);
     assert.match(html, />1</u);
     assert.match(html, /Main rail regulator/u);
-    assert.match(html, /Project usage and circuit-block dependency do not approve this part or make exports available/u);
+    assert.match(html, /Showing this part in projects or circuit blocks does not approve it or make it ready to export/u);
     assert.match(html, /Circuit blocks/u);
     assert.match(html, /Alpha power rail/u);
     assert.match(html, /ALPHA-POWER/u);
     assert.match(html, /Ready to reuse/u);
     assert.match(html, /Main LDO/u);
-    assert.match(html, /Whole-part approval remains separate from generated asset review and explicit export promotion/u);
-    assert.match(html, /Export lane/u);
+    assert.match(html, /Approving the part does not review its files or mark them ready for export/u);
+    assert.match(html, /Ready to download|Not ready/u);
   } finally {
     restoreFetch();
   }
@@ -269,7 +268,7 @@ test("connector detail elevates connector build set near the top of the readines
     assert.match(html, /Mates and accessories/u);
     assert.match(html, /Best mate/u);
     assert.match(html, /Required accessories/u);
-    assert.match(html, /Implementation-friendly mate and accessory context/u);
+    assert.match(html, /Mates and accessories you need to build with this connector/u);
   } finally {
     restoreFetch();
   }
