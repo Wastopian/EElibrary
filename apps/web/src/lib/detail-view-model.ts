@@ -670,46 +670,46 @@ export function getPartEnrichmentStateLabel(summary: PartEnrichmentSummary): Wor
   if (summary.state === "available") {
     if (summary.latestJobStatus === "failed") {
       return {
-        detail: "The latest background enrichment attempt failed. Stored truth on the checklist stays unchanged until evidence is captured and reviewed.",
-        label: "Latest enrichment failed",
+        detail: "The latest background data update failed. The checklist below only counts what we already have on file, so nothing has changed.",
+        label: "Latest update failed",
         tone: "review"
       };
     }
 
     if (summary.latestJobStatus === "running") {
       return {
-        detail: "Background enrichment is currently running for this part. It can improve source evidence, but it does not imply approval or export readiness.",
-        label: "Enrichment running",
+        detail: "A background data update is running for this part. It can fill in source details, but it does not approve or verify any files.",
+        label: "Update running",
         tone: "info"
       };
     }
 
     if (summary.latestJobStatus === "queued") {
       return {
-        detail: "Background enrichment is queued for this part. Stored truth on the checklist stays unchanged until evidence is persisted.",
-        label: "Enrichment queued",
+        detail: "A background data update is queued for this part. The checklist below only counts what we already have on file.",
+        label: "Update queued",
         tone: "info"
       };
     }
 
     return {
-      detail: "Background enrichment history is recorded for this part. Captured evidence can improve usefulness, but it does not imply parsing, verification, approval, or export readiness.",
-      label: "Enrichment history recorded",
+      detail: "Background data update history is recorded for this part. Updates can fill in source details, but they do not review, approve, or verify any files.",
+      label: "Update history recorded",
       tone: "info"
     };
   }
 
   if (summary.state === "unavailable") {
     return {
-      detail: summary.reason ?? "Enrichment history is unavailable for this detail response.",
-      label: "Enrichment unavailable",
+      detail: summary.reason ?? "Update history is unavailable for this detail response.",
+      label: "Updates unavailable",
       tone: "neutral"
     };
   }
 
   return {
-    detail: summary.reason ?? "No provider enrichment jobs are recorded for this part yet.",
-    label: "No enrichment jobs recorded",
+    detail: summary.reason ?? "No background data updates are recorded for this part yet.",
+    label: "No background updates recorded",
     tone: "neutral"
   };
 }
@@ -952,18 +952,18 @@ function buildCadChecklistItem(
   }
 
   if (assetGroup?.readiness === "reference_only") {
-    return createChecklistItem(assetType, label, "review", "Reference only", "Only referenced metadata exists for this asset class; no stored file is attached.");
+    return createChecklistItem(assetType, label, "review", "Reference only", "Only a link is on file for this file type; no stored file is attached.");
   }
 
   if (assetGroup?.readiness === "failed" || generationOption?.workflowStatus === "failed") {
-    return createChecklistItem(assetType, label, "blocked", "Blocked", generationOption?.reason ?? "The latest recovery attempt failed for this asset class.");
+    return createChecklistItem(assetType, label, "blocked", "Blocked", generationOption?.reason ?? "The latest recovery attempt failed for this file type.");
   }
 
   if (generationOption?.canRequest) {
     return createChecklistItem(assetType, label, "review", "Requestable", generationOption.reason);
   }
 
-  return createChecklistItem(assetType, label, "missing", "Missing", "No stored asset or requestable recovery workflow is recorded for this class yet.");
+  return createChecklistItem(assetType, label, "missing", "Missing", "No file or recovery request is on file for this file type yet.");
 }
 
 /**
@@ -1023,7 +1023,7 @@ function buildApprovalChecklistItem(record: PartSearchRecord, reviewWorkflowSumm
       "Approval/review state",
       "blocked",
       "Not approved",
-      `${record.approval.detail} Whole-part approval remains separate from generated asset review and export promotion.`
+      `${record.approval.detail} Approving the part does not review its files or mark them ready for export.`
     );
   }
 
@@ -1124,18 +1124,18 @@ function describePartEnrichmentJob(
   job: PartEnrichmentSummary["jobs"][number]
 ): string {
   if (job.jobStatus === "failed") {
-    return job.errorMessage ?? "The background enrichment job did not complete.";
+    return job.errorMessage ?? "The background data update did not complete.";
   }
 
   if (job.jobStatus === "queued") {
-    return "This background enrichment job is queued and has not started yet.";
+    return "This background data update is queued and has not started yet.";
   }
 
   if (job.jobStatus === "running") {
-    return "This background enrichment job is currently running. Stored readiness, approval, and export truth stay unchanged until evidence is persisted.";
+    return "This background data update is running. Readiness, approval, and export status only change when evidence is recorded.";
   }
 
-  return "This background enrichment job completed. Captured evidence can improve usefulness, but it does not imply parsing, verification, approval, or export readiness.";
+  return "This background data update completed. New evidence can fill in details, but it does not review, approve, or verify any files.";
 }
 
 /**

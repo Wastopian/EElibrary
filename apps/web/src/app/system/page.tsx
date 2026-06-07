@@ -115,7 +115,7 @@ function SystemHealthOverview({ health }: { health: SystemHealthResponse }) {
     <div className="system-health-grid">
       <SystemHealthCard detail="The web app reached the system-health endpoint." label="API" tone="verified" value="OK" />
       <SystemHealthCard detail="Catalog, project memory, evidence, where-used, and export records require this connection." label="Database" tone={toneForConnection(health.database.status)} value={formatConnectionLabel(health.database.status)} />
-      <SystemHealthCard detail="File-backed evidence, generated assets, and export bundles depend on configured storage." label="Object storage" tone={toneForConnection(health.objectStorage.status)} value={formatConnectionLabel(health.objectStorage.status)} />
+      <SystemHealthCard detail="Stored evidence files, generated files, and export packages depend on configured storage." label="Object storage" tone={toneForConnection(health.objectStorage.status)} value={formatConnectionLabel(health.objectStorage.status)} />
       <SystemHealthCard detail={formatWorkerDetail(health.worker)} label="Worker" tone={toneForWorker(health.worker.status)} value={formatWorkerLabel(health.worker.status)} />
     </div>
   );
@@ -160,22 +160,22 @@ function SystemUnavailableState({ apiBaseUrl }: { apiBaseUrl: string }) {
 function SystemQueueTable({ health }: { health: SystemHealthResponse }) {
   const rows = [
     {
-      description: "Provider acquisition jobs that collect source records and catalog candidates.",
+      description: "Provider import jobs that collect source records and catalog candidates.",
       failed: health.queues.acquisition.failed,
       pending: health.queues.acquisition.pending,
-      queue: "Acquisition"
+      queue: "Imports"
     },
     {
-      description: "Queued enrichment work that may add normalized fields, metadata, or generated drafts.",
+      description: "Background data updates that may add normalized fields, metadata, or generated drafts.",
       failed: health.queues.enrichment.failed,
       pending: health.queues.enrichment.pending,
-      queue: "Enrichment"
+      queue: "Background updates"
     },
     {
-      description: "Pending export bundles waiting for the worker daemon to copy verified asset bytes; failed rows expose `assembly_error` JSONB for diagnostic detail.",
+      description: "Export packages waiting for the worker daemon to copy verified file bytes. Failed rows expose `assembly_error` JSONB for diagnostic detail.",
       failed: health.queues.exportBundleAssembly.failed,
       pending: health.queues.exportBundleAssembly.pending,
-      queue: "Export bundle assembly"
+      queue: "Export package assembly"
     }
   ];
 
@@ -300,14 +300,14 @@ function buildWorkerRecoveryDetail(health: SystemHealthResponse | null, queueTot
   }
 
   if (health.worker.status === "online") {
-    return queueTotals.pending > 0 ? "The worker is online, so pending background work should continue moving." : "The worker is online and no pending queue work is reported.";
+    return queueTotals.pending > 0 ? "The worker is online, so pending background work should keep moving." : "The worker is online and no pending queue work is reported.";
   }
 
   if (health.worker.status === "offline") {
-    return queueTotals.pending > 0 ? "Queued work is waiting for the worker before acquisition or enrichment can continue." : "Start or restart the worker before relying on new async provider jobs.";
+    return queueTotals.pending > 0 ? "Queued work is waiting for the worker before imports or background updates can continue." : "Start or restart the worker before relying on new background provider jobs.";
   }
 
-  return "No worker heartbeat has been confirmed yet, so async provider job progress is uncertain.";
+  return "No worker heartbeat has been confirmed yet, so background provider job progress is uncertain.";
 }
 
 /**

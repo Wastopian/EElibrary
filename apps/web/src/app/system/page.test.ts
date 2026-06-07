@@ -35,9 +35,9 @@ test("system page renders health summary, worker warning, and queue recovery", a
     assert.match(html, /Object storage/u);
     assert.match(html, /Not configured/u);
     assert.match(html, /Worker daemon is offline/u);
-    assert.match(html, /Acquisition/u);
-    assert.match(html, /Enrichment/u);
-    assert.match(html, /Export bundle assembly/u);
+    assert.match(html, /Imports/u);
+    assert.match(html, /Background updates/u);
+    assert.match(html, /Export package assembly/u);
     assert.match(html, /Needs review/u);
     assert.match(html, /Open Admin queues/u);
   } finally {

@@ -23,7 +23,7 @@ test("WorkerStatusBanner renders offline worker warning with pending queue count
   );
 
   assert.match(html, /Worker daemon is offline/u);
-  assert.match(html, /Acquisition: 2 pending, 0 failed/u);
+  assert.match(html, /Imports: 2 pending, 0 failed/u);
   assert.match(html, /waiting for a worker/u);
 });
 
@@ -40,8 +40,8 @@ test("WorkerStatusBanner renders queue failure diagnostics while worker is onlin
     })
   );
 
-  assert.match(html, /Queued provider work has failures/u);
-  assert.match(html, /Enrichment: 0 pending, 1 failed/u);
+  assert.match(html, /Background provider work has failures/u);
+  assert.match(html, /Background updates: 0 pending, 1 failed/u);
   assert.match(html, /operations:worker/u);
 });
 
