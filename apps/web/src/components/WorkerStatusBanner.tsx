@@ -82,7 +82,7 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
       <div className="status-banner status-banner--warning" data-testid="banner-worker-offline" role="status">
         <strong>Worker daemon is offline.</strong>
         <span>
-          Direct MPN imports still work. Bulk acquisition and queued enrichment will not run until you start{" "}
+          Direct MPN imports still work. Bulk imports and background updates will not run until you start{" "}
           <code>npm run dev:worker</code>
           {health.worker.lastSeenAt ? ` (last heartbeat ${formatRelative(health.worker.lastSeenAt)})` : " (no heartbeat ever recorded)"}.
           {queueSummary.totalPending > 0 ? ` ${formatQueueSummary(queueSummary)} waiting for a worker.` : ""}
@@ -94,9 +94,9 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
   if (queueSummary.totalFailed > 0) {
     return (
       <div className="status-banner status-banner--warning" data-testid="banner-queue-failures" role="status">
-        <strong>Queued provider work has failures.</strong>
+        <strong>Background provider work has failures.</strong>
         <span>
-          {formatQueueSummary(queueSummary)} Check <code>npm run operations:worker</code> or the admin queue before trusting async acquisition results.
+          {formatQueueSummary(queueSummary)} Check <code>npm run operations:worker</code> or the admin queue before trusting background import results.
         </span>
       </div>
     );
@@ -105,9 +105,9 @@ export function WorkerStatusBanner({ apiBaseUrl, databaseUrlConfigured, health, 
   if (queueSummary.totalPending > 0) {
     return (
       <div className="status-banner status-banner--warning" data-testid="banner-queue-pending" role="status">
-        <strong>Queued provider work is active.</strong>
+        <strong>Background provider work is active.</strong>
         <span>
-          {formatQueueSummary(queueSummary)} The worker is online, so queued acquisition and enrichment should continue moving.
+          {formatQueueSummary(queueSummary)} The worker is online, so background imports and updates should keep moving.
         </span>
       </div>
     );
@@ -155,7 +155,7 @@ function summarizeQueues(health: SystemHealthResponse): QueueSummary {
  * Formats queue counts for the status banner without hiding which queue needs attention.
  */
 function formatQueueSummary(summary: QueueSummary): string {
-  return `Acquisition: ${summary.acquisitionPending} pending, ${summary.acquisitionFailed} failed. Enrichment: ${summary.enrichmentPending} pending, ${summary.enrichmentFailed} failed.`;
+  return `Imports: ${summary.acquisitionPending} pending, ${summary.acquisitionFailed} failed. Background updates: ${summary.enrichmentPending} pending, ${summary.enrichmentFailed} failed.`;
 }
 
 /**

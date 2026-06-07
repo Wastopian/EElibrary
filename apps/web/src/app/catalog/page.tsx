@@ -935,7 +935,7 @@ function buildTrustScoreBreakdown(record: PartSearchRecord): Array<{ label: stri
   const verifiedCadCount = cadAssets.filter((asset) => asset.exportStatus === "verified_for_export").length;
   const totalCadCount = cadAssets.length;
   factors.push({
-    detail: verifiedCadCount > 0 ? "File-backed verified assets count toward export readiness." : totalCadCount > 0 ? "CAD exists but is not yet verified for export." : "No CAD assets are attached to this record.",
+    detail: verifiedCadCount > 0 ? "Stored verified files count toward export readiness." : totalCadCount > 0 ? "CAD exists but is not yet verified for export." : "No CAD files are attached to this record.",
     label: verifiedCadCount > 0 ? `${verifiedCadCount} of ${totalCadCount} CAD verified` : totalCadCount > 0 ? `${totalCadCount} CAD unverified` : "No CAD assets",
     tone: verifiedCadCount > 0 ? "verified" : totalCadCount > 0 ? "review" : "neutral"
   });

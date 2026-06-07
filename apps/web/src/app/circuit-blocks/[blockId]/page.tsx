@@ -78,7 +78,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
             <p className="app-kicker">Circuit block detail</p>
             <h1>{detail.circuitBlock.name}</h1>
             <p className="projects-hero__lede">
-              <span className="ui-mono">{detail.circuitBlock.blockKey}</span> preserves part roles, constraints, reuse scope, and evidence for this circuit pattern. Linked parts keep their own approval, readiness, and export truth.
+              <span className="ui-mono">{detail.circuitBlock.blockKey}</span> keeps part roles, constraints, reuse scope, and evidence for this circuit pattern on file. Linked parts keep their own approval, readiness, and export status.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label={formatCircuitBlockStatus(detail.circuitBlock.status)} tone={circuitBlockStatusTone(detail.circuitBlock.status)} />
@@ -223,7 +223,7 @@ export default async function CircuitBlockDetailPage({ params }: { params: Promi
         <SectionPanel description="Circuit block evidence is provenance. It does not approve the block, validate assets, or make export available." title={detail.evidence.length > 0 ? `${detail.evidence.length} evidence attachments` : "No evidence attachments"}>
           <div className="project-evidence-panel">
             <div className="project-evidence-panel__boundary">
-              <strong>Evidence is provenance.</strong> It supports future review without changing part approval, validation, or export readiness.
+              <strong>Evidence is a record, not a gate.</strong> It supports future review without changing part approval, validation, or export readiness.
             </div>
             <EvidenceAttachmentPanel submitLabel="Attach circuit evidence" targetId={detail.circuitBlock.id} targetType="circuit_block" />
             {detail.evidence.length > 0 ? <CircuitBlockEvidenceTable evidence={detail.evidence} /> : <EmptyState title="No circuit evidence yet" body="Attach design review links or notes when this reusable circuit is reviewed." />}
@@ -421,7 +421,7 @@ function summarizeReuseReadinessGuidance(stages: CircuitBlockReuseStageSummary[]
   }
 
   return {
-    detail: reusable?.detail ?? "All reuse gates passed. Linked-part approval and export readiness remain separate per part.",
+    detail: reusable?.detail ?? "All reuse checks passed. Each linked part still has its own approval and export readiness.",
     title: "Ready to reuse"
   };
 }

@@ -506,7 +506,7 @@ test("part detail renders enrichment states while the completeness checklist sta
     const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
 
     assert.match(html, /Enrichment status/u);
-    assert.match(html, /Enrichment running/u);
+    assert.match(html, /Update running/u);
     assert.match(html, /Datasheet capture/u);
     assert.match(html, /Queued/u);
     assert.match(html, /Running/u);
@@ -577,7 +577,7 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
     const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
 
     assert.match(html, /Acquisition history unavailable/u);
-    assert.match(html, /Enrichment unavailable/u);
+    assert.match(html, /Updates unavailable/u);
     assert.match(html, /seed fallback data/u);
     assert.doesNotMatch(html, /Imported via acquisition job/u);
   } finally {
