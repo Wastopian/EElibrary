@@ -349,14 +349,14 @@ export function getAssetTruthSummary(record: PartSearchRecord): WorkflowSignalLa
 
   if (referencedCadCount > 0) {
     return {
-      detail: `${referencedCadCount} CAD ${pluralize("reference", referencedCadCount)} exist without stored files.`,
-      label: "CAD references only",
+      detail: `${referencedCadCount} CAD ${pluralize("link", referencedCadCount)} on file without stored files.`,
+      label: "CAD links only",
       tone: "review"
     };
   }
 
   return {
-    detail: "No stored CAD files or CAD references are attached to this record.",
+    detail: "No stored CAD files or CAD links are attached to this record.",
     label: "no usable CAD files",
     tone: "neutral"
   };
@@ -1346,7 +1346,7 @@ function buildQuickReadinessDetail(
   assetTruth: WorkflowSignalLabel,
   workflow: WorkflowSignalLabel
 ): string {
-  return `Whole-part readiness: ${record.readinessSummary.detail} Approval: ${record.approval.detail} Export bundle: ${exportReadiness.label}. CAD truth: ${assetTruth.detail} Workflow signal: ${workflow.detail}`;
+  return `Part readiness: ${record.readinessSummary.detail} Approval: ${record.approval.detail} Export package: ${exportReadiness.label}. CAD status: ${assetTruth.detail} Workflow signal: ${workflow.detail}`;
 }
 
 /**

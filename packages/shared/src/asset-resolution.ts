@@ -76,8 +76,8 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
     return {
       exportActions,
       fileBackedCadAssetCount,
-      label: "partial bundle",
-      reason: "Some CAD files exist, but no export bundle has every required asset verified for export.",
+      label: "partial package",
+      reason: "Some CAD files exist, but no export package has every required file marked verified.",
       referencedAssetCount,
       state: "partial_bundle",
       verifiedCadAssetCount
@@ -88,8 +88,8 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
     return {
       exportActions,
       fileBackedCadAssetCount,
-      label: "references only",
-      reason: "Only referenced metadata is available; no stored CAD files are ready for export.",
+      label: "links only",
+      reason: "Only links are on file; no stored CAD files are ready for export.",
       referencedAssetCount,
       state: "references_only",
       verifiedCadAssetCount
@@ -99,8 +99,8 @@ export function getBundleReadinessSummary(record: PartSearchRecord): BundleReadi
   return {
     exportActions,
     fileBackedCadAssetCount,
-    label: "no usable assets",
-    reason: "No usable asset records are available for export or generation evidence.",
+    label: "no usable files",
+    reason: "No usable files are on file for export or generation.",
     referencedAssetCount,
     state: "no_usable_assets",
     verifiedCadAssetCount

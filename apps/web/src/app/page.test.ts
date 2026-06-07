@@ -163,7 +163,7 @@ test("homepage renders quick readiness result from matched catalog record", asyn
 
     // Quick readiness panel: headline blocker + bundle truth.
     assert.match(html, /Blocked/u);
-    assert.match(html, /Export bundle: partial bundle/u);
+    assert.match(html, /Export package: partial package/u);
 
     // Result-action surfaces. The admin link renders as "Open admin queue" (lowercase q),
     // so the test now matches the actual rendered text instead of an outdated capitalized label.

@@ -170,7 +170,7 @@ test("generated draft assets use honest source and review wording", () => {
   assert.equal(shouldRenderAssetPromotionAction(generatedPromotionSummary), false);
   assert.equal(shouldRenderAssetPromotionAction(approvedPromotionSummary), true);
   assert.equal(shouldRenderAssetPromotionAction(promotedPromotionSummary), false);
-  assert.equal(getSearchExportReadiness({ ...regulatorRecord, assets: [generatedDraftAsset] }).label, "partial bundle");
+  assert.equal(getSearchExportReadiness({ ...regulatorRecord, assets: [generatedDraftAsset] }).label, "partial package");
 });
 
 /**
@@ -229,9 +229,9 @@ test("search export readiness labels distinguish bundles from single verified CA
   };
 
   assert.equal(getSearchExportReadiness(connectorRecord).label, "bundle ready");
-  assert.equal(getSearchExportReadiness(footprintOnlyRecord).label, "partial bundle");
-  assert.equal(getSearchExportReadiness(getSeedRecord("part-tps7a02dbvr")).label, "partial bundle");
-  assert.equal(getSearchExportReadiness(getSeedRecord("part-stm32g031k8t6")).label, "references only");
+  assert.equal(getSearchExportReadiness(footprintOnlyRecord).label, "partial package");
+  assert.equal(getSearchExportReadiness(getSeedRecord("part-tps7a02dbvr")).label, "partial package");
+  assert.equal(getSearchExportReadiness(getSeedRecord("part-stm32g031k8t6")).label, "links only");
 });
 
 /**
@@ -244,7 +244,7 @@ test("quick readiness summary explains blockers without inventing approval state
   const regulatorSummary = getQuickReadinessSummary(regulatorRecord);
 
   assert.equal(connectorSummary.headline, "Ready for Export Review");
-  assert.match(connectorSummary.detail, /Export bundle: bundle ready/u);
+  assert.match(connectorSummary.detail, /Export package: bundle ready/u);
   assert.doesNotMatch(connectorSummary.detail, /approved part/u);
   assert.equal(regulatorSummary.headline, "Blocked");
   assert.ok(regulatorSummary.actions.some((action) => action.label.includes("stored CAD file before export")));
