@@ -93,6 +93,16 @@ That means:
 - no decorative clutter pretending to be value
 - no fake “AI magic” styling
 
+### Copy tone
+Plain language, no internal-workflow jargon. The audience is older electrical engineers who are not software-savvy. The full standardized vocabulary lives in [`COPY_GLOSSARY.md`](COPY_GLOSSARY.md); review every user-facing string against it before merging.
+
+Quick reminders:
+- "Mark verified" / "Verify" — not "promote" or "promotion"
+- "Import" / "background update" — not "acquisition" or "enrichment"
+- "Stored file" — not "file-backed asset"
+- "Status" / "state" — never "truth" in user copy
+- "Export package" / "export readiness" — not "bundle gate" / "export lane"
+
 ---
 
 ## Color direction

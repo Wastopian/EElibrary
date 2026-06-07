@@ -136,7 +136,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/vendors`: filesystem-backed supplier notebook for PCB shops, sheet metal, machining, finishing, and assembly partners — notes and reference files per vendor, reachable even when the database is down.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in` with self-service `/sign-up` for local workstation accounts; raw API health remains available at `/system/health`.
 
-Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md). User-facing copy follows [`docs/COPY_GLOSSARY.md`](docs/COPY_GLOSSARY.md) — review every PR diff against it before merging.
 
 ## Still Planned (not shipped)
 

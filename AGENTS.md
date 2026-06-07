@@ -16,6 +16,7 @@ Build **EE Library**, an engineering-first platform for:
 5. Preserve provenance for normalized fields and assets.
 6. Prefer deterministic naming for bundles and assets.
 7. Desktop-first UX. This is an engineering workstation, not a phone toy.
+8. User-facing copy follows [`docs/COPY_GLOSSARY.md`](docs/COPY_GLOSSARY.md). The audience is older electrical engineers who are not software-savvy — workflow nouns like *promote*, *enrichment*, *acquisition*, *truth*, *gate*, *file-backed* do not appear in strings the UI renders. Persistent type/field names stay as-is; only user-facing strings are standardized.
 
 ## Priority order
 1. Search and filtering
