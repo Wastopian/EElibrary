@@ -75,7 +75,7 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
         <div>
           <p className="app-kicker">Admin</p>
           <h2 id="admin-queue-overview-heading">Operations queues</h2>
-          <p>Grouped by assistant triage prep, real review, promotion, approval, issue, import, and validation state. Queues only appear when the backend records them.</p>
+          <p>Queues for triage, review, verification, approval, issues, imports, and validation. Each queue only appears when there is something in it.</p>
         </div>
         <div className="admin-queue-overview__controls">
           <div className="admin-queue-overview__mode" aria-label="Queue presentation mode">
@@ -106,7 +106,7 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
             </button>
           ))}
         </div>
-        <p>{activeGroupId === "all" ? `${rows.length} backend-backed rows across current queues` : `${filteredRows.length} backend-backed rows in ${activeGroup?.label ?? "the selected queue"}`}</p>
+        <p>{activeGroupId === "all" ? `${rows.length} rows across current queues` : `${filteredRows.length} rows in ${activeGroup?.label ?? "the selected queue"}`}</p>
       </div>
 
       <div className="admin-queue-scope-controls" aria-label="Queue row scope controls">
@@ -163,7 +163,7 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
       ) : (
         <div className="admin-queue-table-view">
           <div className="admin-queue-table-view__toolbar">
-            <p>Dense mode keeps queue, state, detail, and action truth visible together.</p>
+            <p>Dense mode shows queue, state, detail, and action in one row.</p>
           </div>
 
           {filteredRows.length > 0 ? (
@@ -206,8 +206,8 @@ export function AdminQueuePresentation({ groups, initialMode = "grouped", rows, 
             </div>
           ) : (
             <div className="admin-queue-table-view__empty">
-              <strong>No rows for this queue filter</strong>
-              <p>The current admin view does not have backend-backed rows for this filter.</p>
+              <strong>No rows for this filter</strong>
+              <p>Nothing matches this filter right now.</p>
             </div>
           )}
         </div>

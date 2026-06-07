@@ -308,7 +308,7 @@ export default async function AdminPage(props: AdminPageProps) {
             <p className="app-kicker">Admin workspace</p>
             <h1>Review and trust maintenance</h1>
             <p className="admin-hero__lede">
-              Review pending drafts, clear blockers, and promote files to verified for export. Promotion stays explicit so nothing slips through unreviewed.
+              Review pending drafts, clear blockers, and mark files verified for export. Marking files verified is a separate step so nothing slips through unreviewed.
             </p>
             <div className="admin-hero__status">
               <StatusBadge label={source === "seed_fallback" ? "Local seed mode" : "DB-backed catalog"} tone={source === "seed_fallback" ? "review" : "verified"} />
@@ -330,9 +330,9 @@ export default async function AdminPage(props: AdminPageProps) {
           { href: "#issue-ops-heading", label: "Issue operations" },
           { href: "#import-by-mpn-heading", label: "Import by MPN" },
           { href: "#review-queue-heading", label: "Review queue" },
-          { href: "#promotion-queue-heading", label: "Promotion queue" },
+          { href: "#promotion-queue-heading", label: "Files to mark verified" },
           { href: "#ops-health-heading", label: "Imports and validation" },
-          { href: "#audit-heading", label: "Promotion audit history" },
+          { href: "#audit-heading", label: "Verification audit history" },
           { href: "#user-action-audit-heading", label: "User action audit" }
         ]}
       />
@@ -343,11 +343,11 @@ export default async function AdminPage(props: AdminPageProps) {
         <SectionHeading
           id="assistant-triage-heading"
           index="00"
-          subtitle="Evidence packets for assistant-aided review prep. They summarize existing records only and never advance trust state."
+          subtitle="Briefing packets for assistant-aided review. They summarize existing records only and never change approval or export status."
           title="Assistant triage prep"
         />
         <SectionPanel
-          description="Built from current source, metric, issue, extraction, and asset evidence. No assistant output is trusted automatically; review queues remain the authority."
+          description="Built from current source, metric, issue, extraction, and file evidence. Assistant output is never trusted automatically — the review queues stay in charge."
           title={`${assistantTriageRows.length} assistant triage ${assistantTriageRows.length === 1 ? "packet" : "packets"}`}
         >
           {recentAssistantTriageRows.length > 0 ? (
@@ -386,7 +386,7 @@ export default async function AdminPage(props: AdminPageProps) {
               </table>
             </div>
           ) : (
-            <EmptyState title="No assistant triage packets" body="Current catalog records do not have source conflicts, generated-review assets, or low-confidence extraction work needing prep." />
+            <EmptyState title="No assistant triage packets" body="Current catalog records do not have source conflicts, generated-review files, or low-confidence extraction work that needs prep." />
           )}
         </SectionPanel>
       </section>
@@ -395,11 +395,11 @@ export default async function AdminPage(props: AdminPageProps) {
         <SectionHeading
           id="issue-ops-heading"
           index="01"
-          subtitle="Assign, resolve, and reopen open issues. These stay separate from asset review and promotion."
+          subtitle="Assign, resolve, and reopen open issues. These stay separate from file review and verification."
           title="Issue operations"
         />
         <SectionPanel
-          description="Editing an issue here does not change part readiness or make export available. It only updates the issue itself."
+          description="Editing an issue here does not change part status or make exports available. It only updates the issue."
           title={`${issueWorkflowRows.length} issue workflow items`}
         >
           {issueWorkflowRows.length > 0 ? (
@@ -508,11 +508,11 @@ export default async function AdminPage(props: AdminPageProps) {
         <SectionHeading
           id="import-by-mpn-heading"
           index="02"
-          subtitle="Pull one part from a registered provider into the catalog database, then continue in part detail or the queues below."
+          subtitle="Pull one part from a provider into the catalog, then continue in part detail or the queues below."
           title="Import by MPN"
         />
         <SectionPanel
-          description="Same import path the worker uses. Success means the record was created — not that CAD is verified or exportable."
+          description="Same import path the background worker uses. A successful import means the record was created — not that CAD is verified or ready to export."
           title="Operator import"
           tone="technical"
         >
@@ -521,8 +521,8 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="review-queue-heading">
-        <SectionHeading id="review-queue-heading" index="03" title="Review queue" subtitle="Generated drafts and review-required outputs that need approve/reject/changes decisions." />
-        <SectionPanel description="Review state and actions are explicit. Approval alone does not verify export." title={`${reviewQueue.length} review items`}>
+        <SectionHeading id="review-queue-heading" index="03" title="Review queue" subtitle="Generated drafts and review-required files that need approve, reject, or request-changes." />
+        <SectionPanel description="Review state and actions are explicit. Approving alone does not verify files for export." title={`${reviewQueue.length} review items`}>
           {reviewQueue.length > 0 ? (
             <div className="admin-table-wrap">
               <table className="admin-table">
@@ -578,22 +578,22 @@ export default async function AdminPage(props: AdminPageProps) {
               </table>
             </div>
           ) : (
-            <EmptyState title="No review queue items" body="No generated drafts or review-required items are currently waiting for review." />
+            <EmptyState title="No review queue items" body="No drafts or review-required items are waiting right now." />
           )}
         </SectionPanel>
       </section>
 
       <section className="detail-section" aria-labelledby="promotion-queue-heading">
-        <SectionHeading id="promotion-queue-heading" index="04" title="Promotion queue" subtitle="Approved assets that are ready or blocked for the final verification step." />
-        <SectionPanel description="Promotion remains separate from review. Blocker reasons are shown before action." title={`${promotionQueue.length} promotion candidates`}>
+        <SectionHeading id="promotion-queue-heading" index="04" title="Files to mark verified" subtitle="Approved files that are ready or blocked for the final verification step before export." />
+        <SectionPanel description="Verifying for export is a separate step from review. Blockers are shown before you mark anything verified." title={`${promotionQueue.length} files waiting to verify`}>
           {promotionQueue.length > 0 ? (
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
                   <tr>
                     <th>Part</th>
-                    <th>Asset</th>
-                    <th>Promotion state</th>
+                    <th>File</th>
+                    <th>Verify state</th>
                     <th>Validation evidence</th>
                     <th>Blockers</th>
                     <th>Action</th>
@@ -615,7 +615,7 @@ export default async function AdminPage(props: AdminPageProps) {
                         <div className="muted-copy">{formatDateTime(item.updatedAt)}</div>
                       </td>
                       <td>
-                        <StatusBadge label={item.canPromote ? "Eligible now" : "Blocked"} tone={item.canPromote ? "verified" : "review"} />
+                        <StatusBadge label={item.canPromote ? "Ready to verify" : "Blocked"} tone={item.canPromote ? "verified" : "review"} />
                       </td>
                       <td>{item.validationReason}</td>
                       <td>
@@ -634,7 +634,7 @@ export default async function AdminPage(props: AdminPageProps) {
                           <input name="partId" type="hidden" value={item.partId} />
                           <input name="assetId" type="hidden" value={item.assetId} />
                           <button disabled={!item.canPromote} type="submit">
-                            Promote
+                            Mark verified
                           </button>
                         </form>
                       </td>
@@ -644,7 +644,7 @@ export default async function AdminPage(props: AdminPageProps) {
               </table>
             </div>
           ) : (
-            <EmptyState title="No promotion candidates" body="No approved non-export assets are currently waiting for promotion." />
+            <EmptyState title="Nothing to verify right now" body="No approved files are waiting to be marked verified for export." />
           )}
         </SectionPanel>
       </section>
@@ -652,7 +652,7 @@ export default async function AdminPage(props: AdminPageProps) {
       <section className="detail-section" aria-labelledby="ops-health-heading">
         <SectionHeading id="ops-health-heading" index="05" title="Imports and validation" subtitle="Recent import results and validation evidence." />
         <div className="detail-two-col">
-          <SectionPanel title="Recent imports" description="Newest source imports.">
+          <SectionPanel title="Recent imports" description="Most recent source imports.">
             {recentImportRows.length > 0 ? (
               <div className="admin-table-wrap">
                 <table className="admin-table">
@@ -683,10 +683,10 @@ export default async function AdminPage(props: AdminPageProps) {
                 </table>
               </div>
             ) : (
-              <EmptyState title="No imports" body="No source import rows are attached to the current catalog window." />
+              <EmptyState title="No imports" body="No source imports recorded in the current catalog window." />
             )}
           </SectionPanel>
-          <SectionPanel title="Failed imports" description="Failures include source-level error text for immediate triage.">
+          <SectionPanel title="Failed imports" description="Failures include the original error text so you can fix them quickly.">
             {failedImportRows.length > 0 ? (
               <ul className="admin-inline-list">
                 {failedImportRows.map((row) => (
@@ -745,10 +745,10 @@ export default async function AdminPage(props: AdminPageProps) {
               </table>
             </div>
           ) : (
-            <EmptyState title="No validation records" body="No validation evidence is attached to the current catalog window." />
+            <EmptyState title="No validation records" body="No validation evidence recorded in the current catalog window." />
           )}
         </SectionPanel>
-        <SectionPanel title="CAD trust checks needing attention" description="Failed or review-required checks, plus CAD assets marked for validation review without durable evidence yet.">
+        <SectionPanel title="CAD trust checks needing attention" description="Failed or review-required checks, plus CAD files marked for validation review with no evidence yet.">
           {recentValidationAttentionRows.length > 0 ? (
             <div className="admin-table-wrap">
               <table className="admin-table">
@@ -796,8 +796,8 @@ export default async function AdminPage(props: AdminPageProps) {
       </section>
 
       <section className="detail-section" aria-labelledby="audit-heading">
-        <SectionHeading id="audit-heading" index="06" title="Promotion audit history" subtitle="Recent promotion attempts with actor, outcome, and blocker reasons." />
-        <SectionPanel title="Recent promotion audits" description="Promotion outcomes remain auditable even when denied by blocker rules.">
+        <SectionHeading id="audit-heading" index="06" title="Verification audit history" subtitle="Recent verification attempts with who, the outcome, and any blocker reasons." />
+        <SectionPanel title="Recent verification audits" description="Verification outcomes are recorded even when denied by a blocker.">
           {promotionAudits.length > 0 ? (
             <div className="admin-table-wrap">
               <table className="admin-table">
@@ -842,7 +842,7 @@ export default async function AdminPage(props: AdminPageProps) {
               </table>
             </div>
           ) : (
-            <EmptyState title="No promotion audits" body="No promotion attempts are recorded in the current catalog window." />
+            <EmptyState title="No verification audits" body="No verification attempts recorded in the current catalog window." />
           )}
         </SectionPanel>
       </section>
@@ -869,7 +869,7 @@ function AdminUserActionAuditSection({ auditEventState }: { auditEventState: Adm
       />
       <SectionPanel
         title="Filter audit timeline"
-        description="Narrow by actor, action, target, or outcome. Filters apply server-side; clear to see the global recent-events view."
+        description="Narrow by actor, action, target, or outcome. Clear filters to see all recent events."
       >
         <form className="audit-filter-form" method="get" action="/admin">
           <label className="audit-filter-form__field">
@@ -1083,9 +1083,9 @@ function buildAdminOverviewStats(
   return [
     { label: "Assistant triage", tone: assistantTriageTone, value: assistantTriageCount },
     { label: "Review items", tone: "review" as const, value: reviewQueue.length },
-    { label: "Promotion candidates", tone: "info" as const, value: promotionQueue.length },
-    { label: "Eligible promotions", tone: "verified" as const, value: eligiblePromotionCount },
-    { label: "Blocked promotions", tone: "review" as const, value: blockedPromotionCount },
+    { label: "Files waiting to verify", tone: "info" as const, value: promotionQueue.length },
+    { label: "Ready to verify", tone: "verified" as const, value: eligiblePromotionCount },
+    { label: "Blocked from verify", tone: "review" as const, value: blockedPromotionCount },
     { label: "Pending approval", tone: "info" as const, value: pendingApprovalCount },
     { label: "Identity follow-up", tone: "review" as const, value: identityFollowUpCount },
     { label: "Missing verified CAD", tone: "review" as const, value: cadGapCount },
@@ -1110,31 +1110,31 @@ function buildAdminOverviewGroups(
   const groups: AdminQueueOverviewGroup[] = [];
 
   pushAdminOverviewGroup(groups, assistantTriageCount, {
-    description: "Review-prep packets assembled from existing evidence. They do not approve, normalize, or promote anything.",
+    description: "Review-prep packets built from existing evidence. They do not approve, normalize, or verify anything.",
     id: "assistant_triage",
     label: "Assistant triage prep",
     tone: "generated"
   });
   pushAdminOverviewGroup(groups, reviewQueue.length, {
-    description: "Generated assets and generation workflows waiting for explicit review decisions.",
+    description: "Generated files and generation workflows waiting for an explicit review decision.",
     id: "review",
-    label: "Generated drafts and review-required outputs",
+    label: "Drafts and review-required files",
     tone: "review"
   });
   pushAdminOverviewGroup(groups, promotionQueue.length, {
-    description: "Approved assets that still need the final verification step or a blocker review.",
+    description: "Approved files that still need the final verification step or a blocker review.",
     id: "promotion",
-    label: "Promotion blockers and candidates",
+    label: "Files to mark verified",
     tone: "info"
   });
   pushAdminOverviewGroup(groups, countQueueRows(issueQueueRows, "approval"), {
-    description: "Whole-part approval is still pending or not requested, so engineer-ready use needs follow-up.",
+    description: "Part approval is still pending or not requested, so engineering use needs follow-up.",
     id: "approval",
     label: "Pending approval",
     tone: "info"
   });
   pushAdminOverviewGroup(groups, countQueueRows(issueQueueRows, "identity"), {
-    description: "Identity confidence or provenance is still below the confirmed threshold.",
+    description: "Identity confidence or source is still below the confirmed threshold.",
     id: "identity",
     label: "Low-confidence identity",
     tone: "review"
@@ -1152,7 +1152,7 @@ function buildAdminOverviewGroups(
     tone: "review"
   });
   pushAdminOverviewGroup(groups, countQueueRows(issueQueueRows, "duplicates"), {
-    description: "Possible duplicate catalog rows need merge, dismissal, or reconciliation decisions.",
+    description: "Possible duplicate catalog rows need merge, dismissal, or reconciliation.",
     id: "duplicates",
     label: "Duplicate candidates",
     tone: "review"
@@ -1164,13 +1164,13 @@ function buildAdminOverviewGroups(
     tone: "danger"
   });
   pushAdminOverviewGroup(groups, countQueueRows(issueQueueRows, "source_conflicts"), {
-    description: "Provider/source provenance is conflicted or unhealthy and needs investigation.",
+    description: "Provider or source records conflict or look unhealthy and need investigation.",
     id: "source_conflicts",
     label: "Source conflicts",
     tone: "review"
   });
   pushAdminOverviewGroup(groups, failedImportCount, {
-    description: "Provider source rows with failed import status and durable error details.",
+    description: "Provider source rows that failed to import, with the original error text.",
     id: "imports",
     label: "Failed imports",
     tone: "danger"
@@ -1230,8 +1230,8 @@ function buildAdminOverviewTableRows(
       manufacturerName: item.manufacturerName,
       mpn: item.mpn,
       queueId: "promotion",
-      queueLabel: "Promotion queue",
-      stateLabel: item.canPromote ? "Eligible now" : "Blocked",
+      queueLabel: "Files to mark verified",
+      stateLabel: item.canPromote ? "Ready to verify" : "Blocked",
       stateTone: item.canPromote ? ("verified" as const) : ("review" as const),
       updatedAtRaw: item.updatedAt,
       updatedLabel: formatDateTime(item.updatedAt)
@@ -1718,7 +1718,7 @@ function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogS
         <div>
           <p className="app-kicker">Admin workspace</p>
           <h1>Review and trust maintenance</h1>
-          <p className="admin-hero__lede">{getSetupStateCopy(catalogState.code).body} Connect the catalog before using review/promotion/audit operations.</p>
+          <p className="admin-hero__lede">{getSetupStateCopy(catalogState.code).body} Connect the catalog before using review, verification, or audit features.</p>
         </div>
         <div className="admin-hero__status">
           <StatusBadge label={catalogState.code} tone="review" />
@@ -1726,7 +1726,7 @@ function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogS
         </div>
         <p className="mode-warning">{catalogState.message}</p>
       </section>
-      <SectionPanel title="Setup guidance" description="Admin tools require DB-backed catalog records.">
+      <SectionPanel title="Setup guidance" description="Admin tools need the database-backed catalog to be reachable.">
         <div className="setup-steps">
           <div>
             <strong>Canonical database</strong>
@@ -1738,7 +1738,7 @@ function AdminSetupState({ catalogState }: { catalogState: Extract<AdminCatalogS
             <strong>Explicit local seed</strong>
             <code>$env:EE_LIBRARY_ALLOW_SEED_FALLBACK=&quot;true&quot;</code>
             <code>npm run dev</code>
-            <span>Seed mode is for local examples, not production trust maintenance.</span>
+            <span>Seed mode is for local examples, not production work.</span>
           </div>
         </div>
       </SectionPanel>
@@ -1754,18 +1754,18 @@ function AdminTruthRail() {
     <section aria-label="Admin guidance" className="admin-truth-rail">
       <div>
         <span>Review</span>
-        <strong>Approval does not make export available.</strong>
-        <p>Approved or reviewed outputs still need stored validation files and a final verification step before export.</p>
+        <strong>Approving a part does not make exports available.</strong>
+        <p>Approved or reviewed files still need stored validation evidence and a final verification step before export.</p>
       </div>
       <div>
-        <span>Promotion</span>
-        <strong>Promotion stays explicit.</strong>
-        <p>Promotion is a separate action so you can see exactly which assets are eligible now and which are still blocked.</p>
+        <span>Verification</span>
+        <strong>Marking files verified stays a separate step.</strong>
+        <p>It is a separate step so you can see exactly which files are ready now and which are still blocked.</p>
       </div>
       <div>
         <span>Coverage</span>
-        <strong>Queues only appear when records exist.</strong>
-        <p>Issue queues like identity, connector coverage, lifecycle, and source conflicts stay hidden until they have records.</p>
+        <strong>Queues only appear when there is something in them.</strong>
+        <p>Queues for identity, connector coverage, lifecycle, and source conflicts stay hidden until there is something to handle.</p>
       </div>
     </section>
   );

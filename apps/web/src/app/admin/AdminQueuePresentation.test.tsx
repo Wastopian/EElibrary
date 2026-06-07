@@ -109,7 +109,7 @@ test("admin queue presentation renders table mode with backend-backed rows", () 
   assert.match(html, /Ready or informational/u);
   assert.match(html, /Review queue/u);
   assert.match(html, /Pending approval/u);
-  assert.match(html, /backend-backed rows across current queues/u);
+  assert.match(html, /rows across current queues/u);
   assert.match(html, /215079-8/u);
   assert.match(html, /TPS7A02DBVR/u);
   assert.doesNotMatch(html, /Duplicate candidates/u);
