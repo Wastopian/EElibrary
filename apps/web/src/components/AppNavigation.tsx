@@ -101,6 +101,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           match: { path: "/connector-sets", type: "path" }
         },
         {
+          description: "Quick EE math — voltage divider, RC time constant.",
+          href: "/tools",
+          label: "Tools",
+          match: { path: "/tools", type: "path" }
+        },
+        {
           description: "Handle review queues and blocked items.",
           href: "/admin",
           label: "Admin",
