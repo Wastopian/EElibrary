@@ -65,6 +65,17 @@ test("app navigation marks the vendors route as active inside vendor notebook pa
 });
 
 /**
+ * Verifies the tools workspace is visible and active inside calculator pages.
+ */
+test("app navigation marks the tools route as active inside the calculator workspace", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/tools" />);
+
+  assert.match(html, /Tools/u);
+  assert.match(html, /Quick EE math/u);
+  assert.match(html, /aria-current="page"/u);
+});
+
+/**
  * Verifies the system-health workspace is visible and active for operational review.
  */
 test("app navigation marks the system route as active inside system health pages", () => {

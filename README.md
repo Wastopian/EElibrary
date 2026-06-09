@@ -134,6 +134,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
 - `/connector-sets`: browse connector families, mate pairs, and project usage counts.
 - `/vendors`: filesystem-backed supplier notebook for PCB shops, sheet metal, machining, finishing, and assembly partners — notes and reference files per vendor, reachable even when the database is down.
+- `/tools`: small focused EE calculators — voltage divider (forward and solve-for-resistor with E96 1% suggestions) and RC time constant (τ plus 1τ/3τ/5τ settling times and the matching low-pass cutoff). Pure client-side math; nothing leaves the page.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in` with self-service `/sign-up` for local workstation accounts; raw API health remains available at `/system/health`.
 
 Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md). User-facing copy follows [`docs/COPY_GLOSSARY.md`](docs/COPY_GLOSSARY.md) — review every PR diff against it before merging.
@@ -143,7 +144,7 @@ Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTAT
 These remain product direction; they are **not** in the implementation-status matrix as shipped features (or are only **partial** there).
 
 - **Deeper compare** (richer datasheet-revision diff; CAD preview band is now shipped).
-- **Tools / EE calculators** page.
+- **More EE calculators** in the `/tools` workspace (voltage divider and RC time constant ship today; further calculators remain incremental).
 - **Subcategory** search facets until backed by persisted catalog data.
 - **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation (deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission) beyond current worker foundations.
 - **More file-grounded validators** (STEP integrity, footprint pad pitch vs package geometry) and richer validation cross-reference on the part record.
