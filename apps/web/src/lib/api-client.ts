@@ -1524,10 +1524,11 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
         ? (process.env["NEXTAUTH_URL"] ?? "http://localhost:3000")
         : "";
     const cookieHeader = isServer ? await readServerCookieHeader() : null;
-    const res = await fetch(`${base}/api/token`, {
-      cache: "no-store",
-      headers: cookieHeader ? { cookie: cookieHeader } : undefined
-    });
+    const tokenRequestInit: RequestInit = { cache: "no-store" };
+    if (cookieHeader) {
+      tokenRequestInit.headers = { cookie: cookieHeader };
+    }
+    const res = await fetch(`${base}/api/token`, tokenRequestInit);
     if (!res.ok) return {};
     const { token } = (await res.json()) as { token: string };
     if (typeof token !== "string" || token.length === 0) return {};
