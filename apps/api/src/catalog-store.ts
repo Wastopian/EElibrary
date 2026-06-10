@@ -985,12 +985,12 @@ export async function readAssetDownloadTargetFromDatabase(partId: string, assetI
       return { status: "not_accessible", reason: "This asset's last download or validation attempt failed." };
     }
 
-    if (row.source_url) {
-      return { status: "redirect", url: row.source_url, assetType: row.asset_type, fileFormat: row.file_format };
-    }
-
     if (row.storage_key) {
       return { status: "file_only", storageKey: row.storage_key, assetType: row.asset_type, fileFormat: row.file_format };
+    }
+
+    if (row.source_url) {
+      return { status: "redirect", url: row.source_url, assetType: row.asset_type, fileFormat: row.file_format };
     }
 
     return { status: "not_accessible", reason: "This asset has no accessible URL or stored file." };
