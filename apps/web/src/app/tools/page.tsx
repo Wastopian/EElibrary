@@ -9,6 +9,8 @@
 import React from "react";
 import { SectionHeading } from "@ee-library/ui";
 import { WorkspaceJumpNav } from "../../components/WorkspaceJumpNav";
+import { LedResistorCalculator } from "./LedResistorCalculator";
+import { OhmsLawCalculator } from "./OhmsLawCalculator";
 import { RCTimeConstantCalculator } from "./RCTimeConstantCalculator";
 import { VoltageDividerCalculator } from "./VoltageDividerCalculator";
 
@@ -35,25 +37,47 @@ export default function ToolsPage(): React.ReactElement {
       <WorkspaceJumpNav
         ariaLabel="Tools sections"
         items={[
+          { href: "#ohms-law-heading", label: "Ohm's Law + Power" },
           { href: "#voltage-divider-heading", label: "Voltage divider" },
+          { href: "#led-resistor-heading", label: "LED current-limit resistor" },
           { href: "#rc-time-constant-heading", label: "RC time constant" }
         ]}
       />
 
+      <section aria-labelledby="ohms-law-heading" className="detail-section">
+        <SectionHeading
+          id="ohms-law-heading"
+          index="01"
+          subtitle="Pick any two of voltage, current, resistance, and power. The other two are computed."
+          title="Ohm's Law + Power"
+        />
+        <OhmsLawCalculator />
+      </section>
+
       <section aria-labelledby="voltage-divider-heading" className="detail-section">
         <SectionHeading
           id="voltage-divider-heading"
-          index="01"
+          index="02"
           subtitle="Compute Vout from Vin, R1, R2 — or solve for one resistor when you know the target Vout."
           title="Voltage divider"
         />
         <VoltageDividerCalculator />
       </section>
 
+      <section aria-labelledby="led-resistor-heading" className="detail-section">
+        <SectionHeading
+          id="led-resistor-heading"
+          index="03"
+          subtitle="Series resistor for an LED at a target forward current, with resistor power and nearest E96 1% values."
+          title="LED current-limit resistor"
+        />
+        <LedResistorCalculator />
+      </section>
+
       <section aria-labelledby="rc-time-constant-heading" className="detail-section">
         <SectionHeading
           id="rc-time-constant-heading"
-          index="02"
+          index="04"
           subtitle="Compute τ = R × C, common settling times, and the matching low-pass cutoff frequency."
           title="RC time constant"
         />
