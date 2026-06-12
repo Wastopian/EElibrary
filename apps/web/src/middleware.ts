@@ -9,6 +9,12 @@ import { NextResponse, type NextRequest } from "next/server";
 type AppRole = "admin" | "user";
 
 /**
+ * Minimum byte length for session secrets. This matches the API bearer-token guard so
+ * weak web session cookies cannot pass middleware when token issuance would fail closed.
+ */
+const MIN_SESSION_SECRET_BYTES = 32;
+
+/**
  * Redirects non-authenticated users to sign-in and keeps non-admin users out of admin routes.
  */
 export default async function middleware(request: NextRequest) {
@@ -38,7 +44,7 @@ function buildSignInRedirect(request: NextRequest): URL {
  * Reads the Auth.js JWT without importing the server auth module that depends on DB and Node APIs.
  */
 async function readSessionToken(request: NextRequest): Promise<Record<string, unknown> | null> {
-  const secret = process.env["AUTH_SECRET"] ?? process.env["NEXTAUTH_SECRET"];
+  const secret = readSessionSecret();
 
   if (!secret) {
     return null;
@@ -53,6 +59,28 @@ async function readSessionToken(request: NextRequest): Promise<Record<string, un
   } catch {
     return null;
   }
+}
+
+/**
+ * Reads a configured session secret only when it has enough entropy for HS256 cookies.
+ */
+export function readSessionSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+  const authSecret = env["AUTH_SECRET"];
+
+  if (authSecret !== undefined) {
+    return isStrongSessionSecret(authSecret) ? authSecret : null;
+  }
+
+  const nextAuthSecret = env["NEXTAUTH_SECRET"];
+
+  return nextAuthSecret !== undefined && isStrongSessionSecret(nextAuthSecret) ? nextAuthSecret : null;
+}
+
+/**
+ * Auth.js accepts shorter HMAC keys, but middleware must fail closed on weak deploy config.
+ */
+function isStrongSessionSecret(value: string): boolean {
+  return new TextEncoder().encode(value).byteLength >= MIN_SESSION_SECRET_BYTES;
 }
 
 /**
