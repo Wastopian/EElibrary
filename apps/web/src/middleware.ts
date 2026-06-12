@@ -64,7 +64,7 @@ async function readSessionToken(request: NextRequest): Promise<Record<string, un
 /**
  * Reads a configured session secret only when it has enough entropy for HS256 cookies.
  */
-export function readSessionSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+export function readSessionSecret(env: Record<string, string | undefined> = process.env): string | null {
   const authSecret = env["AUTH_SECRET"];
 
   if (authSecret !== undefined) {
