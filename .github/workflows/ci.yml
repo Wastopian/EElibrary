@@ -30,3 +30,10 @@ jobs:
 
       - name: Test
         run: npm run test
+
+      # The team server ships a real `next build`; this catches prerender regressions
+      # (e.g. useSearchParams outside Suspense) that typecheck and tests cannot see.
+      - name: Production web build
+        run: npm run build -w @ee-library/web
+        env:
+          AUTH_TRUST_HOST: "true"

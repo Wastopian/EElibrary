@@ -139,6 +139,14 @@ export function resolveSignUpNotice(error: AuthQueryValue): AuthNotice | null {
     };
   }
 
+  if (errorKey === "invite_mismatch") {
+    return {
+      body: "The team invite code did not match. Ask the person who runs your EE Library server for the current code, then try again.",
+      tone: "error",
+      title: "Team invite code did not match"
+    };
+  }
+
   return null;
 }
 

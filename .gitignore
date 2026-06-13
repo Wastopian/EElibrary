@@ -14,6 +14,11 @@ tmp/
 .env.local
 .env.*.local
 
+# Team server secrets, host-mounted data, and backup archives (never committed).
+.env.team
+team-data/
+backups/
+
 # Operating-system and editor noise.
 .DS_Store
 Thumbs.db

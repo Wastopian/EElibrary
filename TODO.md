@@ -1,6 +1,6 @@
 # EE Library — active backlog
 
-**Updated:** 2026-05-13
+**Updated:** 2026-06-12
 
 ## Where things live
 
@@ -30,11 +30,22 @@ Use this list to close gaps between **documented intent**, **`IMPLEMENTATION_STA
 
 ## Active work
 
+### 0. Team deployment and operations — current top priority
+
+EE Library today runs only on a single developer workstation: `compose.yaml` starts Postgres, Redis, and MinIO, but `web`, `api`, and `worker` run via `npm run dev`. A shared engineering memory that only one engineer can reach is not yet a team tool. The 2026-06-12 project review ranked this gap above all feature work.
+
+**Operator bar for everything in this section:** an engineer on the team starts using EE Library by opening one address in a browser and signing in. Nothing else — no terminal, no Node, no Docker, no query strings. Exactly one person (the server admin) ever touches the machine it runs on, and that person gets copyable, plain-language steps.
+
+1. **Team server deployment** — _First increment landed 2026-06-12: the full stack shipped as a **server-hosted site**. Multi-target root `Dockerfile` (api/worker run TypeScript via tsx exactly like dev; web is a real `next build` + `next start`), `compose.team.yaml` (postgres + one-shot `migrate` + api + worker + web, restart policies, named volumes, only the web port published), `.env.team.example` + `scripts/setup-team-server.mjs` (generates `.env.team` with database password, session secret, and team invite code; safe to re-run), and the plain-language `docs/TEAM_SERVER_SETUP.md`. Browser code now reaches the API through a same-origin `/api-proxy/:path*` rewrite (`next.config.mjs` + `getApiBaseUrl` in `apps/web/src/lib/api-client.ts`) protected by the session middleware, so engineers only ever need the web address and the API/database stay private to the stack. `/sign-up` gained optional invite gating via `EE_LIBRARY_SIGNUP_INVITE_CODE` (open when unset, for local dev). Fixed along the way: `next build` had never been exercised and failed on prerender — root `/` now declares `force-dynamic` like its sibling pages, and the shell's `AppNavigation` is wrapped in a Suspense boundary._ **Remaining:** run the full first-time walkthrough on the real team server machine as the acceptance step (build images, `up -d`, seed admin, sign in from a second computer), then record the result here.
+2. **Backup and restore** — _Scripts landed 2026-06-12: `scripts/team-backup.mjs` (full `pg_dump` + one tar.gz of stored files/project files/vendor notes into dated `backups/` folders, `--retain` pruning) and `scripts/team-restore.mjs` (dry-run by default, `--yes` to replace data and restart the stack), with `npm run team:backup` / `npm run team:restore` aliases and scheduling instructions (Task Scheduler + cron) in `docs/TEAM_SERVER_SETUP.md`._ **Remaining:** rehearse one real backup → restore cycle against a running stack and record the date here — an unrehearsed restore is not a safety net.
+3. **CI against real Postgres + one browser smoke journey** — CI currently runs typecheck/lint/unit tests only; migrations and the real UI are never exercised. Add a CI job that boots the compose Postgres and runs `db:migrate` + `npm run smoke:local`, and one browser-driven journey (sign in → search → part detail → project overlap) so UI breakage is caught before it reaches an engineer who cannot debug it.
+4. **RBAC v1 (opt-in roles)** — The flat `admin` / `user` JWT model is correct for the current small trusted team; everyone stays full-power by default. When roles land they are **opt-in and restrict no one by default**. The only early candidate is a read-only viewer role so a casual browser cannot worry about changing an approval. No urgency until the team server exists.
+
 ### 1. Documentation and contract truth
 
 These keep onboarding and boundaries honest for contributors and operators.
 
-1. **Periodic README ↔ implementation-status pass** — After any nav or major route change, verify [`README.md`](README.md) “Current Capabilities”, “Still Planned”, and “Current Boundaries” match [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (e.g. `/compare` in nav vs `/tools` absent).
+1. **Periodic README ↔ implementation-status pass** — After any nav or major route change, verify [`README.md`](README.md) “Current Capabilities”, “Still Planned”, and “Current Boundaries” match [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (e.g. `/compare` in nav vs `/tools` absent). _Known drift as of 2026-06-12:_ README has a duplicated “Problems It Solves” section (appears twice), and the “What EE Library Is Not” / “Current Boundaries” copy still says `/tools` must stay out of navigation “until that route exists” — `/tools` shipped (PR #37) and is in the status matrix, so those lines need the post-ship phrasing.
 2. **UI/UX brief vs shipped surfaces** — When adding or changing primary workspaces, update [`docs/UI_UX_BRIEF.md`](docs/UI_UX_BRIEF.md) only where it describes **live** behavior, or call out intentional deltas in the implementation matrix.
 
 ### 2. Core build priorities ([`AGENTS.md`](AGENTS.md) order)

@@ -67,5 +67,6 @@ test("resolveSignUpNotice returns field-specific recovery copy", () => {
   assert.match(resolveSignUpNotice("account_exists")?.body ?? "", /already exists/u);
   assert.match(resolveSignUpNotice("password_mismatch")?.body ?? "", /match exactly/u);
   assert.match(resolveSignUpNotice("setup_required")?.body ?? "", /database connection/u);
+  assert.match(resolveSignUpNotice("invite_mismatch")?.body ?? "", /invite code/u);
   assert.equal(resolveSignUpNotice(undefined), null);
 });

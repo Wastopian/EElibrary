@@ -15,7 +15,7 @@ import { hashSync } from "bcryptjs";
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 /** SignUpSearchParams carries callback and validation state for the account creation route. */
 type SignUpSearchParams = {
@@ -35,12 +35,24 @@ const BCRYPT_COST = 12;
 const DEFAULT_DATABASE_URL = "postgres://ee_library:ee_library@localhost:5432/ee_library";
 
 /**
+ * Reads the optional team invite code. When EE_LIBRARY_SIGNUP_INVITE_CODE is set (team server
+ * deployments), sign-up requires the matching code; when unset (local single-workstation dev),
+ * sign-up stays open and the form does not show the field.
+ */
+function readRequiredInviteCode(): string | null {
+  const value = process.env["EE_LIBRARY_SIGNUP_INVITE_CODE"];
+
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
  * Renders the sign-up page or redirects authenticated operators to the requested workspace.
  */
 export default async function SignUpPage({ searchParams }: SignUpPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const callbackUrl = resolveSafeCallbackUrl(resolvedSearchParams.callbackUrl);
   const notice = resolveSignUpNotice(resolvedSearchParams.error);
+  const inviteCodeRequired = readRequiredInviteCode() !== null;
   const session = await auth();
   if (session) redirect(callbackUrl);
 
@@ -92,6 +104,19 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
             required
             type="password"
           />
+          {inviteCodeRequired ? (
+            <>
+              <label htmlFor="invite-code">Team invite code</label>
+              <input
+                autoComplete="off"
+                id="invite-code"
+                name="inviteCode"
+                placeholder="Ask the person who runs your EE Library server"
+                required
+                type="text"
+              />
+            </>
+          ) : null}
           <button className="auth-form__primary-action" type="submit">Create account</button>
         </form>
         <div className="auth-switch">
@@ -125,6 +150,16 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string): Promis
     redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "password_mismatch" }));
   }
 
+  const requiredInviteCode = readRequiredInviteCode();
+
+  if (requiredInviteCode !== null) {
+    const submittedInviteCode = readTrimmedFormString(formData.get("inviteCode"));
+
+    if (!inviteCodeMatches(submittedInviteCode, requiredInviteCode)) {
+      redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "invite_mismatch" }));
+    }
+  }
+
   let creationError: string | null = null;
 
   try {
@@ -150,6 +185,17 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string): Promis
   }
 
   redirect(buildAuthRoutePath("/sign-in", callbackUrl, { notice: "account_created" }));
+}
+
+/**
+ * Compares the submitted invite code against the required one in constant time. Hashing both
+ * sides first lets timingSafeEqual run on equal-length buffers without leaking code length.
+ */
+function inviteCodeMatches(submitted: string, required: string): boolean {
+  const submittedDigest = createHash("sha256").update(submitted).digest();
+  const requiredDigest = createHash("sha256").update(required).digest();
+
+  return timingSafeEqual(submittedDigest, requiredDigest);
 }
 
 /**

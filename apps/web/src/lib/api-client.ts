@@ -1934,8 +1934,16 @@ export function buildExportBundleDownloadUrl(storageKey: string | null): string 
 
 /**
  * Resolves the API base URL for local and deployed web runtimes.
+ *
+ * In the browser this is always the same-origin /api-proxy path (rewritten to the API by
+ * next.config.mjs), so an engineer's machine only ever needs to reach the web app address —
+ * the API service can stay private to the server. Env URLs only apply server-side.
  */
 export function getApiBaseUrl(): string {
+  if (typeof globalThis.window !== "undefined") {
+    return "/api-proxy";
+  }
+
   return process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000";
 }
 
