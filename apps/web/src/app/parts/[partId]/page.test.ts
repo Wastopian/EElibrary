@@ -64,7 +64,7 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /File status/u);
     assert.match(html, /Review step/u);
     assert.match(html, /Trust check/u);
-    assert.match(html, /Ready for project export/u);
+    assert.match(html, /Ready for export/u);
     assert.doesNotMatch(html, /<button class="export-action export-action--available"/u);
     assert.match(html, /Not ready yet/u);
     assert.doesNotMatch(html, /approved part/u);
