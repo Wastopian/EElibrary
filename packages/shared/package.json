@@ -18,6 +18,10 @@
       "types": "./src/asset-resolution.ts",
       "default": "./src/asset-resolution.ts"
     },
+    "./bom-csv": {
+      "types": "./src/bom-csv.ts",
+      "default": "./src/bom-csv.ts"
+    },
     "./catalog-runtime": {
       "types": "./src/catalog-runtime.ts",
       "default": "./src/catalog-runtime.ts"

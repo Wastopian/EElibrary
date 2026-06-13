@@ -133,11 +133,14 @@ async function main() {
   );
 
   console.log("-> [3/4] restore stored files");
-  // Clear the data roots first so files deleted after the backup do not linger, then unpack.
+  // Clear existing contents of each data root so files deleted after the backup do not
+  // linger, then unpack the archive over them. `find -mindepth 1 -delete` keeps the mount
+  // points themselves and is a single clean argv with no shell globbing or `&&` — passing a
+  // compound `sh -c` string here breaks when the host shell (cmd.exe on Windows) re-parses it.
   await runCompose([
     "run", "--rm", "--no-deps", "-T", "api",
-    "sh", "-c",
-    "rm -rf /data/storage /data/project-files/* /data/vendor-notes/* && mkdir -p /data/storage"
+    "find", "/data/storage", "/data/project-files", "/data/vendor-notes",
+    "-mindepth", "1", "-delete"
   ]);
   await runCompose(["run", "--rm", "--no-deps", "-T", "api", "tar", "xzf", "-", "-C", "/data"], filesArchive);
 
