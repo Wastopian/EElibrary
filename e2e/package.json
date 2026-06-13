@@ -1,0 +1,13 @@
+{
+  "name": "ee-library-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser end-to-end journey for the EE Library team stack. Deliberately NOT a root workspace so `npm ci` and the production Docker image never pull Playwright.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
