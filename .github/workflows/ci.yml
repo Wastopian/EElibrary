@@ -37,3 +37,87 @@ jobs:
         run: npm run build -w @ee-library/web
         env:
           AUTH_TRUST_HOST: "true"
+
+  # Stands the API up against a real Postgres, applies every migration, seeds the demo
+  # data, and probes the core loop end-to-end. This is what catches migration drift and
+  # API-contract breakage before an engineer hits it on the shared team server — the unit
+  # tests above run against pg-mem and never exercise the real schema or seed path.
+  integration:
+    name: Migrations + API smoke (real Postgres)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ee_library
+          POSTGRES_USER: ee_library
+          POSTGRES_PASSWORD: ee_library
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ee_library -d ee_library"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgres://ee_library:ee_library@localhost:5432/ee_library
+      EE_LIBRARY_API_BASE_URL: http://127.0.0.1:4000
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: ./.ci-storage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # AUTH_SECRET must be 32+ bytes or the API refuses to start; generate an ephemeral one.
+      - name: Generate ephemeral AUTH_SECRET
+        run: echo "AUTH_SECRET=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Apply migrations
+        run: node scripts/db-migrate.mjs
+
+      # Re-running must be a no-op; a non-empty pending set here means a migration is not
+      # tracked correctly and would re-run (or drift) on a teammate's next upgrade.
+      - name: Assert migrations are idempotent
+        run: |
+          output="$(node scripts/db-migrate.mjs)"
+          echo "$output"
+          echo "$output" | grep -q "no pending migrations"
+
+      - name: Seed admin, sample parts, and demo project
+        run: |
+          node scripts/seed-admin.mjs
+          npm run ingest:local
+          node scripts/seed-demo-project.mjs
+
+      - name: Start API
+        run: |
+          nohup npm run dev:api:nowrap > "$RUNNER_TEMP/api.log" 2>&1 &
+          disown || true
+          echo "Waiting for API /health ..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4000/health > /dev/null; then
+              echo "API is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become healthy in time; recent log:" >&2
+          tail -n 50 "$RUNNER_TEMP/api.log" >&2
+          exit 1
+
+      - name: Smoke the running stack
+        run: node scripts/smoke-local.mjs
+
+      - name: API log on failure
+        if: failure()
+        run: tail -n 100 "$RUNNER_TEMP/api.log" || true
