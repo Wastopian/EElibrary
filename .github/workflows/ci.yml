@@ -121,3 +121,67 @@ jobs:
       - name: API log on failure
         if: failure()
         run: tail -n 100 "$RUNNER_TEMP/api.log" || true
+
+  # Builds and runs the actual production Docker images from compose.team.yaml and smokes
+  # them through the published web port only — the way a real engineer's browser does. The
+  # integration job above runs the app through the workspace symlink, so it cannot catch
+  # production-image-only failures (e.g. a package `exports` subpath missing once npm ci
+  # installs the workspace package strictly). This job is what closes that gap.
+  docker-stack:
+    name: Production Docker stack smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Ephemeral admin password, shared by the seed step and the smoke step.
+      - name: Generate ephemeral admin password
+        run: echo "CI_ADMIN_PW=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      # Writes .env.team with generated secrets and creates the host data dirs the stack mounts.
+      - name: Generate .env.team
+        run: node scripts/setup-team-server.mjs
+
+      - name: Build and start the team stack
+        run: docker compose -f compose.team.yaml up -d --build
+
+      - name: Wait for the stack to be healthy
+        run: |
+          echo "Waiting for api health and the published web port ..."
+          for i in $(seq 1 60); do
+            api_status="$(docker compose -f compose.team.yaml ps api --format '{{.Status}}' 2>/dev/null || true)"
+            if echo "$api_status" | grep -q healthy && curl -sf -o /dev/null http://localhost:8080/sign-in; then
+              echo "Stack is up after ~$((i * 5))s (api: $api_status)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Stack did not become healthy in time." >&2
+          docker compose -f compose.team.yaml ps -a >&2
+          exit 1
+
+      - name: Seed admin, sample parts, and demo project
+        run: |
+          docker compose -f compose.team.yaml run --rm migrate \
+            node scripts/seed-admin.mjs --force --email admin@ci.local --password "$CI_ADMIN_PW"
+          docker compose -f compose.team.yaml run --rm migrate npm run ingest:local
+          docker compose -f compose.team.yaml run --rm migrate \
+            node scripts/seed-demo-project.mjs --force
+
+      - name: Smoke the production stack through the web port
+        env:
+          EE_SMOKE_ADMIN_EMAIL: admin@ci.local
+          EE_SMOKE_ADMIN_PASSWORD: ${{ env.CI_ADMIN_PW }}
+        run: node scripts/team-stack-smoke.mjs http://localhost:8080
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose -f compose.team.yaml logs --tail 120 || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f compose.team.yaml down -v || true
