@@ -132,7 +132,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/where-used` across parts, circuit blocks, connector sets (mates), and assets (bundle manifests).
 - `/evidence` vault with filters, review, and storage-backed attachments tied to projects, BOM lines, parts, findings, and blocks.
 - `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
-- `/connector-sets`: browse connector families, mate pairs, and project usage counts.
+- `/connector-sets`: browse connector families, mate pairs, and project usage counts, plus a **connector intent resolver** — describe what you need ("JST PH 2 pin for 26 AWG", "sealed connector 8 pin 18 AWG") and get ranked buildable-set candidates (housing, mate, crimp terminal, cable, tooling) with explicit confidence and family-confusion warnings. Ten high-value families are seeded so it works on day one. It ranks stored relationships only and never approves a part or unlocks export.
 - `/vendors`: filesystem-backed supplier notebook for PCB shops, sheet metal, machining, finishing, and assembly partners — notes and reference files per vendor, reachable even when the database is down.
 - `/tools`: small focused EE calculators — voltage divider (forward and solve-for-resistor with E96 1% suggestions) and RC time constant (τ plus 1τ/3τ/5τ settling times and the matching low-pass cutoff). Pure client-side math; nothing leaves the page.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in` with self-service `/sign-up` for local workstation accounts (optionally gated by a team invite code via `EE_LIBRARY_SIGNUP_INVITE_CODE`); raw API health remains available at `/system/health`.

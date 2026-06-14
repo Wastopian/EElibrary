@@ -57,3 +57,11 @@ test("engineer signs in, searches a part, opens its detail, and sees project ove
   await expect(page).toHaveURL(new RegExp(`/projects/${DEMO_PROJECT_ID}`, "u"));
   await expect(page.getByRole("heading", { name: "Prior project overlap" })).toBeVisible();
 });
+
+test("connector intent resolver renders a buildable candidate on /connector-sets", async ({ page }) => {
+  // Free-text intent resolves against the seeded connector families (ingest:local).
+  await page.goto(`/connector-sets?q=${encodeURIComponent("JST PH 2 pin for 26 AWG")}`);
+  await expect(page.getByRole("heading", { name: "Intent resolver" })).toBeVisible();
+  // The seeded JST PH housing must appear as a ranked candidate (linked by MPN).
+  await expect(page.getByRole("link", { name: "JST-PH-2P-HSG" })).toBeVisible();
+});

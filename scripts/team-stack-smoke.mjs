@@ -128,6 +128,25 @@ async function main() {
     return `blocked as expected (status ${response.status})`;
   });
 
+  await check("POST /api-proxy/connector-sets/resolve returns a buildable candidate", async () => {
+    const response = await fetch(`${baseUrl}/api-proxy/connector-sets/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieHeader() },
+      body: JSON.stringify({ query: "JST PH 2 pin for 26 AWG" }),
+      redirect: "manual"
+    });
+    if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
+    const body = await response.json();
+    const resolution = body?.data ?? body;
+    const top = resolution?.candidates?.[0];
+    // The seeded JST PH family must resolve to a connector with a stored mate; this guards the
+    // connector intent resolver + its day-one seed against a regression on the team stack.
+    if (!top?.connector?.mpn || !top?.mate?.part?.mpn) {
+      throw new Error(`no buildable candidate with a mate (state=${resolution?.state}, candidates=${resolution?.candidates?.length ?? 0})`);
+    }
+    return `top candidate ${top.connector.mpn} -> mate ${top.mate.part.mpn} (${top.buildabilityState})`;
+  });
+
   const failed = results.filter((entry) => !entry.ok);
   console.log("");
   console.log(`team-stack-smoke: ${results.length - failed.length} pass, ${failed.length} fail`);
