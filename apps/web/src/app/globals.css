@@ -3333,6 +3333,238 @@ details[open] .trust-breakdown__toggle::before {
   margin-top: 0;
 }
 
+/* Connector intent resolver candidate cards — mate pairing is the focal point. */
+.resolver-candidates {
+  display: grid;
+  gap: 14px;
+}
+
+.resolver-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.resolver-card__head {
+  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-content: space-between;
+}
+
+.resolver-card__identity {
+  display: grid;
+  gap: 3px;
+}
+
+.resolver-card__mpn {
+  font-size: 1.12rem;
+  font-weight: 600;
+}
+
+.resolver-card__sub {
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+  margin: 0;
+}
+
+.resolver-card__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.resolver-mate {
+  align-items: center;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  column-gap: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  justify-content: center;
+  padding: 16px;
+  row-gap: 8px;
+}
+
+.resolver-mate__node {
+  align-content: center;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.resolver-mate__role {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.resolver-mate__part {
+  font-size: 1.06rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.resolver-mate__part--pending {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+}
+
+.resolver-mate__meta {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.resolver-mate__bridge {
+  align-content: center;
+  color: var(--color-accent);
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  padding: 0 10px;
+}
+
+.resolver-mate__arrow {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.resolver-mate__bridge-label {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.resolver-kit {
+  display: grid;
+  gap: 8px;
+}
+
+.resolver-kit__title {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.resolver-kit__list {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.resolver-kit__row {
+  align-items: baseline;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 16px 158px 1fr;
+}
+
+.resolver-kit__marker {
+  font-weight: 700;
+  text-align: center;
+}
+
+.resolver-kit__row--present .resolver-kit__marker {
+  color: var(--color-plum-hover);
+}
+
+.resolver-kit__row--pending .resolver-kit__marker {
+  color: var(--color-text-x-muted);
+}
+
+.resolver-kit__label {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.resolver-kit__value {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.resolver-kit__row--pending .resolver-kit__value {
+  font-style: italic;
+}
+
+.resolver-flags {
+  border-top: 1px solid var(--color-border-light);
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.resolver-flags__title {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.resolver-flags ul {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.resolver-flag {
+  border-left: 3px solid var(--color-border-strong);
+  font-size: 0.84rem;
+  line-height: 1.4;
+  padding: 1px 0 1px 10px;
+}
+
+.resolver-flag--review {
+  border-left-color: var(--color-review);
+}
+
+.resolver-flag--danger {
+  border-left-color: var(--color-danger);
+}
+
+@media (max-width: 720px) {
+  .resolver-mate {
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .resolver-mate__bridge {
+    justify-items: start;
+    padding: 2px 0;
+  }
+
+  .resolver-mate__arrow {
+    transform: rotate(90deg);
+  }
+
+  .resolver-kit__row {
+    grid-template-columns: 16px 1fr;
+  }
+
+  .resolver-kit__value {
+    grid-column: 2;
+  }
+}
+
 .projects-table-wrap {
   overflow-x: auto;
 }
