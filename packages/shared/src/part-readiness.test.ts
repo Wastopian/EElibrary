@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { derivePartProjection } from "./part-readiness";
 import { getPartDetail } from "./search";
 
 /**
@@ -44,4 +45,38 @@ test("fully verified record can surface ready-for-export-review status", () => {
   assert.equal(record.readinessSummary.status, "ready_for_export_review");
   assert.equal(record.approval.status, "approved");
   assert.equal(record.issues.some((issue) => issue.code === "missing_verified_cad"), false);
+});
+
+/**
+ * Verifies an error-severity connector issue cannot be hidden behind the ready summary.
+ */
+test("connector missing a best mate is blocked even when export CAD is ready", () => {
+  const record = getPartDetail("part-te-215079-8");
+
+  assert.ok(record, "expected connector seed record");
+
+  const projection = derivePartProjection({
+    accessoryRequirements: record.accessoryRequirements,
+    assets: record.assets,
+    buildableMatingSet: {
+      ...record.buildableMatingSet,
+      bestMate: null
+    },
+    datasheetRevision: record.datasheetRevision,
+    duplicateCandidates: record.duplicateCandidates,
+    extractionSignals: record.extractionSignals,
+    generationRequests: record.generationRequests,
+    generationWorkflows: record.generationWorkflows,
+    mateRelations: record.mateRelations.filter((relation) => relation.relationshipType !== "best_mate"),
+    metrics: record.metrics,
+    part: record.part,
+    promotionAudits: record.promotionAudits,
+    reviewRecords: record.reviewRecords,
+    sourceReconciliation: record.sourceReconciliation,
+    sources: record.sources,
+    validationRecords: record.validationRecords
+  });
+
+  assert.equal(projection.issues.find((issue) => issue.code === "missing_connector_mate")?.severity, "error");
+  assert.equal(projection.readinessSummary.status, "blocked");
 });

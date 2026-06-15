@@ -355,6 +355,10 @@ function findLatestRequest(requests: GenerationRequest[], targetAssetType: Gener
  * Resolves a user-facing workflow state from source readiness plus persisted records.
  */
 function resolveWorkflowStatus(sourceReadiness: GenerationSourceReadiness, workflow: GenerationWorkflow | null, latestRequest: GenerationRequest | null): GenerationWorkflowState {
+  if (workflow && isTerminalWorkflowStatus(workflow.generationStatus) && latestRequest?.workflowId === workflow.id) {
+    return workflow.generationStatus;
+  }
+
   if (latestRequest) {
     return latestRequest.requestStatus;
   }
@@ -364,6 +368,13 @@ function resolveWorkflowStatus(sourceReadiness: GenerationSourceReadiness, workf
   }
 
   return sourceReadiness.ready ? "available_to_request" : "unavailable";
+}
+
+/**
+ * Terminal workflow states are authoritative for their linked request, including older rows created before request syncing.
+ */
+function isTerminalWorkflowStatus(status: GenerationWorkflow["generationStatus"]): boolean {
+  return status === "approved" || status === "failed";
 }
 
 /**

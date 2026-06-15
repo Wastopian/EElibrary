@@ -151,6 +151,27 @@ test("generation options follow stored workflow and target readiness state", () 
 });
 
 /**
+ * Verifies reviewed workflows are not masked by stale linked request rows.
+ */
+test("generation options prefer terminal workflow state over a stale linked request", () => {
+  const regulatorRecord = getSeedRecord("part-tps7a02dbvr");
+  const approvedWorkflowRecord: PartSearchRecord = {
+    ...regulatorRecord,
+    generationRequests: regulatorRecord.generationRequests.map((request) =>
+      request.targetAssetType === "three_d_model" ? { ...request, requestStatus: "review_required" } : request
+    ),
+    generationWorkflows: regulatorRecord.generationWorkflows.map((workflow) =>
+      workflow.targetAssetType === "three_d_model" ? { ...workflow, generationStatus: "approved" } : workflow
+    )
+  };
+
+  const option = getGenerationOptions(approvedWorkflowRecord).find((candidate) => candidate.targetAssetType === "three_d_model");
+
+  assert.equal(option?.workflowStatus, "approved");
+  assert.equal(option?.workflowStatusLabel, "approved");
+});
+
+/**
  * Builds a default footprint asset for ranking tests.
  */
 function buildAsset(overrides: Partial<Asset> = {}): Asset {
