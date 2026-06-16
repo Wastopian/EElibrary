@@ -30,3 +30,184 @@ jobs:
 
       - name: Test
         run: npm run test
+
+      # The team server ships a real `next build`; this catches prerender regressions
+      # (e.g. useSearchParams outside Suspense) that typecheck and tests cannot see.
+      - name: Production web build
+        run: npm run build -w @ee-library/web
+        env:
+          AUTH_TRUST_HOST: "true"
+
+  # Stands the API up against a real Postgres, applies every migration, seeds the demo
+  # data, and probes the core loop end-to-end. This is what catches migration drift and
+  # API-contract breakage before an engineer hits it on the shared team server — the unit
+  # tests above run against pg-mem and never exercise the real schema or seed path.
+  integration:
+    name: Migrations + API smoke (real Postgres)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ee_library
+          POSTGRES_USER: ee_library
+          POSTGRES_PASSWORD: ee_library
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ee_library -d ee_library"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgres://ee_library:ee_library@localhost:5432/ee_library
+      EE_LIBRARY_API_BASE_URL: http://127.0.0.1:4000
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: ./.ci-storage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # AUTH_SECRET must be 32+ bytes or the API refuses to start; generate an ephemeral one.
+      - name: Generate ephemeral AUTH_SECRET
+        run: echo "AUTH_SECRET=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Apply migrations
+        run: node scripts/db-migrate.mjs
+
+      # Re-running must be a no-op; a non-empty pending set here means a migration is not
+      # tracked correctly and would re-run (or drift) on a teammate's next upgrade.
+      - name: Assert migrations are idempotent
+        run: |
+          output="$(node scripts/db-migrate.mjs)"
+          echo "$output"
+          echo "$output" | grep -q "no pending migrations"
+
+      - name: Seed admin, sample parts, and demo project
+        run: |
+          node scripts/seed-admin.mjs
+          npm run ingest:local
+          node scripts/seed-demo-project.mjs
+
+      - name: Start API
+        run: |
+          nohup npm run dev:api:nowrap > "$RUNNER_TEMP/api.log" 2>&1 &
+          disown || true
+          echo "Waiting for API /health ..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4000/health > /dev/null; then
+              echo "API is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become healthy in time; recent log:" >&2
+          tail -n 50 "$RUNNER_TEMP/api.log" >&2
+          exit 1
+
+      - name: Smoke the running stack
+        run: node scripts/smoke-local.mjs
+
+      - name: API log on failure
+        if: failure()
+        run: tail -n 100 "$RUNNER_TEMP/api.log" || true
+
+  # Builds and runs the actual production Docker images from compose.team.yaml and smokes
+  # them through the published web port only — the way a real engineer's browser does. The
+  # integration job above runs the app through the workspace symlink, so it cannot catch
+  # production-image-only failures (e.g. a package `exports` subpath missing once npm ci
+  # installs the workspace package strictly). This job is what closes that gap.
+  docker-stack:
+    name: Production Docker stack smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Ephemeral admin password, shared by the seed step and the smoke step.
+      - name: Generate ephemeral admin password
+        run: echo "CI_ADMIN_PW=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      # Writes .env.team with generated secrets and creates the host data dirs the stack mounts.
+      - name: Generate .env.team
+        run: node scripts/setup-team-server.mjs
+
+      - name: Build and start the team stack
+        run: docker compose -f compose.team.yaml up -d --build
+
+      - name: Wait for the stack to be healthy
+        run: |
+          echo "Waiting for api health and the published web port ..."
+          for i in $(seq 1 60); do
+            api_status="$(docker compose -f compose.team.yaml ps api --format '{{.Status}}' 2>/dev/null || true)"
+            if echo "$api_status" | grep -q healthy && curl -sf -o /dev/null http://localhost:8080/sign-in; then
+              echo "Stack is up after ~$((i * 5))s (api: $api_status)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Stack did not become healthy in time." >&2
+          docker compose -f compose.team.yaml ps -a >&2
+          exit 1
+
+      - name: Seed admin, sample parts, and demo project
+        run: |
+          docker compose -f compose.team.yaml run --rm migrate \
+            node scripts/seed-admin.mjs --force --email admin@ci.local --password "$CI_ADMIN_PW"
+          docker compose -f compose.team.yaml run --rm migrate npm run ingest:local
+          docker compose -f compose.team.yaml run --rm migrate \
+            node scripts/seed-demo-project.mjs --force
+
+      - name: Smoke the production stack through the web port
+        env:
+          EE_SMOKE_ADMIN_EMAIL: admin@ci.local
+          EE_SMOKE_ADMIN_PASSWORD: ${{ env.CI_ADMIN_PW }}
+        run: node scripts/team-stack-smoke.mjs http://localhost:8080
+
+      # Browser journey against the same running stack: real client-side rendering and
+      # interaction the HTTP smoke cannot see. e2e/ is a standalone Playwright project, so
+      # this is the only place its dependencies are installed.
+      - name: Install browser e2e dependencies
+        run: |
+          cd e2e
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run browser journey (Playwright)
+        working-directory: e2e
+        env:
+          EE_SMOKE_ADMIN_EMAIL: admin@ci.local
+          EE_SMOKE_ADMIN_PASSWORD: ${{ env.CI_ADMIN_PW }}
+          PLAYWRIGHT_BASE_URL: http://localhost:8080
+        run: npx playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose -f compose.team.yaml logs --tail 120 || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f compose.team.yaml down -v || true

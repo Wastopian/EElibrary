@@ -45,6 +45,35 @@ free-text/structured intent resolver would be a feature nobody else has.
 warnings stay distinct from "buildable"; missing accessories degrade to `pending` instead of
 being hidden.
 
+**First slice shipped (verified 2026-06-14).** The concrete first slice above is live:
+
+- `resolveConnectorSetIntent` + `parseConnectorSetIntentText` in
+  `packages/shared/src/connector-intelligence.ts` (free-text parses family, pin count,
+  sealing, and AWG; ranks candidates with explicit per-candidate confidence and
+  family-confusion / low-confidence warnings; missing accessory coverage degrades to
+  `pending`, never hidden), with tests in `connector-intelligence.test.ts`.
+- Typed route `POST /connector-sets/resolve` (`handleConnectorSetIntentResolve` in
+  `apps/api/src/index.ts`) and the `resolveConnectorSetIntent` web client.
+- A resolver search box on `/connector-sets` (`apps/web/src/app/connector-sets/page.tsx`)
+  with query / pin-count / sealing / AWG inputs that renders ranked candidates plus the
+  boundary copy.
+- **10 deterministic high-value families seeded through the worker**
+  (`buildConnectorIntelligenceSeedRecords` in
+  `apps/worker/src/providers/local-catalog-provider.ts`, appended to local-catalog output so
+  `npm run ingest:local` seeds them): JST PH / ZH / SH, Molex Pico-EZmate, Hirose DF13,
+  Phoenix MC, TE AMPSEAL, Deutsch DT, Amphenol C091, and a sealed JST PH variant — each with
+  housing, mate, crimp terminal (required accessory), tooling, cable, and seals for sealed
+  families.
+
+Verified end-to-end on the running team stack: e.g. *"JST PH 2 pin for 26 AWG"* →
+`JST-PH-2P-HSG` (buildable, with mate + terminal + cable + tooling), *"sealed connector 2 pin
+16 AWG"* → `DEUTSCH-DT-2P-HSG`, *"AMPSEAL 8 pin 18 AWG"* → `TE-AMPSEAL-8P-HSG`. Because the
+seed evidence is family-inferred, every candidate carries review-heavy warnings rather than
+presenting as fully trusted — the honesty contract holding.
+
+Remaining depth (not yet shipped): more families toward the 20 mark; richer keying/gender
+distinction; surfacing the resolver from connector-set entries and connector part detail.
+
 ---
 
 ## 3. Honest LLM-assisted triage that respects the trust contract

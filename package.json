@@ -29,7 +29,11 @@
     "seed:admin": "node scripts/with-local-env.mjs node scripts/seed-admin.mjs",
     "seed:demo-project": "node scripts/with-local-env.mjs node scripts/seed-demo-project.mjs",
     "setup:dev": "node scripts/setup-dev.mjs",
+    "setup:team": "node scripts/setup-team-server.mjs",
     "smoke:local": "node scripts/with-local-env.mjs --warn-only node scripts/smoke-local.mjs",
+    "team:backup": "node scripts/team-backup.mjs",
+    "team:restore": "node scripts/team-restore.mjs",
+    "team:smoke": "node scripts/team-stack-smoke.mjs",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
     "test:scripts": "node --test scripts/__tests__",
     "typecheck": "npm run typecheck --workspaces"

@@ -23,9 +23,12 @@ import {
   countKicadSymbolPins,
   decideFootprintGeometryStatus,
   decideSymbolPinCountStatus,
+  decideThreeDGeometryStatus,
   parseKicadFootprint,
+  parseStepModel,
   processFootprintGeometryValidations,
-  processSymbolPinCountValidations
+  processSymbolPinCountValidations,
+  processThreeDGeometryValidations
 } from "./asset-validation-jobs";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import type { Pool } from "pg";
@@ -68,6 +71,50 @@ const THREE_PIN_SYMBOL = `
   (pin power_in line (at 0 -2.54 90) (length 2.54) (name "GND") (number "3"))
 )
 `;
+
+/**
+ * A structurally complete STEP solid: ISO envelope, an identifiable schema, and DATA
+ * entities including a closed shell and a solid brep -- the resolver's "verified" path.
+ */
+const VALID_STEP_SOLID = `ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('A test solid'),'2;1');
+FILE_NAME('cube.step','2026-06-14T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1=CARTESIAN_POINT('',(0.,0.,0.));
+#2=ADVANCED_FACE('',(#10),#20,.T.);
+#3=CLOSED_SHELL('',(#2));
+#4=MANIFOLD_SOLID_BREP('solid',#3);
+ENDSEC;
+END-ISO-10303-21;
+`;
+
+/** A STEP file with a valid envelope and schema but no entities -- header-only / empty. */
+const EMPTY_STEP = `ISO-10303-21;
+HEADER;
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+ENDSEC;
+END-ISO-10303-21;
+`;
+
+/** A STEP file with faces but no closed solid shell -- a surface-only model. */
+const SURFACE_ONLY_STEP = `ISO-10303-21;
+HEADER;
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1=CARTESIAN_POINT('',(0.,0.,0.));
+#2=ADVANCED_FACE('',(#10),#20,.T.);
+ENDSEC;
+END-ISO-10303-21;
+`;
+
+/** Bytes that are not a STEP file at all (no ISO 10303-21 envelope). */
+const NOT_A_STEP_FILE = `This is a plain text note, not a STEP model.`;
 
 /**
  * Verifies the kicad_mod parser counts pads and extracts pad centers correctly.
@@ -227,6 +274,134 @@ test("decideSymbolPinCountStatus returns needs_review when extraction confidence
 
   assert.equal(decision.status, "needs_review");
   assert.match(decision.notes, /Cross-check requires a high-confidence extraction/u);
+});
+
+/**
+ * Verifies the STEP parser reads the ISO envelope, DATA entities, schema, and topology counts.
+ */
+test("parseStepModel extracts envelope, schema, and topology counts from a STEP solid", () => {
+  const parsed = parseStepModel(VALID_STEP_SOLID);
+
+  assert.equal(parsed.hasIsoEnvelope, true);
+  assert.equal(parsed.hasDataSection, true);
+  assert.deepEqual(parsed.schemaNames, ["AUTOMOTIVE_DESIGN"]);
+  assert.equal(parsed.dataEntityCount, 4);
+  assert.equal(parsed.closedSolidCount, 2); // CLOSED_SHELL + MANIFOLD_SOLID_BREP
+  assert.equal(parsed.faceCount, 1);
+});
+
+/**
+ * Verifies non-STEP bytes are recognized as having no ISO envelope.
+ */
+test("parseStepModel flags bytes that are not a STEP file", () => {
+  const parsed = parseStepModel(NOT_A_STEP_FILE);
+
+  assert.equal(parsed.hasIsoEnvelope, false);
+  assert.equal(parsed.dataEntityCount, 0);
+});
+
+/**
+ * Verifies the STEP decision returns `verified` for a complete solid with a known schema.
+ */
+test("decideThreeDGeometryStatus returns verified for a complete STEP solid", () => {
+  const decision = decideThreeDGeometryStatus(parseStepModel(VALID_STEP_SOLID));
+
+  assert.equal(decision.status, "verified");
+  assert.match(decision.notes, /Valid STEP file/u);
+  assert.match(decision.notes, /AUTOMOTIVE_DESIGN/u);
+});
+
+/**
+ * Verifies the STEP decision returns `failed` when the bytes are not a STEP file.
+ */
+test("decideThreeDGeometryStatus returns failed for non-STEP bytes", () => {
+  const decision = decideThreeDGeometryStatus(parseStepModel(NOT_A_STEP_FILE));
+
+  assert.equal(decision.status, "failed");
+  assert.match(decision.notes, /not a valid STEP file/u);
+});
+
+/**
+ * Verifies the STEP decision returns `failed` for a header-only / empty STEP.
+ */
+test("decideThreeDGeometryStatus returns failed for an empty STEP with no entities", () => {
+  const decision = decideThreeDGeometryStatus(parseStepModel(EMPTY_STEP));
+
+  assert.equal(decision.status, "failed");
+  assert.match(decision.notes, /no DATA-section entities/u);
+});
+
+/**
+ * Verifies the STEP decision returns `needs_review` for a surface-only model (faces but no
+ * closed solid shell), which may not be a watertight body.
+ */
+test("decideThreeDGeometryStatus returns needs_review for a surface-only STEP", () => {
+  const decision = decideThreeDGeometryStatus(parseStepModel(SURFACE_ONLY_STEP));
+
+  assert.equal(decision.status, "needs_review");
+  assert.match(decision.notes, /surface-only model/u);
+});
+
+/**
+ * Verifies the STEP validator end-to-end: a valid solid surfaces `verified`, a non-STEP
+ * file surfaces `failed`, exactly one `three_d_geometry` row is written per asset, and the
+ * asset's review/export trust state is never moved.
+ */
+test("processThreeDGeometryValidations persists evidence rows without moving trust state", async () => {
+  const pool = createValidationPool();
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    const storage = buildMemoryStorage({
+      "cad/3d/asset-3d-pass.step": Buffer.from(VALID_STEP_SOLID),
+      "cad/3d/asset-3d-fail.step": Buffer.from(NOT_A_STEP_FILE)
+    });
+
+    const summary = await processThreeDGeometryValidations(10, storage, new Date("2026-06-14T12:00:00.000Z"));
+
+    const passOutcome = summary.processed.find((row) => row.assetId === "asset-3d-pass");
+    const failOutcome = summary.processed.find((row) => row.assetId === "asset-3d-fail");
+    assert.ok(passOutcome);
+    assert.ok(failOutcome);
+    assert.equal(passOutcome.recordedStatus, "verified");
+    assert.equal(failOutcome.recordedStatus, "failed");
+
+    const records = await pool.query<{
+      id: string;
+      asset_id: string;
+      validation_status: string;
+      validation_type: string;
+      validator: string;
+    }>(
+      `SELECT id, asset_id, validation_status, validation_type, validator
+         FROM asset_validation_records
+         WHERE validation_type = 'three_d_geometry'
+         ORDER BY id ASC`
+    );
+    assert.equal(records.rows.length, 2);
+    for (const row of records.rows) {
+      assert.equal(row.validation_type, "three_d_geometry");
+      assert.equal(row.validator, "generated:step_integrity_v1");
+    }
+    assert.equal(records.rows.find((row) => row.asset_id === "asset-3d-pass")?.id, "validation:three_d_geometry:asset-3d-pass");
+
+    const assetRows = await pool.query<{
+      id: string;
+      review_status: string;
+      export_status: string;
+    }>(
+      `SELECT id, review_status, export_status
+         FROM assets WHERE id IN ('asset-3d-pass', 'asset-3d-fail')
+         ORDER BY id ASC`
+    );
+    for (const row of assetRows.rows) {
+      assert.equal(row.review_status, "not_reviewed", `${row.id} review_status must stay untouched`);
+      assert.equal(row.export_status, "not_exportable", `${row.id} export_status must stay untouched`);
+    }
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
 });
 
 /**
@@ -495,7 +670,9 @@ function createValidationPool(): TestPool {
       ('part-fp-pass', 'FP-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
       ('part-fp-fail', 'FP-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
       ('part-sym-pass', 'SYM-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
-      ('part-sym-fail', 'SYM-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5);
+      ('part-sym-fail', 'SYM-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
+      ('part-3d-pass', '3D-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
+      ('part-3d-fail', '3D-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5);
 
     INSERT INTO assets (
       id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode, provenance,
@@ -516,6 +693,14 @@ function createValidationPool(): TestPool {
         'not_exportable', 'downloaded', NULL, NULL, 'not_validated', 'not_available', 'downloaded',
         NULL, NULL, '2026-05-13T00:00:00.000Z'),
       ('asset-sym-fail', 'part-sym-fail', 'symbol', 'kicad_sym', 'cad/sym/asset-sym-fail.kicad_sym',
+        NULL, NULL, 'redistribution_allowed', 'manual_internal', 'downloaded', 'not_reviewed',
+        'not_exportable', 'downloaded', NULL, NULL, 'not_validated', 'not_available', 'downloaded',
+        NULL, NULL, '2026-05-13T00:00:00.000Z'),
+      ('asset-3d-pass', 'part-3d-pass', 'three_d_model', 'step', 'cad/3d/asset-3d-pass.step',
+        NULL, NULL, 'redistribution_allowed', 'manual_internal', 'downloaded', 'not_reviewed',
+        'not_exportable', 'downloaded', NULL, NULL, 'not_validated', 'not_available', 'downloaded',
+        NULL, NULL, '2026-05-13T00:00:00.000Z'),
+      ('asset-3d-fail', 'part-3d-fail', 'three_d_model', 'step', 'cad/3d/asset-3d-fail.step',
         NULL, NULL, 'redistribution_allowed', 'manual_internal', 'downloaded', 'not_reviewed',
         'not_exportable', 'downloaded', NULL, NULL, 'not_validated', 'not_available', 'downloaded',
         NULL, NULL, '2026-05-13T00:00:00.000Z');

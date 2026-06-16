@@ -66,6 +66,7 @@ export const config = {
   matcher: [
     "/",
     "/admin/:path*",
+    "/api-proxy/:path*",
     "/catalog/:path*",
     "/circuit-blocks/:path*",
     "/compare/:path*",

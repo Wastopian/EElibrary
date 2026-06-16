@@ -34,6 +34,7 @@
     "test": "node ../../scripts/run-tests.mjs src",
     "validate-footprints": "tsx src/index.ts validate-footprints",
     "validate-symbol-pin-counts": "tsx src/index.ts validate-symbol-pin-counts",
+    "validate-three-d-models": "tsx src/index.ts validate-three-d-models",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

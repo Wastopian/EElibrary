@@ -132,10 +132,14 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/where-used` across parts, circuit blocks, connector sets (mates), and assets (bundle manifests).
 - `/evidence` vault with filters, review, and storage-backed attachments tied to projects, BOM lines, parts, findings, and blocks.
 - `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
-- `/connector-sets`: browse connector families, mate pairs, and project usage counts.
+- `/connector-sets`: browse connector families, mate pairs, and project usage counts, plus a **connector intent resolver** — describe what you need ("JST PH 2 pin for 26 AWG", "sealed connector 8 pin 18 AWG") and get ranked buildable-set candidates (housing, mate, crimp terminal, cable, tooling) with explicit confidence and family-confusion warnings. Ten high-value families are seeded so it works on day one. It ranks stored relationships only and never approves a part or unlocks export.
 - `/vendors`: filesystem-backed supplier notebook for PCB shops, sheet metal, machining, finishing, and assembly partners — notes and reference files per vendor, reachable even when the database is down.
 - `/tools`: small focused EE calculators — voltage divider (forward and solve-for-resistor with E96 1% suggestions) and RC time constant (τ plus 1τ/3τ/5τ settling times and the matching low-pass cutoff). Pure client-side math; nothing leaves the page.
-- `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in` with self-service `/sign-up` for local workstation accounts; raw API health remains available at `/system/health`.
+- `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in` with self-service `/sign-up` for local workstation accounts (optionally gated by a team invite code via `EE_LIBRARY_SIGNUP_INVITE_CODE`); raw API health remains available at `/system/health`.
+
+**Team server**
+
+- One shared machine can host EE Library for the whole team: `node scripts/setup-team-server.mjs` writes `.env.team` with generated secrets, `docker compose -f compose.team.yaml up -d --build` starts everything (Postgres, migrations, API, worker, web), and engineers just open `http://<server-address>:8080` in a browser and sign in — no installs. Only the web app is published to the network; browsers reach the API through a session-protected same-origin `/api-proxy` path, and the database stays private to the stack. `npm run team:backup` / `team:restore` cover backup and restore. Full walkthrough: [`docs/TEAM_SERVER_SETUP.md`](docs/TEAM_SERVER_SETUP.md).
 
 Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md). User-facing copy follows [`docs/COPY_GLOSSARY.md`](docs/COPY_GLOSSARY.md) — review every PR diff against it before merging.
 
@@ -143,6 +147,7 @@ Authoritative detail lives in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTAT
 
 These remain product direction; they are **not** in the implementation-status matrix as shipped features (or are only **partial** there).
 
+- **Team server acceptance pass** — the deployment stack is shipped (see "Team server" under Current Capabilities); what remains is the first-time walkthrough on the real server machine and one rehearsed backup → restore cycle (`TODO.md` §0).
 - **Deeper compare** (richer datasheet-revision diff; CAD preview band is now shipped).
 - **More EE calculators** in the `/tools` workspace (voltage divider and RC time constant ship today; further calculators remain incremental).
 - **Subcategory** search facets until backed by persisted catalog data.
@@ -186,6 +191,7 @@ After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED
 - [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) - shipped vs planned status matrix
 - [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) - product intent and scope
 - [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) - system boundaries and runtime responsibilities
+- [`docs/TEAM_SERVER_SETUP.md`](docs/TEAM_SERVER_SETUP.md) - team server install, upgrade, backup, and restore guide
 - [`docs/UI_UX_BRIEF.md`](docs/UI_UX_BRIEF.md) - engineering-first UI guidance
 - [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) - canonical entity and relationship model
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) - staged delivery plan

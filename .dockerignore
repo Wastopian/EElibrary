@@ -1,0 +1,17 @@
+# Keep image build contexts small and never bake local secrets or data into images.
+node_modules
+**/node_modules
+.git
+.env
+.env.*
+!.env.example
+!.env.team.example
+apps/web/.next
+storage
+backups
+tmp
+tmp-web-test.log
+mockups
+ClaudeDesignMockup
+docs
+*.md

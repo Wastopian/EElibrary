@@ -745,6 +745,35 @@ Do not let evidence attachments, project usage, or circuit block membership impl
 
 ---
 
+## Deployment architecture
+
+Everything above describes how the system behaves. This section describes where it runs.
+
+### Two supported shapes
+
+**Developer workstation** (unchanged): `compose.yaml` provides local Postgres/Redis/MinIO containers and the `web`, `api`, and `worker` apps run via `npm run dev`. This remains the development loop.
+
+**Team server**: the production stack in `compose.team.yaml` builds all three apps from the multi-target root `Dockerfile` (api and worker run their TypeScript through tsx exactly as dev does; web is a real `next build` + `next start`), adds a one-shot `migrate` service that applies pending SQL migrations before the api/worker start, and publishes **only the web app** to the network. Browser-side code reaches the API through the web app's same-origin `/api-proxy/:path*` rewrite (protected by the session middleware), so the API and database stay private to the stack and the only address an engineer ever needs is the web app itself. File storage is the local-filesystem backend on a named volume shared by api and worker; project files and vendor notes are host bind mounts so they stay human-browsable. `scripts/setup-team-server.mjs` bootstraps `.env.team` with generated secrets; `scripts/team-backup.mjs` / `scripts/team-restore.mjs` cover backup and rehearsed restore. The operator walkthrough is `docs/TEAM_SERVER_SETUP.md`.
+
+### Target shape: one team server, browser-only access
+
+The deployment is a **server-hosted site**, not a per-engineer installed application:
+
+- One shared machine (small office server, NAS, or dedicated workstation) runs the full stack — containerized `web`, `api`, and `worker` alongside the existing Postgres/Redis/MinIO services — started with a single `docker compose up -d` and surviving reboots through restart policies and persistent volumes.
+- Engineers access EE Library by opening **one fixed address in a browser and signing in**. That is the entire end-user requirement. No terminal, no Node, no Docker, no local install for anyone on the team.
+- Exactly one person (the server admin) operates the machine, following a plain-language setup/upgrade/recovery guide (`docs/TEAM_SERVER_SETUP.md`, planned) held to the same copy standards as the UI.
+- A packaged desktop executable is the explicitly deprioritized alternative: it would fragment the shared database that makes engineering memory shared at all, and it conflicts with the single-source-of-truth principle above. It is reconsidered only if server hosting proves unworkable for the team.
+
+### Deployment rules (the shipped stack satisfies these; future work must keep them)
+
+1. **Fail closed on configuration.** The API refuses to bind its port with a missing or short `AUTH_SECRET`, and the stack inherits that behavior instead of papering over it with defaults.
+2. **Sign-up exposure is decided before the server is shared.** `scripts/setup-team-server.mjs` generates `EE_LIBRARY_SIGNUP_INVITE_CODE` by default, so new accounts require the team invite code; clearing the value re-opens sign-up and is documented as safe only on a fully trusted network.
+3. **Backups are part of deployment, not an afterthought.** `scripts/team-backup.mjs` dumps the database and archives every stored file in one run; `scripts/team-restore.mjs` is the rehearsable counterpart, and `docs/TEAM_SERVER_SETUP.md` tells the admin to practice a restore on day one. A system whose product is durable engineering memory does not get to lose the database to one disk failure.
+4. **LAN-first, no cloud dependency.** The stack runs fully on the team's own hardware with no external service required — consistent with the defense-adjacent audience in `docs/COMMERCIAL_ROADMAP.md` and with the existing local-first provider posture. It serves plain HTTP and is documented as private-network-only; HTTPS or remote access goes through a reverse proxy or VPN in front.
+5. **Honesty rules carry over.** A hosted instance changes where the system runs, not what it claims: imported still does not mean approved, and no deployment convenience may collapse trust boundaries.
+
+---
+
 ## Long-term architectural direction
 
 The long-term goal is not just to store part files.
