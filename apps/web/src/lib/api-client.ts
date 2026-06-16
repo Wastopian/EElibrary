@@ -1500,23 +1500,57 @@ export async function updateSourceReconciliation(
   return envelope.data;
 }
 
+type ServerCookieReader = () => Promise<string | null> | string | null;
+
+let serverCookieReaderForTests: ServerCookieReader | null = null;
+
+/**
+ * Installs a cookie reader for focused tests of server-side API token minting.
+ */
+export function setApiClientServerCookieReaderForTests(reader: ServerCookieReader | null): void {
+  serverCookieReaderForTests = reader;
+}
+
 /**
  * Fetches a short-lived HS256 token from the Next.js /api/token route for API POST calls.
- * Works from both server components (absolute URL) and client components (relative URL).
+ * Works from both server components (absolute URL with forwarded cookies) and client
+ * components (relative URL that lets the browser include cookies).
  */
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
+    const isServer = typeof globalThis.window === "undefined";
     const base =
-      typeof globalThis.window === "undefined"
+      isServer
         ? (process.env["NEXTAUTH_URL"] ?? "http://localhost:3000")
         : "";
-    const res = await fetch(`${base}/api/token`, { cache: "no-store" });
+    const cookieHeader = isServer ? await readServerCookieHeader() : null;
+    const tokenRequestInit: RequestInit = { cache: "no-store" };
+    if (cookieHeader) {
+      tokenRequestInit.headers = { cookie: cookieHeader };
+    }
+    const res = await fetch(`${base}/api/token`, tokenRequestInit);
     if (!res.ok) return {};
     const { token } = (await res.json()) as { token: string };
     if (typeof token !== "string" || token.length === 0) return {};
     return { Authorization: `Bearer ${token}` };
   } catch {
     return {};
+  }
+}
+
+/**
+ * Reads the current Next.js request cookie when API helpers run inside a server action.
+ */
+async function readServerCookieHeader(): Promise<string | null> {
+  if (serverCookieReaderForTests) {
+    return serverCookieReaderForTests();
+  }
+
+  try {
+    const { headers } = await import("next/headers");
+    return (await headers()).get("cookie");
+  } catch {
+    return null;
   }
 }
 

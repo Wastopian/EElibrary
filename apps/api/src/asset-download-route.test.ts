@@ -40,7 +40,7 @@ test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a 
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a downloaded asset that still has source_url", async () => {
+test("GET /parts/:partId/assets/:assetId/download prefers stored files for downloaded assets that still have source_url", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "test";
   setCatalogStorePoolForTests(createAssetPoolStub({
@@ -52,15 +52,17 @@ test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a 
     source_url: "https://example.com/footprint.kicad_mod",
     storage_key: "cad/part-b.kicad_mod"
   }));
+  setStorageClientForTests(createStorageClientStub("http://127.0.0.1:4000/storage/cad%2Fpart-b.kicad_mod"));
 
   try {
     const { handleRequest } = await import("./index");
     const result = await invokeApiGet("/parts/part-b/assets/asset-b/download", handleRequest);
 
     assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "https://example.com/footprint.kicad_mod");
+    assert.equal(result.headers["Location"], "http://127.0.0.1:4000/storage/cad%2Fpart-b.kicad_mod");
   } finally {
     setCatalogStorePoolForTests(null);
+    setStorageClientForTests(null);
     restoreEnv(previousNodeEnv);
   }
 });
