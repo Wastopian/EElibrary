@@ -10,7 +10,7 @@
 import React from "react";
 import { SectionPanel, StatusBadge } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
-import type { Asset, AssetClassSummary, AssetValidationSummary, CatalogDataSource } from "@ee-library/shared/types";
+import type { Asset, AssetClassSummary, AssetValidationSummary, CatalogDataSource, ControlledDocumentRevision } from "@ee-library/shared/types";
 import { buildAssetDownloadUrl } from "../../../../lib/api-client";
 import {
   buildAssetTrustCheckSummary,
@@ -29,11 +29,13 @@ import type { PartFilesRow } from "../lib/types";
  */
 export function PartFilesPanel({
   assetGroups,
+  gatedRevisionsByAssetId,
   partId,
   source,
   validationSummaries
 }: {
   assetGroups: AssetClassSummary[];
+  gatedRevisionsByAssetId: Map<string, ControlledDocumentRevision>;
   partId: string;
   source: CatalogDataSource | undefined;
   validationSummaries: AssetValidationSummary[];
@@ -54,7 +56,7 @@ export function PartFilesPanel({
     const validationSummary = findAssetValidationSummary(validationSummaries, best);
 
     return {
-      action: buildPartFileAction(best, partId, source),
+      action: buildPartFileAction(best, partId, source, gatedRevisionsByAssetId.get(best.id) ?? null),
       format: best.fileFormat,
       label: assetTypeLabel(group.assetType),
       status: { label: formatAssetClassReadinessLabel(group.readiness), tone: assetClassReadinessTone(group.readiness) },
@@ -94,14 +96,26 @@ export function PartFilesPanel({
 }
 
 /**
- * Builds the top-panel action for one asset without collapsing references into downloads.
+ * Builds the top-panel action for one asset without collapsing references,
+ * gated documents, or failed file rows into plain downloads.
  */
-function buildPartFileAction(asset: Asset, partId: string, source: CatalogDataSource | undefined): PartFilesRow["action"] {
+function buildPartFileAction(asset: Asset, partId: string, source: CatalogDataSource | undefined, gatedRevision: ControlledDocumentRevision | null): PartFilesRow["action"] {
   if (source === "seed_fallback") {
     return asset.sourceUrl ? { href: asset.sourceUrl, label: "View source" } : null;
   }
 
+  if (asset.availabilityStatus === "failed") {
+    return null;
+  }
+
   if (isFileBackedAsset(asset)) {
+    if (gatedRevision) {
+      return {
+        href: `${buildAssetDownloadUrl(partId, asset.id)}?ack=1`,
+        label: "Acknowledge and download"
+      };
+    }
+
     return {
       href: buildAssetDownloadUrl(partId, asset.id),
       label: "Download file"

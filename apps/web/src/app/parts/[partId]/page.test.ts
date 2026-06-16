@@ -12,7 +12,7 @@ import {
   buildUnavailablePartEnrichmentSummary
 } from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
-import type { DocumentRevisionListResponse, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
+import type { Asset, DocumentRevisionListResponse, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
 
 /**
  * Verifies the detail page renders V3-style readiness record truth without whole-part approval claims.
@@ -64,7 +64,8 @@ test("part detail renders readiness record summary from detail response", async 
     assert.match(html, /File status/u);
     assert.match(html, /Review step/u);
     assert.match(html, /Trust check/u);
-    assert.match(html, /Ready to download/u);
+    assert.match(html, /Ready for export/u);
+    assert.doesNotMatch(html, /<button class="export-action export-action--available"/u);
     assert.match(html, /Not ready yet/u);
     assert.doesNotMatch(html, /approved part/u);
   } finally {
@@ -173,6 +174,92 @@ test("part detail files panel disables sample storage downloads in seed fallback
 });
 
 /**
+ * Verifies controlled document gates are reflected in the top files panel, not only
+ * in the lower asset cards.
+ */
+test("part detail files panel requires acknowledgement for restricted controlled documents", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-te-215079-8");
+
+  assert.ok(record, "expected connector seed part detail record");
+
+  const detail = buildPartDetailResponse(record, records);
+  const gatedAsset = detail.assetGroups.find((group) => group.bestAsset !== null && group.bestAsset.storageKey !== null && group.bestAsset.fileHash !== null)?.bestAsset;
+
+  assert.ok(gatedAsset, "expected file-backed asset for controlled document test");
+
+  const restoreFetch = mockFetch(
+    () =>
+      jsonResponse({
+        data: detail,
+        source: "database"
+      }),
+    undefined,
+    undefined,
+    () =>
+      jsonResponse({
+        data: buildRestrictedDocumentControlResponse(record.part.id, gatedAsset),
+        source: "database"
+      })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const filesPanelHtml = extractPanelHtml(html, "Files and downloads");
+    const gatedDownloadPath = `/assets/${encodeURIComponent(gatedAsset.id)}/download`;
+
+    assert.match(filesPanelHtml, /Acknowledge and download/u);
+    assert.ok(filesPanelHtml.includes(`${gatedDownloadPath}?ack=1`), "expected gated top-panel download to include acknowledgement");
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies failed stored assets remain visible as failed records without a download
+ * affordance that the API will reject.
+ */
+test("part detail does not offer downloads for failed file-backed assets", async () => {
+  const records = getAllPartRecords();
+  const baseRecord = records.find((candidate) => candidate.part.id === "part-te-215079-8");
+
+  assert.ok(baseRecord, "expected connector seed part detail record");
+
+  const record = structuredClone(baseRecord);
+  const failedAsset = record.assets.find((asset) => asset.storageKey !== null && asset.fileHash !== null);
+
+  assert.ok(failedAsset, "expected file-backed asset for failed asset test");
+
+  for (const asset of record.assets) {
+    if (asset.assetType !== failedAsset.assetType) continue;
+
+    asset.availabilityStatus = "failed";
+    asset.assetState = "failed";
+    asset.assetStatus = "failed";
+    asset.exportStatus = "not_exportable";
+    asset.validationStatus = "failed";
+  }
+
+  const restoreFetch = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const filesPanelHtml = extractPanelHtml(html, "Files and downloads");
+    const failedDownloadPattern = new RegExp(`/assets/${escapeRegExp(encodeURIComponent(failedAsset.id))}/download`, "u");
+
+    assert.match(filesPanelHtml, /File failed/u);
+    assert.doesNotMatch(html, failedDownloadPattern);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies catalog setup failures render guidance instead of route-fatal detail errors.
  */
 test("part detail renders setup guidance when catalog detail is unavailable", async () => {
@@ -239,7 +326,7 @@ test("part detail renders confirmed where-used project usage", async () => {
     assert.match(html, /Ready to reuse/u);
     assert.match(html, /Main LDO/u);
     assert.match(html, /Approving the part does not review its files or mark them ready for export/u);
-    assert.match(html, /Ready to download|Not ready/u);
+    assert.match(html, /Ready for project export|Not ready/u);
   } finally {
     restoreFetch();
   }
@@ -590,7 +677,8 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
 function mockFetch(
   handler: (url: URL) => Response,
   whereUsedHandler?: (url: URL) => Response,
-  supplyOffersHandler?: (url: URL) => Response
+  supplyOffersHandler?: (url: URL) => Response,
+  documentControlHandler?: (url: URL) => Response
 ): () => void {
   const previousFetch = globalThis.fetch;
 
@@ -605,7 +693,7 @@ function mockFetch(
     }
 
     if (isDocumentControlRequest(url)) {
-      return jsonResponse({
+      return documentControlHandler ? documentControlHandler(url) : jsonResponse({
         data: buildEmptyDocumentControlResponse(readDocumentControlPartId(url)),
         source: "database"
       });
@@ -696,6 +784,60 @@ function buildEmptyDocumentControlResponse(partId: string): DocumentRevisionList
     revisions: [],
     state: "empty"
   };
+}
+
+/**
+ * Builds one active restricted revision attached to an asset for download-gate tests.
+ */
+function buildRestrictedDocumentControlResponse(partId: string, asset: Asset): DocumentRevisionListResponse {
+  const now = "2026-05-01T12:00:00.000Z";
+
+  return {
+    boundary: "Document control test boundary.",
+    partId,
+    revisions: [
+      {
+        accessLevel: "restricted",
+        accessNotes: "Restricted drawing package.",
+        aclEntries: [],
+        asset: {
+          availabilityStatus: asset.availabilityStatus,
+          assetType: asset.assetType,
+          fileFormat: asset.fileFormat,
+          fileHash: asset.fileHash,
+          id: asset.id,
+          partId: asset.partId,
+          provenance: asset.provenance,
+          sourceUrl: asset.sourceUrl,
+          storageKey: asset.storageKey
+        },
+        assetId: asset.id,
+        createdAt: now,
+        createdBy: "test",
+        documentType: "datasheet",
+        effectiveAt: null,
+        expiresAt: null,
+        id: `docrev-${asset.id}`,
+        lifecycleStatus: "released",
+        partId,
+        redlines: [],
+        revisionDate: "2026-05-01",
+        revisionLabel: "A",
+        sourceAssetHash: asset.fileHash,
+        supersededByDocumentRevisionId: null,
+        supersedesDocumentRevisionId: null,
+        updatedAt: now
+      }
+    ],
+    state: "available"
+  };
+}
+
+/**
+ * Escapes a dynamic URL segment for regex-based rendered-markup assertions.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 /**
