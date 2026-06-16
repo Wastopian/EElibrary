@@ -12,7 +12,7 @@ import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
-import { processFootprintGeometryValidations, processSymbolPinCountValidations } from "./asset-validation-jobs";
+import { processFootprintGeometryValidations, processSymbolPinCountValidations, processThreeDGeometryValidations } from "./asset-validation-jobs";
 import { runProviderPartImport } from "./provider-part-import";
 import { refreshStaleSupplyOfferSnapshots } from "./supply-offer-refresh";
 import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
@@ -206,6 +206,7 @@ function buildUsageLines(): string[] {
     "npm run generate-three-d-previews -w @ee-library/worker -- [limit]",
     "npm run validate-footprints -w @ee-library/worker -- [limit]",
     "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
+    "npm run validate-three-d-models -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
@@ -460,6 +461,37 @@ async function runSymbolPinCountValidationCommand(limitValue?: string): Promise<
 }
 
 /**
+ * Runs the file-grounded STEP integrity validator over a bounded batch of stored 3D-model
+ * assets. Each candidate produces an `asset_validation_records` row tagged
+ * `generated:step_integrity_v1`; the asset's review/export status is never moved.
+ */
+async function runThreeDGeometryValidationCommand(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 20;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const storage = getWorkerStorageClient();
+    const summary = await timeWorkerOperation(
+      "worker.validate_three_d_geometry",
+      () => processThreeDGeometryValidations(Number.isFinite(limit) ? limit : 20, storage),
+      timings,
+      (value) =>
+        `${value.processed.length} candidate${value.processed.length === 1 ? "" : "s"}, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "verified").length} verified, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "needs_review").length} needs_review, ` +
+        `${value.processed.filter((row) => row.recordedStatus === "failed").length} failed`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.validate_three_d_geometry", error, timings);
+    throw error;
+  }
+}
+
+/**
  * Refreshes stale active supply-offer snapshots by re-running exact provider imports.
  */
 async function refreshSupplyOffers(limitValue?: string): Promise<void> {
@@ -623,6 +655,11 @@ async function main(): Promise<void> {
 
   if (command === "validate-symbol-pin-counts") {
     await runSymbolPinCountValidationCommand(process.argv[3]);
+    return;
+  }
+
+  if (command === "validate-three-d-models") {
+    await runThreeDGeometryValidationCommand(process.argv[3]);
     return;
   }
 
@@ -841,28 +878,36 @@ async function safeProcessPendingThreeDPreviews(): Promise<void> {
 }
 
 /**
- * Runs both file-grounded asset validators (footprint + symbol) without crashing the daemon
- * on storage / DB failures. Logs only when the tick produced new evidence so an idle system
- * stays quiet, and keeps the two outcomes separate so an operator can see which validator
- * surfaced which decisions.
+ * Runs the file-grounded asset validators (footprint + symbol + STEP integrity) without
+ * crashing the daemon on storage / DB failures. Logs only when the tick produced new evidence
+ * so an idle system stays quiet, and keeps the outcomes separate so an operator can see which
+ * validator surfaced which decisions.
  */
 async function safeRunAssetValidations(): Promise<void> {
   try {
     const storage = getWorkerStorageClient();
     const footprintSummary = await processFootprintGeometryValidations(DEFAULT_ASSET_VALIDATION_BATCH_LIMIT, storage);
     const symbolSummary = await processSymbolPinCountValidations(DEFAULT_ASSET_VALIDATION_BATCH_LIMIT, storage);
+    const threeDSummary = await processThreeDGeometryValidations(DEFAULT_ASSET_VALIDATION_BATCH_LIMIT, storage);
 
-    if (footprintSummary.processed.length === 0 && symbolSummary.processed.length === 0) {
+    if (
+      footprintSummary.processed.length === 0 &&
+      symbolSummary.processed.length === 0 &&
+      threeDSummary.processed.length === 0
+    ) {
       return;
     }
 
     const footprintFailed = footprintSummary.processed.filter((row) => row.recordedStatus === "failed").length;
     const symbolFailed = symbolSummary.processed.filter((row) => row.recordedStatus === "failed").length;
+    const threeDFailed = threeDSummary.processed.filter((row) => row.recordedStatus === "failed").length;
     console.log(
       `Worker daemon: asset validation pass — footprints: ${footprintSummary.processed.length} candidates` +
         (footprintFailed > 0 ? `, ${footprintFailed} failed` : "") +
         `; symbols: ${symbolSummary.processed.length} candidates` +
-        (symbolFailed > 0 ? `, ${symbolFailed} failed` : "")
+        (symbolFailed > 0 ? `, ${symbolFailed} failed` : "") +
+        `; 3D models: ${threeDSummary.processed.length} candidates` +
+        (threeDFailed > 0 ? `, ${threeDFailed} failed` : "")
     );
   } catch (error) {
     console.error("Asset validation tick failed.", error instanceof Error ? error.message : error);
