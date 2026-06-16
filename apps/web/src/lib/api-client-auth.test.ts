@@ -4,7 +4,23 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requestProviderImport, setApiClientServerCookieReaderForTests } from "./api-client";
+import {
+  buildAssetDownloadUrl,
+  buildAssetPreviewArtifactDownloadUrl,
+  buildExportBundleDownloadUrl,
+  requestProviderImport,
+  setApiClientServerCookieReaderForTests
+} from "./api-client";
+
+test("browser-facing file URLs use the same-origin API proxy during SSR", () => {
+  assert.equal(buildAssetDownloadUrl("part/a", "asset b"), "/api-proxy/parts/part%2Fa/assets/asset%20b/download");
+  assert.equal(
+    buildAssetPreviewArtifactDownloadUrl("part/a", "asset b"),
+    "/api-proxy/parts/part%2Fa/assets/asset%20b/preview-artifact/download"
+  );
+  assert.equal(buildExportBundleDownloadUrl("bundles/project one.zip"), "/api-proxy/storage/bundles%2Fproject%20one.zip");
+  assert.equal(buildExportBundleDownloadUrl(null), null);
+});
 
 test("server-side API writes forward the current session cookie when minting an API token", async () => {
   const previousFetch = globalThis.fetch;

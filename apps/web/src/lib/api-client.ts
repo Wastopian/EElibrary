@@ -1930,7 +1930,7 @@ export async function applyApprovalBatch(projectId: string, input: ApprovalBatch
  * Builds the API download URL for one asset so the UI can link directly to the redirect endpoint.
  */
 export function buildAssetDownloadUrl(partId: string, assetId: string): string {
-  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+  return buildBrowserApiUrl(`/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`);
 }
 
 /**
@@ -1939,7 +1939,7 @@ export function buildAssetDownloadUrl(partId: string, assetId: string): string {
  * the derived viewer artifact have separate availability and trust contracts.
  */
 export function buildAssetPreviewArtifactDownloadUrl(partId: string, assetId: string): string {
-  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`;
+  return buildBrowserApiUrl(`/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`);
 }
 
 const MAX_COMPARE_PARTS = 4;
@@ -1963,7 +1963,15 @@ export function buildCompareUrl(partIds: string[]): string {
  */
 export function buildExportBundleDownloadUrl(storageKey: string | null): string | null {
   if (!storageKey) return null;
-  return `${getApiBaseUrl()}/storage/${encodeURIComponent(storageKey)}`;
+  return buildBrowserApiUrl(`/storage/${encodeURIComponent(storageKey)}`);
+}
+
+/**
+ * User-facing href/src values must stay same-origin even during server rendering. The
+ * server-only API base URL may be an internal Docker hostname that browsers cannot reach.
+ */
+function buildBrowserApiUrl(path: string): string {
+  return `/api-proxy${path}`;
 }
 
 /**

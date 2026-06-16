@@ -121,30 +121,27 @@ async function main() {
 
   console.log(`team-restore: restoring backups/${backupName}`);
 
-  console.log("-> [1/4] stop app services (database stays up)");
+  console.log("-> [1/5] verify stored-file archive");
+  await runCompose(["run", "--rm", "--no-deps", "-T", "api", "tar", "tzf", "-"], filesArchive);
+
+  console.log("-> [2/5] stop app services (database stays up)");
   await runCompose(["stop", "web", "api", "worker"]);
   await runCompose(["up", "-d", "postgres"]);
 
-  console.log("-> [2/4] restore database");
+  console.log("-> [3/5] restore database");
   // The dump was taken with --clean --if-exists, so psql drops and recreates each object.
   await runCompose(
     ["exec", "-T", "postgres", "psql", "--username", dbUser, "--dbname", dbName, "--set", "ON_ERROR_STOP=1", "--quiet"],
     databaseDump
   );
 
-  console.log("-> [3/4] restore stored files");
-  // Clear existing contents of each data root so files deleted after the backup do not
-  // linger, then unpack the archive over them. `find -mindepth 1 -delete` keeps the mount
-  // points themselves and is a single clean argv with no shell globbing or `&&` — passing a
-  // compound `sh -c` string here breaks when the host shell (cmd.exe on Windows) re-parses it.
-  await runCompose([
-    "run", "--rm", "--no-deps", "-T", "api",
-    "find", "/data/storage", "/data/project-files", "/data/vendor-notes",
-    "-mindepth", "1", "-delete"
-  ]);
+  console.log("-> [4/5] restore stored files");
+  // The archive is verified before the database is touched, then unpacked over the live
+  // data roots without a pre-delete. Files no longer referenced by the restored database
+  // may remain on disk, but a corrupt archive can no longer erase all stored files.
   await runCompose(["run", "--rm", "--no-deps", "-T", "api", "tar", "xzf", "-", "-C", "/data"], filesArchive);
 
-  console.log("-> [4/4] start the stack (any newer migrations re-apply)");
+  console.log("-> [5/5] start the stack (any newer migrations re-apply)");
   await runCompose(["up", "-d"]);
 
   console.log("");
