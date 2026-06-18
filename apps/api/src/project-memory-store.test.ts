@@ -2790,6 +2790,67 @@ test("createExportBundleInDatabase writes archive content when storage is availa
   }
 });
 
+test("createExportBundleInDatabase assigns unique asset paths when project parts share an MPN", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(`
+      CREATE TABLE export_bundles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        revision_label TEXT,
+        bundle_format TEXT NOT NULL,
+        storage_key TEXT,
+        archive_storage_key TEXT,
+        manifest JSONB NOT NULL,
+        part_count INTEGER NOT NULL DEFAULT 0,
+        included_asset_count INTEGER NOT NULL DEFAULT 0,
+        omitted_asset_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        assembly_status TEXT NOT NULL DEFAULT 'not_required',
+        assembly_error JSONB,
+        assembly_completed_at TIMESTAMPTZ,
+        assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_mod'");
+    await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'official'");
+    await pool.query(`
+      INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, created_at, updated_at)
+      VALUES
+        ('usage-alpha-dup-a', 'project-alpha', 'rev-alpha-a', NULL, 'part-dup-alpha', 'Second-source regulator', '{"U2"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z'),
+        ('usage-alpha-dup-b', 'project-alpha', 'rev-alpha-a', NULL, 'part-dup-beta', 'Alternate-source regulator', '{"U3"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')
+    `);
+    await pool.query(`
+      INSERT INTO assets (id, part_id, asset_type, storage_key, file_hash, source_url, export_status, validation_status, last_updated_at, file_format, provenance)
+      VALUES
+        ('asset-dup-alpha-footprint', 'part-dup-alpha', 'footprint', 'parts/alpha/dup-123.kicad_mod', 'sha256-alpha', NULL, 'verified_for_export', 'verified', '2026-05-02T00:01:00.000Z', 'kicad_mod', 'official'),
+        ('asset-dup-beta-footprint', 'part-dup-beta', 'footprint', 'parts/beta/dup-123.kicad_mod', 'sha256-beta', NULL, 'verified_for_export', 'verified', '2026-05-02T00:01:00.000Z', 'kicad_mod', 'official')
+    `);
+
+    const result = await createExportBundleInDatabase("project-alpha", { bundleFormat: "neutral" }, "test-admin");
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const duplicateMpnAssets = result.response.bundle.manifest.includedAssets.filter((asset) => asset.partMpn === "DUP-123");
+    const duplicateMpnPaths = duplicateMpnAssets.map((asset) => asset.bundlePath);
+
+    assert.equal(duplicateMpnAssets.length, 2);
+    assert.equal(new Set(duplicateMpnPaths).size, duplicateMpnPaths.length);
+    for (const bundlePath of duplicateMpnPaths) {
+      assert.match(bundlePath, /^[A-Za-z0-9_-]+-DUP-123-[a-f0-9]{12}\/footprint-[a-f0-9]{12}\.kicad_mod$/u);
+      assert.equal(bundlePath.includes(".."), false);
+      assert.equal(bundlePath.startsWith("/"), false);
+    }
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
 test("createExportBundleInDatabase surfaces archive write failures as bundle warnings", async () => {
   const pool = createProjectMemoryPool(true);
   setProjectMemoryStorePoolForTests(pool);
