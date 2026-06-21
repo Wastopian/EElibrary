@@ -3,12 +3,14 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { SignJWT } from "jose";
 import { Readable, PassThrough } from "node:stream";
 import { setCatalogStorePoolForTests } from "./catalog-store";
+import { setDocumentControlPoolForTests } from "./document-control";
 import { setStorageClientForTests } from "./file-storage";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -40,9 +42,15 @@ test("GET /parts/:partId/assets/:assetId/download redirects to source_url for a 
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download prefers stored files for downloaded assets that still have source_url", async () => {
+test("GET /parts/:partId/assets/:assetId/download streams stored files for downloaded assets that still have source_url", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-asset-download-test-"));
+  await mkdir(join(tempDir, "cad"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "part-b.kicad_mod"), "stored footprint", "utf8");
+
   process.env.NODE_ENV = "test";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createAssetPoolStub({
     id: "asset-b",
     part_id: "part-b",
@@ -52,18 +60,25 @@ test("GET /parts/:partId/assets/:assetId/download prefers stored files for downl
     source_url: "https://example.com/footprint.kicad_mod",
     storage_key: "cad/part-b.kicad_mod"
   }));
-  setStorageClientForTests(createStorageClientStub("http://127.0.0.1:4000/storage/cad%2Fpart-b.kicad_mod"));
+  setStorageClientForTests(createStorageClientStub("local-storage-enabled"));
 
   try {
     const { handleRequest } = await import("./index");
-    const result = await invokeApiGet("/parts/part-b/assets/asset-b/download", handleRequest);
+    const result = await invokeApiGetStreaming("/parts/part-b/assets/asset-b/download", handleRequest);
 
-    assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "http://127.0.0.1:4000/storage/cad%2Fpart-b.kicad_mod");
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body, "stored footprint");
+    assert.equal(result.headers["Content-Type"], "application/octet-stream");
   } finally {
     setCatalogStorePoolForTests(null);
     setStorageClientForTests(null);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
@@ -202,9 +217,15 @@ test("GET /parts/:partId/assets/:assetId/download returns 503 when database is n
   }
 });
 
-test("GET /parts/:partId/assets/:assetId/download redirects via storage client for a file_only asset", async () => {
+test("GET /parts/:partId/assets/:assetId/download streams a file_only asset", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-file-only-download-test-"));
+  await mkdir(join(tempDir, "cad"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "part-local.kicad_sym"), "stored symbol", "utf8");
+
   process.env.NODE_ENV = "test";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(createAssetPoolStub({
     id: "asset-local",
     part_id: "part-local",
@@ -214,18 +235,81 @@ test("GET /parts/:partId/assets/:assetId/download redirects via storage client f
     source_url: null,
     storage_key: "cad/part-local.kicad_sym"
   }));
-  setStorageClientForTests(createStorageClientStub("http://127.0.0.1:4000/storage/cad%2Fpart-local.kicad_sym"));
+  setStorageClientForTests(createStorageClientStub("local-storage-enabled"));
 
   try {
     const { handleRequest } = await import("./index");
-    const result = await invokeApiGet("/parts/part-local/assets/asset-local/download", handleRequest);
+    const result = await invokeApiGetStreaming("/parts/part-local/assets/asset-local/download", handleRequest);
 
-    assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "http://127.0.0.1:4000/storage/cad%2Fpart-local.kicad_sym");
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body, "stored symbol");
+    assert.equal(result.headers["Content-Type"], "application/octet-stream");
   } finally {
     setCatalogStorePoolForTests(null);
     setStorageClientForTests(null);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
+  }
+});
+
+test("GET /parts/:partId/assets/:assetId/download authorizes gated admin override from a bearer session", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousAuthSecret = process.env.AUTH_SECRET;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-gated-download-test-"));
+  await mkdir(join(tempDir, "cad"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "controlled.step"), "controlled step", "utf8");
+
+  process.env.NODE_ENV = "test";
+  process.env.AUTH_SECRET = "0123456789abcdef0123456789abcdef";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
+  setCatalogStorePoolForTests(createAssetPoolStub({
+    id: "asset-controlled",
+    part_id: "part-controlled",
+    asset_type: "three_d_model",
+    file_format: "step",
+    availability_status: "validated",
+    source_url: null,
+    storage_key: "cad/controlled.step"
+  }));
+  setDocumentControlPoolForTests(createGatedDocumentPoolStub());
+  setStorageClientForTests(createStorageClientStub("local-storage-enabled"));
+
+  const token = await new SignJWT({ role: "admin" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject("admin-1")
+    .setIssuedAt()
+    .setExpirationTime("30s")
+    .sign(new TextEncoder().encode(process.env.AUTH_SECRET));
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGetStreaming(
+      "/parts/part-controlled/assets/asset-controlled/download?ack=1",
+      handleRequest,
+      { authorization: `Bearer ${token}` }
+    );
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body, "controlled step");
+    assert.equal(result.headers["X-EE-Asset-Gate-Grant"], "admin_override");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    setDocumentControlPoolForTests(null);
+    setStorageClientForTests(null);
+    restoreOptionalEnv("AUTH_SECRET", previousAuthSecret);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
+    restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
@@ -426,6 +510,33 @@ function createEmptyPoolStub(): Pool {
 }
 
 /**
+ * Creates a document-control pool with one restricted revision and no ACL grant.
+ */
+function createGatedDocumentPoolStub(): Pool {
+  return {
+    query: async (sql: string) => {
+      if (typeof sql === "string" && sql.includes("FROM document_revisions")) {
+        return {
+          rows: [{
+            access_level: "restricted",
+            document_type: "controlled_drawing",
+            id: "docrev-controlled",
+            revision_label: "Rev A"
+          }],
+          rowCount: 1
+        };
+      }
+
+      if (typeof sql === "string" && sql.includes("FROM document_acl_entries")) {
+        return { rows: [], rowCount: 0 };
+      }
+
+      return { rows: [], rowCount: 0 };
+    }
+  } as unknown as Pool;
+}
+
+/**
  * Invokes one GET API route through the real request handler.
  */
 async function invokeApiGet(
@@ -480,7 +591,8 @@ function createStorageClientStub(downloadUrl: string | null): FileStorageClient 
  */
 async function invokeApiGetStreaming(
   url: string,
-  handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>
+  handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>,
+  headers: Record<string, string> = {}
 ): Promise<{ statusCode: number; body: string; headers: Record<string, string> }> {
   const request = Readable.from([]) as IncomingMessage;
   const chunks: Buffer[] = [];
@@ -491,9 +603,13 @@ async function invokeApiGetStreaming(
   responseStream.on("data", (chunk: Buffer) => { chunks.push(chunk); });
 
   const response = responseStream as unknown as ServerResponse;
+  (response as any).setHeader = (name: string, value: string | number | readonly string[]) => {
+    responseHeaders[name] = Array.isArray(value) ? value.join(", ") : String(value);
+    return response;
+  };
   (response as any).writeHead = (code: number, headers?: Record<string, string>) => {
     statusCode = code;
-    responseHeaders = headers ?? {};
+    responseHeaders = { ...responseHeaders, ...(headers ?? {}) };
     return response;
   };
 
@@ -505,7 +621,7 @@ async function invokeApiGetStreaming(
     origEnd();
   };
 
-  request.headers = { host: "localhost" };
+  request.headers = { host: "localhost", ...headers };
   request.method = "GET";
   request.url = url;
 

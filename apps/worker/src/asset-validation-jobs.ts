@@ -111,7 +111,7 @@ export interface SymbolPinCountCandidateRow {
   part_id: string;
   storage_key: string;
   file_format: string;
-  pin_table_confidence: number | null;
+  pin_table_confidence: number | string | null;
   pin_table_pin_count: number | null;
 }
 
@@ -213,10 +213,20 @@ async function readThreeDGeometryCandidates(pool: Pool, limit: number): Promise<
         a.storage_key AS storage_key,
         a.file_format AS file_format
       FROM assets a
+      LEFT JOIN (
+        SELECT asset_id, MAX(validated_at) AS last_validation_at
+        FROM asset_validation_records
+        WHERE validation_type = 'three_d_geometry'
+        GROUP BY asset_id
+      ) validation_cursor ON validation_cursor.asset_id = a.id
       WHERE a.asset_type = 'three_d_model'
         AND a.availability_status IN ('downloaded', 'validated')
         AND a.storage_key IS NOT NULL
-      ORDER BY a.last_updated_at ASC, a.id ASC
+      ORDER BY
+        CASE WHEN validation_cursor.last_validation_at IS NULL THEN 0 ELSE 1 END ASC,
+        validation_cursor.last_validation_at ASC,
+        a.last_updated_at ASC,
+        a.id ASC
       LIMIT $1
     `,
     [limit]
@@ -247,10 +257,20 @@ async function readFootprintGeometryCandidates(
       FROM assets a
       JOIN parts p ON p.id = a.part_id
       LEFT JOIN packages pkg ON pkg.id = p.package_id
+      LEFT JOIN (
+        SELECT asset_id, MAX(validated_at) AS last_validation_at
+        FROM asset_validation_records
+        WHERE validation_type = 'footprint_geometry'
+        GROUP BY asset_id
+      ) validation_cursor ON validation_cursor.asset_id = a.id
       WHERE a.asset_type = 'footprint'
         AND a.availability_status IN ('downloaded', 'validated')
         AND a.storage_key IS NOT NULL
-      ORDER BY a.last_updated_at ASC, a.id ASC
+      ORDER BY
+        CASE WHEN validation_cursor.last_validation_at IS NULL THEN 0 ELSE 1 END ASC,
+        validation_cursor.last_validation_at ASC,
+        a.last_updated_at ASC,
+        a.id ASC
       LIMIT $1
     `,
     [limit]
@@ -265,7 +285,7 @@ interface RawSymbolPinCountCandidateRow {
   part_id: string;
   storage_key: string;
   file_format: string;
-  pin_table_confidence: number | null;
+  pin_table_confidence: number | string | null;
   pin_table_notes: string | null;
 }
 
@@ -325,10 +345,20 @@ async function readSymbolPinCountCandidates(
         sig.notes AS pin_table_notes
       FROM assets a
       LEFT JOIN strongest_pin_signal sig ON sig.part_id = a.part_id
+      LEFT JOIN (
+        SELECT asset_id, MAX(validated_at) AS last_validation_at
+        FROM asset_validation_records
+        WHERE validation_type = 'symbol_pin_mapping'
+        GROUP BY asset_id
+      ) validation_cursor ON validation_cursor.asset_id = a.id
       WHERE a.asset_type = 'symbol'
         AND a.availability_status IN ('downloaded', 'validated')
         AND a.storage_key IS NOT NULL
-      ORDER BY a.last_updated_at ASC, a.id ASC
+      ORDER BY
+        CASE WHEN validation_cursor.last_validation_at IS NULL THEN 0 ELSE 1 END ASC,
+        validation_cursor.last_validation_at ASC,
+        a.last_updated_at ASC,
+        a.id ASC
       LIMIT $1
     `,
     [limit]
@@ -338,10 +368,23 @@ async function readSymbolPinCountCandidates(
     asset_id: row.asset_id,
     file_format: row.file_format,
     part_id: row.part_id,
-    pin_table_confidence: row.pin_table_confidence,
+    pin_table_confidence: parseNullableNumeric(row.pin_table_confidence),
     pin_table_pin_count: parsePinCountFromExtractionNotes(row.pin_table_notes),
     storage_key: row.storage_key
   }));
+}
+
+/**
+ * node-pg returns NUMERIC columns as strings in real Postgres, while pg-mem tests return
+ * numbers. Normalize at the boundary before decision code calls numeric methods.
+ */
+function parseNullableNumeric(value: number | string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
@@ -844,7 +887,7 @@ export function decideSymbolPinCountStatus(
     };
   }
 
-  const confidence = candidate.pin_table_confidence;
+  const confidence = parseNullableNumeric(candidate.pin_table_confidence);
   const datasheetPinCount = candidate.pin_table_pin_count;
   if (confidence === null) {
     return {

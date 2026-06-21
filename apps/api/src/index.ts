@@ -3984,11 +3984,14 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
       return;
     }
 
+    // Browser downloads arrive through the web /api-proxy with a short-lived Bearer
+    // token added by middleware; verify it before controlled-document gate checks.
+    const session = await readOptionalSession(request);
+
     // Check controlled-document gating before issuing the download URL or redirect.
     const gateResult = await readAssetDownloadGateFromDatabase(assetId);
 
     if (gateResult.status === "decided" && gateResult.gate.status === "gated") {
-      const session = readSessionFromRequest(request);
       const gate = gateResult.gate;
       const aclResult = await readAssetDownloadAclGrant(gate.revisionId, {
         userId: session?.sub ?? null,
@@ -4028,19 +4031,17 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
       return;
     }
 
-    const fileUrl = await getStorageClient().getDownloadUrl(result.storageKey);
-
-    if (!fileUrl) {
+    if (getStorageClient().backend !== "local") {
       sendJson(response, 503, {
         error: {
           code: "STORAGE_BACKEND_NOT_CONFIGURED",
-          message: "This file has a local storage key but the storage backend could not produce a download URL."
+          message: "This file has a local storage key but the storage backend is not available."
         }
       });
       return;
     }
 
-    sendRedirect(response, fileUrl);
+    await handleStorageFileServe(response, encodeURIComponent(result.storageKey));
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -4098,19 +4099,17 @@ async function handleAssetPreviewArtifactDownload(
       return;
     }
 
-    const fileUrl = await getStorageClient().getDownloadUrl(result.storageKey);
-
-    if (!fileUrl) {
+    if (getStorageClient().backend !== "local") {
       sendJson(response, 503, {
         error: {
           code: "STORAGE_BACKEND_NOT_CONFIGURED",
-          message: "Preview artifact has a local storage key but the storage backend could not produce a download URL."
+          message: "Preview artifact has a local storage key but the storage backend is not available."
         }
       });
       return;
     }
 
-    sendRedirect(response, fileUrl);
+    await handleStorageFileServe(response, encodeURIComponent(result.storageKey));
   } catch (error) {
     sendCatalogStoreError(response, error);
   }

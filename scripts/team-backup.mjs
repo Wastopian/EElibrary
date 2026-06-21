@@ -14,8 +14,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import { fromRepoRoot } from "./lib/paths.mjs";
 import { readEnvFile } from "./lib/env-file.mjs";
 
@@ -54,18 +57,14 @@ function parseArgs(argv) {
  * Runs a docker compose command, streaming its stdout into outputPath when provided.
  * Rejects when the command exits non-zero so a failed dump never looks like a good backup.
  */
-function runCompose(args, outputPath = null) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("docker", ["compose", "-f", COMPOSE_FILE, ...args], {
-      cwd: fromRepoRoot(),
-      shell: process.platform === "win32",
-      stdio: ["ignore", outputPath ? "pipe" : "inherit", "inherit"]
-    });
+async function runCompose(args, outputPath = null) {
+  const child = spawn("docker", ["compose", "-f", COMPOSE_FILE, ...args], {
+    cwd: fromRepoRoot(),
+    shell: process.platform === "win32",
+    stdio: ["ignore", outputPath ? "pipe" : "inherit", "inherit"]
+  });
 
-    if (outputPath) {
-      child.stdout.pipe(createWriteStream(outputPath));
-    }
-
+  const exitPromise = new Promise((resolvePromise, rejectPromise) => {
     child.on("error", rejectPromise);
     child.on("exit", (code) => {
       if (code === 0) {
@@ -75,6 +74,50 @@ function runCompose(args, outputPath = null) {
       }
     });
   });
+
+  if (!outputPath) {
+    await exitPromise;
+    return;
+  }
+
+  if (!child.stdout) {
+    throw new Error(`docker compose ${args.join(" ")} did not expose stdout for backup capture.`);
+  }
+
+  await Promise.all([
+    exitPromise,
+    pipeline(child.stdout, createWriteStream(outputPath))
+  ]);
+}
+
+/**
+ * Verifies the artifacts before retention pruning can remove older recovery points.
+ */
+async function validateBackupArtifacts(backupName) {
+  const databasePath = fromRepoRoot("backups", backupName, "database.sql");
+  const filesPath = fromRepoRoot("backups", backupName, "files.tar.gz");
+  const databaseSize = (await stat(databasePath)).size;
+  const filesSize = (await stat(filesPath)).size;
+
+  if (databaseSize === 0) {
+    throw new Error("database.sql is empty — the dump did not run. Is the stack up (docker compose -f compose.team.yaml up -d)?");
+  }
+
+  if (filesSize === 0) {
+    throw new Error("files.tar.gz is empty — stored files were not captured.");
+  }
+
+  await pipeline(
+    createReadStream(filesPath),
+    createGunzip(),
+    new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      }
+    })
+  );
+
+  return { databaseSize, filesSize };
 }
 
 /**
@@ -111,39 +154,43 @@ async function main() {
   const backupName = buildBackupName();
   const backupDir = fromRepoRoot("backups", backupName);
   await mkdir(backupDir, { recursive: true });
+  let artifactsValidated = false;
 
-  console.log(`team-backup: writing ${backupName}`);
+  try {
+    console.log(`team-backup: writing ${backupName}`);
 
-  console.log("-> [1/3] database (pg_dump)");
-  await runCompose(
-    ["exec", "-T", "postgres", "pg_dump", "--username", dbUser, "--dbname", dbName, "--clean", "--if-exists"],
-    fromRepoRoot("backups", backupName, "database.sql")
-  );
+    console.log("-> [1/3] database (pg_dump)");
+    await runCompose(
+      ["exec", "-T", "postgres", "pg_dump", "--username", dbUser, "--dbname", dbName, "--clean", "--if-exists"],
+      fromRepoRoot("backups", backupName, "database.sql")
+    );
 
-  console.log("-> [2/3] stored files (CAD assets, datasheets, bundles, project files, vendor notes)");
-  // The api container mounts all three data roots under /data, so one tar covers them.
-  // --ignore-failed-read keeps an empty optional folder from failing the whole backup.
-  await runCompose(
-    ["exec", "-T", "api", "tar", "czf", "-", "--ignore-failed-read", "-C", "/data", "storage", "project-files", "vendor-notes"],
-    fromRepoRoot("backups", backupName, "files.tar.gz")
-  );
+    console.log("-> [2/3] stored files (CAD assets, datasheets, bundles, project files, vendor notes)");
+    // The api container mounts all three data roots under /data, so one tar covers them.
+    // --ignore-failed-read keeps an empty optional folder from failing the whole backup.
+    await runCompose(
+      ["exec", "-T", "api", "tar", "czf", "-", "--ignore-failed-read", "-C", "/data", "storage", "project-files", "vendor-notes"],
+      fromRepoRoot("backups", backupName, "files.tar.gz")
+    );
 
-  console.log(`-> [3/3] keep the newest ${retain} backups`);
-  await pruneOldBackups(retain);
+    const { databaseSize, filesSize } = await validateBackupArtifacts(backupName);
+    artifactsValidated = true;
 
-  const databaseSize = (await stat(fromRepoRoot("backups", backupName, "database.sql"))).size;
-  const filesSize = (await stat(fromRepoRoot("backups", backupName, "files.tar.gz"))).size;
+    console.log(`-> [3/3] keep the newest ${retain} backups`);
+    await pruneOldBackups(retain);
 
-  if (databaseSize === 0) {
-    throw new Error("database.sql is empty — the dump did not run. Is the stack up (docker compose -f compose.team.yaml up -d)?");
+    console.log("");
+    console.log(`Backup complete: backups/${backupName}`);
+    console.log(`  database.sql  ${(databaseSize / 1024 / 1024).toFixed(1)} MB`);
+    console.log(`  files.tar.gz  ${(filesSize / 1024 / 1024).toFixed(1)} MB`);
+    console.log("");
+    console.log("Copy the backups folder somewhere off this machine (second disk, NAS, or cloud drive).");
+  } catch (error) {
+    if (!artifactsValidated) {
+      await rm(backupDir, { force: true, recursive: true });
+    }
+    throw error;
   }
-
-  console.log("");
-  console.log(`Backup complete: backups/${backupName}`);
-  console.log(`  database.sql  ${(databaseSize / 1024 / 1024).toFixed(1)} MB`);
-  console.log(`  files.tar.gz  ${(filesSize / 1024 / 1024).toFixed(1)} MB`);
-  console.log("");
-  console.log("Copy the backups folder somewhere off this machine (second disk, NAS, or cloud drive).");
 }
 
 main().catch((error) => {

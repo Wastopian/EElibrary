@@ -277,6 +277,23 @@ test("decideSymbolPinCountStatus returns needs_review when extraction confidence
 });
 
 /**
+ * Verifies real Postgres NUMERIC strings do not crash the decision formatter.
+ */
+test("decideSymbolPinCountStatus accepts Postgres NUMERIC strings for confidence", () => {
+  const decision = decideSymbolPinCountStatus(3, {
+    asset_id: "asset-sym-string-confidence",
+    file_format: "kicad_sym",
+    part_id: "part-sym-string-confidence",
+    pin_table_confidence: "0.50",
+    pin_table_pin_count: 3,
+    storage_key: "cad/sym/string-confidence.kicad_sym"
+  });
+
+  assert.equal(decision.status, "needs_review");
+  assert.match(decision.notes, /confidence = 0\.50/u);
+});
+
+/**
  * Verifies the STEP parser reads the ISO envelope, DATA entities, schema, and topology counts.
  */
 test("parseStepModel extracts envelope, schema, and topology counts from a STEP solid", () => {
@@ -480,6 +497,37 @@ test("processFootprintGeometryValidations persists one validation row and never 
       assert.equal(row.export_status, "not_exportable", `${row.id} export_status must stay untouched`);
       assert.equal(row.availability_status, "downloaded", `${row.id} availability_status must stay untouched`);
     }
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a limited daemon batch drains unvalidated assets before rechecking the same
+ * oldest asset forever.
+ */
+test("processFootprintGeometryValidations rotates limited batches by last validation time", async () => {
+  const pool = createValidationPool();
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    const storage = buildMemoryStorage({
+      "cad/fp/asset-fp-pass.kicad_mod": Buffer.from(SOT23_TWO_PAD_FOOTPRINT),
+      "cad/fp/asset-fp-fail.kicad_mod": Buffer.from(PAD_OUTSIDE_ENVELOPE_FOOTPRINT)
+    });
+
+    const first = await processFootprintGeometryValidations(1, storage, new Date("2026-05-13T12:00:00.000Z"));
+    const second = await processFootprintGeometryValidations(1, storage, new Date("2026-05-13T12:05:00.000Z"));
+
+    assert.equal(first.processed.length, 1);
+    assert.equal(second.processed.length, 1);
+    assert.notEqual(first.processed[0]?.assetId, second.processed[0]?.assetId);
+
+    const records = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM asset_validation_records WHERE validation_type = 'footprint_geometry'`
+    );
+    assert.equal(records.rows[0]?.count, "2");
   } finally {
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
