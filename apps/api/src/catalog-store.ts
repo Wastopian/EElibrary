@@ -778,14 +778,10 @@ export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilte
 
   const cadAvailability = filters.cadAvailability ?? "any";
   const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
-  const estimatedPagination = buildSearchPagination(0, filters);
-  const requestedPage = Math.max(1, filters.page ?? 1);
-  const offset = (requestedPage - 1) * estimatedPagination.pageSize;
-  const [totalCount, partIds] = await Promise.all([
-    readSearchResultCount(databasePool, searchFilter, options),
-    readSearchPartIds(databasePool, searchFilter, estimatedPagination.sort, estimatedPagination.pageSize, offset, options)
-  ]);
+  const totalCount = await readSearchResultCount(databasePool, searchFilter, options);
   const pagination = buildSearchPagination(totalCount, filters);
+  const offset = (pagination.page - 1) * pagination.pageSize;
+  const partIds = await readSearchPartIds(databasePool, searchFilter, pagination.sort, pagination.pageSize, offset, options);
 
   if (partIds.length === 0) {
     return {
