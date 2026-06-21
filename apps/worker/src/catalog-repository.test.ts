@@ -214,6 +214,89 @@ test("persistNormalizedPartRows persists supply offerings and replaces stale pri
 });
 
 /**
+ * Verifies provider metadata refreshes cannot erase already downloaded and reviewed file evidence.
+ */
+test("persistNormalizedPartRows preserves stored asset evidence during reference-only refreshes", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(
+      client,
+      buildDatasheetAssetImportPart({
+        fileHash: "sha256:stored-datasheet",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        sourceUrl: "https://provider.example/old-datasheet.pdf",
+        storageKey: "datasheets/repeat-c1.pdf"
+      })
+    );
+
+    await persistNormalizedPartRows(
+      client,
+      buildDatasheetAssetImportPart({
+        fileHash: null,
+        lastUpdatedAt: "2026-04-12T03:00:00.000Z",
+        sourceUrl: "https://provider.example/new-datasheet.pdf",
+        storageKey: null
+      })
+    );
+
+    const assetRows = await client.query<{
+      asset_state: string;
+      asset_status: string;
+      availability_status: string;
+      export_status: string;
+      file_hash: string | null;
+      preview_artifact_format: string | null;
+      preview_artifact_source: string | null;
+      preview_artifact_storage_key: string | null;
+      preview_status: string;
+      review_status: string;
+      source_url: string | null;
+      storage_key: string | null;
+      validation_status: string;
+    }>(
+      `
+        SELECT
+          asset_state,
+          asset_status,
+          availability_status,
+          export_status,
+          file_hash,
+          preview_artifact_format,
+          preview_artifact_source,
+          preview_artifact_storage_key,
+          preview_status,
+          review_status,
+          source_url,
+          storage_key,
+          validation_status
+        FROM assets
+        WHERE id = 'asset-repeat-c1-datasheet'
+      `
+    );
+
+    assert.equal(assetRows.rows.length, 1);
+    assert.equal(assetRows.rows[0]?.storage_key, "datasheets/repeat-c1.pdf");
+    assert.equal(assetRows.rows[0]?.file_hash, "sha256:stored-datasheet");
+    assert.equal(assetRows.rows[0]?.availability_status, "validated");
+    assert.equal(assetRows.rows[0]?.asset_state, "validated");
+    assert.equal(assetRows.rows[0]?.asset_status, "verified_for_export");
+    assert.equal(assetRows.rows[0]?.review_status, "approved");
+    assert.equal(assetRows.rows[0]?.export_status, "verified_for_export");
+    assert.equal(assetRows.rows[0]?.validation_status, "verified");
+    assert.equal(assetRows.rows[0]?.preview_status, "ready");
+    assert.equal(assetRows.rows[0]?.preview_artifact_storage_key, "datasheets/repeat-c1.pdf");
+    assert.equal(assetRows.rows[0]?.preview_artifact_format, "pdf");
+    assert.equal(assetRows.rows[0]?.preview_artifact_source, "source_native");
+    assert.equal(assetRows.rows[0]?.source_url, "https://provider.example/new-datasheet.pdf");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
  * Verifies non-active lifecycle parts persist lifecycle issue and risk projections for DB-backed reads.
  */
 test("persistNormalizedPartRows stores lifecycle risk projection rows for non-active parts", async () => {
@@ -758,6 +841,61 @@ function buildSupplyImportPart(
         supplierName: "Repeat Supplier",
         sourceRecordId: "source-repeat-provider-c1",
         updatedAt: lastUpdatedAt
+      }
+    ]
+  };
+}
+
+/**
+ * Builds a repeated datasheet import whose asset can be either file-backed or reference-only.
+ */
+function buildDatasheetAssetImportPart(input: {
+  fileHash: string | null;
+  lastUpdatedAt: string;
+  sourceUrl: string;
+  storageKey: string | null;
+}): NormalizedProviderPart {
+  const hasStoredFile = input.storageKey !== null && input.fileHash !== null;
+  const assetState = hasStoredFile ? "validated" : "referenced";
+  const assetStatus = hasStoredFile ? "verified_for_export" : "referenced";
+  const validationStatus = hasStoredFile ? "verified" : "not_validated";
+
+  return {
+    ...buildMinimalImportPart(input.lastUpdatedAt, 0.7),
+    assets: [
+      withCanonicalAssetTruth({
+        assetState,
+        assetStatus,
+        assetType: "datasheet",
+        fileFormat: "pdf",
+        fileHash: input.fileHash,
+        generationMethod: null,
+        generationSourceAssetId: null,
+        id: "asset-repeat-c1-datasheet",
+        lastUpdatedAt: input.lastUpdatedAt,
+        licenseMode: "metadata_only",
+        partId: "part-repeat-c1",
+        previewStatus: hasStoredFile ? "ready" : "not_available",
+        providerId: "repeat-provider",
+        provenance: "trusted_external",
+        sourceRecordId: "source-repeat-provider-c1",
+        sourceUrl: input.sourceUrl,
+        storageKey: input.storageKey,
+        validationStatus
+      })
+    ],
+    datasheetRevisions: [
+      {
+        fileAssetId: "asset-repeat-c1-datasheet",
+        id: "dsr-repeat-c1",
+        lastUpdatedAt: input.lastUpdatedAt,
+        pageCount: null,
+        parseConfidence: 0,
+        partId: "part-repeat-c1",
+        pinTableStatus: "not_available",
+        revisionDate: null,
+        revisionLabel: "Provider datasheet reference",
+        sourceRecordId: "source-repeat-provider-c1"
       }
     ]
   };
