@@ -13,13 +13,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  applyProjectDocumentExtractions,
   buildProjectFilesResponse,
+  copyProjectDocumentToSuggestedFolder,
   getCustomHardwarePrefixes,
   getProjectFilesRoot,
   resolveProjectFolderCategory,
   sanitizeProjectKey,
   sanitizeUploadFilename,
   saveProjectFile,
+  searchProjectDocumentsForWhereUsed,
   PROJECT_FOLDER_DEFINITIONS
 } from "./project-files";
 
@@ -104,6 +107,7 @@ test("buildProjectFilesResponse returns not_configured when env var is off", asy
     assert.deepEqual(response.folders, []);
     assert.equal(response.message, null);
     assert.equal(response.customHardware, null);
+    assert.equal(response.documentMap, null);
   } finally {
     if (previous === undefined) {
       delete process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
@@ -169,6 +173,325 @@ test("buildProjectFilesResponse surfaces files dropped directly into the on-disk
     const models = response.folders.find((folder) => folder.category === "models");
     assert.ok(models);
     assert.deepEqual(models.entries, []);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("buildProjectFilesResponse maps messy project folders into document sorting hints", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const messyTestPath = path.join(sandbox.root, "ALPHA", "Bob-drop", "old-tests");
+    await mkdir(messyTestPath, { recursive: true });
+    await writeFile(
+      path.join(messyTestPath, "J202-test-procedure-rev-d.md"),
+      [
+        "# J202 Test Procedure",
+        "",
+        "Revision: Rev D",
+        "Connector J202 pin 47 carries RS422_TX+.",
+        "Use with TFX-DEMO-PMC-BRINGUP only after review.",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(messyTestPath, "J202-atp-run-sheet-rev-d.txt"),
+      [
+        "Acceptance test procedure for connector J202.",
+        "Revision: Rev D",
+        "Check pin 48 before energizing the RS422_TX- pair.",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+
+    const cablePath = path.join(sandbox.root, "ALPHA", "hardware", "CAB-DEMO-PMC-JST-PWR");
+    await mkdir(cablePath, { recursive: true });
+    await writeFile(
+      path.join(cablePath, "CAB-DEMO-PMC-JST-PWR-pinout.csv"),
+      "Cable,Revision,Connector Ref,Pin,Signal\nCAB-DEMO-PMC-JST-PWR,R0.2,J202,47,RS422_TX+\n",
+      "utf8"
+    );
+
+    const unknownPath = path.join(sandbox.root, "ALPHA", "random");
+    await mkdir(unknownPath, { recursive: true });
+    await writeFile(path.join(unknownPath, "notes-from-bob.tmp"), "ask Bob", "utf8");
+
+    const networkDumpPath = path.join(sandbox.root, "ALPHA", "network-drive-dump", "rev-c");
+    await mkdir(networkDumpPath, { recursive: true });
+    await writeFile(
+      path.join(networkDumpPath, "PMC-requirements-rev-c.txt"),
+      "Requirements Rev C\nThe unit shall keep startup current below 500 mA.\nThe unit shall log brownout events during bring-up.\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(networkDumpPath, "J202-cable-pinout-rev-c.csv"),
+      "Cable,Revision,Connector Ref,Pin,Signal\nCAB-DEMO-PMC-JST-PWR,Rev C,J202,47,RS422_TX+\n",
+      "utf8"
+    );
+
+    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+
+    assert.equal(response.availability, "configured");
+    assert.ok(response.documentMap);
+    assert.equal(response.documentMap.summary.documentCount, 6);
+    assert.equal(response.documentMap.summary.folderPatternCount, 2);
+    assert.equal(response.documentMap.summary.mixedFolderCount, 1);
+    assert.equal(response.documentMap.summary.outsideStandardFolderCount, 5);
+    assert.equal(response.documentMap.summary.connectorMentionCount, 4);
+    assert.equal(response.documentMap.summary.pinMentionCount, 4);
+    assert.equal(response.documentMap.summary.moveSuggestionCount, 4);
+    assert.equal(response.documentMap.summary.unknownDocumentCount, 1);
+
+    const testFolderPattern = response.documentMap.folderPatterns.find((pattern) => pattern.folderPath === "Bob-drop/old-tests");
+    assert.ok(testFolderPattern);
+    assert.equal(testFolderPattern.dominantDocumentType, "test_procedure");
+    assert.equal(testFolderPattern.fileCount, 2);
+    assert.equal(testFolderPattern.suggestedCategory, "notes");
+    assert.equal(testFolderPattern.suggestedAction, "use_file_copy_buttons");
+    assert.deepEqual(testFolderPattern.signals.connectorRefs, ["J202"]);
+    assert.deepEqual(testFolderPattern.signals.pinRefs, ["47", "48"]);
+    assert.ok(testFolderPattern.exampleFilenames.includes("J202-test-procedure-rev-d.md"));
+
+    const mixedFolderPattern = response.documentMap.folderPatterns.find((pattern) => pattern.folderPath === "network-drive-dump/rev-c");
+    assert.ok(mixedFolderPattern);
+    assert.equal(mixedFolderPattern.suggestedAction, "sort_each_file");
+    assert.equal(mixedFolderPattern.fileCount, 2);
+    assert.equal(mixedFolderPattern.typeCounts.some((entry) => entry.documentType === "requirements"), true);
+    assert.equal(mixedFolderPattern.typeCounts.some((entry) => entry.documentType === "pinout"), true);
+
+    const testProcedure = response.documentMap.documents.find((entry) => entry.filename === "J202-test-procedure-rev-d.md");
+    assert.ok(testProcedure);
+    assert.equal(testProcedure.documentType, "test_procedure");
+    assert.equal(testProcedure.outsideStandardFolders, true);
+    assert.equal(testProcedure.suggestedCategory, "notes");
+    assert.deepEqual(testProcedure.signals.connectorRefs, ["J202"]);
+    assert.deepEqual(testProcedure.signals.pinRefs, ["47"]);
+    assert.deepEqual(testProcedure.signals.revisionLabels, ["Rev D"]);
+    assert.ok(testProcedure.signals.signalNames.includes("RS422_TX+"));
+    assert.equal(testProcedure.sortPlan.action, "move_to_standard_folder");
+    assert.equal(testProcedure.sortPlan.targetCategory, "notes");
+    assert.equal(testProcedure.sortPlan.targetRelativePath, "notes/J202-test-procedure-rev-d.md");
+
+    const pinout = response.documentMap.documents.find((entry) => entry.filename === "CAB-DEMO-PMC-JST-PWR-pinout.csv");
+    assert.ok(pinout);
+    assert.equal(pinout.documentType, "pinout");
+    assert.equal(pinout.currentCategory, "hardware");
+    assert.equal(pinout.outsideStandardFolders, false);
+    assert.deepEqual(pinout.signals.cableKeys, ["CAB-DEMO-PMC-JST-PWR"]);
+    assert.deepEqual(pinout.signals.pinRefs, ["47"]);
+    assert.equal(pinout.sortPlan.action, "leave_in_place");
+    assert.equal(pinout.sortPlan.targetRelativePath, "hardware/CAB-DEMO-PMC-JST-PWR/CAB-DEMO-PMC-JST-PWR-pinout.csv");
+
+    const unknown = response.documentMap.documents.find((entry) => entry.filename === "notes-from-bob.tmp");
+    assert.ok(unknown);
+    assert.equal(unknown.documentType, "unknown");
+    assert.equal(unknown.needsAttention, true);
+    assert.equal(unknown.sortPlan.action, "review_unknown");
+    assert.equal(unknown.sortPlan.targetRelativePath, null);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("copyProjectDocumentToSuggestedFolder copies a current sort suggestion without moving the source", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const messyTestPath = path.join(sandbox.root, "ALPHA", "Bob-drop", "old-tests");
+    await mkdir(messyTestPath, { recursive: true });
+    await writeFile(
+      path.join(messyTestPath, "J202-test-procedure-rev-d.md"),
+      "Revision: Rev D\nConnector J202 pin 47 carries RS422_TX+.\nTest procedure for TFX-DEMO-PMC-BRINGUP.\n",
+      "utf8"
+    );
+
+    const project = { id: "project-alpha", projectKey: "ALPHA" };
+    const firstCopy = await copyProjectDocumentToSuggestedFolder(project, {
+      sourceRelativePath: "Bob-drop/old-tests/J202-test-procedure-rev-d.md"
+    });
+
+    assert.equal(firstCopy.status, "ok");
+    assert.equal(firstCopy.response.sourceRelativePath, "Bob-drop/old-tests/J202-test-procedure-rev-d.md");
+    assert.equal(firstCopy.response.suggestedRelativePath, "notes/J202-test-procedure-rev-d.md");
+    assert.equal(firstCopy.response.targetRelativePath, "notes/J202-test-procedure-rev-d.md");
+    assert.equal(firstCopy.response.targetCategory, "notes");
+    assert.match(firstCopy.response.boundary, /original file was left in place/u);
+
+    const copiedContent = await readFile(path.join(sandbox.root, "ALPHA", "notes", "J202-test-procedure-rev-d.md"), "utf8");
+    const sourceContent = await readFile(path.join(messyTestPath, "J202-test-procedure-rev-d.md"), "utf8");
+    assert.equal(copiedContent, sourceContent);
+
+    const secondCopy = await copyProjectDocumentToSuggestedFolder(project, {
+      sourceRelativePath: "Bob-drop/old-tests/J202-test-procedure-rev-d.md"
+    });
+    assert.equal(secondCopy.status, "ok");
+    assert.equal(secondCopy.response.targetRelativePath, "notes/J202-test-procedure-rev-d-1.md");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("copyProjectDocumentToSuggestedFolder refuses rows without a standard-folder copy suggestion", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const hardwarePath = path.join(sandbox.root, "ALPHA", "hardware", "CAB-DEMO-PMC-JST-PWR");
+    await mkdir(hardwarePath, { recursive: true });
+    await writeFile(
+      path.join(hardwarePath, "CAB-DEMO-PMC-JST-PWR-pinout.csv"),
+      "Cable,Connector Ref,Pin,Signal\nCAB-DEMO-PMC-JST-PWR,J202,47,RS422_TX+\n",
+      "utf8"
+    );
+
+    const sortedResult = await copyProjectDocumentToSuggestedFolder(
+      { id: "project-alpha", projectKey: "ALPHA" },
+      { sourceRelativePath: "hardware/CAB-DEMO-PMC-JST-PWR/CAB-DEMO-PMC-JST-PWR-pinout.csv" }
+    );
+    assert.equal(sortedResult.status, "not_suggested");
+
+    const missingResult = await copyProjectDocumentToSuggestedFolder(
+      { id: "project-alpha", projectKey: "ALPHA" },
+      { sourceRelativePath: "../outside.txt" }
+    );
+    assert.equal(missingResult.status, "not_found");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("searchProjectDocumentsForWhereUsed finds natural connector and pin questions", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const messyTestPath = path.join(sandbox.root, "ALPHA", "Bob-drop", "old-tests");
+    await mkdir(messyTestPath, { recursive: true });
+    await writeFile(
+      path.join(messyTestPath, "J202-test-procedure-rev-d.md"),
+      "Revision: Rev D\nConnector J202 pin 47 carries RS422_TX+.\nTest procedure for TFX-DEMO-PMC-BRINGUP.\n",
+      "utf8"
+    );
+
+    const projects = [
+      {
+        createdAt: "2026-06-16T12:00:00.000Z",
+        description: "Area 1 search fixture",
+        id: "project-alpha",
+        name: "Alpha Controller",
+        owner: "hardware",
+        projectKey: "ALPHA",
+        status: "active" as const,
+        updatedAt: "2026-06-16T12:00:00.000Z"
+      }
+    ];
+
+    const connectorHits = await searchProjectDocumentsForWhereUsed(projects, "Which test procedure uses connector J202?");
+    assert.equal(connectorHits.length, 1);
+    assert.equal(connectorHits[0]?.project.projectKey, "ALPHA");
+    assert.equal(connectorHits[0]?.document.relativePath, "Bob-drop/old-tests/J202-test-procedure-rev-d.md");
+    assert.deepEqual(connectorHits[0]?.matchedLabels, ["Connector: J202", "Type: Test procedure"]);
+
+    const pinHits = await searchProjectDocumentsForWhereUsed(projects, "pin 47");
+    assert.equal(pinHits.length, 1);
+    assert.deepEqual(pinHits[0]?.matchedLabels, ["Pin: 47"]);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("extracted PDF text improves document classification and where-used source labels", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const projectFolder = path.join(sandbox.root, "ALPHA", "incoming");
+    await mkdir(projectFolder, { recursive: true });
+    await writeFile(path.join(projectFolder, "scan-001.pdf"), "%PDF mock bytes", "utf8");
+
+    const rawResponse = await buildProjectFilesResponse({
+      id: "project-alpha",
+      projectKey: "ALPHA"
+    });
+    const rawDocument = rawResponse.documentMap?.documents.find(
+      (entry) => entry.filename === "scan-001.pdf"
+    );
+    assert.ok(rawDocument);
+    assert.equal(rawDocument.documentType, "unknown");
+
+    const extractedText = [
+      "J202 acceptance test procedure",
+      "Revision: Rev D",
+      "Connector J202 pin 47 carries RS422_TX+.",
+      "Use fixture TFX-DEMO-PMC-BRINGUP."
+    ].join("\n");
+    const extractionRecord = {
+      extractedText,
+      relativePath: "incoming/scan-001.pdf",
+      sourceSegments: [
+        {
+          label: "Page 4",
+          text: extractedText,
+          textPreview: "Connector J202 pin 47 carries RS422_TX+."
+        }
+      ],
+      state: {
+        completedAt: "2026-06-18T10:01:00.000Z",
+        errorCode: null,
+        errorMessage: null,
+        estimatedWaitSeconds: null,
+        extractedCharacterCount: extractedText.length,
+        extractorVersion: "project-document-reader-v1",
+        format: "pdf" as const,
+        progressMessage: "Text ready from 1 source section.",
+        progressPercent: 100,
+        queuePosition: null,
+        searchableTextAvailable: true,
+        sourceLocations: [
+          {
+            label: "Page 4",
+            textPreview: "Connector J202 pin 47 carries RS422_TX+."
+          }
+        ],
+        sourceUnitCount: 1,
+        startedAt: "2026-06-18T10:00:00.000Z",
+        status: "succeeded" as const
+      }
+    };
+    const enrichedResponse = applyProjectDocumentExtractions(rawResponse, [
+      extractionRecord
+    ]);
+    const enrichedDocument = enrichedResponse.documentMap?.documents.find(
+      (entry) => entry.filename === "scan-001.pdf"
+    );
+
+    assert.ok(enrichedDocument);
+    assert.equal(enrichedDocument.documentType, "test_procedure");
+    assert.deepEqual(enrichedDocument.signals.connectorRefs, ["J202"]);
+    assert.deepEqual(enrichedDocument.signals.pinRefs, ["47"]);
+    assert.equal(enrichedDocument.extraction?.status, "succeeded");
+
+    const projects = [
+      {
+        createdAt: "2026-06-18T09:00:00.000Z",
+        description: "",
+        id: "project-alpha",
+        name: "Alpha",
+        owner: null,
+        projectKey: "ALPHA",
+        status: "prototype" as const,
+        updatedAt: "2026-06-18T09:00:00.000Z"
+      }
+    ];
+    const hits = await searchProjectDocumentsForWhereUsed(
+      projects,
+      "Which test procedure uses connector J202?",
+      async () => [extractionRecord]
+    );
+
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0]?.document.filename, "scan-001.pdf");
+    assert.ok(hits[0]?.matchedLabels.includes("Source: Page 4"));
   } finally {
     await sandbox.restore();
   }

@@ -18,6 +18,7 @@
     "dev:web": "node scripts/with-local-env.mjs npm run dev -w @ee-library/web",
     "dev:web:nowrap": "npm run dev -w @ee-library/web",
     "dev:worker": "node scripts/with-local-env.mjs npm run dev -w @ee-library/worker",
+    "extract:project-documents": "node scripts/with-local-env.mjs npm run extract-project-documents -w @ee-library/worker",
     "generate:drafts": "node scripts/with-local-env.mjs npm run generate:drafts -w @ee-library/worker",
     "ingest:local": "node scripts/with-local-env.mjs npm run ingest -w @ee-library/worker",
     "ingest:jlcparts": "node scripts/with-local-env.mjs npm run ingest:jlcparts -w @ee-library/worker",

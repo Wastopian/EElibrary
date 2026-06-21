@@ -9,7 +9,10 @@ import {
   buildDemoExportManifest,
   buildDemoRouteGuide,
   DEMO_BOM_IMPORTS,
+  DEMO_CABLE_ASSEMBLY_ID,
   DEMO_CIRCUIT_BLOCK_ID,
+  DEMO_FIXTURE_ID,
+  DEMO_INTERCONNECT_PIN_MAP_ROWS,
   DEMO_PROJECT_ID,
   DEMO_PROJECT_KEY,
   DEMO_REVISIONS,
@@ -34,7 +37,10 @@ test("demo project constants stay aligned with deterministic id rules", () => {
   assert.equal(DEMO_PROJECT_ID, "project-demo-pocket-mcu");
   assert.equal(DEMO_REVISIONS[0]?.id, "rev-project-demo-pocket-mcu-r0-1");
   assert.equal(DEMO_REVISIONS[1]?.id, "rev-project-demo-pocket-mcu-r0-2");
+  assert.equal(DEMO_CABLE_ASSEMBLY_ID, "cable-demo-pocket-mcu-jst-power");
+  assert.equal(DEMO_FIXTURE_ID, "fixture-demo-pocket-mcu-bringup");
   assert.ok(PART_IDS_REQUIRED.includes("part-ci-jst-ph-housing"));
+  assert.ok(PART_IDS_REQUIRED.includes("part-ci-jst-ph-mate"));
 });
 
 test("buildDemoBomImportSummary keeps weak rows separate from confirmed usage", () => {
@@ -68,6 +74,16 @@ test("buildDemoRouteGuide exposes the primary walkthrough routes", () => {
 
   assert.ok(paths.includes(`/projects/${DEMO_PROJECT_ID}`));
   assert.ok(paths.includes(`/circuit-blocks/${DEMO_CIRCUIT_BLOCK_ID}`));
+  assert.ok(paths.includes("/interconnects"));
   assert.ok(paths.some((path) => path.startsWith("/compare?parts=")));
   assert.ok(paths.some((path) => path.startsWith("/where-used?")));
+});
+
+test("demo interconnect pin map includes the J202 review row", () => {
+  const reviewRows = DEMO_INTERCONNECT_PIN_MAP_ROWS.filter((row) => row.pinNumber === "47" || row.pinNumber === "48");
+
+  assert.equal(DEMO_INTERCONNECT_PIN_MAP_ROWS.length, 24);
+  assert.equal(reviewRows.length, 2);
+  assert.equal(reviewRows.every((row) => row.confidenceScore < 0.75), true);
+  assert.equal(DEMO_INTERCONNECT_PIN_MAP_ROWS.some((row) => row.signalName === "VBAT_IN"), true);
 });

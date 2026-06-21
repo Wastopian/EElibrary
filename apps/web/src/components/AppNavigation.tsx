@@ -101,6 +101,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           match: { path: "/connector-sets", type: "path" }
         },
         {
+          description: "Track cables, fixture ports, and pin maps.",
+          href: "/interconnects",
+          label: "Interconnects",
+          match: { path: "/interconnects", type: "path" }
+        },
+        {
           description: "Quick EE math — voltage divider, RC time constant.",
           href: "/tools",
           label: "Tools",

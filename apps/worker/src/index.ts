@@ -13,6 +13,7 @@ import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
 import { processFootprintGeometryValidations, processSymbolPinCountValidations, processThreeDGeometryValidations } from "./asset-validation-jobs";
+import { processProjectDocumentExtractionJobs } from "./project-document-extraction";
 import { runProviderPartImport } from "./provider-part-import";
 import { refreshStaleSupplyOfferSnapshots } from "./supply-offer-refresh";
 import { countJlcCategories, enumerateJlcPartRequests } from "./providers/jlcparts-provider";
@@ -207,6 +208,7 @@ function buildUsageLines(): string[] {
     "npm run validate-footprints -w @ee-library/worker -- [limit]",
     "npm run validate-symbol-pin-counts -w @ee-library/worker -- [limit]",
     "npm run validate-three-d-models -w @ee-library/worker -- [limit]",
+    "npm run extract-project-documents -w @ee-library/worker -- [limit]",
     "npm run refresh-supply-offers -w @ee-library/worker -- [limit]",
     "npm run enqueue-catalog -w @ee-library/worker",
     "npm run drain-acquisition-jobs -w @ee-library/worker -- [batchSize]",
@@ -334,6 +336,28 @@ async function processQueuedProviderEnrichmentJobs(limitValue?: string): Promise
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.process_provider_enrichment_jobs", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Processes queued project PDF and Office extraction jobs.
+ */
+async function extractProjectDocuments(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 5;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+    const summary = await timeWorkerOperation(
+      "worker.extract_project_documents",
+      () => processProjectDocumentExtractionJobs(Number.isFinite(limit) ? limit : 5),
+      timings,
+      (value) => `${value.processed.length} documents`
+    );
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.extract_project_documents", error, timings);
     throw error;
   }
 }
@@ -663,6 +687,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "extract-project-documents") {
+    await extractProjectDocuments(process.argv[3]);
+    return;
+  }
+
   if (command === "refresh-supply-offers") {
     await refreshSupplyOffers(process.argv[3]);
     return;
@@ -762,6 +791,15 @@ const DEFAULT_ASSET_VALIDATION_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_ASSET_VALIDATION_BATCH_LIMIT = 5;
 
 /**
+ * DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS keeps newly discovered documents
+ * moving quickly while leaving the API request itself non-blocking.
+ */
+const DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS = 20_000;
+
+/** DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT bounds document reads per daemon tick. */
+const DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT = 3;
+
+/**
  * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, drains
  * pending export-bundle asset-byte assemblies, and refreshes stale active supply-offer snapshots.
  *
@@ -775,7 +813,7 @@ async function runDaemon(): Promise<void> {
   setThreeDPreviewConverter(threeDPreviewConverter);
 
   console.log(
-    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms, supplyOfferRefresh=${DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS}ms, threeDPreview=${DEFAULT_THREE_D_PREVIEW_INTERVAL_MS}ms${threeDPreviewConverter ? "" : " (no converter configured)"}, assetValidation=${DEFAULT_ASSET_VALIDATION_INTERVAL_MS}ms).`
+    `Worker daemon starting (workerId=${resolveWorkerId()}, heartbeat=${DEFAULT_HEARTBEAT_INTERVAL_MS}ms, bundleAssembly=${DEFAULT_BUNDLE_ASSEMBLY_INTERVAL_MS}ms, projectDocumentExtraction=${DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS}ms, supplyOfferRefresh=${DEFAULT_SUPPLY_OFFER_REFRESH_INTERVAL_MS}ms, threeDPreview=${DEFAULT_THREE_D_PREVIEW_INTERVAL_MS}ms${threeDPreviewConverter ? "" : " (no converter configured)"}, assetValidation=${DEFAULT_ASSET_VALIDATION_INTERVAL_MS}ms).`
   );
 
   await safeEmitHeartbeat({ command: "daemon" });
@@ -800,12 +838,17 @@ async function runDaemon(): Promise<void> {
     void safeRunAssetValidations();
   }, DEFAULT_ASSET_VALIDATION_INTERVAL_MS);
 
+  const projectDocumentExtractionInterval = setInterval(() => {
+    void safeProcessProjectDocumentExtractions();
+  }, DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS);
+
   // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
   // not have to wait a full interval before the worker picks it up.
   void safeProcessPendingExportBundleAssembly();
   void safeRefreshStaleSupplyOffers();
   void safeProcessPendingThreeDPreviews();
   void safeRunAssetValidations();
+  void safeProcessProjectDocumentExtractions();
 
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -814,6 +857,7 @@ async function runDaemon(): Promise<void> {
       clearInterval(supplyOfferRefreshInterval);
       clearInterval(threeDPreviewInterval);
       clearInterval(assetValidationInterval);
+      clearInterval(projectDocumentExtractionInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -822,6 +866,34 @@ async function runDaemon(): Promise<void> {
 
   console.log("Worker daemon stopping.");
   await shutdownHeartbeatPool();
+}
+
+/**
+ * Reads queued project PDF and Office files without crashing the daemon on one bad file.
+ */
+async function safeProcessProjectDocumentExtractions(): Promise<void> {
+  try {
+    const summary = await processProjectDocumentExtractionJobs(
+      DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT
+    );
+    if (summary.processed.length === 0) {
+      return;
+    }
+
+    const succeeded = summary.processed.filter((row) => row.status === "succeeded").length;
+    const failed = summary.processed.filter((row) => row.status === "failed").length;
+    const superseded = summary.processed.filter((row) => row.status === "superseded").length;
+    console.log(
+      `Worker daemon: read ${succeeded} project document${succeeded === 1 ? "" : "s"}` +
+        (failed > 0 ? `, ${failed} failed` : "") +
+        (superseded > 0 ? `, ${superseded} replaced by newer copies` : "") +
+        (summary.recoveredStaleCount > 0
+          ? `, ${summary.recoveredStaleCount} abandoned read${summary.recoveredStaleCount === 1 ? "" : "s"} retried`
+          : "")
+    );
+  } catch (error) {
+    console.error("Project document extraction tick failed.", error instanceof Error ? error.message : error);
+  }
 }
 
 /**

@@ -72,6 +72,7 @@ export const config = {
     "/compare/:path*",
     "/connector-sets/:path*",
     "/evidence/:path*",
+    "/interconnects/:path*",
     "/parts/:path*",
     "/projects/:path*",
     "/system/:path*",

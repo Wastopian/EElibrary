@@ -830,6 +830,291 @@ export interface ProjectCustomHardwareListing {
   boundary: string;
 }
 
+/** ProjectDocumentType names the first-pass document families found during a folder scan. */
+export type ProjectDocumentType =
+  | "archive"
+  | "cad_model"
+  | "cable_doc"
+  | "datasheet"
+  | "drawing"
+  | "fixture_doc"
+  | "parts_list"
+  | "pinout"
+  | "requirements"
+  | "review_note"
+  | "schematic"
+  | "test_procedure"
+  | "unknown";
+
+/** ProjectDocumentExtractionFormat names document formats handled by the background reader. */
+export type ProjectDocumentExtractionFormat = "pdf" | "docx" | "xlsx" | "pptx";
+
+/** ProjectDocumentExtractionStatus tracks background text-reading progress for one project file. */
+export type ProjectDocumentExtractionStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "unsupported";
+
+/**
+ * ProjectDocumentExtractionSourceLocation preserves a human-readable page, sheet, slide,
+ * or paragraph reference beside a short extracted-text preview.
+ */
+export interface ProjectDocumentExtractionSourceLocation {
+  /** Stable source label such as "Page 4", "Sheet: Pin Map", or "Slide 8". */
+  label: string;
+  /** Short text excerpt from that location; never the full source document. */
+  textPreview: string;
+}
+
+/**
+ * ProjectDocumentExtractionState is the user-facing background-reader state attached
+ * to one document-map row.
+ */
+export interface ProjectDocumentExtractionState {
+  /** Supported format selected from the file extension. */
+  format: ProjectDocumentExtractionFormat;
+  /** Current background-reader state. */
+  status: ProjectDocumentExtractionStatus;
+  /** Integer progress from 0 through 100. */
+  progressPercent: number;
+  /** Plain-language current activity or result message. */
+  progressMessage: string;
+  /** Approximate seconds remaining; null when no useful estimate is available. */
+  estimatedWaitSeconds: number | null;
+  /** Number of queued files ahead of this one when the latest status was read. */
+  queuePosition: number | null;
+  /** Number of pages, sheets, slides, or paragraph groups read when known. */
+  sourceUnitCount: number | null;
+  /** Number of extracted characters retained for search. */
+  extractedCharacterCount: number;
+  /** True when extracted text is available to classification and where-used search. */
+  searchableTextAvailable: boolean;
+  /** Bounded page/sheet/slide excerpts that preserve source context. */
+  sourceLocations: ProjectDocumentExtractionSourceLocation[];
+  /** Extractor implementation version for provenance and safe reprocessing. */
+  extractorVersion: string;
+  /** Time extraction started, when available. */
+  startedAt: string | null;
+  /** Time extraction completed or failed, when available. */
+  completedAt: string | null;
+  /** Stable failure code when extraction failed. */
+  errorCode: string | null;
+  /** Calm user-facing recovery detail when extraction failed. */
+  errorMessage: string | null;
+}
+
+/** ProjectDocumentExtractionStatusRecord carries one lightweight polling update. */
+export interface ProjectDocumentExtractionStatusRecord {
+  /** Relative path used to merge the state into the current document map. */
+  relativePath: string;
+  /** Current persisted reader state without full extracted document text. */
+  extraction: ProjectDocumentExtractionState;
+}
+
+/** ProjectDocumentExtractionStatusResponse is returned by the status-only polling route. */
+export interface ProjectDocumentExtractionStatusResponse {
+  /** Number of queued or running files in this project. */
+  activeCount: number;
+  /** Current supported-document states for this project. */
+  records: ProjectDocumentExtractionStatusRecord[];
+}
+
+/** ProjectDocumentSignals preserves searchable engineering clues found in filenames or text. */
+export interface ProjectDocumentSignals {
+  /** Connector references such as J202 found during the scan. */
+  connectorRefs: string[];
+  /** Pin references such as 47 or A12 found near pin wording or connector refs. */
+  pinRefs: string[];
+  /** Cable or harness identifiers found during the scan. */
+  cableKeys: string[];
+  /** Fixture, jig, or custom hardware identifiers found during the scan. */
+  fixtureKeys: string[];
+  /** Revision labels such as Rev C or R0.2 found during the scan. */
+  revisionLabels: string[];
+  /** Signal-like names such as RS422_TX+ found during the scan. */
+  signalNames: string[];
+}
+
+/** ProjectDocumentSortAction names the safe next step for one mapped document. */
+export type ProjectDocumentSortAction = "leave_in_place" | "move_to_standard_folder" | "choose_destination" | "review_unknown";
+
+/** ProjectDocumentFolderPatternAction names the safe next step for one folder trend. */
+export type ProjectDocumentFolderPatternAction =
+  | "use_file_copy_buttons"
+  | "sort_each_file"
+  | "open_folder"
+  | "leave_folder";
+
+/**
+ * ProjectDocumentSortPlan is a non-mutating cleanup suggestion. It tells an engineer
+ * where a file appears to belong without moving or copying anything automatically.
+ */
+export interface ProjectDocumentSortPlan {
+  /** Recommended cleanup action for this file. */
+  action: ProjectDocumentSortAction;
+  /** Original relative path preserved for traceability. */
+  sourceRelativePath: string;
+  /** Suggested standard folder, when the scan found one. */
+  targetCategory: ProjectFolderCategory | null;
+  /** Human-readable standard folder label, when available. */
+  targetFolderLabel: string | null;
+  /** Suggested relative destination path, when available. */
+  targetRelativePath: string | null;
+  /** Short explanation for the suggested action. */
+  reason: string;
+}
+
+/**
+ * ProjectDocumentMapEntry describes one file found under the project folder. The
+ * classification is a scan hint only; nullable fields prevent uncertain files from
+ * looking reviewed.
+ */
+export interface ProjectDocumentMapEntry {
+  /** Stable id derived from the relative path for list rendering. */
+  id: string;
+  /** Bare filename as observed on disk. */
+  filename: string;
+  /** Relative path from the project root. */
+  relativePath: string;
+  /** Relative parent folder, or "." for project-root files. */
+  parentFolder: string;
+  /** Filesystem size in bytes. */
+  sizeBytes: number;
+  /** ISO-8601 filesystem mtime, or null when unavailable. */
+  modifiedAt: string | null;
+  /** First-pass document family. */
+  documentType: ProjectDocumentType;
+  /** Confidence score for the first-pass document family. */
+  confidenceScore: number;
+  /** Short explanation for the first-pass document family. */
+  reason: string;
+  /** Standard folder category where this file appears today, if any. */
+  currentCategory: ProjectFolderCategory | null;
+  /** Suggested standard folder when the scan sees a better fit. */
+  suggestedCategory: ProjectFolderCategory | null;
+  /** True when the file is outside the standard project folders. */
+  outsideStandardFolders: boolean;
+  /** True when the row deserves human sorting or review. */
+  needsAttention: boolean;
+  /** Searchable engineering clues found in filenames or text. */
+  signals: ProjectDocumentSignals;
+  /** Non-mutating cleanup suggestion for messy project folders. */
+  sortPlan: ProjectDocumentSortPlan;
+  /** Background PDF/Office reading state, or null for formats that do not need it. */
+  extraction: ProjectDocumentExtractionState | null;
+}
+
+/** ProjectDocumentTypeCount keeps folder trend mix counts explicit and bounded. */
+export interface ProjectDocumentTypeCount {
+  /** Document family counted inside the folder. */
+  documentType: ProjectDocumentType;
+  /** Number of files with this scan family. */
+  count: number;
+}
+
+/**
+ * ProjectDocumentFolderPattern describes a repeated folder-level hint from the same
+ * bounded document scan. It is not a reviewed taxonomy; it only helps engineers decide
+ * which messy folders to open first.
+ */
+export interface ProjectDocumentFolderPattern {
+  /** Stable id derived from the folder path for list rendering. */
+  id: string;
+  /** Relative folder path from the project root. */
+  folderPath: string;
+  /** Standard folder category when the folder already lives under one. */
+  currentCategory: ProjectFolderCategory | null;
+  /** Number of mapped files grouped into this folder. */
+  fileCount: number;
+  /** True when this folder is outside the standard project folders. */
+  outsideStandardFolders: boolean;
+  /** Document family mix, sorted by count. */
+  typeCounts: ProjectDocumentTypeCount[];
+  /** Dominant document family when one exists. */
+  dominantDocumentType: ProjectDocumentType | null;
+  /** Number of files using the dominant document family. */
+  dominantTypeCount: number;
+  /** Suggested standard folder when a strong folder-level trend exists. */
+  suggestedCategory: ProjectFolderCategory | null;
+  /** Human-readable standard folder label, when available. */
+  suggestedFolderLabel: string | null;
+  /** Safe next step for this folder trend. */
+  suggestedAction: ProjectDocumentFolderPatternAction;
+  /** Confidence score for the folder-level trend, not review status. */
+  confidenceScore: number;
+  /** Short explanation for why this folder was grouped this way. */
+  reason: string;
+  /** Example filenames from this folder for quick visual confirmation. */
+  exampleFilenames: string[];
+  /** Count of files in this folder with individual move suggestions. */
+  moveSuggestionCount: number;
+  /** Count of files still classified as unknown. */
+  unknownDocumentCount: number;
+  /** Aggregated searchable engineering clues found in this folder. */
+  signals: ProjectDocumentSignals;
+}
+
+/** ProjectDocumentMapSummary keeps the messy-folder scan bounded and scannable. */
+export interface ProjectDocumentMapSummary {
+  /** Number of files returned in the map. */
+  documentCount: number;
+  /** Number of folders visited during the scan. */
+  folderCount: number;
+  /** Number of repeated folder trends found during the scan. */
+  folderPatternCount: number;
+  /** Number of folder trends whose files point to more than one likely destination. */
+  mixedFolderCount: number;
+  /** Files outside the standard project folders. */
+  outsideStandardFolderCount: number;
+  /** Files classified as unknown. */
+  unknownDocumentCount: number;
+  /** Files whose score is below the confident threshold. */
+  lowConfidenceCount: number;
+  /** Files containing at least one connector reference. */
+  connectorMentionCount: number;
+  /** Files containing at least one pin reference. */
+  pinMentionCount: number;
+  /** PDF/Office files waiting for the background reader. */
+  extractionQueuedCount: number;
+  /** PDF/Office files currently being read. */
+  extractionRunningCount: number;
+  /** PDF/Office files with searchable extracted text. */
+  extractionSucceededCount: number;
+  /** PDF/Office files whose latest extraction failed. */
+  extractionFailedCount: number;
+  /** Legacy Office files that need conversion before reading. */
+  extractionUnsupportedCount: number;
+  /** Files with a high-confidence standard-folder move suggestion. */
+  moveSuggestionCount: number;
+  /** Files skipped because scan caps were reached or the folder could not be read. */
+  skippedCount: number;
+}
+
+/**
+ * ProjectDocumentMap is the Area 1 first-pass folder scan. It maps what is on disk
+ * without claiming the files are reviewed, current, or safe to reuse.
+ */
+export interface ProjectDocumentMap {
+  /** Honesty reminder rendered above the scan results. */
+  boundary: string;
+  /** Absolute project folder scanned by the API. */
+  scanRootPath: string;
+  /** ISO-8601 timestamp for this scan. */
+  generatedAt: string;
+  /** Maximum recursion depth allowed for this scan. */
+  maxDepth: number;
+  /** Maximum files returned by this scan. */
+  maxFiles: number;
+  /** Aggregate counts for the document map. */
+  summary: ProjectDocumentMapSummary;
+  /** Folder-level trends inferred from repeated file names and document families. */
+  folderPatterns: ProjectDocumentFolderPattern[];
+  /** Bounded document rows sorted for workstation review. */
+  documents: ProjectDocumentMapEntry[];
+}
+
 /**
  * ProjectFilesAvailability tracks whether the file mirror is reachable. "configured"
  * means the API can read and write the project root; "not_configured" means the env
@@ -851,6 +1136,8 @@ export interface ProjectFilesResponse {
   folders: ProjectFolderListing[];
   /** Custom internal designs found under the custom design folder and parts-list files. */
   customHardware: ProjectCustomHardwareListing | null;
+  /** First-pass document map for messy project folders, or null when unavailable. */
+  documentMap: ProjectDocumentMap | null;
   /** Human-readable detail when availability is "error". */
   message: string | null;
 }
@@ -881,6 +1168,164 @@ export interface ProjectFileUploadResponse {
   entry: ProjectFolderEntry;
   /** Absolute path the file was written to. */
   absolutePath: string;
+}
+
+/** ProjectDocumentCopyInput names the mapped source file the engineer wants copied. */
+export interface ProjectDocumentCopyInput {
+  /** Relative path from the project root. Must match one current document-map row. */
+  sourceRelativePath: string;
+}
+
+/** ProjectDocumentExtractionRetryInput identifies one failed extraction to retry. */
+export interface ProjectDocumentExtractionRetryInput {
+  /** Relative path from the project root. Must match one current document-map row. */
+  sourceRelativePath: string;
+}
+
+/** ProjectDocumentCopyResponse is returned after a safe copy from a sort suggestion. */
+export interface ProjectDocumentCopyResponse {
+  /** Original path that was copied. */
+  sourceRelativePath: string;
+  /** Suggested path from the sort plan before collision handling. */
+  suggestedRelativePath: string;
+  /** Final relative path written after collision handling. */
+  targetRelativePath: string;
+  /** Absolute path written on the API host. */
+  targetAbsolutePath: string;
+  /** Standard folder where the copy was written. */
+  targetCategory: ProjectFolderCategory;
+  /** Final copied file entry. */
+  entry: ProjectFolderEntry;
+  /** Plain reminder that the messy source file remains in place. */
+  boundary: string;
+}
+
+/** InterconnectRecordStatus keeps cable and fixture state separate from part approval. */
+export type InterconnectRecordStatus = "draft" | "in_review" | "approved" | "restricted" | "retired";
+
+/** InterconnectProvenance records how cable or fixture knowledge entered the system. */
+export type InterconnectProvenance = "manual_internal" | "project_file" | "bom_import" | "connector_catalog";
+
+/** CableAssemblyEndLabel names the physical connector ends currently supported by the first slice. */
+export type CableAssemblyEndLabel = "A" | "B" | "C" | "D" | "other";
+
+/** InterconnectPartSummary is the compact part identity used by cable and fixture rows. */
+export interface InterconnectPartSummary {
+  /** Internal part id, or null when the connector has not been matched to a catalog part record. */
+  partId: string | null;
+  /** Manufacturer part number, or null for unmatched connector references. */
+  mpn: string | null;
+  /** Manufacturer display name, or null when identity only exists as a source reference. */
+  manufacturerName: string | null;
+}
+
+/** CableAssemblyEnd records one physical end of a cable assembly. */
+export interface CableAssemblyEnd {
+  id: string;
+  cableAssemblyId: string;
+  endLabel: CableAssemblyEndLabel;
+  connectorRef: string;
+  connectorPart: InterconnectPartSummary;
+  matePart: InterconnectPartSummary;
+  backshellPart: InterconnectPartSummary;
+  notes: string | null;
+}
+
+/** CableAssembly is one revision-scoped cable or adapter-like assembly record. */
+export interface CableAssembly {
+  id: string;
+  cableKey: string;
+  revisionLabel: string;
+  assemblyStatus: InterconnectRecordStatus;
+  projectId: string | null;
+  projectKey: string | null;
+  projectName: string | null;
+  projectRevisionId: string | null;
+  projectRevisionLabel: string | null;
+  owner: string | null;
+  description: string | null;
+  sourceDocumentRef: string | null;
+  provenance: InterconnectProvenance;
+  ends: CableAssemblyEnd[];
+  pinRowCount: number;
+  fixturePortCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** FixturePort records one J-number or other connector reference on a test fixture. */
+export interface FixturePort {
+  id: string;
+  fixtureId: string;
+  connectorRef: string;
+  connectorPart: InterconnectPartSummary;
+  matePart: InterconnectPartSummary;
+  cableAssemblyId: string | null;
+  cableKey: string | null;
+  portRole: string | null;
+  notes: string | null;
+}
+
+/** TestFixture is the revision-scoped record for bench hardware that cables plug into. */
+export interface TestFixture {
+  id: string;
+  fixtureKey: string;
+  revisionLabel: string;
+  fixtureStatus: InterconnectRecordStatus;
+  projectId: string | null;
+  projectKey: string | null;
+  projectName: string | null;
+  owner: string | null;
+  purpose: string | null;
+  sourceDocumentRef: string | null;
+  provenance: InterconnectProvenance;
+  ports: FixturePort[];
+  pinRowCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** CablePinMapRow is one searchable pin-to-signal row with provenance and confidence. */
+export interface CablePinMapRow {
+  id: string;
+  cableAssemblyId: string;
+  cableKey: string;
+  revisionLabel: string;
+  cableEndId: string | null;
+  fixturePortId: string | null;
+  endLabel: CableAssemblyEndLabel;
+  connectorRef: string;
+  pinNumber: string;
+  signalName: string;
+  wireColor: string | null;
+  wireGauge: number | null;
+  destinationConnectorRef: string | null;
+  destinationPinNumber: string | null;
+  confidenceScore: number;
+  evidenceAttachmentId: string | null;
+  sourceDocumentRef: string | null;
+  notes: string | null;
+}
+
+/** InterconnectDashboardSummary gives the workspace scannable counts without implying approval. */
+export interface InterconnectDashboardSummary {
+  cableAssemblyCount: number;
+  fixtureCount: number;
+  fixturePortCount: number;
+  pinMapRowCount: number;
+  approvedCableAssemblyCount: number;
+  restrictedRecordCount: number;
+  lowConfidencePinRowCount: number;
+}
+
+/** InterconnectDashboardResponse is the first read model for the Area 2 workspace. */
+export interface InterconnectDashboardResponse {
+  state: ProjectMemoryReadState;
+  boundary: string;
+  summary: InterconnectDashboardSummary;
+  cableAssemblies: CableAssembly[];
+  fixtures: TestFixture[];
+  pinMapRows: CablePinMapRow[];
 }
 
 /**
@@ -1215,7 +1660,7 @@ export interface ProjectOverlapPanelResponse {
 }
 
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
-export type WhereUsedTargetType = "part" | "circuit_block" | "connector_set" | "asset";
+export type WhereUsedTargetType = "part" | "circuit_block" | "connector_set" | "asset" | "document";
 
 /** WhereUsedProjectUsageRecord joins global where-used rows to part and optional circuit-role context. */
 export interface WhereUsedProjectUsageRecord {
@@ -1250,6 +1695,16 @@ export interface WhereUsedAssetExportRecord {
   fileFormat: string | null;
 }
 
+/** WhereUsedDocumentHitRecord reports one mapped project file that matched a clue search. */
+export interface WhereUsedDocumentHitRecord {
+  /** Project that owns the file mirror where the document was found. */
+  project: Project;
+  /** Current document-map row. This is a scan hint, not reviewed document metadata. */
+  document: ProjectDocumentMapEntry;
+  /** Plain labels explaining why the row matched the query. */
+  matchedLabels: string[];
+}
+
 /** WhereUsedSearchResponse powers the global where-used workspace without implying approved reuse. */
 export interface WhereUsedSearchResponse {
   state: ProjectMemoryReadState;
@@ -1262,6 +1717,7 @@ export interface WhereUsedSearchResponse {
   projectUsages: WhereUsedProjectUsageRecord[];
   circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
   assetExports: WhereUsedAssetExportRecord[];
+  documentHits: WhereUsedDocumentHitRecord[];
   boundary: string;
 }
 

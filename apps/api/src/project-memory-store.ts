@@ -11,6 +11,8 @@ import {
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
+import { searchProjectDocumentsForWhereUsed } from "./project-files";
+import { searchProjectDocumentExtractions } from "./project-document-extraction-store";
 import type {
   ApprovalBatchAction,
   ApprovalBatchCandidate,
@@ -179,6 +181,7 @@ import type {
   CircuitBlockProjectDependency,
   WhereUsedAssetExportRecord,
   WhereUsedCircuitBlockDependencyRecord,
+  WhereUsedDocumentHitRecord,
   WhereUsedProjectUsageRecord,
   WhereUsedSearchResponse,
   WhereUsedTargetType
@@ -2657,6 +2660,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports: [],
           circuitBlockDependencies: [],
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts: [],
           projectUsages: [],
@@ -2680,6 +2684,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports: [],
           circuitBlockDependencies,
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts,
           projectUsages,
@@ -2703,6 +2708,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports,
           circuitBlockDependencies: [],
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts,
           projectUsages,
@@ -2726,9 +2732,35 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports: [],
           circuitBlockDependencies,
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts,
           projectUsages,
+          query: normalizedQuery,
+          supportedTarget: true,
+          targetType: normalizedTargetType,
+          unsupportedReason: null
+        }),
+        status: "available"
+      };
+    }
+
+    if (normalizedTargetType === "document") {
+      const projectSummaries = await readProjectSummaries(databasePool);
+      const documentHits = await searchProjectDocumentsForWhereUsed(
+        projectSummaries.map((summary) => summary.project),
+        normalizedQuery,
+        searchProjectDocumentExtractions
+      );
+
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports: [],
+          circuitBlockDependencies: [],
+          documentHits,
+          matchedCircuitBlocks: [],
+          matchedParts: [],
+          projectUsages: [],
           query: normalizedQuery,
           supportedTarget: true,
           targetType: normalizedTargetType,
@@ -2746,6 +2778,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
       response: buildWhereUsedSearchResponse({
         assetExports: [],
         circuitBlockDependencies,
+        documentHits: [],
         matchedCircuitBlocks,
         matchedParts: [],
         projectUsages,
@@ -4631,18 +4664,21 @@ function buildWhereUsedSearchResponse(input: {
   projectUsages: WhereUsedProjectUsageRecord[];
   circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
   assetExports: WhereUsedAssetExportRecord[];
+  documentHits: WhereUsedDocumentHitRecord[];
 }): WhereUsedSearchResponse {
   const hasResults =
     input.matchedParts.length > 0 ||
     input.matchedCircuitBlocks.length > 0 ||
     input.projectUsages.length > 0 ||
     input.circuitBlockDependencies.length > 0 ||
-    input.assetExports.length > 0;
+    input.assetExports.length > 0 ||
+    input.documentHits.length > 0;
 
   return {
     assetExports: input.assetExports,
     boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
     circuitBlockDependencies: input.circuitBlockDependencies,
+    documentHits: input.documentHits,
     matchedCircuitBlocks: input.matchedCircuitBlocks,
     matchedParts: input.matchedParts,
     projectUsages: input.projectUsages,
@@ -6901,7 +6937,7 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
  * Normalizes global where-used target type strings while defaulting to part search.
  */
 function normalizeWhereUsedTargetType(value: string | null | undefined): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
     return value;
   }
 
