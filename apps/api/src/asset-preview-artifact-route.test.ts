@@ -9,12 +9,16 @@
  *    no artifact key/format), so the UI can render an explicit "preview pending" state,
  *  - 503 when storage is misconfigured, so the UI can render an explicit "setup_required"
  *    state instead of a silently broken viewer,
- *  - 302 redirect to the storage-backed file URL on the happy path.
+ *  - 200 streaming the storage-backed bytes on the happy path (the route serves the file
+ *    directly instead of redirecting to the admin-only /storage endpoint a browser cannot follow).
  */
 
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { Readable } from "node:stream";
+import { Readable, PassThrough } from "node:stream";
 import { setCatalogStorePoolForTests } from "./catalog-store";
 import { setStorageClientForTests } from "./file-storage";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
@@ -166,9 +170,15 @@ test("GET /assets/:assetId/preview-artifact/download returns 503 when storage ba
   }
 });
 
-test("GET /assets/:assetId/preview-artifact/download redirects to the storage URL on the happy path", async () => {
+test("GET /assets/:assetId/preview-artifact/download streams the stored artifact bytes on the happy path", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-preview-artifact-test-"));
+  await mkdir(join(tempDir, "cad", "three-d-previews", "part-ok"), { recursive: true });
+  await writeFile(join(tempDir, "cad", "three-d-previews", "part-ok", "asset-ok.glb"), "stored glb bytes", "utf8");
+
   process.env.NODE_ENV = "test";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
   setCatalogStorePoolForTests(
     createPreviewArtifactPoolStub({
       id: "asset-ok",
@@ -180,22 +190,28 @@ test("GET /assets/:assetId/preview-artifact/download redirects to the storage UR
       preview_artifact_format: "glb"
     })
   );
-  setStorageClientForTests(createStorageClientStub("https://storage.local/cad/three-d-previews/part-ok/asset-ok.glb"));
+  setStorageClientForTests(createStorageClientStub("local-storage-enabled"));
 
   try {
     const { handleRequest } = await import("./index");
-    const result = await invokeApiGet(
+    const result = await invokeApiGetStreaming(
       "/parts/part-ok/assets/asset-ok/preview-artifact/download",
       handleRequest
     );
 
-    assert.equal(result.statusCode, 302);
-    assert.equal(result.headers["Location"], "https://storage.local/cad/three-d-previews/part-ok/asset-ok.glb");
-    assert.equal(result.headers["X-EE-Operation"], "api-asset-preview-artifact-download");
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body, "stored glb bytes");
+    assert.equal(result.headers["Content-Type"], "model/gltf-binary");
   } finally {
     setCatalogStorePoolForTests(null);
     setStorageClientForTests(null);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
     restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
   }
 });
 
@@ -306,4 +322,52 @@ async function invokeApiGet(
   }
 
   return { statusCode, body: parsedBody, headers: responseHeaders };
+}
+
+/**
+ * Invokes one GET API route and captures streamed bytes, for routes that serve a file body
+ * through the response stream instead of a single JSON end() payload.
+ */
+async function invokeApiGetStreaming(
+  url: string,
+  handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>
+): Promise<{ statusCode: number; body: string; headers: Record<string, string> }> {
+  const request = Readable.from([]) as IncomingMessage;
+  const chunks: Buffer[] = [];
+  let statusCode = 0;
+  let responseHeaders: Record<string, string> = {};
+
+  const responseStream = new PassThrough();
+  responseStream.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+
+  const response = responseStream as unknown as ServerResponse;
+  (response as any).setHeader = (name: string, value: string | number | readonly string[]) => {
+    responseHeaders[name] = Array.isArray(value) ? value.join(", ") : String(value);
+    return response;
+  };
+  (response as any).writeHead = (code: number, headers?: Record<string, string>) => {
+    statusCode = code;
+    responseHeaders = { ...responseHeaders, ...(headers ?? {}) };
+    return response;
+  };
+
+  const origEnd = responseStream.end.bind(responseStream);
+  (response as any).end = (payload?: string | Buffer) => {
+    if (payload !== undefined) {
+      responseStream.write(payload);
+    }
+    origEnd();
+  };
+
+  request.headers = { host: "localhost" };
+  request.method = "GET";
+  request.url = url;
+
+  await handleRequest(request, response);
+
+  return {
+    body: Buffer.concat(chunks).toString("utf8"),
+    headers: responseHeaders,
+    statusCode
+  };
 }
