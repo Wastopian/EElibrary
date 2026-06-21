@@ -73,7 +73,7 @@ test("seedAdminUser leaves an existing admin untouched without reset", async () 
   assert.equal(client.queries.some((query) => query.text.includes("UPDATE users")), false);
 });
 
-test("seedAdminUser promotes an existing local user without rotating the password", async () => {
+test("seedAdminUser promotes an existing local user and rotates to the requested admin password", async () => {
   const client = makeFakeClient([{ email: DEFAULT_ADMIN_EMAIL, id: "existing-id", role: "user" }]);
   const result = await seedAdminUser(client, {
     email: DEFAULT_ADMIN_EMAIL,
@@ -83,11 +83,13 @@ test("seedAdminUser promotes an existing local user without rotating the passwor
   const update = client.queries.find((query) => query.text.includes("UPDATE users"));
 
   assert.equal(result.status, "updated");
-  assert.equal(result.passwordChanged, false);
+  assert.equal(result.passwordChanged, true);
   assert.equal(result.roleChanged, true);
   assert.ok(update, "expected role promotion query");
-  assert.match(update.text, /SET role = 'admin'/u);
-  assert.deepEqual(update.values, [DEFAULT_ADMIN_EMAIL]);
+  assert.match(update.text, /password_hash = \$2/u);
+  assert.match(update.text, /role = 'admin'/u);
+  assert.equal(update.values[0], DEFAULT_ADMIN_EMAIL);
+  assert.equal(compareSync(DEFAULT_ADMIN_PASSWORD, update.values[1]), true);
 });
 
 test("seedAdminUser rotates an existing admin password only when reset is explicit", async () => {

@@ -208,6 +208,41 @@ test("assembleSingleExportBundle copies each included asset's bytes to its per-b
 });
 
 /**
+ * Verifies legacy manifests with colliding archive paths fail before any copy can overwrite bytes.
+ */
+test("assembleSingleExportBundle rejects duplicate bundle paths before copying assets", async () => {
+  const manifest = buildTestManifest({
+    includedAssets: [
+      buildTestManifest().includedAssets[0]!,
+      {
+        ...buildTestManifest().includedAssets[1]!,
+        assetId: "asset-duplicate",
+        bundlePath: "C0805/footprint.kicad_mod",
+        storageKey: "assets/part-2/footprint.kicad_mod"
+      }
+    ]
+  });
+  const { storage, writes } = createMemoryStorageClient({
+    "assets/part-1/footprint.kicad_mod": Buffer.from("(first-footprint)"),
+    "assets/part-2/footprint.kicad_mod": Buffer.from("(second-footprint)")
+  });
+
+  const result = await assembleSingleExportBundle(storage, {
+    assembly_attempt_count: 0,
+    id: TEST_BUNDLE_ID,
+    manifest,
+    project_id: TEST_PROJECT_ID
+  });
+
+  assert.equal(result.status, "assembly_failed");
+  assert.equal(result.assetsCopied, 0);
+  assert.equal(result.failure?.failedAssetId, "asset-duplicate");
+  assert.equal(result.failure?.failedBundlePath, "C0805/footprint.kicad_mod");
+  assert.match(result.failure?.message ?? "", /multiple assets/u);
+  assert.deepEqual(Object.keys(writes), []);
+});
+
+/**
  * Verifies a bundle with zero included assets short-circuits to assembled without storage I/O.
  */
 test("assembleSingleExportBundle returns assembled with zero assets when nothing is included", async () => {

@@ -21,7 +21,12 @@ import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
-import { buildProjectFilesResponse, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import { applyProjectDocumentExtractions, buildProjectFilesResponse, copyProjectDocumentToSuggestedFolder, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import {
+  readProjectDocumentExtractionStatuses,
+  requeueProjectDocumentExtraction,
+  syncProjectDocumentExtractions
+} from "./project-document-extraction-store";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin } from "./auth";
 import { buildSystemHealth } from "./system-health";
@@ -29,6 +34,7 @@ import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit
 import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
+import { readInterconnectDashboardFromDatabase } from "./interconnect-store";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
@@ -97,6 +103,8 @@ import type {
   PartSearchSort,
   PartSubstitutionCreateInput,
   ProjectCreateInput,
+  ProjectDocumentCopyInput,
+  ProjectDocumentExtractionRetryInput,
   ProjectFileUploadInput,
   ProjectFromCsvInput,
   ProjectRevisionApprovalGateRequest,
@@ -206,6 +214,9 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const projectFollowUpsMatch = /^\/projects\/([^/]+)\/follow-ups$/u.exec(url.pathname);
   const projectOverlapMatch = /^\/projects\/([^/]+)\/overlap$/u.exec(url.pathname);
   const projectFilesMatch = /^\/projects\/([^/]+)\/files$/u.exec(url.pathname);
+  const projectDocumentExtractionStatusMatch = /^\/projects\/([^/]+)\/files\/document-map\/extractions$/u.exec(url.pathname);
+  const projectDocumentCopySuggestionMatch = /^\/projects\/([^/]+)\/files\/document-map\/copy-suggestion$/u.exec(url.pathname);
+  const projectDocumentExtractionRetryMatch = /^\/projects\/([^/]+)\/files\/document-map\/retry-extraction$/u.exec(url.pathname);
   const projectFileUploadMatch = /^\/projects\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
   const projectDetailMatch = /^\/projects\/([^/]+)$/u.exec(url.pathname);
   const circuitBlockPartCreateMatch = /^\/circuit-blocks\/([^/]+)\/parts$/u.exec(url.pathname);
@@ -316,6 +327,28 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProjectFollowUpsSync(response, decodeURIComponent(projectFollowUpsMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && projectDocumentCopySuggestionMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectDocumentCopySuggestion(request, response, decodeURIComponent(projectDocumentCopySuggestionMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && projectDocumentExtractionRetryMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectDocumentExtractionRetry(request, response, decodeURIComponent(projectDocumentExtractionRetryMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && projectDocumentExtractionStatusMatch?.[1]) {
+    await handleProjectDocumentExtractionStatusRead(
+      response,
+      decodeURIComponent(projectDocumentExtractionStatusMatch[1])
+    );
     return;
   }
 
@@ -613,6 +646,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (url.pathname === "/where-used") {
     await handleWhereUsedSearchRead(response, url);
+    return;
+  }
+
+  if (url.pathname === "/interconnects") {
+    await handleInterconnectDashboardRead(response);
     return;
   }
 
@@ -2509,6 +2547,247 @@ async function handleVendorFileUpload(
 }
 
 /**
+ * Handles safe document-map copy suggestions.
+ *
+ * The browser only submits the mapped source path. The API reloads the project and
+ * rebuilds the document map before copying so stale UI suggestions cannot write an
+ * arbitrary file or turn a no-longer-suggested row into a copy action.
+ */
+async function handleProjectDocumentCopySuggestion(
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string
+): Promise<void> {
+  const body = await readJsonBody<ProjectDocumentCopyInput>(request);
+  if (!body || typeof body.sourceRelativePath !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_DOCUMENT_COPY",
+        message: "Choose one mapped project file before copying it."
+      }
+    });
+    return;
+  }
+
+  try {
+    const detail = await timeRouteOperation(
+      response,
+      "project-document-copy-detail",
+      () => readProjectDetailFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (detail.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (detail.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = detail.response.project;
+    const result = await timeRouteOperation(
+      response,
+      "project-document-copy-write",
+      () => copyProjectDocumentToSuggestedFolder({ id: project.id, projectKey: project.projectKey }, body),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_FILES_NOT_CONFIGURED",
+          message: "EE_LIBRARY_PROJECT_FILES_ROOT is set to off on the API host, so document-map copies are disabled."
+        }
+      });
+      return;
+    }
+
+    if (result.status === "invalid_source") {
+      sendJson(response, 400, {
+        error: {
+          code: "INVALID_PROJECT_DOCUMENT_SOURCE",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendJson(response, 404, {
+        error: {
+          code: "PROJECT_DOCUMENT_NOT_FOUND",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "not_suggested") {
+      sendJson(response, 409, {
+        error: {
+          code: "PROJECT_DOCUMENT_COPY_NOT_SUGGESTED",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    if (result.status === "error") {
+      sendJson(response, 500, {
+        error: {
+          code: "PROJECT_DOCUMENT_COPY_FAILED",
+          message: result.message
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 201, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Requeues one failed PDF/Office extraction after validating that the file still exists
+ * in the current project document map.
+ */
+async function handleProjectDocumentExtractionRetry(
+  request: IncomingMessage,
+  response: ServerResponse,
+  projectId: string
+): Promise<void> {
+  const body = await readJsonBody<ProjectDocumentExtractionRetryInput>(request);
+  if (!body || typeof body.sourceRelativePath !== "string") {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_DOCUMENT_EXTRACTION_RETRY",
+        message: "Choose one project document before retrying."
+      }
+    });
+    return;
+  }
+
+  try {
+    const detail = await readProjectDetailFromDatabase(projectId);
+    if (detail.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (detail.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = detail.response.project;
+    const files = await buildProjectFilesResponse({ id: project.id, projectKey: project.projectKey });
+    const normalizedSourcePath = body.sourceRelativePath.replace(/\\/gu, "/");
+    const currentDocument = files.documentMap?.documents.find(
+      (document) => document.relativePath === normalizedSourcePath
+    );
+    if (!currentDocument) {
+      sendJson(response, 404, {
+        error: {
+          code: "PROJECT_DOCUMENT_NOT_FOUND",
+          message: "That file is no longer in the current project folder. Refresh and try again."
+        }
+      });
+      return;
+    }
+
+    const syncResult = await syncProjectDocumentExtractions(
+      project.id,
+      project.projectKey,
+      [currentDocument]
+    );
+    const currentExtraction = syncResult.records.find(
+      (record) => record.relativePath === normalizedSourcePath
+    )?.state;
+    if (currentExtraction?.status === "queued") {
+      sendCatalogJsonWithStatus(
+        response,
+        202,
+        {
+          message: "The changed file is queued. This page will update while the document reader works.",
+          sourceRelativePath: normalizedSourcePath,
+          status: "queued"
+        },
+        "database"
+      );
+      return;
+    }
+    if (currentExtraction?.status !== "failed") {
+      sendJson(response, 409, {
+        error: {
+          code: "PROJECT_DOCUMENT_EXTRACTION_NOT_RETRYABLE",
+          message: "Only a failed document read can be retried."
+        }
+      });
+      return;
+    }
+
+    const result = await requeueProjectDocumentExtraction(project.id, normalizedSourcePath);
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendJson(response, 409, {
+        error: {
+          code: "PROJECT_DOCUMENT_EXTRACTION_NOT_AVAILABLE",
+          message: "This file format is not available to the document reader."
+        }
+      });
+      return;
+    }
+
+    sendCatalogJsonWithStatus(
+      response,
+      202,
+      {
+        message: "Retry queued. This page will update while the document reader works.",
+        sourceRelativePath: normalizedSourcePath,
+        status: "queued"
+      },
+      "database"
+    );
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Returns project document-reader progress without rescanning the filesystem. */
+async function handleProjectDocumentExtractionStatusRead(
+  response: ServerResponse,
+  projectId: string
+): Promise<void> {
+  try {
+    const detail = await readProjectDetailFromDatabase(projectId);
+    if (detail.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (detail.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const statuses = await timeRouteOperation(
+      response,
+      "project-document-extraction-status-read",
+      () => readProjectDocumentExtractionStatuses(projectId),
+      (value) => `${value.activeCount} active:${value.records.length} tracked`
+    );
+    sendCatalogJson(response, statuses, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles read-only project file mirror requests.
  *
  * Looks up the project so we can resolve its on-disk folder by `projectKey`, then
@@ -2536,11 +2815,34 @@ async function handleProjectFilesRead(response: ServerResponse, projectId: strin
     }
 
     const project = result.response.project;
-    const filesResponse = await timeRouteOperation(
+    const rawFilesResponse = await timeRouteOperation(
       response,
       "project-files-listing",
       () => buildProjectFilesResponse({ id: project.id, projectKey: project.projectKey }),
       (value) => `${value.availability}:${value.folders.length}`
+    );
+    const extractionSync =
+      rawFilesResponse.documentMap && rawFilesResponse.availability === "configured"
+        ? await timeRouteOperation(
+            response,
+            "project-document-extraction-sync",
+            () =>
+              syncProjectDocumentExtractions(
+                project.id,
+                project.projectKey,
+                rawFilesResponse.documentMap?.documents ?? [],
+                {
+                  // A capped or partially unreadable scan cannot prove that an omitted
+                  // document was deleted, so it must not remove cached extraction rows.
+                  pruneMissing: rawFilesResponse.documentMap?.summary.skippedCount === 0
+                }
+              ),
+            (value) => `${value.queuedCount} queued:${value.records.length} tracked`
+          )
+        : { queuedCount: 0, records: [] };
+    const filesResponse = applyProjectDocumentExtractions(
+      rawFilesResponse,
+      extractionSync.records
     );
 
     sendCatalogJson(response, filesResponse, "database");
@@ -3070,6 +3372,29 @@ async function handleWhereUsedSearchRead(response: ServerResponse, url: URL): Pr
       response,
       "where-used-search-read",
       () => readWhereUsedSearchFromDatabase(targetType, query),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles interconnect dashboard reads for cable assemblies, fixtures, and pin maps.
+ */
+async function handleInterconnectDashboardRead(response: ServerResponse): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "interconnect-dashboard-read",
+      () => readInterconnectDashboardFromDatabase(),
       (value) => value.status
     );
 
@@ -4648,7 +4973,7 @@ function isCircuitBlockPartSubstitutionPolicy(value: unknown): value is CircuitB
  * Reads a global where-used target type without accepting arbitrary target labels.
  */
 function readWhereUsedTargetType(value: string | null): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
     return value;
   }
 
@@ -4878,6 +5203,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 1, pattern: /^\/projects\/([^/]+)$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/bom-imports$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/follow-ups$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/files\/document-map\/retry-extraction$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/files\/([^/]+)$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/export-bundles$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/approval-batch$/u, targetType: "project" },
@@ -5099,6 +5425,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && pathname === "/parts/facets") return "api-search-facets";
   if (method === "GET" && pathname === "/where-used") return "api-where-used-search";
   if (method === "GET" && pathname === "/audit-events") return "api-audit-events-read";
+  if (method === "GET" && pathname === "/interconnects") return "api-interconnect-dashboard";
   if (method === "GET" && pathname === "/connector-sets") return "api-connector-set-list";
   if (method === "POST" && pathname === "/connector-sets/resolve") return "api-connector-set-intent-resolve";
   if (method === "GET" && /^\/projects\/[^/]+\/approval-candidates$/u.test(pathname)) return "api-approval-batch-candidates";
@@ -5121,6 +5448,9 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups";
   if (method === "POST" && /^\/projects\/[^/]+\/follow-ups$/u.test(pathname)) return "api-project-follow-ups-sync";
   if (method === "GET" && /^\/projects\/[^/]+\/files$/u.test(pathname)) return "api-project-files";
+  if (method === "GET" && /^\/projects\/[^/]+\/files\/document-map\/extractions$/u.test(pathname)) return "api-project-document-extraction-status";
+  if (method === "POST" && /^\/projects\/[^/]+\/files\/document-map\/copy-suggestion$/u.test(pathname)) return "api-project-document-copy-suggestion";
+  if (method === "POST" && /^\/projects\/[^/]+\/files\/document-map\/retry-extraction$/u.test(pathname)) return "api-project-document-extraction-retry";
   if (method === "POST" && /^\/projects\/[^/]+\/files\/[^/]+$/u.test(pathname)) return "api-project-file-upload";
   if (method === "GET" && pathname === "/vendors") return "api-vendor-list";
   if (method === "POST" && pathname === "/vendors") return "api-vendor-create";

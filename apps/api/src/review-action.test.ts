@@ -118,6 +118,35 @@ test("createReviewInDatabase updates workflow review state without verifying out
 });
 
 /**
+ * Verifies workflow approval also advances the linked request row out of review-required.
+ */
+test("createReviewInDatabase syncs linked generation request after workflow approval", async () => {
+  const pool = createFakeReviewPool();
+
+  try {
+    setCatalogStorePoolForTests(pool as unknown as Pool);
+    const result = await createReviewInDatabase(
+      "part-a",
+      {
+        outcome: "approved",
+        targetId: "gen-a-step",
+        targetType: "generation_workflow"
+      },
+      "api-review-test",
+      "2026-04-13T00:00:00.000Z"
+    );
+
+    assert.equal(result.status, "created");
+    assert.equal(pool.workflowRow.generation_status, "approved");
+    assert.equal(pool.requestRow.request_status, "approved");
+    assert.equal(pool.requestRow.last_updated_at, "2026-04-13T00:00:00.000Z");
+    assert.equal(pool.assetRow.asset_status, "downloaded");
+  } finally {
+    setCatalogStorePoolForTests(null);
+  }
+});
+
+/**
  * Verifies review write endpoints do not pretend to work without a configured database.
  */
 test("review action endpoint requires configured database", async () => {
@@ -196,6 +225,7 @@ function createFakeReviewPool() {
   const pool = {
     assetRow: buildAssetRow(),
     promotionAuditRows: [] as any[],
+    requestRow: buildRequestRow(),
     reviewRows: [] as any[],
     validationRows: [] as any[],
     workflowRow: buildWorkflowRow(),
@@ -252,6 +282,14 @@ function createFakeReviewPool() {
             };
           }
 
+          if (text.includes("UPDATE generation_requests") && values) {
+            pool.requestRow = {
+              ...pool.requestRow,
+              last_updated_at: values[3] as string,
+              request_status: values[1] as string
+            };
+          }
+
           return { rows: [] };
         },
         release() {}
@@ -272,7 +310,7 @@ function createFakeReviewPool() {
       if (text.includes("FROM similar_part_relations")) return { rows: [] };
       if (text.includes("FROM companion_recommendations")) return { rows: [] };
       if (text.includes("FROM generation_workflows")) return { rows: [pool.workflowRow] };
-      if (text.includes("FROM generation_requests")) return { rows: [] };
+      if (text.includes("FROM generation_requests")) return { rows: [pool.requestRow] };
       if (text.includes("FROM review_records")) return { rows: pool.reviewRows };
       if (text.includes("FROM asset_validation_records")) return { rows: pool.validationRows };
       if (text.includes("FROM asset_promotion_audits")) return { rows: pool.promotionAuditRows };
@@ -374,6 +412,24 @@ function buildWorkflowRow() {
     source_asset_id: null,
     source_datasheet_revision_id: "dsr-a",
     target_asset_type: "three_d_model"
+  };
+}
+
+/**
+ * Builds the generation request linked to the reviewable workflow.
+ */
+function buildRequestRow() {
+  return {
+    id: "genreq-a-step",
+    last_updated_at: "2026-04-12T00:00:00.000Z",
+    part_id: "part-a",
+    requested_at: "2026-04-12T00:00:00.000Z",
+    requested_by: "api-review-test",
+    request_status: "review_required",
+    source_asset_id: null,
+    source_datasheet_revision_id: "dsr-a",
+    target_asset_type: "three_d_model",
+    workflow_id: "gen-a-step"
   };
 }
 

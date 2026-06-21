@@ -11,6 +11,8 @@ import {
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
+import { searchProjectDocumentsForWhereUsed } from "./project-files";
+import { searchProjectDocumentExtractions } from "./project-document-extraction-store";
 import type {
   ApprovalBatchAction,
   ApprovalBatchCandidate,
@@ -179,6 +181,7 @@ import type {
   CircuitBlockProjectDependency,
   WhereUsedAssetExportRecord,
   WhereUsedCircuitBlockDependencyRecord,
+  WhereUsedDocumentHitRecord,
   WhereUsedProjectUsageRecord,
   WhereUsedSearchResponse,
   WhereUsedTargetType
@@ -2657,6 +2660,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports: [],
           circuitBlockDependencies: [],
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts: [],
           projectUsages: [],
@@ -2680,6 +2684,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports: [],
           circuitBlockDependencies,
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts,
           projectUsages,
@@ -2703,6 +2708,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports,
           circuitBlockDependencies: [],
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts,
           projectUsages,
@@ -2726,9 +2732,35 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
         response: buildWhereUsedSearchResponse({
           assetExports: [],
           circuitBlockDependencies,
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts,
           projectUsages,
+          query: normalizedQuery,
+          supportedTarget: true,
+          targetType: normalizedTargetType,
+          unsupportedReason: null
+        }),
+        status: "available"
+      };
+    }
+
+    if (normalizedTargetType === "document") {
+      const projectSummaries = await readProjectSummaries(databasePool);
+      const documentHits = await searchProjectDocumentsForWhereUsed(
+        projectSummaries.map((summary) => summary.project),
+        normalizedQuery,
+        searchProjectDocumentExtractions
+      );
+
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports: [],
+          circuitBlockDependencies: [],
+          documentHits,
+          matchedCircuitBlocks: [],
+          matchedParts: [],
+          projectUsages: [],
           query: normalizedQuery,
           supportedTarget: true,
           targetType: normalizedTargetType,
@@ -2746,6 +2778,7 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
       response: buildWhereUsedSearchResponse({
         assetExports: [],
         circuitBlockDependencies,
+        documentHits: [],
         matchedCircuitBlocks,
         matchedParts: [],
         projectUsages,
@@ -4631,18 +4664,21 @@ function buildWhereUsedSearchResponse(input: {
   projectUsages: WhereUsedProjectUsageRecord[];
   circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
   assetExports: WhereUsedAssetExportRecord[];
+  documentHits: WhereUsedDocumentHitRecord[];
 }): WhereUsedSearchResponse {
   const hasResults =
     input.matchedParts.length > 0 ||
     input.matchedCircuitBlocks.length > 0 ||
     input.projectUsages.length > 0 ||
     input.circuitBlockDependencies.length > 0 ||
-    input.assetExports.length > 0;
+    input.assetExports.length > 0 ||
+    input.documentHits.length > 0;
 
   return {
     assetExports: input.assetExports,
     boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
     circuitBlockDependencies: input.circuitBlockDependencies,
+    documentHits: input.documentHits,
     matchedCircuitBlocks: input.matchedCircuitBlocks,
     matchedParts: input.matchedParts,
     projectUsages: input.projectUsages,
@@ -6901,7 +6937,7 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
  * Normalizes global where-used target type strings while defaulting to part search.
  */
 function normalizeWhereUsedTargetType(value: string | null | undefined): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
     return value;
   }
 
@@ -7688,15 +7724,16 @@ export async function createExportBundleInDatabase(
            WHERE a.part_id IN (${partIdPlaceholders})
              AND a.asset_type IN (${applicableTypeSql})
              AND a.export_status = 'verified_for_export'
-             AND a.storage_key IS NOT NULL`,
+             AND a.storage_key IS NOT NULL
+           ORDER BY m.name, p.mpn, a.part_id, a.asset_type, a.id`,
         partIds
       );
 
       const coveredKeys = new Set(verifiedRows.rows.map((r) => `${r.part_id}:${r.asset_type}`));
+      const usedBundlePaths = new Set<string>();
 
       for (const row of verifiedRows.rows) {
-        const ext = row.storage_key.split(".").pop() ?? "bin";
-        const bundlePath = `${row.part_mpn}/${row.asset_type}.${ext}`;
+        const bundlePath = buildIncludedAssetBundlePath(row, usedBundlePaths);
         includedAssets.push({
           assetId: row.asset_id,
           assetType: row.asset_type as AssetType,
@@ -8152,6 +8189,64 @@ function buildExportBundleStorageKey(
 ): string {
   const timestamp = generatedAtIso.replace(/[-:.TZ]/gu, "");
   return `export-bundles/${projectId}/${timestamp}-${format}-${bundleId}.json`;
+}
+
+/**
+ * Builds a stable archive path for one included asset without trusting provider/BOM text as path
+ * syntax. Manufacturer/MPN keep the extracted bundle readable; short deterministic IDs prevent
+ * second-source parts or duplicate verified assets from overwriting each other.
+ */
+function buildIncludedAssetBundlePath(row: DatabaseBundleAssetRow, usedBundlePaths: Set<string>): string {
+  const manufacturer = sanitizeBundlePathSegment(row.manufacturer_name, "mfg", 14);
+  const mpn = sanitizeBundlePathSegment(row.part_mpn, "part", 24);
+  const partSuffix = shortBundlePathHash(row.part_id);
+  const assetSuffix = shortBundlePathHash(row.asset_id);
+  const assetType = sanitizeBundlePathSegment(row.asset_type, "asset", 18);
+  const extension = extractBundleFileExtension(row.storage_key, row.file_format);
+  const directory = `${manufacturer}-${mpn}-${partSuffix}`;
+  const baseName = `${assetType}-${assetSuffix}`;
+  let candidate = `${directory}/${baseName}.${extension}`;
+  let collisionIndex = 2;
+
+  while (usedBundlePaths.has(candidate)) {
+    candidate = `${directory}/${baseName}-${collisionIndex}.${extension}`;
+    collisionIndex += 1;
+  }
+
+  usedBundlePaths.add(candidate);
+  return candidate;
+}
+
+/**
+ * Restricts archive path text to a simple ASCII segment so extracted bundles cannot contain
+ * absolute paths, parent-directory segments, or platform-specific separators.
+ */
+function sanitizeBundlePathSegment(value: string | null | undefined, fallback: string, maxLength: number): string {
+  const sanitized = (value ?? "")
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9_-]+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "")
+    .slice(0, maxLength)
+    .replace(/-$/u, "");
+
+  return sanitized.length > 0 ? sanitized : fallback;
+}
+
+/**
+ * Uses the stored filename extension when available, falling back to file_format. Both values are
+ * normalized because storage keys can come from imported metadata.
+ */
+function extractBundleFileExtension(storageKey: string, fileFormat: string): string {
+  const filename = storageKey.split(/[\\/]/u).pop() ?? "";
+  const dotIndex = filename.lastIndexOf(".");
+  const rawExtension = dotIndex >= 0 ? filename.slice(dotIndex + 1) : fileFormat;
+  return sanitizeBundlePathSegment(rawExtension, "bin", 10).toLowerCase();
+}
+
+/** Builds the short deterministic suffix used to disambiguate bundle archive paths. */
+function shortBundlePathHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 /**

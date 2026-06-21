@@ -10,7 +10,7 @@ import { fetchApiHealth, fetchWhereUsedSearch, isApiClientError } from "../../li
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CircuitBlockPartSubstitutionPolicy, ProjectPartUsageStatus, WhereUsedAssetExportRecord, WhereUsedCircuitBlockDependencyRecord, WhereUsedProjectUsageRecord, WhereUsedSearchResponse, WhereUsedTargetType } from "@ee-library/shared/types";
+import type { CircuitBlockPartSubstitutionPolicy, ProjectDocumentMapEntry, ProjectDocumentType, ProjectPartUsageStatus, WhereUsedAssetExportRecord, WhereUsedCircuitBlockDependencyRecord, WhereUsedDocumentHitRecord, WhereUsedProjectUsageRecord, WhereUsedSearchResponse, WhereUsedTargetType } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +71,7 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
             <p className="app-kicker">Where-used</p>
             <h1>Usage and dependency search</h1>
             <p className="projects-hero__lede">
-              Find every place a part, asset, or circuit block has been used. Past use does not approve a part for a new project.
+              Find every place a part, asset, circuit block, or project document clue appears. Past use does not approve a part for a new project.
             </p>
             <div className="projects-hero__status">
               <StatusBadge label="Historical context only" tone="review" />
@@ -86,8 +86,8 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
       <WorkspaceJumpNav ariaLabel="Where-used sections" items={jumpItems} />
 
       <section className="detail-section" aria-labelledby="where-used-search-heading">
-        <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Connect project memory to search where things are used." : "Find a part, circuit block, connector set, or exported asset and see where it appears."} title="Search memory" />
-        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is paused until projects are connected." : "Search by part id, part number, circuit block id, or block key."} title={pageState.status === "setup_required" ? "Projects unavailable" : "Where-used lookup"}>
+        <SectionHeading id="where-used-search-heading" index="01" subtitle={pageState.status === "setup_required" ? "Connect project memory to search where things are used." : "Find a part, circuit block, connector set, exported asset, or project document clue and see where it appears."} title="Search memory" />
+        <SectionPanel description={pageState.status === "setup_required" ? "Where-used search is paused until projects are connected." : "Search by part number, block key, connector ref, pin, cable id, fixture id, or signal."} title={pageState.status === "setup_required" ? "Projects unavailable" : "Where-used lookup"}>
           {pageState.status === "setup_required"
             ? <WhereUsedSearchSetupState state={pageState} />
             : <WhereUsedSearchForm query={pageState.status === "ready" ? pageState.response.query : pageState.query} targetType={pageState.status === "ready" ? pageState.response.targetType : pageState.targetType} />}
@@ -123,6 +123,11 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
             <span>Asset exports</span>
             <strong>Asset search returns export bundles that included the part's assets.</strong>
             <p>Results come from export bundle manifests. A part appearing in an export bundle does not mean the part is approved or that the design is released.</p>
+          </div>
+          <div>
+            <span>Project documents</span>
+            <strong>Document search reads current project file maps.</strong>
+            <p>Document hits come from filenames, small text files, and completed PDF or Office reading. They do not mean the file was reviewed or approved.</p>
           </div>
         </div>
       </section>
@@ -221,6 +226,7 @@ function WhereUsedSearchForm({ query, targetType }: { query: string; targetType:
             <option value="circuit_block">Circuit block</option>
             <option value="connector_set">Connector set</option>
             <option value="asset">Asset</option>
+            <option value="document">Project documents</option>
           </select>
         </label>
         <label className="where-used-search-form__query">
@@ -248,8 +254,8 @@ function WhereUsedSearchSetupState({ state }: { state: Extract<WhereUsedPageStat
 function WhereUsedIdleSnapshot() {
   return (
     <div className="projects-stat-grid">
-      <WhereUsedStat label="Targets" tone="info" value="4" />
-      <WhereUsedStat label="Backed now" tone="verified" value="4" />
+      <WhereUsedStat label="Targets" tone="info" value="5" />
+      <WhereUsedStat label="Backed now" tone="verified" value="5" />
       <WhereUsedStat label="Trust" tone="review" value="Bounded" />
       <WhereUsedStat label="Export" tone="neutral" value="No change" />
     </div>
@@ -281,6 +287,7 @@ function WhereUsedSnapshot({ response }: { response: WhereUsedSearchResponse }) 
       <WhereUsedStat label="Project usages" tone={response.projectUsages.length > 0 ? "verified" : "neutral"} value={response.projectUsages.length.toString()} />
       <WhereUsedStat label="Block roles" tone={response.circuitBlockDependencies.length > 0 ? "review" : "neutral"} value={response.circuitBlockDependencies.length.toString()} />
       {response.assetExports.length > 0 && <WhereUsedStat label="Export bundles" tone="verified" value={response.assetExports.length.toString()} />}
+      {response.documentHits.length > 0 && <WhereUsedStat label="Document hits" tone="info" value={response.documentHits.length.toString()} />}
     </div>
   );
 }
@@ -334,11 +341,12 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
       <WhereUsedMatchSummary response={response} />
       {response.projectUsages.length > 0
         ? <WhereUsedProjectUsageTable records={response.projectUsages} />
-        : response.assetExports.length === 0
+        : response.assetExports.length === 0 && response.documentHits.length === 0
           ? <EmptyState title="No confirmed project usage" body="This part may still appear in circuit blocks or export bundles below, even if no project BOM has used it yet." />
           : null}
       {response.circuitBlockDependencies.length > 0 ? <WhereUsedCircuitDependencyTable records={response.circuitBlockDependencies} /> : null}
       {response.assetExports.length > 0 ? <WhereUsedAssetExportTable records={response.assetExports} /> : null}
+      {response.documentHits.length > 0 ? <WhereUsedDocumentHitTable records={response.documentHits} /> : null}
     </div>
   );
 }
@@ -569,6 +577,58 @@ function WhereUsedAssetExportTable({ records }: { records: WhereUsedAssetExportR
 }
 
 /**
+ * Renders project document hits from the live file-map scan.
+ */
+function WhereUsedDocumentHitTable({ records }: { records: WhereUsedDocumentHitRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <h4 className="form-section-label">Project document hits</h4>
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>File</th>
+            <th>Type</th>
+            <th>Matched clues</th>
+            <th>Suggested place</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record) => (
+            <tr key={`${record.project.id}:${record.document.relativePath}`}>
+              <td>
+                <Link href={`/projects/${encodeURIComponent(record.project.id)}#project-files-heading`}>{record.project.projectKey}</Link>
+                <p>{record.project.name}</p>
+              </td>
+              <td>
+                <span className="ui-mono">{record.document.filename}</span>
+                <p>{record.document.relativePath}</p>
+              </td>
+              <td>
+                <span>{formatProjectDocumentType(record.document.documentType)}</span>
+                <p>{Math.round(record.document.confidenceScore * 100)}% scan confidence</p>
+              </td>
+              <td>
+                <ul className="where-used-role-list">
+                  {record.matchedLabels.slice(0, 4).map((label) => (
+                    <li key={label}>{label}</li>
+                  ))}
+                </ul>
+                <p>{formatProjectDocumentSignals(record.document)}</p>
+              </td>
+              <td>
+                <span>{formatProjectDocumentSortAction(record.document)}</span>
+                <p>{record.document.sortPlan.targetRelativePath ?? record.document.parentFolder}</p>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
  * Builds the result panel title from current page state.
  */
 function getResultsTitle(state: WhereUsedPageState): string {
@@ -635,6 +695,18 @@ function getWhereUsedQueryGuidance(targetType: WhereUsedTargetType): WhereUsedQu
     };
   }
 
+  if (targetType === "document") {
+    return {
+      examples: [
+        { label: "Connector", query: "J202" },
+        { label: "Pin", query: "pin 47" },
+        { label: "Question", query: "Which test procedure uses connector J202?" }
+      ],
+      hint: "Project document searches use the current file map and match connector refs, pins, cables, fixtures, revisions, signals, filenames, and clear document types.",
+      recovery: "Open the project files panel and check that the document map sees the folder. PDF and Office body text need a later extraction pass; filenames and small text-like files are searchable now."
+    };
+  }
+
   return {
     examples: [
       { label: "Part id", query: "part-memory-ldo" },
@@ -661,7 +733,7 @@ function buildWhereUsedExampleHref(targetType: WhereUsedTargetType, query: strin
  * Parses where-used target types while defaulting invalid query strings to part.
  */
 function readWhereUsedTargetType(value: string): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
     return value;
   }
 
@@ -675,7 +747,48 @@ function formatWhereUsedTargetType(targetType: WhereUsedTargetType): string {
   if (targetType === "circuit_block") return "Circuit block";
   if (targetType === "connector_set") return "Connector set (with mates)";
   if (targetType === "asset") return "Asset (export bundles)";
+  if (targetType === "document") return "Project documents";
   return "Part";
+}
+
+/** Formats a document-map type in the global where-used table. */
+function formatProjectDocumentType(documentType: ProjectDocumentType): string {
+  return {
+    archive: "Archive",
+    cad_model: "CAD model",
+    cable_doc: "Cable or harness doc",
+    datasheet: "Datasheet or app note",
+    drawing: "Drawing",
+    fixture_doc: "Fixture doc",
+    parts_list: "Parts list",
+    pinout: "Connector pinout",
+    requirements: "Requirements",
+    review_note: "Review note",
+    schematic: "Schematic or board file",
+    test_procedure: "Test procedure",
+    unknown: "Needs sorting"
+  }[documentType];
+}
+
+/** Formats one document-map row's most useful clue groups. */
+function formatProjectDocumentSignals(entry: ProjectDocumentMapEntry): string {
+  const groups = [
+    entry.signals.connectorRefs.length > 0 ? `Connectors ${entry.signals.connectorRefs.slice(0, 3).join(", ")}` : null,
+    entry.signals.pinRefs.length > 0 ? `Pins ${entry.signals.pinRefs.slice(0, 3).join(", ")}` : null,
+    entry.signals.cableKeys.length > 0 ? `Cables ${entry.signals.cableKeys.slice(0, 2).join(", ")}` : null,
+    entry.signals.fixtureKeys.length > 0 ? `Fixtures ${entry.signals.fixtureKeys.slice(0, 2).join(", ")}` : null,
+    entry.signals.signalNames.length > 0 ? `Signals ${entry.signals.signalNames.slice(0, 2).join(", ")}` : null
+  ].filter((value): value is string => Boolean(value));
+
+  return groups.length > 0 ? groups.join(" - ") : "No stored clues";
+}
+
+/** Formats the current file-map suggestion without implying that a move has happened. */
+function formatProjectDocumentSortAction(entry: ProjectDocumentMapEntry): string {
+  if (entry.sortPlan.action === "leave_in_place") return "Leave here";
+  if (entry.sortPlan.action === "move_to_standard_folder") return `Copy to ${entry.sortPlan.targetFolderLabel ?? "standard folder"}`;
+  if (entry.sortPlan.action === "review_unknown") return "Open and sort";
+  return "Choose folder";
 }
 
 /**

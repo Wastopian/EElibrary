@@ -1,6 +1,6 @@
 # EE Library — active backlog
 
-**Updated:** 2026-06-12
+**Updated:** 2026-06-17
 
 ## Where things live
 
@@ -29,6 +29,31 @@ Use this list to close gaps between **documented intent**, **`IMPLEMENTATION_STA
 ---
 
 ## Active work
+
+### 0A. Interconnect memory wedge - Area 2 focus
+
+Area 2 is the current product wedge: make EE Library the durable memory for connector sets, cable assemblies, adapters, test fixtures, pin maps, and bench hardware. The existing connector intelligence is the foundation, but cables, adapters, fixtures, and pin-level usage need to become first-class instead of living only in notes, project files, or BOM rows.
+
+**Operator bar for everything in this section:** an engineer can answer "what mates to this?", "which cable or fixture uses this connector?", "which pins carry this signal?", "what changed between cable revisions?", and "is this physical setup safe to reuse?" without reading a folder tree or asking the person who built it.
+
+1. **Interconnect workspace** - _Started 2026-06-16:_ `/interconnects` now renders a read-only desktop workspace for cable assemblies, test fixtures, fixture ports, and pin maps with setup recovery and explicit safety/approval boundaries. Keep `/connector-sets` working as the focused connector catalog. Remaining: filters, create/edit flows, adapter-specific affordances, and richer revision compare.
+2. **First-class cable and fixture records** - _Started 2026-06-16:_ migration `044_interconnect_memory.sql` adds persisted cable assemblies, assembly ends, pin-map rows, test fixtures, and fixture ports. API contracts and `GET /interconnects` preserve project, revision, source, owner, status, and provenance without implying approval or physical validation. Remaining: write APIs, importers, and review history.
+3. **Pin map viewer** - _Started 2026-06-16:_ `/interconnects` ships a dense table for cable / end / connector ref / pin / signal / wire / destination / confidence / source / notes. Remaining filters should include connector ref, MPN, cable id, fixture id, pin number, signal, project, and revision.
+4. **Where-used expansion** - Extend `/where-used` beyond part, circuit block, connector set, and asset lookups so it can search connector refs such as `J202`, cable numbers, fixture ids, pin numbers, and signal names.
+5. **Demo interconnect seed** - _Started 2026-06-16:_ `seed:demo-project` now includes a deterministic `CAB-DEMO-PMC-JST-PWR` cable, `TFX-DEMO-PMC-BRINGUP` fixture, `J201` / `J202` ports, a 24-row pin map, and a low-confidence J202 pin 47/48 review item. Remaining: extend where-used so those connector refs and signals are searchable outside `/interconnects`.
+6. **Inventory later, not first** - Do not start with stockroom inventory. Add serialized physical cable/fixture tracking only after the structured cable and fixture knowledge loop is useful.
+
+### 0B. Engineering document intake - Area 1 focus
+
+Area 1 is the messy-folder/documentation wedge: help engineering teams walk up to network-drive dumps, SharePoint exports, old project folders, and "ask Bob" notes without reorganizing everything first. The first product win is a calm map of procedures, drawings, cable docs, requirements, pinouts, revision notes, and unknown files with connector/cable/fixture clues preserved.
+
+**Operator bar for everything in this section:** an engineer can answer "which files mention J202?", "which docs look like pinouts or test procedures?", "what is sitting outside the standard folders?", "which documents mention this cable, fixture, pin, or signal?", and eventually "what changed between revision C and revision D?" without reading the whole folder tree by hand.
+
+1. **Document map** - _Started 2026-06-16; folder trends added 2026-06-17:_ the project file mirror now returns a bounded recursive document map for messy folders. It classifies small text-like files and filenames into procedures, pinouts, cable docs, fixture docs, requirements, drawings, schematics, CAD models, parts lists, archives, review notes, and unknowns; extracts connector refs, pin refs, cable ids, fixture ids, revisions, and signal names; and clearly labels outside-folder, low-confidence, and unknown rows. It also groups repeated parent folders into plain folder trends, so dumps like `Bob-drop/old-tests` can show "mostly test procedures" while mixed network-drive folders tell the engineer to sort the file rows below. The UI shows the map on project detail with explicit copy that the scan is a hint, not a review or approval.
+2. **Messy-folder sorting flow** - _Started 2026-06-16:_ every mapped file now carries a sorting plan: leave it where it is, copy it to a standard folder, choose a folder, or open and sort unknowns. Plans preserve the source path and show a deterministic destination such as `notes/J202-test-procedure-rev-d.md`; the first admin-gated action safely copies the current suggestion into the standard folder with collision suffixing while leaving the messy original in place. Remaining: add previewed move/archive actions only after copy history and conflict review are visible.
+3. **Document text extraction** - _Started 2026-06-18; efficiency hardening added 2026-06-19:_ PDF, DOCX, XLSX, and PPTX files are read by a background worker with cached fingerprints, bounded extracted text, page/paragraph/sheet/slide source locations, queue position, progress, approximate wait, automatic page refresh, clear failure states, and an admin retry action. Project scans now synchronize supported documents with one bulk database insert instead of one write per file. The worker reads two files at a time, caps retained text/provenance at 2 million characters, protects newer file fingerprints from stale workers, and automatically retries running jobs abandoned for 15 minutes. Opening a project queues only new or changed files; completed text improves document classification and connector/cable/fixture/pin/revision/signal search without claiming review or approval. Legacy DOC/XLS/PPT files receive conversion guidance instead of a false success. The test matrix covers mixed modern formats, all visible states, corrupt/textless/missing/changed/oversized/unsafe files, large payloads, concurrency, stale races, and crash recovery. Remaining: scanned-image OCR, drawing-native extraction, and richer table structure where plain text loses engineering relationships.
+4. **Revision compare** - Next: compare two mapped documents or revisions and summarize changed connector refs, pins, cables, fixtures, requirements language, and procedure steps without claiming review status.
+5. **Where-used bridge** - _Started 2026-06-16:_ `/where-used` now includes a Project documents target that searches the current project file maps for connector refs, pin numbers, cable ids, fixture ids, signals, revisions, filenames, and clear document types, then links hits back to the owning project's files section. Remaining: fold Area 2 interconnect rows into the same plain search path and add persisted indexing only after live file-map search proves the workflow.
 
 ### 0. Team deployment and operations — current top priority
 

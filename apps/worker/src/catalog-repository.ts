@@ -1174,25 +1174,67 @@ async function persistAsset(client: PoolClient, asset: Asset): Promise<void> {
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         asset_type = EXCLUDED.asset_type,
-        file_format = EXCLUDED.file_format,
-        storage_key = EXCLUDED.storage_key,
-        file_hash = EXCLUDED.file_hash,
+        file_format = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.file_format
+          ELSE EXCLUDED.file_format
+        END,
+        storage_key = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.storage_key
+          ELSE EXCLUDED.storage_key
+        END,
+        file_hash = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.file_hash
+          ELSE EXCLUDED.file_hash
+        END,
         provider_id = EXCLUDED.provider_id,
         license_mode = EXCLUDED.license_mode,
         provenance = EXCLUDED.provenance,
-        availability_status = EXCLUDED.availability_status,
-        review_status = EXCLUDED.review_status,
-        export_status = EXCLUDED.export_status,
-        asset_status = EXCLUDED.asset_status,
+        availability_status = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.availability_status
+          ELSE EXCLUDED.availability_status
+        END,
+        review_status = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.review_status
+          ELSE EXCLUDED.review_status
+        END,
+        export_status = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.export_status
+          ELSE EXCLUDED.export_status
+        END,
+        asset_status = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.asset_status
+          ELSE EXCLUDED.asset_status
+        END,
         generation_method = EXCLUDED.generation_method,
         generation_source_asset_id = EXCLUDED.generation_source_asset_id,
-        validation_status = EXCLUDED.validation_status,
-        preview_status = EXCLUDED.preview_status,
-        preview_artifact_storage_key = EXCLUDED.preview_artifact_storage_key,
-        preview_artifact_format = EXCLUDED.preview_artifact_format,
-        preview_artifact_generated_at = EXCLUDED.preview_artifact_generated_at,
-        preview_artifact_source = EXCLUDED.preview_artifact_source,
-        asset_state = EXCLUDED.asset_state,
+        validation_status = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.validation_status
+          ELSE EXCLUDED.validation_status
+        END,
+        preview_status = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.preview_status
+          ELSE EXCLUDED.preview_status
+        END,
+        preview_artifact_storage_key = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.preview_artifact_storage_key
+          ELSE EXCLUDED.preview_artifact_storage_key
+        END,
+        preview_artifact_format = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.preview_artifact_format
+          ELSE EXCLUDED.preview_artifact_format
+        END,
+        preview_artifact_generated_at = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.preview_artifact_generated_at
+          ELSE EXCLUDED.preview_artifact_generated_at
+        END,
+        preview_artifact_source = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.preview_artifact_source
+          ELSE EXCLUDED.preview_artifact_source
+        END,
+        asset_state = CASE
+          WHEN EXCLUDED.storage_key IS NULL AND EXCLUDED.file_hash IS NULL AND (assets.storage_key IS NOT NULL OR assets.file_hash IS NOT NULL) THEN assets.asset_state
+          ELSE EXCLUDED.asset_state
+        END,
         source_url = EXCLUDED.source_url,
         source_record_id = EXCLUDED.source_record_id,
         last_updated_at = EXCLUDED.last_updated_at

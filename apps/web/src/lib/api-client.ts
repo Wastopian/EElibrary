@@ -70,6 +70,7 @@ import type {
   GenerationRequestCreateInput,
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
+  InterconnectDashboardResponse,
   PartDetailResponse,
   PartSubstitutionCreateInput,
   PartSubstitutionCreateResponse,
@@ -84,6 +85,10 @@ import type {
   ProjectBomHealthResponse,
   ProjectCreateInput,
   ProjectCreateResponse,
+  ProjectDocumentCopyInput,
+  ProjectDocumentCopyResponse,
+  ProjectDocumentExtractionRetryInput,
+  ProjectDocumentExtractionStatusResponse,
   ProjectEvidenceAttachmentsResponse,
   ProjectFilesResponse,
   ProjectFileUploadInput,
@@ -447,6 +452,73 @@ export async function uploadProjectFile(
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectFileUploadResponse>;
+  return envelope.data;
+}
+
+/**
+ * Copies one current document-map suggestion into its standard folder.
+ *
+ * The API owns the destination decision and collision suffixing; the browser only
+ * submits the mapped source path so the file map stays the source of truth.
+ */
+export async function copyProjectDocumentSuggestion(
+  projectId: string,
+  input: ProjectDocumentCopyInput
+): Promise<ProjectDocumentCopyResponse> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/document-map/copy-suggestion`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project document copy");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectDocumentCopyResponse>;
+  return envelope.data;
+}
+
+/**
+ * Requeues one failed project PDF/Office extraction.
+ */
+export async function retryProjectDocumentExtraction(
+  projectId: string,
+  input: ProjectDocumentExtractionRetryInput
+): Promise<void> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/document-map/retry-extraction`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project document extraction retry");
+  }
+}
+
+/** Fetches lightweight project document-reader states without rescanning project files. */
+export async function fetchProjectDocumentExtractionStatuses(
+  projectId: string
+): Promise<ProjectDocumentExtractionStatusResponse> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/document-map/extractions`),
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project document extraction status");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectDocumentExtractionStatusResponse>;
   return envelope.data;
 }
 
@@ -1877,6 +1949,14 @@ export async function fetchConnectorSetCatalog(filters: { connectorClass?: Conne
   if (filters.query && filters.query.trim().length > 0) params.set("q", filters.query.trim());
   const path = params.size > 0 ? `/connector-sets?${params.toString()}` : "/connector-sets";
   const envelope = await fetchApi<ApiEnvelope<ConnectorSetListResponse>>(path);
+  return envelope.data;
+}
+
+/**
+ * Fetches the interconnect dashboard for cable assemblies, fixtures, and pin maps.
+ */
+export async function fetchInterconnectDashboard(): Promise<InterconnectDashboardResponse> {
+  const envelope = await fetchApi<ApiEnvelope<InterconnectDashboardResponse>>("/interconnects");
   return envelope.data;
 }
 

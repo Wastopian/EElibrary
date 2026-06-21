@@ -63,6 +63,7 @@ test("where-used page renders empty state for supported asset target with no res
           assetExports: [],
           boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
           circuitBlockDependencies: [],
+          documentHits: [],
           matchedCircuitBlocks: [],
           matchedParts: [],
           projectUsages: [],
@@ -86,6 +87,44 @@ test("where-used page renders empty state for supported asset target with no res
     assert.match(html, /asset-memory-ldo-symbol-ref/u);
     assert.match(html, /Search the owning part id or MPN instead of an asset id/u);
     assert.doesNotMatch(html, /Main LDO/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies document target renders project-file hits without implying document approval.
+ */
+test("where-used page renders project document clue hits", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse(buildHealthResponse("connected"));
+    }
+
+    if (url.pathname === "/where-used") {
+      assert.equal(url.searchParams.get("targetType"), "document");
+      assert.equal(url.searchParams.get("q"), "Which test procedure uses connector J202?");
+
+      return jsonResponse({
+        data: buildDocumentWhereUsedResponse(),
+        source: "database"
+      });
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderWhereUsedPage({ q: "Which test procedure uses connector J202?", targetType: "document" });
+
+    assert.match(html, /Project document hits/u);
+    assert.match(html, /Document hits/u);
+    assert.match(html, /J202-test-procedure-rev-d\.md/u);
+    assert.match(html, /Connector: J202/u);
+    assert.match(html, /Type: Test procedure/u);
+    assert.match(html, /Copy to Notes/u);
+    assert.match(html, /href="\/projects\/project-alpha#project-files-heading"/u);
+    assert.match(html, /Document search reads current project file maps/u);
   } finally {
     restoreFetch();
   }
@@ -136,7 +175,7 @@ test("where-used page renders setup state without backed-target counts when data
     assert.match(html, /DB_NOT_CONFIGURED/u);
     assert.match(html, /Backed now/u);
     assert.match(html, />DB</u);
-    assert.doesNotMatch(html, /<strong>4<\/strong>/u);
+    assert.doesNotMatch(html, /<strong>5<\/strong>/u);
     assert.doesNotMatch(html, /Query examples/u);
   } finally {
     restoreFetch();
@@ -229,6 +268,7 @@ function buildWhereUsedResponse(): WhereUsedSearchResponse {
         part: buildPartSummary()
       }
     ],
+    documentHits: [],
     matchedCircuitBlocks: [],
     matchedParts: [buildPartSummary()],
     projectUsages: [
@@ -300,6 +340,72 @@ function buildWhereUsedResponse(): WhereUsedSearchResponse {
     state: "available",
     supportedTarget: true,
     targetType: "part",
+    unsupportedReason: null
+  };
+}
+
+/**
+ * Builds a where-used fixture with one document-map clue hit.
+ */
+function buildDocumentWhereUsedResponse(): WhereUsedSearchResponse {
+  return {
+    assetExports: [],
+    boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
+    circuitBlockDependencies: [],
+    documentHits: [
+      {
+        document: {
+          confidenceScore: 0.93,
+          currentCategory: null,
+          documentType: "test_procedure",
+          extraction: null,
+          filename: "J202-test-procedure-rev-d.md",
+          id: "doc-bob-drop-old-tests-j202-test-procedure-rev-d-md",
+          modifiedAt: "2026-06-16T13:08:00.000Z",
+          needsAttention: true,
+          outsideStandardFolders: true,
+          parentFolder: "Bob-drop/old-tests",
+          reason: "Test procedure wording found.",
+          relativePath: "Bob-drop/old-tests/J202-test-procedure-rev-d.md",
+          signals: {
+            cableKeys: ["CAB-DEMO-PMC-JST-PWR"],
+            connectorRefs: ["J202"],
+            fixtureKeys: ["TFX-DEMO-PMC-BRINGUP"],
+            pinRefs: ["47"],
+            revisionLabels: ["Rev D"],
+            signalNames: ["RS422_TX+"]
+          },
+          sizeBytes: 228,
+          sortPlan: {
+            action: "move_to_standard_folder",
+            reason: "This looks like a test procedure outside the standard folders.",
+            sourceRelativePath: "Bob-drop/old-tests/J202-test-procedure-rev-d.md",
+            targetCategory: "notes",
+            targetFolderLabel: "Notes",
+            targetRelativePath: "notes/J202-test-procedure-rev-d.md"
+          },
+          suggestedCategory: "notes"
+        },
+        matchedLabels: ["Connector: J202", "Type: Test procedure"],
+        project: {
+          createdAt: "2026-06-16T12:00:00.000Z",
+          description: "Demo project",
+          id: "project-alpha",
+          name: "Alpha Controller",
+          owner: "hardware",
+          projectKey: "ALPHA",
+          status: "active",
+          updatedAt: "2026-06-16T12:00:00.000Z"
+        }
+      }
+    ],
+    matchedCircuitBlocks: [],
+    matchedParts: [],
+    projectUsages: [],
+    query: "Which test procedure uses connector J202?",
+    state: "available",
+    supportedTarget: true,
+    targetType: "document",
     unsupportedReason: null
   };
 }

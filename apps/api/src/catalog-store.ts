@@ -778,14 +778,10 @@ export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilte
 
   const cadAvailability = filters.cadAvailability ?? "any";
   const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
-  const estimatedPagination = buildSearchPagination(0, filters);
-  const requestedPage = Math.max(1, filters.page ?? 1);
-  const offset = (requestedPage - 1) * estimatedPagination.pageSize;
-  const [totalCount, partIds] = await Promise.all([
-    readSearchResultCount(databasePool, searchFilter, options),
-    readSearchPartIds(databasePool, searchFilter, estimatedPagination.sort, estimatedPagination.pageSize, offset, options)
-  ]);
+  const totalCount = await readSearchResultCount(databasePool, searchFilter, options);
   const pagination = buildSearchPagination(totalCount, filters);
+  const offset = (pagination.page - 1) * pagination.pageSize;
+  const partIds = await readSearchPartIds(databasePool, searchFilter, pagination.sort, pagination.pageSize, offset, options);
 
   if (partIds.length === 0) {
     return {
@@ -1370,6 +1366,20 @@ export async function createReviewInDatabase(partId: string, input: ReviewAction
         `,
         [updatedWorkflow.id, updatedWorkflow.generationStatus, partId]
       );
+
+      const linkedRequestStatus = linkedRequestStatusForWorkflow(updatedWorkflow.generationStatus);
+
+      if (linkedRequestStatus) {
+        await client.query(
+          `
+            UPDATE generation_requests
+            SET request_status = $2,
+                last_updated_at = $4
+            WHERE workflow_id = $1 AND part_id = $3
+          `,
+          [updatedWorkflow.id, linkedRequestStatus, partId, reviewedAt]
+        );
+      }
     }
 
     await client.query("COMMIT");
@@ -2667,6 +2677,17 @@ function buildReviewRecord(id: string, partId: string, input: ReviewActionInput,
     reviewer,
     targetType: input.targetType
   };
+}
+
+/**
+ * Mirrors terminal workflow review outcomes onto linked requests so request badges do not stay stale.
+ */
+function linkedRequestStatusForWorkflow(status: GenerationWorkflow["generationStatus"]): GenerationRequest["requestStatus"] | null {
+  if (status === "approved" || status === "failed" || status === "review_required") {
+    return status;
+  }
+
+  return null;
 }
 
 /**

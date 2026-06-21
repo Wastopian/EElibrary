@@ -76,6 +76,17 @@ test("app navigation marks the tools route as active inside the calculator works
 });
 
 /**
+ * Verifies the interconnect workspace is visible and active for cable and fixture memory.
+ */
+test("app navigation marks the interconnect route as active inside the interconnect workspace", () => {
+  const html = renderToStaticMarkup(<AppNavigationLinks currentLocation="/interconnects" />);
+
+  assert.match(html, /Interconnects/u);
+  assert.match(html, /Track cables, fixture ports, and pin maps/u);
+  assert.match(html, /aria-current="page"/u);
+});
+
+/**
  * Verifies the system-health workspace is visible and active for operational review.
  */
 test("app navigation marks the system route as active inside system health pages", () => {

@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { newDb } from "pg-mem";
+import { DataType, newDb } from "pg-mem";
 
 /** hardeningMigrationSql loads the real incremental migration under test. */
 const hardeningMigrationSql = readFileSync(new URL("../../../infra/postgres/003_connector_intelligence_hardening.sql", import.meta.url), "utf8");
@@ -99,6 +99,15 @@ const partEngineeringRecordDraftsMigrationSql = readFileSync(new URL("../../../i
 
 /** scaleIndexesMigrationSql loads the migration 043 pure-additive scale indexes under test. */
 const scaleIndexesMigrationSql = readFileSync(new URL("../../../infra/postgres/043_scale_indexes.sql", import.meta.url), "utf8");
+
+/** interconnectMemoryMigrationSql loads the migration 044 cable and fixture memory tables under test. */
+const interconnectMemoryMigrationSql = readFileSync(new URL("../../../infra/postgres/044_interconnect_memory.sql", import.meta.url), "utf8");
+
+/** projectDocumentExtractionsMigrationSql loads migration 045 background document reading under test. */
+const projectDocumentExtractionsMigrationSql = readFileSync(new URL("../../../infra/postgres/045_project_document_extractions.sql", import.meta.url), "utf8");
+
+/** projectDocumentExtractionPreviewsMigrationSql loads migration 046 compact source previews under test. */
+const projectDocumentExtractionPreviewsMigrationSql = readFileSync(new URL("../../../infra/postgres/046_project_document_extraction_previews.sql", import.meta.url), "utf8");
 
 /** exportBundlesMigrationSql loads the original migration 028 export-bundles table under test. */
 const exportBundlesMigrationSql = readFileSync(new URL("../../../infra/postgres/028_export_bundles.sql", import.meta.url), "utf8");
@@ -1182,6 +1191,185 @@ test("supply offering migration preserves provider-specific commercial snapshots
   assert.match(supplyOfferingsMigrationSql, /source_record_id TEXT NOT NULL REFERENCES source_records/u);
   assert.match(supplyOfferSupplierRefreshMigrationSql, /ADD COLUMN IF NOT EXISTS supplier_name/u);
   assert.match(supplyOfferSupplierRefreshMigrationSql, /ADD COLUMN IF NOT EXISTS retired_at/u);
+});
+
+/**
+ * Verifies interconnect memory tables preserve cable, fixture, and pin-map relationships.
+ */
+test("interconnect memory migration preserves cable and fixture pin context", () => {
+  const db = newDb();
+
+  db.public.none(oldPhase2SchemaSql);
+  db.public.none(`
+    INSERT INTO manufacturers (id, name, aliases, website) VALUES ('mfr-interconnect', 'Interconnect Test', '{}', NULL);
+    INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES ('pkg-d38999', 'D38999 shell', 55, NULL, NULL, NULL, NULL);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES ('part-interconnect-j202', 'D38999-J202', 'mfr-interconnect', 'Connector', 'active', 'pkg-d38999', 0.8);
+  `);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, projectHealthEvidenceMigrationSql);
+  applyMigrationSql(db, interconnectMemoryMigrationSql);
+
+  db.public.none(`
+    INSERT INTO projects (id, project_key, name, description, status)
+    VALUES ('project-interconnect', 'INT', 'Interconnect Rig', '', 'active');
+
+    INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference)
+    VALUES ('revision-interconnect-d', 'project-interconnect', 'D', 'released', 'Cable drawing D');
+
+    INSERT INTO cable_assemblies (id, cable_key, revision_label, assembly_status, project_id, project_revision_id, owner, description, source_document_ref, provenance)
+    VALUES ('cable-int-100', 'INT-100', 'D', 'approved', 'project-interconnect', 'revision-interconnect-d', 'Dana', 'Fixture cable.', 'INT-100-D.xlsx', 'project_file');
+
+    INSERT INTO cable_assembly_ends (id, cable_assembly_id, end_label, connector_ref, connector_part_id, mate_part_id, backshell_part_id, notes)
+    VALUES ('cable-int-100-a', 'cable-int-100', 'A', 'J202', 'part-interconnect-j202', NULL, NULL, 'Fixture end.');
+
+    INSERT INTO test_fixtures (id, fixture_key, revision_label, fixture_status, project_id, owner, purpose, source_document_ref, provenance)
+    VALUES ('fixture-int-1', 'TFX-INT', 'B', 'restricted', 'project-interconnect', 'Morgan', 'DUT fixture.', 'TFX-INT-B.pdf', 'project_file');
+
+    INSERT INTO fixture_ports (id, fixture_id, connector_ref, connector_part_id, mate_part_id, cable_assembly_id, port_role, notes)
+    VALUES ('fixture-int-1-j202', 'fixture-int-1', 'J202', 'part-interconnect-j202', NULL, 'cable-int-100', 'DUT port', 'Rev D only.');
+
+    INSERT INTO cable_pin_map_rows (id, cable_assembly_id, cable_end_id, fixture_port_id, end_label, connector_ref, pin_number, signal_name, wire_color, wire_gauge, destination_connector_ref, destination_pin_number, confidence_score, source_document_ref, notes)
+    VALUES ('pin-int-j202-47', 'cable-int-100', 'cable-int-100-a', 'fixture-int-1-j202', 'A', 'J202', '47', 'RS422_TX+', 'blue', 24, 'J201', '12', 0.62, 'INT-100-D.xlsx', 'Copied from cable spreadsheet.');
+  `);
+
+  const joined = db.public.one(`
+    SELECT
+      ca.cable_key,
+      tf.fixture_key,
+      fp.connector_ref,
+      cpm.pin_number,
+      cpm.signal_name,
+      cpm.confidence_score::float AS confidence_score
+    FROM cable_pin_map_rows cpm
+    JOIN cable_assemblies ca ON ca.id = cpm.cable_assembly_id
+    JOIN fixture_ports fp ON fp.id = cpm.fixture_port_id
+    JOIN test_fixtures tf ON tf.id = fp.fixture_id
+    WHERE cpm.id = 'pin-int-j202-47'
+  `);
+
+  assert.deepEqual(joined, {
+    cable_key: "INT-100",
+    confidence_score: 0.62,
+    connector_ref: "J202",
+    fixture_key: "TFX-INT",
+    pin_number: "47",
+    signal_name: "RS422_TX+",
+  });
+  assert.throws(
+    () => db.public.none(`INSERT INTO cable_assemblies (id, cable_key, revision_label, assembly_status) VALUES ('cable-bad-status', 'BAD', 'A', 'maybe')`),
+    /check/i
+  );
+  assert.throws(
+    () => db.public.none(`INSERT INTO cable_pin_map_rows (id, cable_assembly_id, end_label, connector_ref, pin_number, signal_name, confidence_score) VALUES ('pin-bad-score', 'cable-int-100', 'A', 'J202', '1', 'BAD', 1.5)`),
+    /check/i
+  );
+  assert.match(interconnectMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS cable_assemblies/u);
+  assert.match(interconnectMemoryMigrationSql, /CREATE TABLE IF NOT EXISTS cable_pin_map_rows/u);
+  assert.match(interconnectMemoryMigrationSql, /CREATE INDEX IF NOT EXISTS idx_cable_pin_map_rows_pin/u);
+});
+
+test("project document extraction migration preserves progress and source locations", () => {
+  const db = newDb();
+
+  /**
+   * pg-mem omits PostgreSQL's jsonb_typeof function, so register the behavior
+   * needed by the production migration's JSON-array constraint.
+   */
+  db.public.registerFunction({
+    args: [DataType.jsonb],
+    implementation: (value: unknown) => {
+      if (Array.isArray(value)) return "array";
+      if (value === null) return "null";
+      return typeof value === "object" ? "object" : typeof value;
+    },
+    name: "jsonb_typeof",
+    returns: DataType.text
+  });
+
+  db.public.none(oldPhase2SchemaSql);
+  applyMigrationSql(db, projectBomMemoryMigrationSql);
+  applyMigrationSql(db, projectDocumentExtractionsMigrationSql);
+  applyMigrationSql(db, projectDocumentExtractionPreviewsMigrationSql);
+
+  db.public.none(`
+    INSERT INTO projects (id, project_key, name, description, status)
+    VALUES ('project-docs', 'DOCS', 'Document Project', '', 'active');
+
+    INSERT INTO project_document_extractions (
+      id,
+      project_id,
+      project_key,
+      relative_path,
+      filename,
+      extraction_format,
+      extractor_version,
+      source_fingerprint,
+      source_size_bytes,
+      extraction_status,
+      progress_percent,
+      progress_message,
+      source_unit_count,
+      extracted_character_count,
+      extracted_text,
+      extracted_segments
+    )
+    VALUES (
+      'extract-docs-j202',
+      'project-docs',
+      'DOCS',
+      'old/J202-test.pdf',
+      'J202-test.pdf',
+      'pdf',
+      'project-document-reader-v1',
+      'fingerprint-j202',
+      2048,
+      'succeeded',
+      100,
+      'Text ready from 2 source sections.',
+      2,
+      41,
+      'Connector J202 pin 47 carries RS422_TX+.',
+      '[{"label":"Page 2","text":"Connector J202 pin 47 carries RS422_TX+.","textPreview":"Connector J202 pin 47 carries RS422_TX+."}]'::jsonb
+    );
+  `);
+
+  const extraction = db.public.one(`
+    SELECT
+      extraction_format,
+      extraction_status,
+      progress_percent,
+      source_unit_count,
+      extracted_segments->0->>'label' AS source_label,
+      source_location_previews
+    FROM project_document_extractions
+    WHERE id = 'extract-docs-j202'
+  `);
+
+  assert.deepEqual(extraction, {
+    extraction_format: "pdf",
+    extraction_status: "succeeded",
+    progress_percent: 100,
+    source_label: "Page 2",
+    source_location_previews: [],
+    source_unit_count: 2
+  });
+  assert.throws(
+    () => db.public.none(`
+      INSERT INTO project_document_extractions (
+        id, project_id, project_key, relative_path, filename, extraction_format,
+        extractor_version, source_fingerprint, source_size_bytes, extraction_status,
+        progress_percent, progress_message
+      )
+      VALUES (
+        'extract-bad-progress', 'project-docs', 'DOCS', 'bad.pdf', 'bad.pdf', 'pdf',
+        'v1', 'bad', 1, 'queued', 101, 'bad'
+      )
+    `),
+    /check/i
+  );
+  assert.match(projectDocumentExtractionsMigrationSql, /CREATE TABLE IF NOT EXISTS project_document_extractions/u);
+  assert.match(projectDocumentExtractionsMigrationSql, /idx_project_document_extractions_queue/u);
+  assert.match(projectDocumentExtractionPreviewsMigrationSql, /source_location_previews/u);
 });
 
 /**

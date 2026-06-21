@@ -16,12 +16,26 @@
  * did not.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
-import { uploadProjectFile } from "../lib/api-client";
-import { isApiClientError } from "../lib/api-client";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  copyProjectDocumentSuggestion,
+  fetchProjectDocumentExtractionStatuses,
+  fetchProjectFiles,
+  isApiClientError,
+  retryProjectDocumentExtraction,
+  uploadProjectFile
+} from "../lib/api-client";
 import type {
   ProjectCustomHardwareListing,
   ProjectCustomHardwareRecord,
+  ProjectDocumentExtractionStatusRecord,
+  ProjectDocumentExtractionState,
+  ProjectDocumentFolderPattern,
+  ProjectDocumentFolderPatternAction,
+  ProjectDocumentMap,
+  ProjectDocumentMapEntry,
+  ProjectDocumentSignals,
+  ProjectDocumentType,
   ProjectFilesResponse,
   ProjectFolderCategory,
   ProjectFolderListing
@@ -52,12 +66,74 @@ const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 /** STALE_PROJECT_FILE_DAYS flags projects whose file evidence has not moved in roughly two quarters. */
 const STALE_PROJECT_FILE_DAYS = 180;
 
+/** DOCUMENT_EXTRACTION_POLL_INTERVAL_MS keeps background-reader progress visible. */
+const DOCUMENT_EXTRACTION_POLL_INTERVAL_MS = 4_000;
+
+/** ProjectDocumentMapScope names the current document-map review filter. */
+type ProjectDocumentMapScope = "all" | "attention" | "ready" | "reader_issues";
+
 /**
  * Top-level panel. Decides which honest state to render and otherwise lays out one
  * category card per folder, plus the inline notes composer.
  */
 export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) {
-  if (!files) {
+  const [liveFiles, setLiveFiles] = useState<ProjectFilesResponse | null>(files);
+  const activeExtractionCount =
+    (liveFiles?.documentMap?.summary.extractionQueuedCount ?? 0) +
+    (liveFiles?.documentMap?.summary.extractionRunningCount ?? 0);
+  const hasActiveExtractions = activeExtractionCount > 0;
+
+  useEffect(() => {
+    setLiveFiles(files);
+  }, [files]);
+
+  useEffect(() => {
+    if (!hasActiveExtractions) {
+      return;
+    }
+
+    let cancelled = false;
+    let timeout: number | null = null;
+
+    const poll = async (): Promise<void> => {
+      try {
+        const statusResponse = await fetchProjectDocumentExtractionStatuses(projectId);
+        if (cancelled) {
+          return;
+        }
+
+        if (statusResponse.activeCount === 0) {
+          const refreshedFiles = await fetchProjectFiles(projectId);
+          if (!cancelled && refreshedFiles) {
+            setLiveFiles(refreshedFiles);
+          }
+          return;
+        }
+
+        setLiveFiles((current) =>
+          current ? mergeProjectDocumentExtractionStatuses(current, statusResponse.records) : current
+        );
+      } catch {
+        // Keep the last known state. The next scheduled status read can recover from a
+        // transient API interruption without launching overlapping requests.
+      }
+
+      if (!cancelled) {
+        timeout = window.setTimeout(() => void poll(), DOCUMENT_EXTRACTION_POLL_INTERVAL_MS);
+      }
+    };
+
+    timeout = window.setTimeout(() => void poll(), DOCUMENT_EXTRACTION_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (timeout !== null) {
+        window.clearTimeout(timeout);
+      }
+    };
+  }, [hasActiveExtractions, projectId]);
+
+  if (!liveFiles) {
     return (
       <div className="project-files-panel project-files-panel--unavailable">
         <p>The file mirror is paused because the project record is unavailable.</p>
@@ -65,7 +141,7 @@ export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) 
     );
   }
 
-  if (files.availability === "not_configured") {
+  if (liveFiles.availability === "not_configured") {
     return (
       <div className="project-files-panel project-files-panel--unavailable">
         <p>
@@ -76,11 +152,11 @@ export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) 
     );
   }
 
-  if (files.availability === "error") {
+  if (liveFiles.availability === "error") {
     return (
       <div className="project-files-panel project-files-panel--unavailable">
         <p>The project file mirror could not read the folder on disk.</p>
-        {files.message ? <p className="muted-copy">{files.message}</p> : null}
+        {liveFiles.message ? <p className="muted-copy">{liveFiles.message}</p> : null}
       </div>
     );
   }
@@ -90,38 +166,785 @@ export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) 
       <p className="project-files-panel__hint muted-copy">
         Drop files into the folders below on the API host, or upload through this page.
         Notes can be typed in directly.
-        {files.rootPath ? (
+        {liveFiles.rootPath ? (
           <>
             {" "}
-            Project root: <code className="ui-mono">{files.rootPath}</code>
+            Project root: <code className="ui-mono">{liveFiles.rootPath}</code>
           </>
         ) : null}
       </p>
 
-      <ProjectReentryBrief files={files} />
+      <ProjectReentryBrief files={liveFiles} />
 
-      <ProjectPdfReviewPanel files={files} projectId={projectId} />
+      {liveFiles.documentMap ? <ProjectDocumentMapPanel documentMap={liveFiles.documentMap} projectId={projectId} /> : null}
+
+      <ProjectPdfReviewPanel files={liveFiles} projectId={projectId} />
 
       <div className="project-files-panel__grid">
-        {files.folders.map((folder) => (
+        {liveFiles.folders.map((folder) => (
           <ProjectFilesCategory folder={folder} key={folder.category} projectId={projectId} />
         ))}
       </div>
 
-      {files.customHardware ? <CustomDesignsPanel listing={files.customHardware} /> : null}
+      {liveFiles.customHardware ? <CustomDesignsPanel listing={liveFiles.customHardware} /> : null}
     </div>
   );
 }
 
+/**
+ * Merges lightweight reader states without replacing filesystem classifications or
+ * source excerpts that were already loaded by the full project-files response.
+ */
+export function mergeProjectDocumentExtractionStatuses(
+  files: ProjectFilesResponse,
+  records: ProjectDocumentExtractionStatusRecord[]
+): ProjectFilesResponse {
+  if (!files.documentMap || records.length === 0) {
+    return files;
+  }
+
+  const recordsByPath = new Map(
+    records.map((record) => [record.relativePath.replace(/\\/gu, "/"), record.extraction])
+  );
+  const documents = files.documentMap.documents.map((document) => {
+    const nextExtraction = recordsByPath.get(document.relativePath);
+    if (!nextExtraction) {
+      return document;
+    }
+
+    // The polling route intentionally omits extracted source excerpts. Keep excerpts
+    // already loaded for completed files until the final full refresh is available.
+    const extraction =
+      document.extraction?.status === "succeeded" && nextExtraction.status === "succeeded"
+        ? document.extraction
+        : nextExtraction;
+    return { ...document, extraction };
+  });
+  const summary = {
+    ...files.documentMap.summary,
+    extractionFailedCount: documents.filter(
+      (document) => document.extraction?.status === "failed"
+    ).length,
+    extractionQueuedCount: documents.filter(
+      (document) => document.extraction?.status === "queued"
+    ).length,
+    extractionRunningCount: documents.filter(
+      (document) => document.extraction?.status === "running"
+    ).length,
+    extractionSucceededCount: documents.filter(
+      (document) => document.extraction?.status === "succeeded"
+    ).length,
+    extractionUnsupportedCount: documents.filter(
+      (document) => document.extraction?.status === "unsupported"
+    ).length
+  };
+
+  return {
+    ...files,
+    documentMap: {
+      ...files.documentMap,
+      documents,
+      summary
+    }
+  };
+}
+
+/**
+ * Project document map. The rows come from a bounded folder scan, so every classification
+ * is shown as a sorting hint rather than a reviewed document record.
+ */
+function ProjectDocumentMapPanel({ documentMap, projectId }: { documentMap: ProjectDocumentMap; projectId: string }) {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<ProjectDocumentMapScope>("all");
+  const attentionCount = documentMap.documents.filter((entry) => entry.needsAttention).length;
+  const readyCount = documentMap.documents.filter(
+    (entry) => !entry.needsAttention && entry.extraction?.status !== "failed" && entry.extraction?.status !== "unsupported"
+  ).length;
+  const readerIssueCount = documentMap.documents.filter(
+    (entry) => entry.extraction?.status === "failed" || entry.extraction?.status === "unsupported"
+  ).length;
+  const filteredDocuments = useMemo(
+    () => filterProjectDocumentMapEntries(documentMap.documents, query, scope),
+    [documentMap.documents, query, scope]
+  );
+  const visibleDocuments = filteredDocuments.slice(0, 16);
+
+  return (
+    <section className="custom-hardware-panel" aria-label="Document map">
+      <header className="custom-hardware-panel__header">
+        <div>
+          <h3>Document map</h3>
+          <p className="muted-copy">{documentMap.boundary}</p>
+          <p className="muted-copy">
+            Scanned <code className="ui-mono">{documentMap.scanRootPath}</code>
+          </p>
+        </div>
+        <p className="custom-hardware-panel__path">
+          <span className="project-files-card__path-label">Scan limit</span>
+          <span>{documentMap.maxFiles} files / {documentMap.maxDepth} folders deep</span>
+        </p>
+      </header>
+
+      <div className="custom-hardware-panel__summary" aria-label="Document map summary">
+        <DocumentMapSummaryItem label="Files mapped" value={documentMap.summary.documentCount} />
+        <DocumentMapSummaryItem label="Needs sorting" value={attentionCount} />
+        <DocumentMapSummaryItem label="Move suggestions" value={documentMap.summary.moveSuggestionCount} />
+        <DocumentMapSummaryItem label="Folder trends" value={documentMap.summary.folderPatternCount} />
+        <DocumentMapSummaryItem label="Mixed folders" value={documentMap.summary.mixedFolderCount} />
+        <DocumentMapSummaryItem label="Outside folders" value={documentMap.summary.outsideStandardFolderCount} />
+        <DocumentMapSummaryItem label="Connector refs" value={documentMap.summary.connectorMentionCount} />
+        <DocumentMapSummaryItem label="Pin refs" value={documentMap.summary.pinMentionCount} />
+        <DocumentMapSummaryItem label="Text ready" value={documentMap.summary.extractionSucceededCount} />
+        <DocumentMapSummaryItem
+          label="Reading"
+          value={documentMap.summary.extractionQueuedCount + documentMap.summary.extractionRunningCount}
+        />
+        <DocumentMapSummaryItem label="Read failed" value={documentMap.summary.extractionFailedCount} />
+        <DocumentMapSummaryItem label="Unknown" value={documentMap.summary.unknownDocumentCount} />
+      </div>
+
+      <ProjectDocumentExtractionNotice documentMap={documentMap} />
+
+      {documentMap.documents.length > 0 ? (
+        <div className="document-map-toolbar">
+          <label className="document-map-toolbar__search">
+            <span>Find a mapped file</span>
+            <input
+              autoComplete="off"
+              name="document-map-search"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filename, folder, J202, pin 47, cable, fixture, or signal"
+              type="search"
+              value={query}
+            />
+          </label>
+          <div className="document-map-toolbar__scope" role="group" aria-label="Filter document map">
+            <DocumentMapScopeButton
+              active={scope === "all"}
+              count={documentMap.documents.length}
+              label="All"
+              onClick={() => setScope("all")}
+            />
+            <DocumentMapScopeButton
+              active={scope === "attention"}
+              count={attentionCount}
+              label="Needs sorting"
+              onClick={() => setScope("attention")}
+            />
+            <DocumentMapScopeButton
+              active={scope === "ready"}
+              count={readyCount}
+              label="Looks sorted"
+              onClick={() => setScope("ready")}
+            />
+            <DocumentMapScopeButton
+              active={scope === "reader_issues"}
+              count={readerIssueCount}
+              label="Read issues"
+              onClick={() => setScope("reader_issues")}
+            />
+          </div>
+          <p className="document-map-toolbar__count muted-copy" aria-live="polite">
+            {filteredDocuments.length} of {documentMap.documents.length} file
+            {documentMap.documents.length === 1 ? "" : "s"}
+          </p>
+        </div>
+      ) : null}
+
+      {documentMap.folderPatterns.length > 0 ? <ProjectDocumentFolderPatternTable patterns={documentMap.folderPatterns} /> : null}
+
+      {documentMap.documents.length === 0 ? (
+        <p className="project-files-card__empty muted-copy">No files found under this project folder yet.</p>
+      ) : filteredDocuments.length === 0 ? (
+        <p className="document-map-toolbar__empty">
+          No mapped files match this search and filter. Try another clue or choose All.
+        </p>
+      ) : (
+        <div className="projects-table-wrap custom-hardware-panel__table-wrap">
+          <table className="projects-table custom-hardware-panel__table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Type</th>
+                <th>Clues</th>
+                <th>Document reader</th>
+                <th>Suggested place</th>
+                <th>Attention</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleDocuments.map((entry) => (
+                <ProjectDocumentMapRow entry={entry} key={entry.id} projectId={projectId} />
+              ))}
+            </tbody>
+          </table>
+          {filteredDocuments.length > visibleDocuments.length ? (
+            <p className="muted-copy">
+              Showing the first {visibleDocuments.length} of {filteredDocuments.length} matching files.
+            </p>
+          ) : null}
+        </div>
+      )}
+
+      {documentMap.summary.skippedCount > 0 ? (
+        <p className="muted-copy">
+          {documentMap.summary.skippedCount} file or folder{documentMap.summary.skippedCount === 1 ? "" : "s"} skipped by scan limits.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/** Renders one document-map scope button with a stable count. */
+function DocumentMapScopeButton({
+  active,
+  count,
+  label,
+  onClick
+}: {
+  active: boolean;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button aria-pressed={active} onClick={onClick} type="button">
+      {label} <span>{count}</span>
+    </button>
+  );
+}
+
+/** Filters mapped documents by review scope and common engineering lookup text. */
+export function filterProjectDocumentMapEntries(
+  documents: ProjectDocumentMapEntry[],
+  rawQuery: string,
+  scope: ProjectDocumentMapScope
+): ProjectDocumentMapEntry[] {
+  const query = rawQuery.trim().toLowerCase();
+
+  return documents.filter((entry) => {
+    const scopeMatches =
+      scope === "all" ||
+      (scope === "attention" && entry.needsAttention) ||
+      (scope === "ready" &&
+        !entry.needsAttention &&
+        entry.extraction?.status !== "failed" &&
+        entry.extraction?.status !== "unsupported") ||
+      (scope === "reader_issues" &&
+        (entry.extraction?.status === "failed" || entry.extraction?.status === "unsupported"));
+    if (!scopeMatches) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+
+    const searchText = [
+      entry.filename,
+      entry.relativePath,
+      entry.parentFolder,
+      entry.documentType,
+      formatProjectDocumentType(entry.documentType),
+      entry.reason,
+      entry.sortPlan.reason,
+      entry.sortPlan.targetRelativePath ?? "",
+      ...entry.signals.connectorRefs,
+      ...entry.signals.pinRefs,
+      ...entry.signals.pinRefs.map((pinRef) => `pin ${pinRef}`),
+      ...entry.signals.cableKeys,
+      ...entry.signals.fixtureKeys,
+      ...entry.signals.revisionLabels,
+      ...entry.signals.signalNames
+    ].join(" ").toLowerCase();
+    return searchText.includes(query);
+  });
+}
+
+/** Explains automatic PDF/Office reading and surfaces active or failed work. */
+function ProjectDocumentExtractionNotice({ documentMap }: { documentMap: ProjectDocumentMap }) {
+  const activeCount =
+    documentMap.summary.extractionQueuedCount + documentMap.summary.extractionRunningCount;
+  const failedCount = documentMap.summary.extractionFailedCount;
+  const unsupportedCount = documentMap.summary.extractionUnsupportedCount;
+
+  if (activeCount === 0 && failedCount === 0 && unsupportedCount === 0) {
+    return null;
+  }
+
+  return (
+    <div className="project-document-reader-notice" aria-label="Document reader status">
+      <strong>
+        {activeCount > 0
+          ? `Reading ${activeCount} document${activeCount === 1 ? "" : "s"} in the background`
+          : "Document reader attention"}
+      </strong>
+      <span>
+        {activeCount > 0
+          ? "Large PDFs and workbooks can take a few minutes. This page updates automatically, and you can keep working."
+          : "The original files were not changed."}
+      </span>
+      {failedCount > 0 ? (
+        <span>{failedCount} file{failedCount === 1 ? "" : "s"} could not be read. See its row for recovery details.</span>
+      ) : null}
+      {unsupportedCount > 0 ? (
+        <span>{unsupportedCount} older Office file{unsupportedCount === 1 ? "" : "s"} need saving as DOCX, XLSX, or PPTX.</span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Renders folder-level trends so messy project trees have an obvious first sorting pass. */
+function ProjectDocumentFolderPatternTable({ patterns }: { patterns: ProjectDocumentFolderPattern[] }) {
+  return (
+    <details
+      className="custom-hardware-panel__folder-patterns"
+      aria-label="Folder trends"
+      open={patterns.length <= 2}
+    >
+      <summary>
+        <span>Folder trends</span>
+        <small>{patterns.length} pattern{patterns.length === 1 ? "" : "s"} found from folder names and file mixes</small>
+      </summary>
+      <div className="projects-table-wrap custom-hardware-panel__table-wrap">
+        <table className="projects-table custom-hardware-panel__table">
+          <thead>
+            <tr>
+              <th>Folder</th>
+              <th>Trend</th>
+              <th>Suggested sorting</th>
+              <th>Examples</th>
+            </tr>
+          </thead>
+          <tbody>
+            {patterns.slice(0, 6).map((pattern) => (
+              <ProjectDocumentFolderPatternRow key={pattern.id} pattern={pattern} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {patterns.length > 6 ? <p className="muted-copy">Showing the first 6 folder trends that most need attention.</p> : null}
+    </details>
+  );
+}
+
+/** Renders one folder-level trend row with confidence, clues, and example files. */
+function ProjectDocumentFolderPatternRow({ pattern }: { pattern: ProjectDocumentFolderPattern }) {
+  return (
+    <tr>
+      <td>
+        <span className="ui-mono">{pattern.folderPath === "." ? "Project root" : pattern.folderPath}</span>
+        <div className="muted-copy">
+          {pattern.fileCount} file{pattern.fileCount === 1 ? "" : "s"} - {pattern.outsideStandardFolders ? "Outside folders" : formatCurrentProjectFolder(pattern.currentCategory, pattern.folderPath)}
+        </div>
+      </td>
+      <td>
+        <span>{formatFolderPatternTrend(pattern)}</span>
+        <div className="muted-copy">{Math.round(pattern.confidenceScore * 100)}% - {pattern.reason}</div>
+        {formatFolderPatternTypeMix(pattern) ? <div className="muted-copy">{formatFolderPatternTypeMix(pattern)}</div> : null}
+      </td>
+      <td>
+        <span>{formatFolderPatternAction(pattern)}</span>
+        {pattern.suggestedFolderLabel ? <div className="muted-copy">Likely folder: {pattern.suggestedFolderLabel}</div> : null}
+        {pattern.moveSuggestionCount > 0 ? (
+          <div className="muted-copy">
+            {pattern.moveSuggestionCount} file{pattern.moveSuggestionCount === 1 ? "" : "s"} with copy suggestions below
+          </div>
+        ) : null}
+        {pattern.unknownDocumentCount > 0 ? (
+          <div className="muted-copy">
+            {pattern.unknownDocumentCount} unclear file{pattern.unknownDocumentCount === 1 ? "" : "s"}
+          </div>
+        ) : null}
+      </td>
+      <td>
+        <ul className="where-used-role-list">
+          {pattern.exampleFilenames.map((filename) => (
+            <li key={filename}>
+              <code className="ui-mono">{filename}</code>
+            </li>
+          ))}
+        </ul>
+        {renderFolderPatternSignals(pattern.signals)}
+      </td>
+    </tr>
+  );
+}
+
+/** Renders one compact document-map summary metric. */
+function DocumentMapSummaryItem({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="custom-hardware-panel__summary-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+/** Renders one document-map row with file clues, a sorting hint, and safe copy action. */
+function ProjectDocumentMapRow({ entry, projectId }: { entry: ProjectDocumentMapEntry; projectId: string }) {
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "success" | "error">("idle");
+  const [copyMessage, setCopyMessage] = useState("");
+  const canCopySuggestion = entry.sortPlan.action === "move_to_standard_folder" && Boolean(entry.sortPlan.targetRelativePath);
+
+  const onCopySuggestion = useCallback(async () => {
+    setCopyStatus("copying");
+    setCopyMessage("Copying file...");
+
+    try {
+      const result = await copyProjectDocumentSuggestion(projectId, {
+        sourceRelativePath: entry.relativePath
+      });
+      setCopyStatus("success");
+      setCopyMessage(`Copied to ${result.targetRelativePath}. Original left in place.`);
+      reloadAfterMutation();
+    } catch (error) {
+      setCopyStatus("error");
+      setCopyMessage(formatUploadError(error));
+    }
+  }, [entry.relativePath, projectId]);
+
+  return (
+    <tr>
+      <td>
+        <span className="ui-mono">{entry.filename}</span>
+        <div className="muted-copy">{entry.relativePath}</div>
+        <div className="muted-copy">
+          {formatBytes(entry.sizeBytes)} - {entry.modifiedAt ? formatDateTime(entry.modifiedAt) : "Unknown date"}
+        </div>
+      </td>
+      <td>
+        <span>{formatProjectDocumentType(entry.documentType)}</span>
+        <div className="muted-copy">{Math.round(entry.confidenceScore * 100)}% - {entry.reason}</div>
+      </td>
+      <td>{renderProjectDocumentSignals(entry)}</td>
+      <td>
+        <ProjectDocumentExtractionCell entry={entry} projectId={projectId} />
+      </td>
+      <td>
+        <span>{formatDocumentSortAction(entry)}</span>
+        {entry.sortPlan.targetRelativePath ? (
+          <div className="muted-copy">
+            Put at: <code className="ui-mono">{entry.sortPlan.targetRelativePath}</code>
+          </div>
+        ) : (
+          <div className="muted-copy">{formatSuggestedProjectFolder(entry.suggestedCategory)}</div>
+        )}
+        <div className="muted-copy">Now: {formatCurrentProjectFolder(entry.currentCategory, entry.parentFolder)}</div>
+        <div className="muted-copy">{entry.sortPlan.reason}</div>
+        {canCopySuggestion ? (
+          <button
+            aria-label={`Copy ${entry.filename} to suggested folder`}
+            className="button-link button-link--quiet"
+            disabled={copyStatus === "copying"}
+            onClick={onCopySuggestion}
+            type="button"
+          >
+            {copyStatus === "copying" ? "Copying..." : "Copy to suggested folder"}
+          </button>
+        ) : null}
+        {copyStatus !== "idle" && copyMessage ? (
+          <div
+            className={
+              copyStatus === "error"
+                ? "project-files-card__upload-status project-files-card__upload-status--error"
+                : "project-files-card__upload-status"
+            }
+            role={copyStatus === "error" ? "alert" : undefined}
+          >
+            {copyMessage}
+          </div>
+        ) : null}
+      </td>
+      <td>
+        <span className="project-files-card__badge">{formatDocumentMapAttention(entry)}</span>
+      </td>
+    </tr>
+  );
+}
+
+/** Renders PDF/Office extraction progress, source excerpts, and retry recovery. */
+function ProjectDocumentExtractionCell({
+  entry,
+  projectId
+}: {
+  entry: ProjectDocumentMapEntry;
+  projectId: string;
+}) {
+  const extraction = entry.extraction;
+  const [retryState, setRetryState] = useState<"idle" | "retrying" | "error">("idle");
+  const [retryMessage, setRetryMessage] = useState("");
+
+  const onRetry = useCallback(async () => {
+    setRetryState("retrying");
+    setRetryMessage("Queueing retry...");
+
+    try {
+      await retryProjectDocumentExtraction(projectId, {
+        sourceRelativePath: entry.relativePath
+      });
+      setRetryMessage("Retry queued. This page will update automatically.");
+      reloadAfterMutation();
+    } catch (error) {
+      setRetryState("error");
+      setRetryMessage(formatUploadError(error));
+    }
+  }, [entry.relativePath, projectId]);
+
+  if (!extraction) {
+    return <span className="custom-hardware-panel__missing">Filename and small-text scan only</span>;
+  }
+
+  return (
+    <div className="project-document-reader-cell">
+      <span className={`project-document-reader-cell__status project-document-reader-cell__status--${extraction.status}`}>
+        {formatExtractionStatus(extraction)}
+      </span>
+      <div className="muted-copy">{extraction.progressMessage}</div>
+      {extraction.status === "queued" || extraction.status === "running" ? (
+        <>
+          <progress
+            aria-label={`Document reader progress for ${entry.filename}`}
+            max={100}
+            value={extraction.progressPercent}
+          />
+          <div className="muted-copy">
+            {formatExtractionWait(extraction)}
+            {extraction.queuePosition ? ` - Queue position ${extraction.queuePosition}` : ""}
+          </div>
+        </>
+      ) : null}
+      {extraction.status === "succeeded" ? (
+        <>
+          <div className="muted-copy">
+            {formatExtractionSourceCount(extraction)} - {formatNumber(extraction.extractedCharacterCount)} searchable characters
+          </div>
+          {extraction.sourceLocations.length > 0 ? (
+            <details className="project-document-reader-cell__sources">
+              <summary>Source excerpts</summary>
+              <ul>
+                {extraction.sourceLocations.map((location) => (
+                  <li key={`${location.label}-${location.textPreview}`}>
+                    <strong>{location.label}</strong>
+                    <span>{location.textPreview || "No text found in this section."}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </>
+      ) : null}
+      {extraction.errorMessage ? <div className="project-document-reader-cell__error">{extraction.errorMessage}</div> : null}
+      {extraction.status === "failed" ? (
+        <button
+          className="button-link button-link--quiet"
+          disabled={retryState === "retrying"}
+          onClick={onRetry}
+          type="button"
+        >
+          {retryState === "retrying" ? "Queueing..." : "Retry reading"}
+        </button>
+      ) : null}
+      {retryMessage ? (
+        <div
+          className={retryState === "error" ? "project-document-reader-cell__error" : "muted-copy"}
+          role={retryState === "error" ? "alert" : undefined}
+        >
+          {retryMessage}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Renders compact engineering clues extracted from one document-map row. */
+function renderProjectDocumentSignals(entry: ProjectDocumentMapEntry): React.ReactNode {
+  const groups = [
+    entry.signals.connectorRefs.length > 0 ? `Connectors: ${entry.signals.connectorRefs.slice(0, 4).join(", ")}` : null,
+    entry.signals.pinRefs.length > 0 ? `Pins: ${entry.signals.pinRefs.slice(0, 4).join(", ")}` : null,
+    entry.signals.cableKeys.length > 0 ? `Cables: ${entry.signals.cableKeys.slice(0, 3).join(", ")}` : null,
+    entry.signals.fixtureKeys.length > 0 ? `Fixtures: ${entry.signals.fixtureKeys.slice(0, 3).join(", ")}` : null,
+    entry.signals.revisionLabels.length > 0 ? `Revisions: ${entry.signals.revisionLabels.slice(0, 3).join(", ")}` : null,
+    entry.signals.signalNames.length > 0 ? `Signals: ${entry.signals.signalNames.slice(0, 3).join(", ")}` : null
+  ].filter((value): value is string => Boolean(value));
+
+  if (groups.length === 0) {
+    return <span className="custom-hardware-panel__missing">No clues found</span>;
+  }
+
+  return (
+    <ul className="where-used-role-list">
+      {groups.slice(0, 4).map((group) => (
+        <li key={group}>{group}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** Formats a document-map type for engineers sorting a project folder. */
+function formatProjectDocumentType(documentType: ProjectDocumentType): string {
+  return {
+    archive: "Archive",
+    cad_model: "CAD model",
+    cable_doc: "Cable or harness doc",
+    datasheet: "Datasheet or app note",
+    drawing: "Drawing",
+    fixture_doc: "Fixture doc",
+    parts_list: "Parts list",
+    pinout: "Connector pinout",
+    requirements: "Requirements",
+    review_note: "Review note",
+    schematic: "Schematic or board file",
+    test_procedure: "Test procedure",
+    unknown: "Needs sorting"
+  }[documentType];
+}
+
+/** Formats the current document-reader state in plain language. */
+function formatExtractionStatus(extraction: ProjectDocumentExtractionState): string {
+  if (extraction.status === "queued") return "Waiting to read";
+  if (extraction.status === "running") return `${extraction.progressPercent}% read`;
+  if (extraction.status === "succeeded") return "Text ready";
+  if (extraction.status === "unsupported") return "Needs newer file format";
+  return "Could not read";
+}
+
+/** Formats an approximate background-reader wait without presenting it as a deadline. */
+function formatExtractionWait(extraction: ProjectDocumentExtractionState): string {
+  const seconds = extraction.estimatedWaitSeconds;
+  if (!seconds) {
+    return "Time remaining is not available";
+  }
+  if (seconds < 60) {
+    return "Usually under a minute";
+  }
+
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return `Approximately ${minutes} minute${minutes === 1 ? "" : "s"} remaining`;
+}
+
+/** Formats the source-unit count using the extraction format's familiar noun. */
+function formatExtractionSourceCount(extraction: ProjectDocumentExtractionState): string {
+  const count = extraction.sourceUnitCount ?? extraction.sourceLocations.length;
+  const noun =
+    extraction.format === "pdf"
+      ? "page"
+      : extraction.format === "xlsx"
+        ? "sheet"
+        : extraction.format === "pptx"
+          ? "slide"
+          : "paragraph group";
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** Formats a count for compact workstation metadata. */
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+/** Formats a folder trend title from its strongest document-family hint. */
+function formatFolderPatternTrend(pattern: ProjectDocumentFolderPattern): string {
+  if (!pattern.dominantDocumentType || pattern.dominantDocumentType === "unknown") {
+    return "Needs sorting";
+  }
+
+  return `Mostly ${formatProjectDocumentType(pattern.dominantDocumentType).toLowerCase()}s`;
+}
+
+/** Formats the safe next step for a folder trend without implying a bulk move happened. */
+function formatFolderPatternAction(pattern: ProjectDocumentFolderPattern): string {
+  if (pattern.suggestedAction === "use_file_copy_buttons") {
+    return `Use file copy buttons for ${pattern.suggestedFolderLabel ?? "the likely folder"}`;
+  }
+  if (pattern.suggestedAction === "sort_each_file") {
+    return "Sort file rows below";
+  }
+  if (pattern.suggestedAction === "open_folder") {
+    return "Open folder first";
+  }
+  return "Leave folder as is";
+}
+
+/** Formats the compact type mix shown under a folder trend. */
+function formatFolderPatternTypeMix(pattern: ProjectDocumentFolderPattern): string | null {
+  const visibleTypes = pattern.typeCounts.slice(0, 3);
+  if (visibleTypes.length === 0) {
+    return null;
+  }
+
+  return visibleTypes.map((entry) => `${formatProjectDocumentType(entry.documentType)}: ${entry.count}`).join(" / ");
+}
+
+/** Renders a short folder-level clue line when connector, pin, cable, or fixture hints exist. */
+function renderFolderPatternSignals(signals: ProjectDocumentSignals): React.ReactNode {
+  const groups = [
+    signals.connectorRefs.length > 0 ? `Connectors: ${signals.connectorRefs.slice(0, 3).join(", ")}` : null,
+    signals.pinRefs.length > 0 ? `Pins: ${signals.pinRefs.slice(0, 3).join(", ")}` : null,
+    signals.cableKeys.length > 0 ? `Cables: ${signals.cableKeys.slice(0, 2).join(", ")}` : null,
+    signals.fixtureKeys.length > 0 ? `Fixtures: ${signals.fixtureKeys.slice(0, 2).join(", ")}` : null
+  ].filter((value): value is string => Boolean(value));
+
+  if (groups.length === 0) {
+    return null;
+  }
+
+  return <div className="muted-copy">{groups.join(" - ")}</div>;
+}
+
+/** Formats the current standard folder for one scanned file. */
+function formatCurrentProjectFolder(category: ProjectFolderCategory | null, parentFolder: string): string {
+  if (!category) {
+    return parentFolder === "." ? "Project root" : parentFolder;
+  }
+
+  return formatSuggestedProjectFolder(category);
+}
+
+/** Formats a standard project folder category. */
+function formatSuggestedProjectFolder(category: ProjectFolderCategory | null): string {
+  if (category === "datasheets") return "Datasheets";
+  if (category === "hardware") return "Custom designs";
+  if (category === "models") return "3D models";
+  if (category === "notes") return "Notes";
+  if (category === "parts_list") return "Parts list";
+  return "No suggestion";
+}
+
+/** Formats the safe cleanup suggestion for one mapped document. */
+function formatDocumentSortAction(entry: ProjectDocumentMapEntry): string {
+  if (entry.sortPlan.action === "leave_in_place") return "Leave here";
+  if (entry.sortPlan.action === "move_to_standard_folder") return `Move to ${entry.sortPlan.targetFolderLabel ?? "standard folder"}`;
+  if (entry.sortPlan.action === "review_unknown") return "Open and sort";
+  return "Choose folder";
+}
+
+/** Formats why a scanned document needs attention. */
+function formatDocumentMapAttention(entry: ProjectDocumentMapEntry): string {
+  if (entry.documentType === "unknown") {
+    return "Needs sorting";
+  }
+  if (entry.outsideStandardFolders) {
+    return "Outside folders";
+  }
+  if (entry.suggestedCategory && entry.currentCategory && entry.suggestedCategory !== entry.currentCategory) {
+    return "Review folder";
+  }
+  if (entry.confidenceScore < 0.7) {
+    return "Low confidence";
+  }
+  return "Looks sorted";
+}
+
 interface ProjectPdfReviewTarget {
-  /** Stable select value built from folder category and filename. */
+  /** Stable select value built from the full relative path. */
   value: string;
-  /** Human-readable folder label for the PDF's source category. */
+  /** Human-readable folder label for the PDF's observed parent folder. */
   folderLabel: string;
-  /** Project file category where the PDF was observed. */
-  category: ProjectFolderCategory;
+  /** Project file category where the PDF was observed, when it is in a standard folder. */
+  category: ProjectFolderCategory | null;
   /** Bare PDF filename as reported by the file mirror. */
   filename: string;
+  /** Full relative path preserved in the saved review note. */
+  relativePath: string;
   /** Last modified timestamp from the filesystem when available. */
   modifiedAt: string | null;
 }
@@ -374,7 +1197,7 @@ function ProjectReentryBrief({ files }: { files: ProjectFilesResponse }) {
         <ReentryMetric label="Latest file activity" value={brief.latestActivityLabel} />
         <ReentryMetric label="File entries" value={String(brief.fileEntryCount)} />
         <ReentryMetric label="Custom designs" value={String(brief.customDesignCount)} />
-        <ReentryMetric label="Evidence folders" value={`${brief.foldersWithEntries}/${files.folders.length}`} />
+        <ReentryMetric label="Folders with files" value={`${brief.foldersWithEntries}/${files.folders.length}`} />
       </div>
 
       {brief.attentionItems.length > 0 ? (
@@ -631,7 +1454,7 @@ function buildProjectReentryBrief(files: ProjectFilesResponse) {
   if (emptyFolders.length > 0) {
     attentionItems.push({
       detail: emptyFolders.join(", "),
-      label: "Empty evidence folders"
+      label: "Empty folders"
     });
   }
 
@@ -644,29 +1467,78 @@ function buildProjectReentryBrief(files: ProjectFilesResponse) {
     foldersWithEntries,
     headline: buildReentryHeadline(latestActivityAt, customDesignSummary.total),
     latestActivityLabel: latestActivityAt ? formatDateTime(latestActivityAt) : "Not recorded",
-    statusLabel: statusTone === "ready" ? "File-backed" : statusTone === "stale" ? "Stale review" : "Needs review",
+    statusLabel: statusTone === "ready" ? "Files present" : statusTone === "stale" ? "Stale review" : "Needs review",
     statusTone
   };
 }
 
 /**
- * Returns every top-level PDF visible to the file mirror. The API does not recurse into
- * nested design folders yet, so this list is honest about what the current read can see.
+ * Returns every PDF visible to either the recursive document map or standard folder cards.
+ *
+ * Relative paths de-duplicate top-level files that appear in both reads and preserve
+ * same-named PDFs from different messy folders as separate review targets.
  */
 function listProjectPdfReviewTargets(files: ProjectFilesResponse): ProjectPdfReviewTarget[] {
-  return files.folders
-    .flatMap((folder) =>
-      folder.entries
-        .filter((entry) => entry.isFile && entry.name.toLowerCase().endsWith(".pdf"))
-        .map((entry) => ({
-          category: folder.category,
-          filename: entry.name,
-          folderLabel: folder.label,
-          modifiedAt: entry.modifiedAt,
-          value: `${folder.category}:${entry.name}`
-        }))
-    )
-    .sort(comparePdfReviewTargets);
+  const targetsByPath = new Map<string, ProjectPdfReviewTarget>();
+
+  for (const document of files.documentMap?.documents ?? []) {
+    if (!document.filename.toLowerCase().endsWith(".pdf")) {
+      continue;
+    }
+
+    targetsByPath.set(document.relativePath, {
+      category: document.currentCategory,
+      filename: document.filename,
+      folderLabel: formatPdfReviewParentFolder(document),
+      modifiedAt: document.modifiedAt,
+      relativePath: document.relativePath,
+      value: document.relativePath
+    });
+  }
+
+  for (const folder of files.folders) {
+    for (const entry of folder.entries) {
+      if (!entry.isFile || !entry.name.toLowerCase().endsWith(".pdf")) {
+        continue;
+      }
+
+      const relativePath = `${readProjectFolderDirectory(folder.category)}/${entry.name}`;
+      if (targetsByPath.has(relativePath)) {
+        continue;
+      }
+
+      targetsByPath.set(relativePath, {
+        category: folder.category,
+        filename: entry.name,
+        folderLabel: folder.label,
+        modifiedAt: entry.modifiedAt,
+        relativePath,
+        value: relativePath
+      });
+    }
+  }
+
+  return Array.from(targetsByPath.values()).sort(comparePdfReviewTargets);
+}
+
+/** Formats a recursive PDF's parent folder without hiding messy-folder locations. */
+function formatPdfReviewParentFolder(document: ProjectDocumentMapEntry): string {
+  if (document.parentFolder === ".") {
+    return "Project root";
+  }
+  if (document.currentCategory && !document.parentFolder.includes("/")) {
+    return formatSuggestedProjectFolder(document.currentCategory);
+  }
+  return document.parentFolder;
+}
+
+/** Maps a standard project category to its stable on-disk directory name. */
+function readProjectFolderDirectory(category: ProjectFolderCategory): string {
+  if (category === "parts_list") return "parts-list";
+  if (category === "hardware") return "hardware";
+  if (category === "datasheets") return "datasheets";
+  if (category === "models") return "models";
+  return "notes";
 }
 
 /**
@@ -698,7 +1570,7 @@ function comparePdfReviewTargets(left: ProjectPdfReviewTarget, right: ProjectPdf
 }
 
 /** Returns a stable folder-priority rank for PDF review selection. */
-function getPdfReviewFolderOrder(category: ProjectFolderCategory): number {
+function getPdfReviewFolderOrder(category: ProjectFolderCategory | null): number {
   if (category === "datasheets") {
     return 0;
   }
@@ -711,7 +1583,10 @@ function getPdfReviewFolderOrder(category: ProjectFolderCategory): number {
   if (category === "notes") {
     return 3;
   }
-  return 4;
+  if (category === "parts_list") {
+    return 4;
+  }
+  return 5;
 }
 
 /** Sorts nullable ISO timestamps newest first while keeping invalid dates at the bottom. */
@@ -790,7 +1665,7 @@ function buildPdfReviewNoteContent(input: {
   return [
     `# PDF Review - ${input.target.filename}`,
     "",
-    `PDF: ${input.target.folderLabel} / ${input.target.filename}`,
+    `PDF: ${input.target.relativePath}`,
     `Category: ${formatPdfReviewCategory(input.reviewCategory)}`,
     `Location: ${input.location}`,
     `Reviewer: ${input.reviewer}`,

@@ -318,6 +318,7 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
     const providerPartFiltered = await readPartSearchRecordsFromDatabase({ providerPartId: "C1091", sort: "mpn_asc" });
     const providerUrlFiltered = await readPartSearchRecordsFromDatabase({ providerUrl: "lcsc.com/product-detail/Chip-Resistor", sort: "mpn_asc" });
     const datasheetUrlFiltered = await readPartSearchRecordsFromDatabase({ datasheetUrl: "lcsc_datasheet_2411121005", sort: "mpn_asc" });
+    const outOfRangeSingleResultPage = await readPartSearchRecordsFromDatabase({ page: 2, query: "RC-02W300JT", sort: "mpn_asc" });
     const trustSorted = await readPartSearchRecordsFromDatabase({ pageSize: 2, sort: "trust_desc" });
 
     assert.equal(firstPage.status, "available");
@@ -345,6 +346,7 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
       providerPartFiltered.status !== "available" ||
       providerUrlFiltered.status !== "available" ||
       datasheetUrlFiltered.status !== "available" ||
+      outOfRangeSingleResultPage.status !== "available" ||
       trustSorted.status !== "available"
     ) {
       throw new Error("expected DB-backed search records");
@@ -363,6 +365,9 @@ test("DB-backed search filters, sorts, and paginates in SQL", async () => {
     assert.deepEqual(providerPartFiltered.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
     assert.deepEqual(providerUrlFiltered.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
     assert.deepEqual(datasheetUrlFiltered.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
+    assert.equal(outOfRangeSingleResultPage.pagination.page, 1);
+    assert.equal(outOfRangeSingleResultPage.pagination.totalRecords, 1);
+    assert.deepEqual(outOfRangeSingleResultPage.records.map((record) => record.part.mpn), ["RC-02W300JT"]);
     assert.deepEqual(trustSorted.records.map((record) => record.part.mpn), ["BBB-200", "CCC-300"]);
     assert.equal(firstPage.records[0]?.metrics.length, 0);
     assert.equal(firstPage.records[0]?.similarParts.length, 0);
