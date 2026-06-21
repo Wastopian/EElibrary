@@ -1366,6 +1366,20 @@ export async function createReviewInDatabase(partId: string, input: ReviewAction
         `,
         [updatedWorkflow.id, updatedWorkflow.generationStatus, partId]
       );
+
+      const linkedRequestStatus = linkedRequestStatusForWorkflow(updatedWorkflow.generationStatus);
+
+      if (linkedRequestStatus) {
+        await client.query(
+          `
+            UPDATE generation_requests
+            SET request_status = $2,
+                last_updated_at = $4
+            WHERE workflow_id = $1 AND part_id = $3
+          `,
+          [updatedWorkflow.id, linkedRequestStatus, partId, reviewedAt]
+        );
+      }
     }
 
     await client.query("COMMIT");
@@ -2663,6 +2677,17 @@ function buildReviewRecord(id: string, partId: string, input: ReviewActionInput,
     reviewer,
     targetType: input.targetType
   };
+}
+
+/**
+ * Mirrors terminal workflow review outcomes onto linked requests so request badges do not stay stale.
+ */
+function linkedRequestStatusForWorkflow(status: GenerationWorkflow["generationStatus"]): GenerationRequest["requestStatus"] | null {
+  if (status === "approved" || status === "failed" || status === "review_required") {
+    return status;
+  }
+
+  return null;
 }
 
 /**
