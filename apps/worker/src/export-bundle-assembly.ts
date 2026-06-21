@@ -192,6 +192,18 @@ export async function assembleSingleExportBundle(
 
   let copied = 0;
   const archiveEntries: TarFileEntry[] = [];
+  const manifestPathFailure = validateIncludedAssetBundlePaths(manifest);
+
+  if (manifestPathFailure) {
+    return {
+      ...unsignedDefaults,
+      archiveStorageKey: null,
+      assetsCopied: 0,
+      bundleId: bundle.id,
+      failure: manifestPathFailure,
+      status: "assembly_failed"
+    };
+  }
 
   for (const includedAsset of manifest.includedAssets) {
     const destinationStorageKey = buildExportBundleAssetStorageKey(bundle.project_id, bundle.id, includedAsset.bundlePath);
@@ -365,6 +377,56 @@ export async function assembleSingleExportBundle(
     status: "assembled",
     ...signatureFields
   };
+}
+
+/**
+ * Rejects legacy or hand-edited manifests whose archive paths would overwrite each other or extract
+ * outside the bundle directory. New API-created manifests sanitize paths before persistence; this
+ * worker guard prevents older pending rows from silently assembling corrupt archives.
+ */
+function validateIncludedAssetBundlePaths(manifest: ExportBundleManifest): ExportBundleAssemblyError | null {
+  const seenPaths = new Map<string, string>();
+
+  for (const includedAsset of manifest.includedAssets) {
+    const unsafeReason = getUnsafeBundlePathReason(includedAsset.bundlePath);
+    if (unsafeReason) {
+      return {
+        failedAssetId: includedAsset.assetId,
+        failedAt: new Date().toISOString(),
+        failedBundlePath: includedAsset.bundlePath,
+        message: `Export bundle manifest contains an unsafe asset path (${unsafeReason}). Regenerate the bundle before assembly.`,
+        phase: "unknown"
+      };
+    }
+
+    const previousAssetId = seenPaths.get(includedAsset.bundlePath);
+    if (previousAssetId) {
+      return {
+        failedAssetId: includedAsset.assetId,
+        failedAt: new Date().toISOString(),
+        failedBundlePath: includedAsset.bundlePath,
+        message: `Export bundle manifest maps multiple assets to ${includedAsset.bundlePath} (${previousAssetId}, ${includedAsset.assetId}). Regenerate the bundle before assembly.`,
+        phase: "unknown"
+      };
+    }
+
+    seenPaths.set(includedAsset.bundlePath, includedAsset.assetId);
+  }
+
+  return null;
+}
+
+/** Returns a concise reason when a manifest path is unsafe for storage or archive extraction. */
+function getUnsafeBundlePathReason(bundlePath: string): string | null {
+  if (bundlePath.length === 0) return "empty path";
+  if (bundlePath.startsWith("/") || bundlePath.startsWith("\\")) return "absolute path";
+  if (bundlePath.includes("\0")) return "NUL byte";
+
+  const segments = bundlePath.split(/[\\/]/u);
+  if (segments.some((segment) => segment.length === 0)) return "empty path segment";
+  if (segments.some((segment) => segment === "." || segment === "..")) return "relative path segment";
+
+  return null;
 }
 
 /**
