@@ -225,3 +225,247 @@ export function formatEngineering(value: number, unit: string): string {
 
   return `${rounded.toString()} ${picked.prefix}${unit}`;
 }
+
+/** E96_SERIES is the standard 1% resistor decade (96 values from 100 to 976). */
+export const E96_SERIES: ReadonlyArray<number> = [
+  100, 102, 105, 107, 110, 113, 115, 118, 121, 124, 127, 130, 133, 137, 140, 143,
+  147, 150, 154, 158, 162, 165, 169, 174, 178, 182, 187, 191, 196, 200, 205, 210,
+  215, 221, 226, 232, 237, 243, 249, 255, 261, 267, 274, 280, 287, 294, 301, 309,
+  316, 324, 332, 340, 348, 357, 365, 374, 383, 392, 402, 412, 422, 432, 442, 453,
+  464, 475, 487, 499, 511, 523, 536, 549, 562, 576, 590, 604, 619, 634, 649, 665,
+  681, 698, 715, 732, 750, 768, 787, 806, 825, 845, 866, 887, 909, 931, 953, 976
+];
+
+/** NearestE96Pair holds the closest E96 1% resistance value below and above a target. */
+export interface NearestE96Pair {
+  /** Closest E96 value at or below the target, in ohms. */
+  lower: number;
+  /** Closest E96 value at or above the target, in ohms. */
+  upper: number;
+}
+
+/**
+ * Returns the closest E96 1% resistor value below and above the requested
+ * resistance, in ohms. Returns null when the target is non-positive or NaN.
+ */
+export function nearestE96Pair(targetOhms: number): NearestE96Pair | null {
+  if (!Number.isFinite(targetOhms) || targetOhms <= 0) {
+    return null;
+  }
+
+  const decade = Math.floor(Math.log10(targetOhms / 100));
+  const decadeMultiplier = Math.pow(10, decade);
+  const normalized = targetOhms / decadeMultiplier;
+
+  let lowerInSeries = E96_SERIES[0] ?? 100;
+  let upperInSeries = E96_SERIES[E96_SERIES.length - 1] ?? 976;
+
+  for (const candidate of E96_SERIES) {
+    if (candidate <= normalized) {
+      lowerInSeries = candidate;
+    }
+    if (candidate >= normalized && upperInSeries > candidate) {
+      upperInSeries = candidate;
+    }
+  }
+
+  return {
+    lower: lowerInSeries * decadeMultiplier,
+    upper: upperInSeries * decadeMultiplier
+  };
+}
+
+/** OhmsLawQuantity names one of the four solvable quantities in Ohm's law + power. */
+export type OhmsLawQuantity = "voltage" | "current" | "resistance" | "power";
+
+/** OhmsLawKnown holds one of the two known quantities the operator supplied. */
+export interface OhmsLawKnown {
+  /** Which quantity this value represents. */
+  quantity: OhmsLawQuantity;
+  /** The numeric value in SI base units (volts, amps, ohms, watts). */
+  value: number;
+}
+
+/** OhmsLawResult is the full V/I/R/P solved set. */
+export interface OhmsLawResult {
+  /** Voltage in volts. */
+  voltage: number;
+  /** Current in amps. */
+  current: number;
+  /** Resistance in ohms. */
+  resistance: number;
+  /** Power in watts. */
+  power: number;
+}
+
+/**
+ * Solves Ohm's law plus the power equation for the remaining two quantities
+ * when any two of {V, I, R, P} are known.
+ *
+ * Returns a plain-language error string when the inputs are inconsistent or
+ * the requested unknown is undetermined (e.g. P known with R = 0).
+ */
+export function solveOhmsLaw(a: OhmsLawKnown, b: OhmsLawKnown): OhmsLawResult | string {
+  if (a.quantity === b.quantity) {
+    return "Pick two different quantities to solve from.";
+  }
+
+  if (!Number.isFinite(a.value) || !Number.isFinite(b.value)) {
+    return "Enter a number in both fields.";
+  }
+
+  if (a.value < 0 || b.value < 0) {
+    return "All values must be zero or positive.";
+  }
+
+  const known = new Map<OhmsLawQuantity, number>();
+  known.set(a.quantity, a.value);
+  known.set(b.quantity, b.value);
+
+  const v = known.get("voltage");
+  const i = known.get("current");
+  const r = known.get("resistance");
+  const p = known.get("power");
+
+  // V + I: trivial — derive R and P.
+  if (v !== undefined && i !== undefined) {
+    if (i === 0) {
+      return "Current is 0, so resistance cannot be determined.";
+    }
+    return {
+      voltage: v,
+      current: i,
+      resistance: v / i,
+      power: v * i
+    };
+  }
+
+  // V + R: derive I and P.
+  if (v !== undefined && r !== undefined) {
+    if (r === 0) {
+      return "Resistance is 0 — current would be infinite.";
+    }
+    const computedI = v / r;
+    return {
+      voltage: v,
+      current: computedI,
+      resistance: r,
+      power: v * computedI
+    };
+  }
+
+  // V + P: derive I and R.
+  if (v !== undefined && p !== undefined) {
+    if (v === 0) {
+      return "Voltage is 0, so current and resistance cannot be determined from power alone.";
+    }
+    const computedI = p / v;
+    if (computedI === 0) {
+      return "Current would be 0; resistance is undefined.";
+    }
+    return {
+      voltage: v,
+      current: computedI,
+      resistance: v / computedI,
+      power: p
+    };
+  }
+
+  // I + R: derive V and P.
+  if (i !== undefined && r !== undefined) {
+    const computedV = i * r;
+    return {
+      voltage: computedV,
+      current: i,
+      resistance: r,
+      power: computedV * i
+    };
+  }
+
+  // I + P: derive V and R.
+  if (i !== undefined && p !== undefined) {
+    if (i === 0) {
+      return "Current is 0, so voltage and resistance cannot be determined from power alone.";
+    }
+    const computedV = p / i;
+    return {
+      voltage: computedV,
+      current: i,
+      resistance: computedV / i,
+      power: p
+    };
+  }
+
+  // R + P: derive V and I.
+  if (r !== undefined && p !== undefined) {
+    if (r === 0) {
+      return "Resistance is 0, so voltage and current cannot be determined from power alone.";
+    }
+    const computedI = Math.sqrt(p / r);
+    return {
+      voltage: computedI * r,
+      current: computedI,
+      resistance: r,
+      power: p
+    };
+  }
+
+  return "Pick two known quantities.";
+}
+
+/** LedCurrentLimitInputs are the raw numeric inputs for an LED current-limit calc. */
+export interface LedCurrentLimitInputs {
+  /** Source voltage feeding the LED + resistor in volts. */
+  supplyVoltageVolts: number;
+  /** LED forward voltage drop in volts. */
+  forwardVoltageVolts: number;
+  /** Target LED forward current in amps. */
+  forwardCurrentAmps: number;
+}
+
+/** LedCurrentLimitResult holds the resistor value, its dissipation, and headroom. */
+export interface LedCurrentLimitResult {
+  /** Series resistor in ohms. */
+  resistanceOhms: number;
+  /** Power dissipated by the resistor in watts. */
+  resistorPowerWatts: number;
+  /** Power dissipated by the LED in watts (informational). */
+  ledPowerWatts: number;
+  /** Voltage across the resistor in volts (V_supply − V_forward). */
+  voltageAcrossResistorVolts: number;
+}
+
+/**
+ * Computes the series resistor needed to limit an LED to the target forward
+ * current, the resulting resistor dissipation, and the LED dissipation.
+ *
+ * Returns a plain-language error when inputs are invalid (negative, missing,
+ * or supply ≤ forward voltage — meaning the LED cannot turn on).
+ */
+export function computeLedCurrentLimit(inputs: LedCurrentLimitInputs): LedCurrentLimitResult | string {
+  const { supplyVoltageVolts, forwardVoltageVolts, forwardCurrentAmps } = inputs;
+
+  if (!Number.isFinite(supplyVoltageVolts) || !Number.isFinite(forwardVoltageVolts) || !Number.isFinite(forwardCurrentAmps)) {
+    return "Enter a number in every field.";
+  }
+
+  if (supplyVoltageVolts < 0 || forwardVoltageVolts < 0 || forwardCurrentAmps <= 0) {
+    return "Supply voltage and LED forward voltage must be zero or positive, and the LED current must be positive.";
+  }
+
+  if (supplyVoltageVolts <= forwardVoltageVolts) {
+    return "Supply voltage must be higher than the LED forward voltage, or the LED will not light.";
+  }
+
+  const voltageAcrossResistorVolts = supplyVoltageVolts - forwardVoltageVolts;
+  const resistanceOhms = voltageAcrossResistorVolts / forwardCurrentAmps;
+  const resistorPowerWatts = voltageAcrossResistorVolts * forwardCurrentAmps;
+  const ledPowerWatts = forwardVoltageVolts * forwardCurrentAmps;
+
+  return {
+    resistanceOhms,
+    resistorPowerWatts,
+    ledPowerWatts,
+    voltageAcrossResistorVolts
+  };
+}

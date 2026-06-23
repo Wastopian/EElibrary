@@ -134,7 +134,7 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - `/circuit-blocks` library and detail: part roles, reuse signals, instantiation into a project BOM.
 - `/connector-sets`: browse connector families, mate pairs, and project usage counts, plus a **connector intent resolver** — describe what you need ("JST PH 2 pin for 26 AWG", "sealed connector 8 pin 18 AWG") and get ranked buildable-set candidates (housing, mate, crimp terminal, cable, tooling) with explicit confidence and family-confusion warnings. Ten high-value families are seeded so it works on day one. It ranks stored relationships only and never approves a part or unlocks export.
 - `/vendors`: filesystem-backed supplier notebook for PCB shops, sheet metal, machining, finishing, and assembly partners — notes and reference files per vendor, reachable even when the database is down.
-- `/tools`: small focused EE calculators — voltage divider (forward and solve-for-resistor with E96 1% suggestions) and RC time constant (τ plus 1τ/3τ/5τ settling times and the matching low-pass cutoff). Pure client-side math; nothing leaves the page.
+- `/tools`: small focused EE calculators — Ohm's Law + Power (pick any two of V/I/R/P and see the other two), voltage divider (forward and solve-for-resistor with E96 1% suggestions), LED current-limit resistor (series R, resistor power, nearest E96 1% values), and RC time constant (τ plus 1τ/3τ/5τ settling times and the matching low-pass cutoff). Pure client-side math; nothing leaves the page.
 - `/admin` queues; `/system` health workspace for API, DB, storage, worker, and queue recovery; authenticated shell via `/sign-in` with self-service `/sign-up` for local workstation accounts (optionally gated by a team invite code via `EE_LIBRARY_SIGNUP_INVITE_CODE`); raw API health remains available at `/system/health`.
 
 **Team server**
@@ -149,7 +149,7 @@ These remain product direction; they are **not** in the implementation-status ma
 
 - **Team server acceptance pass** — the deployment stack is shipped (see "Team server" under Current Capabilities); what remains is the first-time walkthrough on the real server machine and one rehearsed backup → restore cycle (`TODO.md` §0).
 - **Deeper compare** (richer datasheet-revision diff; CAD preview band is now shipped).
-- **More EE calculators** in the `/tools` workspace (voltage divider and RC time constant ship today; further calculators remain incremental).
+- **More EE calculators** in the `/tools` workspace (Ohm's Law + Power, voltage divider, LED current-limit resistor, and RC time constant ship today; further calculators remain incremental).
 - **Subcategory** search facets until backed by persisted catalog data.
 - **Richer** multi-provider merge automation, **broad** datasheet extraction, and **production-grade** automatic CAD generation (deterministic KiCad `.kicad_sym` / `.kicad_mod` / `.step` emission) beyond current worker foundations.
 - **More file-grounded validators** (STEP integrity, footprint pad pitch vs package geometry) and richer validation cross-reference on the part record.

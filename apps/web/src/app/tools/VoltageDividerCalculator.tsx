@@ -10,7 +10,7 @@
 
 import React, { useMemo, useState } from "react";
 import { SectionPanel } from "@ee-library/ui";
-import { computeVoltageDivider, formatEngineering, solveVoltageDividerResistor } from "./lib/calculations";
+import { computeVoltageDivider, formatEngineering, nearestE96Pair, solveVoltageDividerResistor } from "./lib/calculations";
 
 /** ResistanceUnit picks the multiplier so engineers can type "1.2" and pick "kΩ". */
 type ResistanceUnit = "Ω" | "kΩ" | "MΩ";
@@ -217,47 +217,19 @@ function formatRatio(ratio: number): string {
   return `${percent}% (${ratio.toFixed(3)})`;
 }
 
-/** E96 series multipliers for the 1% resistor standard. */
-const E96_SERIES = [
-  100, 102, 105, 107, 110, 113, 115, 118, 121, 124, 127, 130, 133, 137, 140, 143,
-  147, 150, 154, 158, 162, 165, 169, 174, 178, 182, 187, 191, 196, 200, 205, 210,
-  215, 221, 226, 232, 237, 243, 249, 255, 261, 267, 274, 280, 287, 294, 301, 309,
-  316, 324, 332, 340, 348, 357, 365, 374, 383, 392, 402, 412, 422, 432, 442, 453,
-  464, 475, 487, 499, 511, 523, 536, 549, 562, 576, 590, 604, 619, 634, 649, 665,
-  681, 698, 715, 732, 750, 768, 787, 806, 825, 845, 866, 887, 909, 931, 953, 976
-];
-
 /**
  * Returns the closest E96 1% resistor below and above the computed resistance so
  * an engineer can quickly pick a real off-the-shelf part.
  */
 function formatE96Suggestions(resistance: number): string {
-  if (!Number.isFinite(resistance) || resistance <= 0) {
+  const pair = nearestE96Pair(resistance);
+  if (!pair) {
     return "—";
   }
 
-  const decade = Math.floor(Math.log10(resistance / 100));
-  const decadeMultiplier = Math.pow(10, decade);
-  const normalized = resistance / decadeMultiplier;
-
-  let lowerInSeries = E96_SERIES[0] ?? 100;
-  let upperInSeries = E96_SERIES[E96_SERIES.length - 1] ?? 976;
-
-  for (const candidate of E96_SERIES) {
-    if (candidate <= normalized) {
-      lowerInSeries = candidate;
-    }
-    if (candidate >= normalized && upperInSeries > candidate) {
-      upperInSeries = candidate;
-    }
+  if (Math.abs(pair.lower - pair.upper) < pair.lower * 0.0001) {
+    return formatEngineering(pair.lower, "Ω");
   }
 
-  const lower = lowerInSeries * decadeMultiplier;
-  const upper = upperInSeries * decadeMultiplier;
-
-  if (Math.abs(lower - upper) < lower * 0.0001) {
-    return formatEngineering(lower, "Ω");
-  }
-
-  return `${formatEngineering(lower, "Ω")} or ${formatEngineering(upper, "Ω")}`;
+  return `${formatEngineering(pair.lower, "Ω")} or ${formatEngineering(pair.upper, "Ω")}`;
 }
