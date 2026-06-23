@@ -64,6 +64,7 @@ test("where-used page renders empty state for supported asset target with no res
           boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
           circuitBlockDependencies: [],
           documentHits: [],
+          interconnectHits: [],
           matchedCircuitBlocks: [],
           matchedParts: [],
           projectUsages: [],
@@ -125,6 +126,47 @@ test("where-used page renders project document clue hits", async () => {
     assert.match(html, /Copy to Notes/u);
     assert.match(html, /href="\/projects\/project-alpha#project-files-heading"/u);
     assert.match(html, /Document search reads current project file maps/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
+ * Verifies the interconnect target renders cable, fixture, and pin-map hits with its trust boundary.
+ */
+test("where-used page renders cable and fixture interconnect hits", async () => {
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse(buildHealthResponse("connected"));
+    }
+
+    if (url.pathname === "/where-used") {
+      assert.equal(url.searchParams.get("targetType"), "interconnect");
+      assert.equal(url.searchParams.get("q"), "J202");
+
+      return jsonResponse({
+        data: buildInterconnectWhereUsedResponse(),
+        source: "database"
+      });
+    }
+
+    throw new Error(`unexpected request: ${url.pathname}`);
+  });
+
+  try {
+    const html = await renderWhereUsedPage({ q: "J202", targetType: "interconnect" });
+
+    assert.match(html, /Cable, fixture, and pin-map hits/u);
+    assert.match(html, /Cable\/fixture hits/u);
+    assert.match(html, /CAB-100/u);
+    assert.match(html, /TFX-42/u);
+    assert.match(html, /RS422_TX\+/u);
+    assert.match(html, /Connector ref J202/u);
+    assert.match(html, /Pin map row/u);
+    assert.match(html, /Fixture port/u);
+    assert.match(html, /href="\/interconnects"/u);
+    assert.match(html, /Interconnect search reads recorded cable, fixture, and pin-map memory/u);
+    assert.doesNotMatch(html, /No confirmed project usage/u);
   } finally {
     restoreFetch();
   }
@@ -269,6 +311,7 @@ function buildWhereUsedResponse(): WhereUsedSearchResponse {
       }
     ],
     documentHits: [],
+    interconnectHits: [],
     matchedCircuitBlocks: [],
     matchedParts: [buildPartSummary()],
     projectUsages: [
@@ -352,6 +395,7 @@ function buildDocumentWhereUsedResponse(): WhereUsedSearchResponse {
     assetExports: [],
     boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
     circuitBlockDependencies: [],
+    interconnectHits: [],
     documentHits: [
       {
         document: {
@@ -406,6 +450,85 @@ function buildDocumentWhereUsedResponse(): WhereUsedSearchResponse {
     state: "available",
     supportedTarget: true,
     targetType: "document",
+    unsupportedReason: null
+  };
+}
+
+/**
+ * Builds an interconnect where-used response with one pin-map, one cable-end, and one fixture-port hit.
+ */
+function buildInterconnectWhereUsedResponse(): WhereUsedSearchResponse {
+  return {
+    assetExports: [],
+    boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
+    circuitBlockDependencies: [],
+    documentHits: [],
+    interconnectHits: [
+      {
+        cableKey: "CAB-100",
+        confidenceScore: 0.62,
+        connectorRef: "J202",
+        destinationConnectorRef: "J201",
+        destinationPinNumber: "12",
+        endLabel: "A",
+        fixtureKey: null,
+        kind: "pin_map_row",
+        matchedLabels: ["Connector ref J202"],
+        pinNumber: "47",
+        projectKey: "ALPHA",
+        recordId: "pin-row-j202-47",
+        revisionLabel: "D",
+        signalName: "RS422_TX+",
+        status: "approved",
+        wireColor: "blue",
+        wireGauge: 24
+      },
+      {
+        cableKey: "CAB-100",
+        confidenceScore: null,
+        connectorRef: "J202",
+        destinationConnectorRef: null,
+        destinationPinNumber: null,
+        endLabel: "A",
+        fixtureKey: null,
+        kind: "cable_end",
+        matchedLabels: ["Connector ref J202"],
+        pinNumber: null,
+        projectKey: "ALPHA",
+        recordId: "cable-cab-100-end-a",
+        revisionLabel: "D",
+        signalName: null,
+        status: "approved",
+        wireColor: null,
+        wireGauge: null
+      },
+      {
+        cableKey: null,
+        confidenceScore: null,
+        connectorRef: "J202",
+        destinationConnectorRef: null,
+        destinationPinNumber: null,
+        endLabel: null,
+        fixtureKey: "TFX-42",
+        kind: "fixture_port",
+        matchedLabels: ["Connector ref J202"],
+        pinNumber: null,
+        projectKey: "ALPHA",
+        recordId: "fixture-tfx-42-port-j202",
+        revisionLabel: "B",
+        signalName: null,
+        status: "restricted",
+        wireColor: null,
+        wireGauge: null
+      }
+    ],
+    matchedCircuitBlocks: [],
+    matchedParts: [],
+    projectUsages: [],
+    query: "J202",
+    state: "available",
+    supportedTarget: true,
+    targetType: "interconnect",
     unsupportedReason: null
   };
 }

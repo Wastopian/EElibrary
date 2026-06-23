@@ -10,7 +10,7 @@ import { fetchApiHealth, fetchWhereUsedSearch, isApiClientError } from "../../li
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CircuitBlockPartSubstitutionPolicy, ProjectDocumentMapEntry, ProjectDocumentType, ProjectPartUsageStatus, WhereUsedAssetExportRecord, WhereUsedCircuitBlockDependencyRecord, WhereUsedDocumentHitRecord, WhereUsedProjectUsageRecord, WhereUsedSearchResponse, WhereUsedTargetType } from "@ee-library/shared/types";
+import type { CircuitBlockPartSubstitutionPolicy, ProjectDocumentMapEntry, ProjectDocumentType, ProjectPartUsageStatus, WhereUsedAssetExportRecord, WhereUsedCircuitBlockDependencyRecord, WhereUsedDocumentHitRecord, WhereUsedInterconnectHitKind, WhereUsedInterconnectHitRecord, WhereUsedProjectUsageRecord, WhereUsedSearchResponse, WhereUsedTargetType } from "@ee-library/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -129,6 +129,11 @@ export default async function WhereUsedPage({ searchParams }: WhereUsedPageProps
             <strong>Document search reads current project file maps.</strong>
             <p>Document hits come from filenames, small text files, and completed PDF or Office reading. They do not mean the file was reviewed or approved.</p>
           </div>
+          <div>
+            <span>Cables &amp; fixtures</span>
+            <strong>Interconnect search reads recorded cable, fixture, and pin-map memory.</strong>
+            <p>Hits show what is on file for a connector ref, cable, fixture, pin, or signal. They do not approve a part or prove a bench setup is safe to reuse.</p>
+          </div>
         </div>
       </section>
     </main>
@@ -227,6 +232,7 @@ function WhereUsedSearchForm({ query, targetType }: { query: string; targetType:
             <option value="connector_set">Connector set</option>
             <option value="asset">Asset</option>
             <option value="document">Project documents</option>
+            <option value="interconnect">Cables &amp; fixtures</option>
           </select>
         </label>
         <label className="where-used-search-form__query">
@@ -254,8 +260,8 @@ function WhereUsedSearchSetupState({ state }: { state: Extract<WhereUsedPageStat
 function WhereUsedIdleSnapshot() {
   return (
     <div className="projects-stat-grid">
-      <WhereUsedStat label="Targets" tone="info" value="5" />
-      <WhereUsedStat label="Backed now" tone="verified" value="5" />
+      <WhereUsedStat label="Targets" tone="info" value="6" />
+      <WhereUsedStat label="Backed now" tone="verified" value="6" />
       <WhereUsedStat label="Trust" tone="review" value="Bounded" />
       <WhereUsedStat label="Export" tone="neutral" value="No change" />
     </div>
@@ -288,6 +294,7 @@ function WhereUsedSnapshot({ response }: { response: WhereUsedSearchResponse }) 
       <WhereUsedStat label="Block roles" tone={response.circuitBlockDependencies.length > 0 ? "review" : "neutral"} value={response.circuitBlockDependencies.length.toString()} />
       {response.assetExports.length > 0 && <WhereUsedStat label="Export bundles" tone="verified" value={response.assetExports.length.toString()} />}
       {response.documentHits.length > 0 && <WhereUsedStat label="Document hits" tone="info" value={response.documentHits.length.toString()} />}
+      {response.interconnectHits.length > 0 && <WhereUsedStat label="Cable/fixture hits" tone="info" value={response.interconnectHits.length.toString()} />}
     </div>
   );
 }
@@ -341,12 +348,13 @@ function WhereUsedResults({ state }: { state: WhereUsedPageState }) {
       <WhereUsedMatchSummary response={response} />
       {response.projectUsages.length > 0
         ? <WhereUsedProjectUsageTable records={response.projectUsages} />
-        : response.assetExports.length === 0 && response.documentHits.length === 0
+        : response.assetExports.length === 0 && response.documentHits.length === 0 && response.interconnectHits.length === 0
           ? <EmptyState title="No confirmed project usage" body="This part may still appear in circuit blocks or export bundles below, even if no project BOM has used it yet." />
           : null}
       {response.circuitBlockDependencies.length > 0 ? <WhereUsedCircuitDependencyTable records={response.circuitBlockDependencies} /> : null}
       {response.assetExports.length > 0 ? <WhereUsedAssetExportTable records={response.assetExports} /> : null}
       {response.documentHits.length > 0 ? <WhereUsedDocumentHitTable records={response.documentHits} /> : null}
+      {response.interconnectHits.length > 0 ? <WhereUsedInterconnectHitTable records={response.interconnectHits} /> : null}
     </div>
   );
 }
@@ -629,6 +637,71 @@ function WhereUsedDocumentHitTable({ records }: { records: WhereUsedDocumentHitR
 }
 
 /**
+ * Renders matched interconnect memory rows (cables, fixture ports, pin maps).
+ */
+function WhereUsedInterconnectHitTable({ records }: { records: WhereUsedInterconnectHitRecord[] }) {
+  return (
+    <div className="where-used-table-wrap">
+      <h4 className="form-section-label">Cable, fixture, and pin-map hits</h4>
+      <table className="where-used-table">
+        <thead>
+          <tr>
+            <th>Record</th>
+            <th>Cable / Fixture</th>
+            <th>Connector</th>
+            <th>Pin / Signal</th>
+            <th>Destination</th>
+            <th>Status</th>
+            <th>Matched</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record) => (
+            <tr key={`${record.kind}:${record.recordId}`}>
+              <td>{formatInterconnectHitKind(record.kind)}</td>
+              <td>
+                <Link href="/interconnects">{record.cableKey ?? record.fixtureKey ?? "Unlabeled"}</Link>
+                <p>{record.revisionLabel ? `Rev ${record.revisionLabel}` : "No revision"}{record.projectKey ? ` · ${record.projectKey}` : ""}</p>
+              </td>
+              <td>
+                <span className="ui-mono">{record.connectorRef ?? "—"}</span>
+                <p>{record.endLabel ? `End ${record.endLabel}` : "No end"}</p>
+              </td>
+              <td>
+                <span className="ui-mono">{record.pinNumber ? `Pin ${record.pinNumber}` : "—"}</span>
+                <p>{record.signalName ?? "No signal recorded"}</p>
+              </td>
+              <td>
+                <span className="ui-mono">{record.destinationConnectorRef ?? "—"}</span>
+                <p>{record.destinationPinNumber ? `Pin ${record.destinationPinNumber}` : ""}</p>
+              </td>
+              <td>
+                <span>{record.status ? record.status.replace(/_/gu, " ") : "—"}</span>
+                <p>{record.confidenceScore !== null ? `${Math.round(record.confidenceScore * 100)}% confidence` : ""}</p>
+              </td>
+              <td>
+                <ul className="where-used-role-list">
+                  {record.matchedLabels.length > 0
+                    ? record.matchedLabels.slice(0, 3).map((label) => <li key={label}>{label}</li>)
+                    : <li>Matched interconnect record</li>}
+                </ul>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Formats an interconnect hit kind for the where-used table. */
+function formatInterconnectHitKind(kind: WhereUsedInterconnectHitKind): string {
+  if (kind === "pin_map_row") return "Pin map row";
+  if (kind === "cable_end") return "Cable end";
+  return "Fixture port";
+}
+
+/**
  * Builds the result panel title from current page state.
  */
 function getResultsTitle(state: WhereUsedPageState): string {
@@ -707,6 +780,18 @@ function getWhereUsedQueryGuidance(targetType: WhereUsedTargetType): WhereUsedQu
     };
   }
 
+  if (targetType === "interconnect") {
+    return {
+      examples: [
+        { label: "Connector ref", query: "J202" },
+        { label: "Signal", query: "CAN_H" },
+        { label: "Pin", query: "47" }
+      ],
+      hint: "Cable & fixture searches read recorded interconnect memory: connector refs and pin numbers match exactly, while cable ids, fixture ids, and signal names match as you type part of the name.",
+      recovery: "Connector refs and pins must match exactly (try J202, not J-202). For cables, fixtures, and signals, part of the name works. Open the Interconnects workspace to see what is recorded."
+    };
+  }
+
   return {
     examples: [
       { label: "Part id", query: "part-memory-ldo" },
@@ -733,7 +818,7 @@ function buildWhereUsedExampleHref(targetType: WhereUsedTargetType, query: strin
  * Parses where-used target types while defaulting invalid query strings to part.
  */
 function readWhereUsedTargetType(value: string): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document" || value === "interconnect") {
     return value;
   }
 
@@ -748,6 +833,7 @@ function formatWhereUsedTargetType(targetType: WhereUsedTargetType): string {
   if (targetType === "connector_set") return "Connector set (with mates)";
   if (targetType === "asset") return "Asset (export bundles)";
   if (targetType === "document") return "Project documents";
+  if (targetType === "interconnect") return "Cables & fixtures";
   return "Part";
 }
 

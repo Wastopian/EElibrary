@@ -4973,7 +4973,7 @@ function isCircuitBlockPartSubstitutionPolicy(value: unknown): value is CircuitB
  * Reads a global where-used target type without accepting arbitrary target labels.
  */
 function readWhereUsedTargetType(value: string | null): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document" || value === "interconnect") {
     return value;
   }
 

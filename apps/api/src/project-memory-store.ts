@@ -11,6 +11,7 @@ import {
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
+import { searchInterconnectWhereUsed } from "./interconnect-store";
 import { searchProjectDocumentsForWhereUsed } from "./project-files";
 import { searchProjectDocumentExtractions } from "./project-document-extraction-store";
 import type {
@@ -182,6 +183,7 @@ import type {
   WhereUsedAssetExportRecord,
   WhereUsedCircuitBlockDependencyRecord,
   WhereUsedDocumentHitRecord,
+  WhereUsedInterconnectHitRecord,
   WhereUsedProjectUsageRecord,
   WhereUsedSearchResponse,
   WhereUsedTargetType
@@ -2770,6 +2772,27 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
       };
     }
 
+    if (normalizedTargetType === "interconnect") {
+      const interconnectHits = await searchInterconnectWhereUsed(databasePool, normalizedQuery);
+
+      return {
+        response: buildWhereUsedSearchResponse({
+          assetExports: [],
+          circuitBlockDependencies: [],
+          documentHits: [],
+          interconnectHits,
+          matchedCircuitBlocks: [],
+          matchedParts: [],
+          projectUsages: [],
+          query: normalizedQuery,
+          supportedTarget: true,
+          targetType: normalizedTargetType,
+          unsupportedReason: null
+        }),
+        status: "available"
+      };
+    }
+
     const matchedCircuitBlocks = await readWhereUsedCircuitBlockMatches(databasePool, normalizedQuery);
     const circuitBlockDependencies = await readWhereUsedCircuitBlockDependenciesForBlockIds(databasePool, matchedCircuitBlocks.map((summary) => summary.circuitBlock.id));
     const projectUsages = await readWhereUsedProjectUsagesForDependencies(databasePool, circuitBlockDependencies);
@@ -4665,20 +4688,24 @@ function buildWhereUsedSearchResponse(input: {
   circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
   assetExports: WhereUsedAssetExportRecord[];
   documentHits: WhereUsedDocumentHitRecord[];
+  interconnectHits?: WhereUsedInterconnectHitRecord[];
 }): WhereUsedSearchResponse {
+  const interconnectHits = input.interconnectHits ?? [];
   const hasResults =
     input.matchedParts.length > 0 ||
     input.matchedCircuitBlocks.length > 0 ||
     input.projectUsages.length > 0 ||
     input.circuitBlockDependencies.length > 0 ||
     input.assetExports.length > 0 ||
-    input.documentHits.length > 0;
+    input.documentHits.length > 0 ||
+    interconnectHits.length > 0;
 
   return {
     assetExports: input.assetExports,
     boundary: "Where-used results are historical dependency and usage context only; they do not approve reuse, validate evidence, or unlock export.",
     circuitBlockDependencies: input.circuitBlockDependencies,
     documentHits: input.documentHits,
+    interconnectHits,
     matchedCircuitBlocks: input.matchedCircuitBlocks,
     matchedParts: input.matchedParts,
     projectUsages: input.projectUsages,
@@ -6937,7 +6964,7 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
  * Normalizes global where-used target type strings while defaulting to part search.
  */
 function normalizeWhereUsedTargetType(value: string | null | undefined): WhereUsedTargetType {
-  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document") {
+  if (value === "circuit_block" || value === "connector_set" || value === "asset" || value === "document" || value === "interconnect") {
     return value;
   }
 

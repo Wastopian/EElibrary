@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { newDb } from "pg-mem";
-import { readInterconnectDashboardFromDatabase, setInterconnectPoolForTests } from "./interconnect-store";
+import { readInterconnectDashboardFromDatabase, searchInterconnectWhereUsed, setInterconnectPoolForTests } from "./interconnect-store";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 
@@ -70,6 +70,100 @@ test("readInterconnectDashboardFromDatabase returns cable, fixture, and pin-map 
     assert.equal(pinRow?.pinNumber, "47");
     assert.equal(pinRow?.signalName, "RS422_TX+");
     assert.equal(pinRow?.confidenceScore, 0.62);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a connector ref matches the pin row, cable end, and fixture port that carry it.
+ */
+test("searchInterconnectWhereUsed returns cable, fixture, and pin hits for a connector ref", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool);
+
+    const hits = await searchInterconnectWhereUsed(pool, "J202");
+    const kinds = hits.map((hit) => hit.kind).sort();
+
+    assert.deepEqual(kinds, ["cable_end", "fixture_port", "pin_map_row"]);
+
+    const pinHit = hits.find((hit) => hit.kind === "pin_map_row");
+    assert.equal(pinHit?.cableKey, "CAB-100");
+    assert.equal(pinHit?.pinNumber, "47");
+    assert.equal(pinHit?.signalName, "RS422_TX+");
+    assert.equal(pinHit?.confidenceScore, 0.62);
+    assert.ok(pinHit?.matchedLabels.includes("Connector ref J202"));
+
+    const fixtureHit = hits.find((hit) => hit.kind === "fixture_port");
+    assert.equal(fixtureHit?.fixtureKey, "TFX-42");
+    assert.equal(fixtureHit?.projectKey, "ALPHA");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies connector-ref matching is case-insensitive so operators do not have to match casing.
+ */
+test("searchInterconnectWhereUsed matches connector refs case-insensitively", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool);
+
+    const hits = await searchInterconnectWhereUsed(pool, "j202");
+
+    assert.ok(hits.length >= 3);
+    assert.ok(hits.every((hit) => hit.matchedLabels.length > 0));
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies signal names match as a substring while a destination connector ref matches the pin row.
+ */
+test("searchInterconnectWhereUsed matches signal substrings and destination connector refs", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool);
+
+    const signalHits = await searchInterconnectWhereUsed(pool, "rs422");
+    assert.equal(signalHits.length, 1);
+    assert.equal(signalHits[0]?.kind, "pin_map_row");
+    assert.ok(signalHits[0]?.matchedLabels.includes("Signal RS422_TX+"));
+
+    const destinationHits = await searchInterconnectWhereUsed(pool, "J201");
+    assert.equal(destinationHits.length, 1);
+    assert.equal(destinationHits[0]?.kind, "pin_map_row");
+    assert.ok(destinationHits[0]?.matchedLabels.includes("Destination connector J201"));
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a no-match query and a blank query both return no hits rather than inventing rows.
+ */
+test("searchInterconnectWhereUsed returns no hits for an unknown or blank query", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool);
+
+    assert.deepEqual(await searchInterconnectWhereUsed(pool, "J999"), []);
+    assert.deepEqual(await searchInterconnectWhereUsed(pool, "   "), []);
   } finally {
     setInterconnectPoolForTests(null);
     await pool.end();
