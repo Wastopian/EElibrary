@@ -14,7 +14,8 @@ import type {
   InterconnectProvenance,
   InterconnectRecordStatus,
   InterconnectPartSummary,
-  TestFixture
+  TestFixture,
+  WhereUsedInterconnectHitRecord
 } from "@ee-library/shared/types";
 
 /** INTERCONNECT_BOUNDARY_COPY explains what this first workspace does and does not decide. */
@@ -37,6 +38,9 @@ const INTERCONNECT_PIN_ROW_LIMIT = 200;
 
 /** LOW_CONFIDENCE_PIN_THRESHOLD names the score below which pin rows need another check. */
 const LOW_CONFIDENCE_PIN_THRESHOLD = 0.75;
+
+/** INTERCONNECT_WHERE_USED_LIMIT caps each interconnect where-used result set so a big harness stays readable. */
+const INTERCONNECT_WHERE_USED_LIMIT = 100;
 
 /** pool is initialized lazily so local tests do not require DATABASE_URL. */
 let pool: Pool | null = null;
@@ -398,6 +402,248 @@ async function readFixturePorts(databasePool: Pool, fixtureIds: string[]): Promi
   );
 
   return result.rows;
+}
+
+/** DatabasePinMapHitRow is one pin-map row joined to its cable identity for where-used search. */
+interface DatabasePinMapHitRow {
+  id: string;
+  cable_key: string;
+  revision_label: string;
+  assembly_status: InterconnectRecordStatus;
+  project_key: string | null;
+  end_label: CableAssemblyEndLabel;
+  connector_ref: string;
+  pin_number: string;
+  signal_name: string;
+  destination_connector_ref: string | null;
+  destination_pin_number: string | null;
+  wire_color: string | null;
+  wire_gauge: number | null;
+  confidence_score: string | number;
+}
+
+/** DatabaseCableEndHitRow is one cable end joined to its cable identity for where-used search. */
+interface DatabaseCableEndHitRow {
+  id: string;
+  cable_key: string;
+  revision_label: string;
+  assembly_status: InterconnectRecordStatus;
+  project_key: string | null;
+  end_label: CableAssemblyEndLabel;
+  connector_ref: string;
+}
+
+/** DatabaseFixturePortHitRow is one fixture port joined to its fixture identity for where-used search. */
+interface DatabaseFixturePortHitRow {
+  id: string;
+  fixture_key: string;
+  revision_label: string;
+  fixture_status: InterconnectRecordStatus;
+  project_key: string | null;
+  connector_ref: string;
+  port_role: string | null;
+}
+
+/**
+ * Searches persisted interconnect memory (cables, fixture ports, pin maps) for one free-text
+ * identifier — a connector ref like `J202`, a cable or fixture key, a pin number, or a signal name.
+ * Connector refs and pin numbers match exactly (case-insensitive); cable/fixture keys and signal
+ * names match as substrings, using the `upper(...)` indexes added with the interconnect schema.
+ *
+ * This reads recorded wiring memory only. A returned row never approves a part, proves a bench
+ * setup is safe, or unlocks export — the where-used workspace repeats that boundary.
+ */
+export async function searchInterconnectWhereUsed(databasePool: Pool, query: string): Promise<WhereUsedInterconnectHitRecord[]> {
+  const normalizedQuery = query.trim();
+
+  if (normalizedQuery.length === 0) {
+    return [];
+  }
+
+  const [pinRows, endRows, portRows] = await Promise.all([
+    databasePool.query<DatabasePinMapHitRow>(
+      `
+        SELECT
+          cpm.id,
+          ca.cable_key,
+          ca.revision_label,
+          ca.assembly_status,
+          p.project_key,
+          cpm.end_label,
+          cpm.connector_ref,
+          cpm.pin_number,
+          cpm.signal_name,
+          cpm.destination_connector_ref,
+          cpm.destination_pin_number,
+          cpm.wire_color,
+          cpm.wire_gauge,
+          cpm.confidence_score
+        FROM cable_pin_map_rows cpm
+        JOIN cable_assemblies ca ON ca.id = cpm.cable_assembly_id
+        LEFT JOIN projects p ON p.id = ca.project_id
+        WHERE upper(cpm.connector_ref) = upper($1)
+           OR upper(cpm.destination_connector_ref) = upper($1)
+           OR upper(cpm.pin_number) = upper($1)
+           OR upper(cpm.signal_name) LIKE '%' || upper($1) || '%'
+           OR upper(ca.cable_key) LIKE '%' || upper($1) || '%'
+        ORDER BY ca.cable_key ASC, cpm.connector_ref ASC, cpm.pin_number ASC
+        LIMIT $2
+      `,
+      [normalizedQuery, INTERCONNECT_WHERE_USED_LIMIT]
+    ),
+    databasePool.query<DatabaseCableEndHitRow>(
+      `
+        SELECT
+          cae.id,
+          ca.cable_key,
+          ca.revision_label,
+          ca.assembly_status,
+          p.project_key,
+          cae.end_label,
+          cae.connector_ref
+        FROM cable_assembly_ends cae
+        JOIN cable_assemblies ca ON ca.id = cae.cable_assembly_id
+        LEFT JOIN projects p ON p.id = ca.project_id
+        WHERE upper(cae.connector_ref) = upper($1)
+           OR upper(ca.cable_key) LIKE '%' || upper($1) || '%'
+        ORDER BY ca.cable_key ASC,
+          CASE cae.end_label WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5 END,
+          cae.connector_ref ASC
+        LIMIT $2
+      `,
+      [normalizedQuery, INTERCONNECT_WHERE_USED_LIMIT]
+    ),
+    databasePool.query<DatabaseFixturePortHitRow>(
+      `
+        SELECT
+          fp.id,
+          tf.fixture_key,
+          tf.revision_label,
+          tf.fixture_status,
+          p.project_key,
+          fp.connector_ref,
+          fp.port_role
+        FROM fixture_ports fp
+        JOIN test_fixtures tf ON tf.id = fp.fixture_id
+        LEFT JOIN projects p ON p.id = tf.project_id
+        WHERE upper(fp.connector_ref) = upper($1)
+           OR upper(tf.fixture_key) LIKE '%' || upper($1) || '%'
+        ORDER BY tf.fixture_key ASC, fp.connector_ref ASC
+        LIMIT $2
+      `,
+      [normalizedQuery, INTERCONNECT_WHERE_USED_LIMIT]
+    )
+  ]);
+
+  return [
+    ...pinRows.rows.map((row) => mapPinMapHitRow(row, normalizedQuery)),
+    ...endRows.rows.map((row) => mapCableEndHitRow(row, normalizedQuery)),
+    ...portRows.rows.map((row) => mapFixturePortHitRow(row, normalizedQuery))
+  ];
+}
+
+/**
+ * Maps one matched pin-map row into the shared where-used contract with plain match labels.
+ */
+function mapPinMapHitRow(row: DatabasePinMapHitRow, query: string): WhereUsedInterconnectHitRecord {
+  const matchedLabels: string[] = [];
+  if (equalsIgnoreCase(row.connector_ref, query)) matchedLabels.push(`Connector ref ${row.connector_ref}`);
+  if (equalsIgnoreCase(row.destination_connector_ref, query)) matchedLabels.push(`Destination connector ${row.destination_connector_ref}`);
+  if (equalsIgnoreCase(row.pin_number, query)) matchedLabels.push(`Pin ${row.pin_number}`);
+  if (containsIgnoreCase(row.signal_name, query)) matchedLabels.push(`Signal ${row.signal_name}`);
+  if (containsIgnoreCase(row.cable_key, query)) matchedLabels.push(`Cable ${row.cable_key}`);
+
+  return {
+    cableKey: row.cable_key,
+    confidenceScore: toNumber(row.confidence_score),
+    connectorRef: row.connector_ref,
+    destinationConnectorRef: row.destination_connector_ref,
+    destinationPinNumber: row.destination_pin_number,
+    endLabel: row.end_label,
+    fixtureKey: null,
+    kind: "pin_map_row",
+    matchedLabels,
+    pinNumber: row.pin_number,
+    projectKey: row.project_key,
+    recordId: row.id,
+    revisionLabel: row.revision_label,
+    signalName: row.signal_name,
+    status: row.assembly_status,
+    wireColor: row.wire_color,
+    wireGauge: row.wire_gauge
+  };
+}
+
+/**
+ * Maps one matched cable end into the shared where-used contract with plain match labels.
+ */
+function mapCableEndHitRow(row: DatabaseCableEndHitRow, query: string): WhereUsedInterconnectHitRecord {
+  const matchedLabels: string[] = [];
+  if (equalsIgnoreCase(row.connector_ref, query)) matchedLabels.push(`Connector ref ${row.connector_ref}`);
+  if (containsIgnoreCase(row.cable_key, query)) matchedLabels.push(`Cable ${row.cable_key}`);
+
+  return {
+    cableKey: row.cable_key,
+    confidenceScore: null,
+    connectorRef: row.connector_ref,
+    destinationConnectorRef: null,
+    destinationPinNumber: null,
+    endLabel: row.end_label,
+    fixtureKey: null,
+    kind: "cable_end",
+    matchedLabels,
+    pinNumber: null,
+    projectKey: row.project_key,
+    recordId: row.id,
+    revisionLabel: row.revision_label,
+    signalName: null,
+    status: row.assembly_status,
+    wireColor: null,
+    wireGauge: null
+  };
+}
+
+/**
+ * Maps one matched fixture port into the shared where-used contract with plain match labels.
+ */
+function mapFixturePortHitRow(row: DatabaseFixturePortHitRow, query: string): WhereUsedInterconnectHitRecord {
+  const matchedLabels: string[] = [];
+  if (equalsIgnoreCase(row.connector_ref, query)) matchedLabels.push(`Connector ref ${row.connector_ref}`);
+  if (containsIgnoreCase(row.fixture_key, query)) matchedLabels.push(`Fixture ${row.fixture_key}`);
+
+  return {
+    cableKey: null,
+    confidenceScore: null,
+    connectorRef: row.connector_ref,
+    destinationConnectorRef: null,
+    destinationPinNumber: null,
+    endLabel: null,
+    fixtureKey: row.fixture_key,
+    kind: "fixture_port",
+    matchedLabels,
+    pinNumber: null,
+    projectKey: row.project_key,
+    recordId: row.id,
+    revisionLabel: row.revision_label,
+    signalName: null,
+    status: row.fixture_status,
+    wireColor: null,
+    wireGauge: null
+  };
+}
+
+/**
+ * Compares two strings without case sensitivity, treating null as no match.
+ */
+function equalsIgnoreCase(value: string | null, query: string): boolean {
+  return value !== null && value.toUpperCase() === query.toUpperCase();
+}
+
+/**
+ * Checks whether a value contains the query as a case-insensitive substring, treating null as no match.
+ */
+function containsIgnoreCase(value: string | null, query: string): boolean {
+  return value !== null && value.toUpperCase().includes(query.toUpperCase());
 }
 
 /**

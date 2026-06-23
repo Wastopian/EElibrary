@@ -1660,7 +1660,7 @@ export interface ProjectOverlapPanelResponse {
 }
 
 /** WhereUsedTargetType names supported and explicitly planned global where-used search targets. */
-export type WhereUsedTargetType = "part" | "circuit_block" | "connector_set" | "asset" | "document";
+export type WhereUsedTargetType = "part" | "circuit_block" | "connector_set" | "asset" | "document" | "interconnect";
 
 /** WhereUsedProjectUsageRecord joins global where-used rows to part and optional circuit-role context. */
 export interface WhereUsedProjectUsageRecord {
@@ -1705,6 +1705,35 @@ export interface WhereUsedDocumentHitRecord {
   matchedLabels: string[];
 }
 
+/** WhereUsedInterconnectHitKind names which interconnect record a where-used hit came from. */
+export type WhereUsedInterconnectHitKind = "pin_map_row" | "cable_end" | "fixture_port";
+
+/**
+ * WhereUsedInterconnectHitRecord reports one persisted cable, fixture, or pin-map row that
+ * matched a connector ref, cable id, fixture id, pin number, or signal name. It is recorded
+ * interconnect memory, never proof a bench setup is safe, approved, or export-ready.
+ */
+export interface WhereUsedInterconnectHitRecord {
+  kind: WhereUsedInterconnectHitKind;
+  recordId: string;
+  cableKey: string | null;
+  fixtureKey: string | null;
+  revisionLabel: string | null;
+  status: InterconnectRecordStatus | null;
+  endLabel: CableAssemblyEndLabel | null;
+  connectorRef: string | null;
+  pinNumber: string | null;
+  signalName: string | null;
+  destinationConnectorRef: string | null;
+  destinationPinNumber: string | null;
+  wireColor: string | null;
+  wireGauge: number | null;
+  confidenceScore: number | null;
+  projectKey: string | null;
+  /** Plain labels explaining why the row matched the query (e.g. "Connector ref J202", "Signal CAN_H"). */
+  matchedLabels: string[];
+}
+
 /** WhereUsedSearchResponse powers the global where-used workspace without implying approved reuse. */
 export interface WhereUsedSearchResponse {
   state: ProjectMemoryReadState;
@@ -1718,6 +1747,7 @@ export interface WhereUsedSearchResponse {
   circuitBlockDependencies: WhereUsedCircuitBlockDependencyRecord[];
   assetExports: WhereUsedAssetExportRecord[];
   documentHits: WhereUsedDocumentHitRecord[];
+  interconnectHits: WhereUsedInterconnectHitRecord[];
   boundary: string;
 }
 
