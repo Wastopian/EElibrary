@@ -1329,6 +1329,71 @@ export interface InterconnectDashboardResponse {
 }
 
 /**
+ * CableAssemblyDetail is the single-record read and mutation response for cable authoring.
+ * The cable header carries its ends; pin rows are listed separately. The boundary reaffirms
+ * that recorded cable memory never approves a part, validates an asset, or unlocks export.
+ */
+export interface CableAssemblyDetail {
+  cable: CableAssembly;
+  pinRows: CablePinMapRow[];
+  boundary: string;
+}
+
+/** CableAssemblyCreateInput is the in-app form payload for a new cable header. */
+export interface CableAssemblyCreateInput {
+  cableKey: string;
+  revisionLabel?: string | null;
+  assemblyStatus?: InterconnectRecordStatus | null;
+  projectId?: string | null;
+  projectRevisionId?: string | null;
+  owner?: string | null;
+  description?: string | null;
+  sourceDocumentRef?: string | null;
+}
+
+/**
+ * CableAssemblyUpdateInput edits a cable header. Provided fields are applied; nullable fields
+ * passed as null are cleared. Setting `assemblyStatus` to `retired` is the soft-retire path.
+ */
+export interface CableAssemblyUpdateInput {
+  cableKey?: string | null;
+  revisionLabel?: string | null;
+  assemblyStatus?: InterconnectRecordStatus | null;
+  projectId?: string | null;
+  projectRevisionId?: string | null;
+  owner?: string | null;
+  description?: string | null;
+  sourceDocumentRef?: string | null;
+}
+
+/** CableAssemblyEndInput is the create/edit payload for one physical connector end. */
+export interface CableAssemblyEndInput {
+  endLabel: CableAssemblyEndLabel;
+  connectorRef: string;
+  connectorPartId?: string | null;
+  matePartId?: string | null;
+  backshellPartId?: string | null;
+  notes?: string | null;
+}
+
+/** CablePinMapRowInput is the create/edit payload for one pin-to-signal row. */
+export interface CablePinMapRowInput {
+  endLabel: CableAssemblyEndLabel;
+  connectorRef: string;
+  pinNumber: string;
+  signalName: string;
+  cableEndId?: string | null;
+  fixturePortId?: string | null;
+  wireColor?: string | null;
+  wireGauge?: number | null;
+  destinationConnectorRef?: string | null;
+  destinationPinNumber?: string | null;
+  confidenceScore?: number | null;
+  sourceDocumentRef?: string | null;
+  notes?: string | null;
+}
+
+/**
  * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
  * the UI can render consistent labels and group views without a free-form taxonomy.
  * Add categories here when the team starts working with a new class of supplier.
@@ -3480,6 +3545,8 @@ export type AuditEventTargetType =
   | "api_route"
   | "asset"
   | "bom_import"
+  | "cable_assembly"
+  | "cable_pin_map_row"
   | "circuit_block"
   | "circuit_block_part"
   | "document_revision"

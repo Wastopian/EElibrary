@@ -425,7 +425,7 @@ function CableAssemblyTableRow({ cable }: { cable: CableAssembly }) {
   return (
     <tr className={recordNeedsCheck(cable.assemblyStatus) ? "interconnect-table__row--attention" : undefined}>
       <td>
-        <span className="ui-mono interconnect-table__identity">{cable.cableKey}</span>
+        <Link className="ui-mono interconnect-table__identity interconnect-table__link" href={`/interconnects/cables/${encodeURIComponent(cable.id)}`}>{cable.cableKey}</Link>
         <p className="muted-copy">Revision {cable.revisionLabel} - updated {formatDate(cable.updatedAt)}</p>
         {cable.description ? <p>{cable.description}</p> : null}
       </td>
