@@ -5,6 +5,7 @@
  * owns client-side lookup across cable assemblies, fixture ports, and pin maps.
  */
 
+import Link from "next/link";
 import React from "react";
 import { SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { InterconnectBrowser } from "./InterconnectBrowser";
@@ -54,6 +55,9 @@ export default async function InterconnectsPage() {
                 tone={health?.dependencies.database === "connected" ? "verified" : "review"}
               />
             </div>
+            <p className="projects-hero__lede">
+              <Link className="button-primary" href="/interconnects/cables/new">New cable</Link>
+            </p>
           </div>
           <InterconnectSnapshot response={response} />
         </div>

@@ -7006,6 +7006,134 @@ details[open] .trust-breakdown__toggle::before {
   width: 100%;
 }
 
+.cable-form {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.cable-form--inline {
+  background: var(--color-surface);
+  margin-top: 12px;
+}
+
+.cable-form__boundary {
+  background: var(--color-accent-soft);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 0.85rem;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.cable-form__grid {
+  display: grid;
+  gap: 10px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.cable-form__field {
+  display: grid;
+  gap: 6px;
+}
+
+.cable-form__field--wide {
+  grid-column: 1 / -1;
+}
+
+.cable-form__field span {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cable-form__field input,
+.cable-form__field select,
+.cable-form__field textarea {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font: inherit;
+  min-height: 40px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.cable-form__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.cable-form__hint,
+.cable-editor__footnote {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.cable-form__error {
+  color: var(--color-danger, #b00020);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.cable-editor {
+  display: grid;
+  gap: 20px;
+}
+
+.cable-editor__section {
+  display: grid;
+  gap: 10px;
+}
+
+.cable-editor__banner {
+  border-radius: 6px;
+  font-size: 0.9rem;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.cable-editor__banner--ok {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.cable-editor__banner--error {
+  background: rgba(176, 0, 32, 0.1);
+  color: var(--color-danger, #b00020);
+}
+
+.cable-editor__list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cable-editor__list-row {
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+
+.cable-editor__row-actions {
+  display: inline-flex;
+  gap: 10px;
+  white-space: nowrap;
+}
+
 .interconnect-browser__filter {
   display: grid;
   gap: 6px;

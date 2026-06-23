@@ -6,7 +6,20 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { newDb } from "pg-mem";
-import { readInterconnectDashboardFromDatabase, searchInterconnectWhereUsed, setInterconnectPoolForTests } from "./interconnect-store";
+import {
+  createCableAssemblyEndInDatabase,
+  createCableAssemblyInDatabase,
+  createCablePinMapRowInDatabase,
+  deleteCableAssemblyEndInDatabase,
+  deleteCablePinMapRowInDatabase,
+  readCableAssemblyDetailFromDatabase,
+  readInterconnectDashboardFromDatabase,
+  searchInterconnectWhereUsed,
+  setInterconnectPoolForTests,
+  updateCableAssemblyEndInDatabase,
+  updateCableAssemblyInDatabase,
+  updateCablePinMapRowInDatabase
+} from "./interconnect-store";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 
@@ -171,6 +184,185 @@ test("searchInterconnectWhereUsed returns no hits for an unknown or blank query"
 });
 
 /**
+ * Verifies a cable can be created and then read back as full detail.
+ */
+test("createCableAssemblyInDatabase persists a cable and detail read returns it", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createCableAssemblyInDatabase({ cableKey: "CAB-200", revisionLabel: "A", owner: "Dana" });
+    assert.equal(created.status, "created");
+    if (created.status !== "created") return;
+    assert.equal(created.response.cable.cableKey, "CAB-200");
+    assert.equal(created.response.cable.assemblyStatus, "draft");
+    assert.equal(created.response.cable.provenance, "manual_internal");
+    assert.match(created.response.boundary, /does not approve/u);
+
+    const detail = await readCableAssemblyDetailFromDatabase(created.response.cable.id);
+    assert.equal(detail.status, "available");
+    if (detail.status !== "available") return;
+    assert.equal(detail.response.cable.cableKey, "CAB-200");
+    assert.equal(detail.response.pinRows.length, 0);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies header validation and duplicate (cable_key, revision) protection.
+ */
+test("createCableAssemblyInDatabase rejects empty keys and duplicate revisions", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const blank = await createCableAssemblyInDatabase({ cableKey: "   " });
+    assert.equal(blank.status, "invalid");
+
+    const first = await createCableAssemblyInDatabase({ cableKey: "CAB-300", revisionLabel: "A" });
+    assert.equal(first.status, "created");
+    const dup = await createCableAssemblyInDatabase({ cableKey: "CAB-300", revisionLabel: "A" });
+    assert.equal(dup.status, "invalid");
+    if (dup.status !== "invalid") return;
+    assert.equal(dup.code, "DUPLICATE_CABLE_KEY");
+
+    const missingProject = await createCableAssemblyInDatabase({ cableKey: "CAB-301", projectId: "project-missing" });
+    assert.equal(missingProject.status, "invalid");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies retiring a cable is a status edit, never a delete.
+ */
+test("updateCableAssemblyInDatabase retires a cable via status and preserves the row", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createCableAssemblyInDatabase({ cableKey: "CAB-400" });
+    assert.equal(created.status, "created");
+    if (created.status !== "created") return;
+
+    const retired = await updateCableAssemblyInDatabase(created.response.cable.id, { assemblyStatus: "retired" });
+    assert.equal(retired.status, "updated");
+    if (retired.status !== "updated") return;
+    assert.equal(retired.response.cable.assemblyStatus, "retired");
+
+    const detail = await readCableAssemblyDetailFromDatabase(created.response.cable.id);
+    assert.equal(detail.status, "available");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies ends can be added, edited, de-duplicated, and deleted.
+ */
+test("cable end create/update/delete enforces validation and duplicates", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createCableAssemblyInDatabase({ cableKey: "CAB-500" });
+    if (created.status !== "created") throw new Error("setup failed");
+    const cableId = created.response.cable.id;
+
+    const badLabel = await createCableAssemblyEndInDatabase(cableId, { endLabel: "Z" as never, connectorRef: "J1" });
+    assert.equal(badLabel.status, "invalid");
+
+    const endResult = await createCableAssemblyEndInDatabase(cableId, { endLabel: "A", connectorRef: "J1" });
+    assert.equal(endResult.status, "created");
+    if (endResult.status !== "created") return;
+    assert.equal(endResult.response.cable.ends.length, 1);
+    const endId = endResult.response.cable.ends[0]!.id;
+
+    const dup = await createCableAssemblyEndInDatabase(cableId, { endLabel: "A", connectorRef: "J1" });
+    assert.equal(dup.status, "invalid");
+
+    const badPart = await createCableAssemblyEndInDatabase(cableId, { endLabel: "B", connectorRef: "J2", matePartId: "part-missing" });
+    assert.equal(badPart.status, "invalid");
+
+    const edited = await updateCableAssemblyEndInDatabase(cableId, endId, { endLabel: "A", connectorRef: "J1-RENAMED" });
+    assert.equal(edited.status, "updated");
+    if (edited.status !== "updated") return;
+    assert.equal(edited.response.cable.ends[0]!.connectorRef, "J1-RENAMED");
+
+    const wrongCable = await updateCableAssemblyEndInDatabase("cable-does-not-exist", endId, { endLabel: "A", connectorRef: "J1" });
+    assert.equal(wrongCable.status, "not_found");
+
+    const removed = await deleteCableAssemblyEndInDatabase(cableId, endId);
+    assert.equal(removed.status, "deleted");
+    if (removed.status !== "deleted") return;
+    assert.equal(removed.response.cable.ends.length, 0);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies pin rows can be added, validated, edited, and deleted.
+ */
+test("cable pin row create/update/delete enforces signal, pin, and confidence rules", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createCableAssemblyInDatabase({ cableKey: "CAB-600" });
+    if (created.status !== "created") throw new Error("setup failed");
+    const cableId = created.response.cable.id;
+
+    const missingSignal = await createCablePinMapRowInDatabase(cableId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "  " });
+    assert.equal(missingSignal.status, "invalid");
+
+    const badConfidence = await createCablePinMapRowInDatabase(cableId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "GND", confidenceScore: 5 });
+    assert.equal(badConfidence.status, "invalid");
+
+    const row = await createCablePinMapRowInDatabase(cableId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "CAN_H", wireGauge: 24 });
+    assert.equal(row.status, "created");
+    if (row.status !== "created") return;
+    assert.equal(row.response.pinRows.length, 1);
+    assert.equal(row.response.pinRows[0]!.confidenceScore, 0.5);
+    const rowId = row.response.pinRows[0]!.id;
+
+    const edited = await updateCablePinMapRowInDatabase(cableId, rowId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "CAN_L" });
+    assert.equal(edited.status, "updated");
+    if (edited.status !== "updated") return;
+    assert.equal(edited.response.pinRows[0]!.signalName, "CAN_L");
+
+    const removed = await deleteCablePinMapRowInDatabase(cableId, rowId);
+    assert.equal(removed.status, "deleted");
+    if (removed.status !== "deleted") return;
+    assert.equal(removed.response.pinRows.length, 0);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies missing-cable detail reads do not invent a record.
+ */
+test("readCableAssemblyDetailFromDatabase returns not_found for an unknown cable", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const detail = await readCableAssemblyDetailFromDatabase("cable-nope");
+    assert.equal(detail.status, "not_found");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies the API route returns the typed interconnect dashboard envelope.
  */
 test("GET /interconnects returns the interconnect dashboard", async () => {
@@ -247,7 +439,9 @@ function createInterconnectPool(): TestPool {
       connector_part_id TEXT REFERENCES parts(id),
       mate_part_id TEXT REFERENCES parts(id),
       backshell_part_id TEXT REFERENCES parts(id),
-      notes TEXT
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE test_fixtures (
@@ -292,7 +486,8 @@ function createInterconnectPool(): TestPool {
       evidence_attachment_id TEXT,
       source_document_ref TEXT,
       notes TEXT,
-      updated_at TIMESTAMPTZ NOT NULL
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 

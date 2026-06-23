@@ -34,7 +34,19 @@ import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit
 import type { AuditEventListFilters } from "./audit-log";
 import { createDocumentRedlineInDatabase, createDocumentRevisionInDatabase, readAssetDownloadAclGrant, readAssetDownloadGateFromDatabase, readDocumentRevisionsForPartFromDatabase, updateDocumentRedlineInDatabase } from "./document-control";
 import type { AssetDownloadGrant } from "./document-control";
-import { readInterconnectDashboardFromDatabase } from "./interconnect-store";
+import {
+  createCableAssemblyEndInDatabase,
+  createCableAssemblyInDatabase,
+  createCablePinMapRowInDatabase,
+  deleteCableAssemblyEndInDatabase,
+  deleteCablePinMapRowInDatabase,
+  readCableAssemblyDetailFromDatabase,
+  readInterconnectDashboardFromDatabase,
+  updateCableAssemblyEndInDatabase,
+  updateCableAssemblyInDatabase,
+  updateCablePinMapRowInDatabase
+} from "./interconnect-store";
+import type { CableAssemblyMutationResult } from "./interconnect-store";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
@@ -47,6 +59,10 @@ import type {
   AssetPromotionInput,
   BomImportCreateInput,
   BomImportPreviewInput,
+  CableAssemblyCreateInput,
+  CableAssemblyEndInput,
+  CableAssemblyUpdateInput,
+  CablePinMapRowInput,
   CadAvailabilityFilter,
   CatalogDataSource,
   CircuitBlockCreateInput,
@@ -246,6 +262,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const storageServeMatch = /^\/storage\/(.+)$/u.exec(url.pathname);
   const vendorDetailMatch = /^\/vendors\/([^/]+)$/u.exec(url.pathname);
   const vendorFileUploadMatch = /^\/vendors\/([^/]+)\/files\/([^/]+)$/u.exec(url.pathname);
+  const cableAssemblyEndDetailMatch = /^\/cable-assemblies\/([^/]+)\/ends\/([^/]+)$/u.exec(url.pathname);
+  const cableAssemblyEndsMatch = /^\/cable-assemblies\/([^/]+)\/ends$/u.exec(url.pathname);
+  const cablePinRowDetailMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows\/([^/]+)$/u.exec(url.pathname);
+  const cablePinRowsMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows$/u.exec(url.pathname);
+  const cableAssemblyDetailMatch = /^\/cable-assemblies\/([^/]+)$/u.exec(url.pathname);
 
   try {
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
@@ -441,6 +462,62 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
       decodeURIComponent(circuitBlockKnownRiskResolveMatch[1]),
       decodeURIComponent(circuitBlockKnownRiskResolveMatch[2])
     );
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/cable-assemblies") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCableAssemblyCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && cableAssemblyEndsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCableAssemblyEndCreate(request, response, decodeURIComponent(cableAssemblyEndsMatch[1]));
+    return;
+  }
+
+  if (request.method === "PATCH" && cableAssemblyEndDetailMatch?.[1] && cableAssemblyEndDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCableAssemblyEndUpdate(request, response, decodeURIComponent(cableAssemblyEndDetailMatch[1]), decodeURIComponent(cableAssemblyEndDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "DELETE" && cableAssemblyEndDetailMatch?.[1] && cableAssemblyEndDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCableAssemblyEndDelete(response, decodeURIComponent(cableAssemblyEndDetailMatch[1]), decodeURIComponent(cableAssemblyEndDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "POST" && cablePinRowsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCablePinRowCreate(request, response, decodeURIComponent(cablePinRowsMatch[1]));
+    return;
+  }
+
+  if (request.method === "PATCH" && cablePinRowDetailMatch?.[1] && cablePinRowDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCablePinRowUpdate(request, response, decodeURIComponent(cablePinRowDetailMatch[1]), decodeURIComponent(cablePinRowDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "DELETE" && cablePinRowDetailMatch?.[1] && cablePinRowDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCablePinRowDelete(response, decodeURIComponent(cablePinRowDetailMatch[1]), decodeURIComponent(cablePinRowDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "PATCH" && cableAssemblyDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCableAssemblyUpdate(request, response, decodeURIComponent(cableAssemblyDetailMatch[1]));
     return;
   }
 
@@ -651,6 +728,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (url.pathname === "/interconnects") {
     await handleInterconnectDashboardRead(response);
+    return;
+  }
+
+  if (request.method === "GET" && cableAssemblyDetailMatch?.[1]) {
+    await handleCableAssemblyDetailRead(response, decodeURIComponent(cableAssemblyDetailMatch[1]));
     return;
   }
 
@@ -3410,6 +3492,214 @@ async function handleInterconnectDashboardRead(response: ServerResponse): Promis
 }
 
 /**
+ * Handles single-cable detail reads for the authoring page.
+ */
+async function handleCableAssemblyDetailRead(response: ServerResponse, cableId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "cable-assembly-detail-read",
+      () => readCableAssemblyDetailFromDatabase(cableId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CABLE_NOT_FOUND", "Cable assembly not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Sends the shared cable mutation result envelope: 201 on create, 200 on update/delete,
+ * 400 on invalid input, 404 on a missing parent/child, 503 when persistence is unavailable.
+ */
+function sendCableMutationResult(response: ServerResponse, result: CableAssemblyMutationResult): void {
+  if (result.status === "not_configured") {
+    sendProjectMemoryNotConfigured(response);
+    return;
+  }
+
+  if (result.status === "not_found") {
+    sendProjectMemoryNotFound(response, result.code, result.message);
+    return;
+  }
+
+  if (result.status === "invalid") {
+    sendJson(response, 400, { error: { code: result.code, message: result.message } });
+    return;
+  }
+
+  sendCatalogJsonWithStatus(response, result.status === "created" ? 201 : 200, result.response, "database");
+}
+
+/**
+ * Handles cable assembly creation from in-app authoring.
+ */
+async function handleCableAssemblyCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<CableAssemblyCreateInput>(request);
+
+  if (!body || typeof body.cableKey !== "string" || body.cableKey.trim().length === 0) {
+    sendJson(response, 400, { error: { code: "INVALID_CABLE_KEY", message: "A cable needs a cable ID (for example CAB-100)." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-assembly-create", () => createCableAssemblyInDatabase(body), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles cable assembly header edits, including soft-retire via status.
+ */
+async function handleCableAssemblyUpdate(request: IncomingMessage, response: ServerResponse, cableId: string): Promise<void> {
+  const body = await readJsonBody<CableAssemblyUpdateInput>(request);
+
+  if (!body || typeof body !== "object") {
+    sendJson(response, 400, { error: { code: "INVALID_CABLE_UPDATE", message: "Cable edits require at least one field to change." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-assembly-update", () => updateCableAssemblyInDatabase(cableId, body), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles adding one connector end to a cable.
+ */
+async function handleCableAssemblyEndCreate(request: IncomingMessage, response: ServerResponse, cableId: string): Promise<void> {
+  const body = await readJsonBody<CableAssemblyEndInput>(request);
+
+  if (!isCableEndInputShape(body)) {
+    sendJson(response, 400, { error: { code: "INVALID_CABLE_END", message: "A connector end needs an end label and connector reference." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-assembly-end-create", () => createCableAssemblyEndInDatabase(cableId, body), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles editing one connector end on a cable.
+ */
+async function handleCableAssemblyEndUpdate(request: IncomingMessage, response: ServerResponse, cableId: string, endId: string): Promise<void> {
+  const body = await readJsonBody<CableAssemblyEndInput>(request);
+
+  if (!isCableEndInputShape(body)) {
+    sendJson(response, 400, { error: { code: "INVALID_CABLE_END", message: "A connector end needs an end label and connector reference." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-assembly-end-update", () => updateCableAssemblyEndInDatabase(cableId, endId, body), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles deleting one connector end from a cable.
+ */
+async function handleCableAssemblyEndDelete(response: ServerResponse, cableId: string, endId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "cable-assembly-end-delete", () => deleteCableAssemblyEndInDatabase(cableId, endId), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles adding one pin-map row to a cable.
+ */
+async function handleCablePinRowCreate(request: IncomingMessage, response: ServerResponse, cableId: string): Promise<void> {
+  const body = await readJsonBody<CablePinMapRowInput>(request);
+
+  if (!isCablePinRowInputShape(body)) {
+    sendJson(response, 400, { error: { code: "INVALID_PIN_ROW", message: "A pin row needs an end, connector reference, pin number, and signal name." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-pin-row-create", () => createCablePinMapRowInDatabase(cableId, body), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles editing one pin-map row on a cable.
+ */
+async function handleCablePinRowUpdate(request: IncomingMessage, response: ServerResponse, cableId: string, rowId: string): Promise<void> {
+  const body = await readJsonBody<CablePinMapRowInput>(request);
+
+  if (!isCablePinRowInputShape(body)) {
+    sendJson(response, 400, { error: { code: "INVALID_PIN_ROW", message: "A pin row needs an end, connector reference, pin number, and signal name." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-pin-row-update", () => updateCablePinMapRowInDatabase(cableId, rowId, body), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles deleting one pin-map row from a cable.
+ */
+async function handleCablePinRowDelete(response: ServerResponse, cableId: string, rowId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "cable-pin-row-delete", () => deleteCablePinMapRowInDatabase(cableId, rowId), (value) => value.status);
+    sendCableMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Confirms a connector-end body has the minimal required string fields. */
+function isCableEndInputShape(body: CableAssemblyEndInput | null): body is CableAssemblyEndInput {
+  return Boolean(body) && typeof body?.endLabel === "string" && typeof body?.connectorRef === "string" && body.connectorRef.trim().length > 0;
+}
+
+/** Confirms a pin-row body has the minimal required string fields. */
+function isCablePinRowInputShape(body: CablePinMapRowInput | null): body is CablePinMapRowInput {
+  return (
+    Boolean(body) &&
+    typeof body?.endLabel === "string" &&
+    typeof body?.connectorRef === "string" &&
+    body.connectorRef.trim().length > 0 &&
+    typeof body?.pinNumber === "string" &&
+    body.pinNumber.trim().length > 0 &&
+    typeof body?.signalName === "string" &&
+    body.signalName.trim().length > 0
+  );
+}
+
+/**
  * Handles connector-set catalog reads grouped by connector_class with mate context.
  */
 async function handleConnectorSetCatalogRead(response: ServerResponse, url: URL): Promise<void> {
@@ -5218,7 +5508,12 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 2, pattern: /^\/circuit-blocks\/([^/]+)\/parts\/([^/]+)$/u, targetType: "circuit_block_part" },
     { idIndex: 1, pattern: /^\/circuit-blocks\/([^/]+)\/follow-ups$/u, targetType: "circuit_block" },
     { idIndex: 1, pattern: /^\/provider-acquisition-jobs\/([^/]+)$/u, targetType: "provider_acquisition_job" },
-    { idIndex: 1, pattern: /^\/vendors\/([^/]+)\/files\/([^/]+)$/u, targetType: "vendor" }
+    { idIndex: 1, pattern: /^\/vendors\/([^/]+)\/files\/([^/]+)$/u, targetType: "vendor" },
+    { idIndex: 2, pattern: /^\/cable-assemblies\/([^/]+)\/pin-rows\/([^/]+)$/u, targetType: "cable_pin_map_row" },
+    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/pin-rows$/u, targetType: "cable_assembly" },
+    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/ends\/([^/]+)$/u, targetType: "cable_assembly" },
+    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/ends$/u, targetType: "cable_assembly" },
+    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)$/u, targetType: "cable_assembly" }
   ];
 
   if (pathname === "/projects") return { targetId: null, targetType: "project" };
@@ -5227,6 +5522,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
   if (pathname === "/imports/provider") return { targetId: null, targetType: "provider_import" };
   if (pathname === "/provider-acquisition-jobs") return { targetId: null, targetType: "provider_acquisition_job" };
   if (pathname === "/vendors") return { targetId: null, targetType: "vendor" };
+  if (pathname === "/cable-assemblies") return { targetId: null, targetType: "cable_assembly" };
 
   for (const check of checks) {
     const match = check.pattern.exec(pathname);
@@ -5504,6 +5800,11 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && /^\/parts\/[^/]+\/issues\/[^/]+\/workflow$/u.test(pathname)) return "api-issue-workflow";
   if (method === "POST" && /^\/parts\/[^/]+\/source-reconciliation$/u.test(pathname)) return "api-source-reconciliation";
   if (method === "POST" && pathname === "/imports/provider") return "api-provider-import";
+  if (method === "POST" && pathname === "/cable-assemblies") return "api-cable-assembly-create";
+  if (method === "GET" && /^\/cable-assemblies\/[^/]+$/u.test(pathname)) return "api-cable-assembly-detail";
+  if (method === "PATCH" && /^\/cable-assemblies\/[^/]+$/u.test(pathname)) return "api-cable-assembly-update";
+  if (/^\/cable-assemblies\/[^/]+\/ends/u.test(pathname)) return "api-cable-assembly-end";
+  if (/^\/cable-assemblies\/[^/]+\/pin-rows/u.test(pathname)) return "api-cable-pin-row";
   if (method === "GET" && pathname === "/health") return "api-health";
 
   return "api-route";

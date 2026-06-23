@@ -67,6 +67,11 @@ import type {
   FollowUpSyncResponse,
   FollowUpUpdateInput,
   FollowUpUpdateResponse,
+  CableAssemblyCreateInput,
+  CableAssemblyDetail,
+  CableAssemblyEndInput,
+  CableAssemblyUpdateInput,
+  CablePinMapRowInput,
   GenerationRequestCreateInput,
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
@@ -1958,6 +1963,69 @@ export async function fetchConnectorSetCatalog(filters: { connectorClass?: Conne
 export async function fetchInterconnectDashboard(): Promise<InterconnectDashboardResponse> {
   const envelope = await fetchApi<ApiEnvelope<InterconnectDashboardResponse>>("/interconnects");
   return envelope.data;
+}
+
+/** Reads one cable assembly's authoring detail (header + ends + pin rows). */
+export async function fetchCableAssemblyDetail(cableId: string): Promise<CableAssemblyDetail> {
+  const envelope = await fetchApi<ApiEnvelope<CableAssemblyDetail>>(`/cable-assemblies/${encodeURIComponent(cableId)}`);
+  return envelope.data;
+}
+
+/** Sends one cable-authoring mutation and returns the refreshed cable detail. */
+async function sendCableMutation(path: string, method: "POST" | "PATCH" | "DELETE", action: string, input?: unknown): Promise<CableAssemblyDetail> {
+  const response = await fetch(buildApiUrl(path), {
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method,
+    ...(input === undefined ? {} : { body: JSON.stringify(input) })
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, action);
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<CableAssemblyDetail>;
+  return envelope.data;
+}
+
+/** Creates a cable assembly header. */
+export async function createCableAssembly(input: CableAssemblyCreateInput): Promise<CableAssemblyDetail> {
+  return sendCableMutation("/cable-assemblies", "POST", "Cable create", input);
+}
+
+/** Edits a cable assembly header (status → retired soft-retires it). */
+export async function updateCableAssembly(cableId: string, input: CableAssemblyUpdateInput): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}`, "PATCH", "Cable update", input);
+}
+
+/** Adds one connector end to a cable. */
+export async function createCableAssemblyEnd(cableId: string, input: CableAssemblyEndInput): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/ends`, "POST", "Cable end create", input);
+}
+
+/** Edits one connector end on a cable. */
+export async function updateCableAssemblyEnd(cableId: string, endId: string, input: CableAssemblyEndInput): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/ends/${encodeURIComponent(endId)}`, "PATCH", "Cable end update", input);
+}
+
+/** Deletes one connector end from a cable. */
+export async function deleteCableAssemblyEnd(cableId: string, endId: string): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/ends/${encodeURIComponent(endId)}`, "DELETE", "Cable end delete");
+}
+
+/** Adds one pin-map row to a cable. */
+export async function createCablePinMapRow(cableId: string, input: CablePinMapRowInput): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/pin-rows`, "POST", "Pin row create", input);
+}
+
+/** Edits one pin-map row on a cable. */
+export async function updateCablePinMapRow(cableId: string, rowId: string, input: CablePinMapRowInput): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/pin-rows/${encodeURIComponent(rowId)}`, "PATCH", "Pin row update", input);
+}
+
+/** Deletes one pin-map row from a cable. */
+export async function deleteCablePinMapRow(cableId: string, rowId: string): Promise<CableAssemblyDetail> {
+  return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/pin-rows/${encodeURIComponent(rowId)}`, "DELETE", "Pin row delete");
 }
 
 /**
