@@ -97,16 +97,6 @@ EE Library is for hardware teams that need their own engineering memory, not jus
 - Teams that repeatedly reuse known-good connectors, circuits, and parts across projects and want those decisions preserved.
 - Organizations that use public provider data as intake, but need private project history and review decisions to become the source of truth.
 
-## Problems It Solves
-
-- “Have we used this part before?”
-- “Is this part approved for new designs?”
-- “Can I trust the footprint, symbol, 3D model, and datasheet source?”
-- “Which BOM lines are obsolete, risky, unapproved, or missing evidence?”
-- “What connector mates, contacts, backshells, cables, and tooling are required?”
-- “Why was this part selected, blocked, replaced, or restricted?”
-
-
 ## Current Capabilities
 
 **Catalog and parts**
@@ -165,11 +155,11 @@ After the FUNC1–FUNC18 engineering-memory wave (history: [`docs/TODO_COMPLETED
 - It is not an automatic claim that imported provider data is approved, validated, or export-ready.
 - It is not a loose notes app for circuits, connectors, and review decisions.
 - It is not a production CAD generator today.
-- It is not allowed to present **tools/calculators** or **deep compare** (connector/CAD-first matrices) as shipped until those capabilities exist and are listed in `docs/IMPLEMENTATION_STATUS.md`. A basic part compare route is listed when present.
+- It is not allowed to present a capability as shipped before it lands in `docs/IMPLEMENTATION_STATUS.md`. Tools/calculators and basic part compare are listed there today; **deep compare** (connector/CAD-first matrices) is not, so it must not be described as shipped.
 
 ## Current Boundaries
 
-- **`/compare`** (basic readiness metrics) and **`/system`** health are in the workspace sidebar. **`/tools`** (calculators) stays out of primary navigation until that route exists.
+- **`/compare`** (basic readiness metrics), **`/tools`** (calculators), and **`/system`** health are in the workspace sidebar.
 - Exact-MPN import and supply-offer snapshots are not broad live distributor search.
 - Imported does not mean approved, CAD-verified, or export-ready.
 - BOM upload preserves raw context; matching and usage follow explicit operator actions and deterministic rules—weak rows do not silently become confirmed usage.
