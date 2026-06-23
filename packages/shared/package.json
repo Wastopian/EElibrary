@@ -18,6 +18,10 @@
       "types": "./src/asset-resolution.ts",
       "default": "./src/asset-resolution.ts"
     },
+    "./bom-csv": {
+      "types": "./src/bom-csv.ts",
+      "default": "./src/bom-csv.ts"
+    },
     "./catalog-runtime": {
       "types": "./src/catalog-runtime.ts",
       "default": "./src/catalog-runtime.ts"
@@ -53,6 +57,10 @@
     "./part-readiness": {
       "types": "./src/part-readiness.ts",
       "default": "./src/part-readiness.ts"
+    },
+    "./project-document-extraction": {
+      "types": "./src/project-document-extraction.ts",
+      "default": "./src/project-document-extraction.ts"
     },
     "./system-health-types": {
       "types": "./src/system-health-types.ts",

@@ -11,10 +11,10 @@
  *    free to use the full main width.
  */
 
-import React from "react";
+import React, { Suspense } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { AppNavigation } from "../components/AppNavigation";
+import { AppNavigation, AppNavigationLinks } from "../components/AppNavigation";
 
 /** RootLayoutShellProps carries page content and optional font class names from the Next layout. */
 export interface RootLayoutShellProps {
@@ -76,7 +76,12 @@ function renderAuthenticatedShell(children: ReactNode) {
             type="search"
           />
         </form>
-        <AppNavigation />
+        {/* AppNavigation reads the URL via useSearchParams, which `next build` only accepts
+            behind a Suspense boundary; the fallback renders the same links without an
+            active-state highlight for the instant before the URL is known. */}
+        <Suspense fallback={<AppNavigationLinks currentLocation="" />}>
+          <AppNavigation />
+        </Suspense>
         <section aria-label="Release reminder" className="app-sidebar__note">
           <span>Before release</span>
           <strong>Only use verified files.</strong>

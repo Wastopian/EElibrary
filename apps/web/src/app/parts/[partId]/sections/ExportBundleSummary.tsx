@@ -32,7 +32,7 @@ export function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: Bund
         </div>
         <div className="detail-export-summary__grid">
           <div>
-            <span>Ready to download</span>
+            <span>Ready for export</span>
             <strong>{availableBundleCount}</strong>
             <p>{availableBundleCount > 0 ? "These export packages have every file we need." : "No export package has every file we need yet."}</p>
           </div>
@@ -55,11 +55,11 @@ export function ExportBundleSummary({ bundleReadiness }: { bundleReadiness: Bund
       </section>
       <div className="export-list">
         {bundleReadiness.exportActions.map((action) => (
-          <button className={`export-action ${action.available ? "export-action--available" : "export-action--blocked"}`} disabled={!action.available} key={action.id} title={action.reason} type="button">
-            <span className="export-action__eyebrow">{action.available ? "Ready to download" : "Not ready"}</span>
+          <article className={`export-action ${action.available ? "export-action--available" : "export-action--blocked"}`} key={action.id} title={action.reason}>
+            <span className="export-action__eyebrow">{action.available ? "Ready for project export" : "Not ready"}</span>
             <strong>{action.label}</strong>
-            <small>{action.reason}</small>
-          </button>
+            <small>{action.available ? `${action.reason} Build the downloadable package from a project that uses this part.` : action.reason}</small>
+          </article>
         ))}
       </div>
     </>

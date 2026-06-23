@@ -87,7 +87,8 @@ export async function seedAdminUser(client, options) {
     };
   }
 
-  const passwordHash = options.resetPassword || !existingUser ? hashSync(password, BCRYPT_COST) : null;
+  const shouldWritePassword = options.resetPassword || !existingUser || existingUser.role !== "admin";
+  const passwordHash = shouldWritePassword ? hashSync(password, BCRYPT_COST) : null;
 
   if (existingUser) {
     if (passwordHash) {

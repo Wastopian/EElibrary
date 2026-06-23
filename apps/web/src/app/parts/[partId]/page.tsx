@@ -470,6 +470,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
 
         <PartFilesPanel
           assetGroups={assetGroups}
+          gatedRevisionsByAssetId={gatingByAssetId}
           partId={record.part.id}
           source={source}
           validationSummaries={assetValidationSummaries}

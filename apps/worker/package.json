@@ -10,6 +10,7 @@
     "./provider-enrichment-jobs": "./src/provider-enrichment-jobs.ts",
     "./provider-part-import": "./src/provider-part-import.ts",
     "./provider-part-lookup": "./src/provider-part-lookup.ts",
+    "./project-document-extraction": "./src/project-document-extraction.ts",
     "./supply-offer-refresh": "./src/supply-offer-refresh.ts"
   },
   "scripts": {
@@ -20,6 +21,7 @@
     "enqueue-catalog": "tsx src/index.ts enqueue-catalog",
     "dev": "tsx src/index.ts daemon",
     "enrichment-jobs": "tsx src/index.ts enrichment-jobs",
+    "extract-project-documents": "tsx src/index.ts extract-project-documents",
     "generate:drafts": "tsx src/index.ts generate-drafts",
     "generate-three-d-previews": "tsx src/index.ts generate-three-d-previews",
     "ingest": "tsx src/index.ts ingest",
@@ -34,10 +36,19 @@
     "test": "node ../../scripts/run-tests.mjs src",
     "validate-footprints": "tsx src/index.ts validate-footprints",
     "validate-symbol-pin-counts": "tsx src/index.ts validate-symbol-pin-counts",
+    "validate-three-d-models": "tsx src/index.ts validate-three-d-models",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@ee-library/shared": "*",
-    "pg": "^8.20.0"
+    "fast-xml-parser": "^5.9.2",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.12.0",
+    "pdfjs-dist": "^4.10.38",
+    "pg": "^8.20.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "pdf-lib": "^1.17.1"
   }
 }

@@ -530,10 +530,10 @@ function buildReadinessSummary(
   const status: PartReadinessStatus =
     input.identityStatus === "unknown" && !input.hasVerifiedCad && input.partialData
       ? "unknown"
-      : input.approvalStatus === "approved" && input.bundleReady
-        ? "ready_for_export_review"
-        : errorIssues.length > 0
-          ? "blocked"
+      : errorIssues.length > 0
+        ? "blocked"
+        : input.approvalStatus === "approved" && input.bundleReady
+          ? "ready_for_export_review"
           : "needs_attention";
 
   return {

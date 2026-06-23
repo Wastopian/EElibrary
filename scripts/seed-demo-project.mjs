@@ -45,12 +45,19 @@ export const DEMO_CIRCUIT_BLOCK_KEY = "DEMO-POCKET-MCU-CORE";
 /** DEMO_CIRCUIT_BLOCK_ID matches the API's deterministic circuit-block id rule. */
 export const DEMO_CIRCUIT_BLOCK_ID = "cblock-demo-pocket-mcu-core";
 
+/** DEMO_CABLE_ASSEMBLY_ID identifies the seeded Area 2 cable record. */
+export const DEMO_CABLE_ASSEMBLY_ID = "cable-demo-pocket-mcu-jst-power";
+
+/** DEMO_FIXTURE_ID identifies the seeded Area 2 test fixture record. */
+export const DEMO_FIXTURE_ID = "fixture-demo-pocket-mcu-bringup";
+
 /** PART_IDS_REQUIRED must exist after `npm run ingest:local`; no catalog records are invented here. */
 export const PART_IDS_REQUIRED = [
   "part-stm32g031k8t6",
   "part-tps7a02dbvr",
   "part-grm188r71c104ka01d",
-  "part-ci-jst-ph-housing"
+  "part-ci-jst-ph-housing",
+  "part-ci-jst-ph-mate"
 ];
 
 /** DEMO_PARTS names the catalog rows used by BOM lines, compare links, and bundle omissions. */
@@ -299,6 +306,9 @@ const DEMO_CIRCUIT_BLOCK_PARTS = [
   }
 ];
 
+/** DEMO_INTERCONNECT_PIN_MAP_ROWS seeds enough pin data to make the Area 2 workspace useful. */
+export const DEMO_INTERCONNECT_PIN_MAP_ROWS = buildDemoInterconnectPinMapRows();
+
 /**
  * Parses CLI flags for the demo seed helper.
  */
@@ -326,6 +336,7 @@ export function buildDemoRouteGuide() {
     { label: "Compare project parts", path: "/compare?parts=part-stm32g031k8t6,part-tps7a02dbvr,part-grm188r71c104ka01d,part-ci-jst-ph-housing" },
     { label: "Circuit block", path: `/circuit-blocks/${DEMO_CIRCUIT_BLOCK_ID}` },
     { label: "Connector sets", path: "/connector-sets?q=JST-PH" },
+    { label: "Interconnects", path: "/interconnects" },
     { label: "Evidence vault", path: `/evidence?targetType=project&q=${DEMO_PROJECT_ID}` }
   ];
 }
@@ -404,6 +415,7 @@ async function main() {
     await seedProjects(client);
     await seedCircuitBlock(client);
     await seedEvidence(client);
+    await seedInterconnects(client);
     await seedFollowUps(client);
     await seedExportBundle(client);
     await client.query("COMMIT");
@@ -451,6 +463,11 @@ async function clearDemoFixture(client) {
     ...DEMO_CIRCUIT_BLOCK_PARTS.map((entry) => entry.id)
   ];
 
+  await client.query("DELETE FROM cable_pin_map_rows WHERE cable_assembly_id = $1 OR id LIKE 'pin-demo-pocket-mcu-%'", [DEMO_CABLE_ASSEMBLY_ID]);
+  await client.query("DELETE FROM fixture_ports WHERE fixture_id = $1 OR cable_assembly_id = $2", [DEMO_FIXTURE_ID, DEMO_CABLE_ASSEMBLY_ID]);
+  await client.query("DELETE FROM test_fixtures WHERE id = $1", [DEMO_FIXTURE_ID]);
+  await client.query("DELETE FROM cable_assembly_ends WHERE cable_assembly_id = $1", [DEMO_CABLE_ASSEMBLY_ID]);
+  await client.query("DELETE FROM cable_assemblies WHERE id = $1", [DEMO_CABLE_ASSEMBLY_ID]);
   await client.query("DELETE FROM project_revision_approval_gates WHERE project_id = ANY($1::text[])", [projectIds]);
   await client.query("DELETE FROM circuit_block_instantiations WHERE project_id = ANY($1::text[]) OR circuit_block_id = $2", [projectIds, DEMO_CIRCUIT_BLOCK_ID]);
   await client.query("DELETE FROM export_bundles WHERE project_id = ANY($1::text[])", [projectIds]);
@@ -879,6 +896,131 @@ async function seedEvidence(client) {
 }
 
 /**
+ * Seeds the Area 2 cable, fixture, and pin-map walkthrough rows.
+ */
+async function seedInterconnects(client) {
+  const now = new Date(DEMO_UPDATED_AT_ISO);
+  const cableEndAId = `${DEMO_CABLE_ASSEMBLY_ID}-end-a`;
+  const cableEndBId = `${DEMO_CABLE_ASSEMBLY_ID}-end-b`;
+  const fixturePortJ201Id = `${DEMO_FIXTURE_ID}-port-j201`;
+  const fixturePortJ202Id = `${DEMO_FIXTURE_ID}-port-j202`;
+
+  await client.query(
+    `
+      INSERT INTO cable_assemblies (
+        id, cable_key, revision_label, assembly_status, project_id, project_revision_id,
+        owner, description, source_document_ref, provenance, created_at, updated_at
+      )
+      VALUES ($1, $2, 'R0.2', 'in_review', $3, $4, $5, $6, $7, 'project_file', $8, $8)
+    `,
+    [
+      DEMO_CABLE_ASSEMBLY_ID,
+      "CAB-DEMO-PMC-JST-PWR",
+      DEMO_PROJECT_ID,
+      DEMO_REVISIONS[1].id,
+      "demo-hardware",
+      "Demo battery harness from the JST-PH connector set to fixture port J202. Pin rows are recorded for lookup only; bench reuse still needs review.",
+      "demo-cable-cab-demo-pmc-jst-pwr-r0.2.csv",
+      now
+    ]
+  );
+
+  await client.query(
+    `
+      INSERT INTO cable_assembly_ends (
+        id, cable_assembly_id, end_label, connector_ref, connector_part_id, mate_part_id, backshell_part_id,
+        notes, created_at, updated_at
+      )
+      VALUES
+        ($1, $2, 'A', 'J1', $3, $4, NULL, $5, $7, $7),
+        ($6, $2, 'B', 'J202', NULL, NULL, NULL, $8, $7, $7)
+    `,
+    [
+      cableEndAId,
+      DEMO_CABLE_ASSEMBLY_ID,
+      DEMO_PARTS.connector.partId,
+      "part-ci-jst-ph-mate",
+      "Catalog-matched JST-PH housing end used on the demo board.",
+      cableEndBId,
+      now,
+      "Fixture-facing J202 end copied from the bring-up cable spreadsheet."
+    ]
+  );
+
+  await client.query(
+    `
+      INSERT INTO test_fixtures (
+        id, fixture_key, revision_label, fixture_status, project_id, owner, purpose,
+        source_document_ref, provenance, created_at, updated_at
+      )
+      VALUES ($1, 'TFX-DEMO-PMC-BRINGUP', 'B', 'restricted', $2, 'demo-lab', $3, $4, 'project_file', $5, $5)
+    `,
+    [
+      DEMO_FIXTURE_ID,
+      DEMO_PROJECT_ID,
+      "Demo bring-up fixture with J201 SWD/programming and J202 battery-harness ports.",
+      "demo-fixture-tfx-demo-pmc-bringup-ports.md",
+      now
+    ]
+  );
+
+  await client.query(
+    `
+      INSERT INTO fixture_ports (
+        id, fixture_id, connector_ref, connector_part_id, mate_part_id, cable_assembly_id,
+        port_role, notes, created_at, updated_at
+      )
+      VALUES
+        ($1, $2, 'J201', NULL, NULL, NULL, 'SWD/programming header', 'Fixture-side programming port. No catalog part matched yet.', $5, $5),
+        ($3, $2, 'J202', NULL, NULL, $4, 'Battery harness input', 'Use only with the seeded R0.2 cable until bench review is complete.', $5, $5)
+    `,
+    [
+      fixturePortJ201Id,
+      DEMO_FIXTURE_ID,
+      fixturePortJ202Id,
+      DEMO_CABLE_ASSEMBLY_ID,
+      now
+    ]
+  );
+
+  for (const row of DEMO_INTERCONNECT_PIN_MAP_ROWS) {
+    await client.query(
+      `
+        INSERT INTO cable_pin_map_rows (
+          id, cable_assembly_id, cable_end_id, fixture_port_id, end_label, connector_ref,
+          pin_number, signal_name, wire_color, wire_gauge, destination_connector_ref,
+          destination_pin_number, confidence_score, evidence_attachment_id, source_document_ref,
+          notes, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, 'B', 'J202',
+          $5, $6, $7, $8, $9,
+          $10, $11, $12, $13,
+          $14, $15, $15
+        )
+      `,
+      [
+        row.id,
+        DEMO_CABLE_ASSEMBLY_ID,
+        cableEndBId,
+        fixturePortJ202Id,
+        row.pinNumber,
+        row.signalName,
+        row.wireColor,
+        row.wireGauge,
+        row.destinationConnectorRef,
+        row.destinationPinNumber,
+        row.confidenceScore,
+        row.evidenceAttachmentId,
+        row.sourceDocumentRef,
+        row.notes,
+        now
+      ]
+    );
+  }
+}
+
+/**
  * Seeds assignable work rows that mirror the kinds of gaps BOM health will compute.
  */
 async function seedFollowUps(client) {
@@ -1010,6 +1152,12 @@ async function seedProjectMirrorFiles() {
   const demoHardwareFolder = join(folders.hardware, "PTA-1001");
   await mkdir(demoHardwareFolder, { recursive: true });
   await writeFile(join(demoHardwareFolder, "README.md"), buildDemoCustomHardwareNote(), "utf8");
+  const cableHardwareFolder = join(folders.hardware, "CAB-DEMO-PMC-JST-PWR");
+  await mkdir(cableHardwareFolder, { recursive: true });
+  await writeFile(join(cableHardwareFolder, "demo-cable-cab-demo-pmc-jst-pwr-r0.2.csv"), buildDemoInterconnectCableCsv(), "utf8");
+  const fixtureHardwareFolder = join(folders.hardware, "TFX-DEMO-PMC-BRINGUP");
+  await mkdir(fixtureHardwareFolder, { recursive: true });
+  await writeFile(join(fixtureHardwareFolder, "demo-fixture-tfx-demo-pmc-bringup-ports.md"), buildDemoFixturePortNote(), "utf8");
   await writeFile(
     join(folders.datasheets, "README.txt"),
     "Drop reviewed datasheets here. The seeded catalog records are references only until files are captured and reviewed.\n",
@@ -1020,6 +1168,16 @@ async function seedProjectMirrorFiles() {
     "Drop verified STEP or native CAD files here. The demo seed does not invent export-ready model files.\n",
     "utf8"
   );
+
+  const messyTestFolder = join(projectRoot, "Bob-drop", "old-tests");
+  await mkdir(messyTestFolder, { recursive: true });
+  await writeFile(join(messyTestFolder, "J202-test-procedure-rev-d.md"), buildDemoMessyTestProcedureNote(), "utf8");
+  await writeFile(join(messyTestFolder, "J202-atp-run-sheet-rev-d.txt"), buildDemoMessyAtpRunSheet(), "utf8");
+
+  const networkDumpFolder = join(projectRoot, "network-drive-dump", "rev-c");
+  await mkdir(networkDumpFolder, { recursive: true });
+  await writeFile(join(networkDumpFolder, "PMC-requirements-rev-c.txt"), buildDemoMessyRequirementsNote(), "utf8");
+  await writeFile(join(networkDumpFolder, "J202-cable-pinout-rev-c.csv"), buildDemoMessyRevCPinoutCsv(), "utf8");
 }
 
 /**
@@ -1047,6 +1205,89 @@ function buildDemoCustomHardwareNote() {
     "Tests: MCU programming, battery rail bring-up, and smoke-test current draw",
     "Project: DEMO-POCKET-MCU bring-up kit",
     "Notes: Internal fixture; keep with the demo project's bench hardware.",
+    ""
+  ].join("\n");
+}
+
+/**
+ * Builds the deterministic pin-map rows used by the interconnect demo.
+ */
+function buildDemoInterconnectPinMapRows() {
+  const rows = [
+    ["1", "VBAT_IN", "red", 24, "J1", "1", 0.94, "Main battery input copied from the Rev R0.2 cable sheet."],
+    ["2", "VBAT_RETURN", "black", 24, "J1", "2", 0.94, "Battery return copied from the Rev R0.2 cable sheet."],
+    ["3", "SWDIO", "green", 28, "J201", "2", 0.9, "Programming signal routed through the bring-up fixture."],
+    ["4", "SWCLK", "white", 28, "J201", "4", 0.9, "Programming clock routed through the bring-up fixture."],
+    ["5", "NRST", "yellow", 28, "J201", "6", 0.86, "Reset line verified against the fixture port list."],
+    ["6", "3V3_SENSE", "orange", 28, "J201", "8", 0.84, "Voltage sense lead; check before powering a real board."],
+    ["7", "UART_TX", "blue", 28, "J201", "10", 0.88, "Serial debug transmit from the DUT."],
+    ["8", "UART_RX", "violet", 28, "J201", "12", 0.88, "Serial debug receive into the DUT."],
+    ["9", "I2C_SCL", "brown", 28, "J201", "14", 0.82, "Optional sensor bus line on the fixture."],
+    ["10", "I2C_SDA", "gray", 28, "J201", "16", 0.82, "Optional sensor bus line on the fixture."],
+    ["11", "GPIO_BOOT0", "white/blue", 30, "J201", "18", 0.78, "Boot strap line from the fixture switch bank."],
+    ["12", "GPIO_WAKE", "white/green", 30, "J201", "20", 0.78, "Wake input used during low-power testing."],
+    ["13", "ADC_BAT_DIV", "white/orange", 30, "J201", "22", 0.8, "Battery-divider sense path."],
+    ["14", "CURRENT_MON", "white/brown", 30, "J201", "24", 0.8, "Current monitor output from the fixture shunt."],
+    ["15", "DUT_PRESENT", "white/gray", 30, "J201", "26", 0.76, "Fixture detect line; confirm before relying on automation."],
+    ["16", "LED_TEST", "pink", 30, "J201", "28", 0.76, "Panel LED exercise line."],
+    ["17", "SPARE_1", "tan", 30, null, null, 0.72, "Spare pin label came from an older drawing; needs another check."],
+    ["18", "SPARE_2", "tan/black", 30, null, null, 0.72, "Spare pin label came from an older drawing; needs another check."],
+    ["19", "GND_SHIELD", "drain", 24, "J201", "30", 0.91, "Shield drain tied at fixture side only."],
+    ["20", "CHASSIS_REF", "green/yellow", 24, "J201", "32", 0.91, "Chassis reference line for the test setup."],
+    ["21", "NTC_EXCITE", "white/red", 30, "J201", "34", 0.7, "Sensor excitation row kept low-confidence until RT1 is resolved."],
+    ["22", "NTC_RETURN", "white/black", 30, "J201", "36", 0.7, "Sensor return row kept low-confidence until RT1 is resolved."],
+    ["47", "RS422_TX+", "blue/white", 26, "J201", "47", 0.62, "Known review item: Rev C and Rev D disagree on this pair."],
+    ["48", "RS422_TX-", "blue/black", 26, "J201", "48", 0.62, "Known review item: Rev C and Rev D disagree on this pair."]
+  ];
+
+  return rows.map(([pinNumber, signalName, wireColor, wireGauge, destinationConnectorRef, destinationPinNumber, confidenceScore, notes]) => ({
+    confidenceScore,
+    destinationConnectorRef,
+    destinationPinNumber,
+    evidenceAttachmentId: pinNumber === "47" || pinNumber === "48" ? "evidence-demo-pocket-mcu-review-link" : null,
+    id: `pin-demo-pocket-mcu-j202-${slugify(pinNumber)}`,
+    notes,
+    pinNumber,
+    signalName,
+    sourceDocumentRef: "demo-cable-cab-demo-pmc-jst-pwr-r0.2.csv",
+    wireColor,
+    wireGauge
+  }));
+}
+
+/**
+ * Builds the cable pin-map CSV written beside the seeded project files.
+ */
+function buildDemoInterconnectCableCsv() {
+  const header = ["Cable", "Revision", "End", "Connector Ref", "Pin", "Signal", "Wire Color", "Wire Gauge", "Destination Connector", "Destination Pin", "Confidence", "Notes"];
+  const rows = DEMO_INTERCONNECT_PIN_MAP_ROWS.map((row) => [
+    "CAB-DEMO-PMC-JST-PWR",
+    "R0.2",
+    "B",
+    "J202",
+    row.pinNumber,
+    row.signalName,
+    row.wireColor ?? "",
+    row.wireGauge ?? "",
+    row.destinationConnectorRef ?? "",
+    row.destinationPinNumber ?? "",
+    row.confidenceScore,
+    row.notes
+  ]);
+
+  return [header, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n") + "\n";
+}
+
+/**
+ * Builds the fixture port note written beside the seeded project files.
+ */
+function buildDemoFixturePortNote() {
+  return [
+    "# TFX-DEMO-PMC-BRINGUP ports",
+    "",
+    "- J201: SWD/programming header. No catalog part matched yet.",
+    "- J202: Battery harness input. Seeded cable CAB-DEMO-PMC-JST-PWR plugs in here.",
+    "- Restriction: use only with R0.2 demo cable until the J202 pin 47/48 disagreement is checked.",
     ""
   ].join("\n");
 }
@@ -1110,9 +1351,66 @@ function buildBringupReviewNote() {
     "- Start at the project page and inspect confirmed usage first.",
     "- Open BOM diagnostics to see exact, weak, ambiguous, ignored, and unmatched rows.",
     "- Use where-used on TPS7A02DBVR to see the prior reference logger project.",
-    "- Export bundle history is manifest-only until CAD assets are verified and file-backed.",
+    "- Export bundle history is manifest-only until CAD assets are verified and saved files are present.",
     ""
   ].join("\n");
+}
+
+/**
+ * Builds a deliberately misplaced test-procedure note for the Area 1 document map demo.
+ */
+function buildDemoMessyTestProcedureNote() {
+  return [
+    "# J202 Bring-up Test Procedure",
+    "",
+    "Revision: Rev D",
+    "Fixture: TFX-DEMO-PMC-BRINGUP",
+    "Cable: CAB-DEMO-PMC-JST-PWR",
+    "Connector J202 pin 47 carries RS422_TX+ in the old procedure.",
+    "Action: compare this against the R0.2 pin map before reuse.",
+    ""
+  ].join("\n");
+}
+
+/**
+ * Builds a second misplaced test file so the document map can show a real folder trend.
+ */
+function buildDemoMessyAtpRunSheet() {
+  return [
+    "J202 acceptance test run sheet",
+    "",
+    "Revision: Rev D",
+    "Procedure: verify connector J202 pin 48 before powering the RS422_TX- pair.",
+    "Fixture: TFX-DEMO-PMC-BRINGUP",
+    ""
+  ].join("\n");
+}
+
+/**
+ * Builds a deliberately misplaced requirements note for the Area 1 document map demo.
+ */
+function buildDemoMessyRequirementsNote() {
+  return [
+    "Pocket MCU requirements Rev C",
+    "",
+    "The unit shall keep startup current below 500 mA during bring-up.",
+    "The unit shall log brownout events before reset.",
+    "The bench setup shall be reviewed before reuse.",
+    ""
+  ].join("\n");
+}
+
+/**
+ * Builds a misplaced Rev C cable pinout so the network-drive dump looks mixed on purpose.
+ */
+function buildDemoMessyRevCPinoutCsv() {
+  const rows = [
+    ["Cable", "Revision", "Connector Ref", "Pin", "Signal", "Note"],
+    ["CAB-DEMO-PMC-JST-PWR", "Rev C", "J202", "47", "RS422_TX+", "Old network-drive copy; compare against R0.2."],
+    ["CAB-DEMO-PMC-JST-PWR", "Rev C", "J202", "48", "RS422_TX-", "Old network-drive copy; compare against R0.2."]
+  ];
+
+  return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n") + "\n";
 }
 
 /**

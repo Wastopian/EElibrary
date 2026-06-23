@@ -296,64 +296,157 @@ function ConnectorSetsFilterForm({ cableGauge, connectorClassFilter, pinCount, q
 }
 
 /**
- * Renders resolver candidates with buildability, confidence, and family warnings separated.
+ * Renders resolver candidates as scannable cards led by the connector-to-mate pairing.
  */
 function ConnectorIntentCandidates({ candidates }: { candidates: ConnectorSetIntentCandidate[] }) {
   return (
-    <div className="connector-sets-list">
+    <div className="resolver-candidates">
       {candidates.map((candidate) => (
-        <article className="connector-sets-card" key={candidate.connector.partId}>
-          <header>
-            <Link href={`/parts/${encodeURIComponent(candidate.connector.partId)}`} className="ui-mono">{candidate.connector.mpn}</Link>
-            <p className="muted-copy">{candidate.connector.manufacturerName} - {candidate.connector.connectorFamilyName ?? "No family"} - {candidate.connector.packagePinCount ?? "?"} pins</p>
-            <div className="projects-hero__status">
-              <StatusBadge label={candidate.buildabilityState.replace(/_/gu, " ")} tone={candidate.buildabilityState === "buildable" ? "verified" : candidate.buildabilityState === "pending" ? "review" : "danger"} />
-              <StatusBadge label={`${Math.round(candidate.confidenceScore * 100)}% confidence`} tone={candidate.confidenceScore >= 0.8 ? "verified" : "review"} />
-            </div>
-          </header>
-          <div className="projects-truth-rail projects-truth-rail--compact">
-            <ConnectorIntentRelation label="Mate" relation={candidate.mate} />
-            <ConnectorIntentRelationList label="Required accessories" relations={candidate.requiredAccessories} />
-            <ConnectorIntentRelationList label="Optional accessories" relations={candidate.optionalAccessories} />
-            <ConnectorIntentRelation label="Cable option" relation={candidate.cableOption} />
-            <ConnectorIntentRelationList label="Tooling" relations={candidate.tooling} />
-          </div>
-          {candidate.familyConfusionWarnings.length > 0 ? (
-            <div className="connector-warning-list">
-              {candidate.familyConfusionWarnings.map((warning) => (
-                <p className="muted-copy" key={warning.code}><strong>{warning.summary}</strong> {warning.detail}</p>
-              ))}
-            </div>
-          ) : null}
-        </article>
+        <ConnectorIntentCard candidate={candidate} key={candidate.connector.partId} />
       ))}
     </div>
   );
 }
 
 /**
- * Renders a single resolver relation without implying that missing data is available.
+ * Renders one resolver candidate with the mate pairing as the visual focus.
  */
-function ConnectorIntentRelation({ label, relation }: { label: string; relation: ConnectorSetIntentCandidate["mate"] }) {
+function ConnectorIntentCard({ candidate }: { candidate: ConnectorSetIntentCandidate }) {
+  const confidencePercent = Math.round(candidate.confidenceScore * 100);
+  const buildabilityTone: BadgeTone =
+    candidate.buildabilityState === "buildable" ? "verified" : candidate.buildabilityState === "pending" ? "review" : "danger";
+  const identityLine = [
+    candidate.connector.manufacturerName,
+    candidate.connector.connectorFamilyName ?? "No family",
+    candidate.connector.packagePinCount !== null ? `${candidate.connector.packagePinCount} pins` : null
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div>
-      <span>{label}</span>
-      <strong>{relation ? relation.part.mpn : "Pending"}</strong>
-      <p>{relation ? `${relation.part.manufacturerName} - ${Math.round(relation.confidenceScore * 100)}% - ${relation.compatibilityStatus}` : "No stored relation satisfies this part of the intent yet."}</p>
+    <article className="resolver-card">
+      <header className="resolver-card__head">
+        <div className="resolver-card__identity">
+          <Link href={`/parts/${encodeURIComponent(candidate.connector.partId)}`} className="ui-mono resolver-card__mpn">
+            {candidate.connector.mpn}
+          </Link>
+          <p className="resolver-card__sub">{identityLine}</p>
+        </div>
+        <div className="resolver-card__status">
+          <StatusBadge label={candidate.buildabilityState.replace(/_/gu, " ")} tone={buildabilityTone} />
+          <StatusBadge label={`${confidencePercent}% confidence`} tone={candidate.confidenceScore >= 0.8 ? "verified" : "review"} />
+        </div>
+      </header>
+
+      <ConnectorMatePairing connector={candidate.connector} mate={candidate.mate} />
+
+      <ConnectorBuildKit candidate={candidate} />
+
+      {candidate.warnings.length > 0 ? (
+        <div className="resolver-flags">
+          <span className="resolver-flags__title">Before you commit</span>
+          <ul>
+            {candidate.warnings.map((warning) => (
+              <li className={`resolver-flag resolver-flag--${warning.tone}`} key={warning.code}>
+                {warning.summary}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+/**
+ * Renders the connector-to-mate pairing as the card's focal point, with an honest pending state.
+ */
+function ConnectorMatePairing({
+  connector,
+  mate
+}: {
+  connector: ConnectorSetIntentCandidate["connector"];
+  mate: ConnectorSetIntentCandidate["mate"];
+}) {
+  return (
+    <div className="resolver-mate">
+      <div className="resolver-mate__node">
+        <span className="resolver-mate__role">This connector</span>
+        <span className="ui-mono resolver-mate__part">{connector.mpn}</span>
+      </div>
+      <div className="resolver-mate__bridge" aria-hidden="true">
+        <span className="resolver-mate__arrow">&rarr;</span>
+        <span className="resolver-mate__bridge-label">mates with</span>
+      </div>
+      {mate ? (
+        <div className="resolver-mate__node resolver-mate__node--mate">
+          <span className="resolver-mate__role">Mate &middot; {Math.round(mate.confidenceScore * 100)}% match</span>
+          <Link href={`/parts/${encodeURIComponent(mate.part.partId)}`} className="ui-mono resolver-mate__part">
+            {mate.part.mpn}
+          </Link>
+          <span className="resolver-mate__meta">{mate.part.manufacturerName}</span>
+        </div>
+      ) : (
+        <div className="resolver-mate__node resolver-mate__node--mate resolver-mate__node--pending">
+          <span className="resolver-mate__role">Mate</span>
+          <span className="resolver-mate__part resolver-mate__part--pending">No mate found yet</span>
+          <span className="resolver-mate__meta">No stored mate satisfies this connector.</span>
+        </div>
+      )}
     </div>
   );
 }
 
 /**
- * Renders resolver relation lists with an explicit pending empty state.
+ * Renders the parts needed to build the connector set, with present and pending markers.
  */
-function ConnectorIntentRelationList({ label, relations }: { label: string; relations: ConnectorSetResolvedRelation[] }) {
+function ConnectorBuildKit({ candidate }: { candidate: ConnectorSetIntentCandidate }) {
+  const groups = [
+    { key: "required", label: "Required accessories", relations: candidate.requiredAccessories, required: true },
+    { key: "cable", label: "Cable", relations: candidate.cableOption ? [candidate.cableOption] : [], required: false },
+    { key: "tooling", label: "Tooling", relations: candidate.tooling, required: false },
+    { key: "optional", label: "Optional accessories", relations: candidate.optionalAccessories, required: false }
+  ];
+  // Optional accessories only render when present; the rest always show so a gap reads as pending.
+  const visible = groups.filter((group) => group.key !== "optional" || group.relations.length > 0);
+
   return (
-    <div>
-      <span>{label}</span>
-      <strong>{relations.length > 0 ? `${relations.length} mapped` : "Pending"}</strong>
-      <p>{relations.length > 0 ? relations.map((relation) => `${relation.part.mpn} (${Math.round(relation.confidenceScore * 100)}%)`).join(", ") : "No stored rows are available for this group."}</p>
+    <div className="resolver-kit">
+      <span className="resolver-kit__title">To build this set</span>
+      <ul className="resolver-kit__list">
+        {visible.map((group) => (
+          <ConnectorBuildKitRow key={group.key} label={group.label} relations={group.relations} required={group.required} />
+        ))}
+      </ul>
     </div>
+  );
+}
+
+/**
+ * Renders one build-kit group as a present or pending line without hiding missing coverage.
+ */
+function ConnectorBuildKitRow({
+  label,
+  relations,
+  required
+}: {
+  label: string;
+  relations: ConnectorSetResolvedRelation[];
+  required: boolean;
+}) {
+  const present = relations.length > 0;
+  const value = present
+    ? relations.map((relation) => `${relation.part.mpn} (${Math.round(relation.confidenceScore * 100)}%)`).join(", ")
+    : required
+      ? "Needed — none stored yet"
+      : "None recorded";
+
+  return (
+    <li className={`resolver-kit__row ${present ? "resolver-kit__row--present" : "resolver-kit__row--pending"}`}>
+      <span className="resolver-kit__marker" aria-hidden="true">{present ? "✓" : "•"}</span>
+      <span className="resolver-kit__label">{label}</span>
+      <span className="resolver-kit__value">{value}</span>
+    </li>
   );
 }
 

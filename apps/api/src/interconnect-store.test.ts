@@ -1,0 +1,401 @@
+/**
+ * File header: Tests interconnect dashboard reads for cable assemblies, fixtures, and pin maps.
+ */
+
+import assert from "node:assert/strict";
+import { Readable } from "node:stream";
+import test from "node:test";
+import { newDb } from "pg-mem";
+import { readInterconnectDashboardFromDatabase, setInterconnectPoolForTests } from "./interconnect-store";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Pool } from "pg";
+
+/** TestPool is the pg-mem pool shape used by interconnect tests. */
+type TestPool = Pool & {
+  /** Closes the in-memory pool after each test releases it. */
+  end: () => Promise<void>;
+};
+
+/**
+ * Verifies interconnect reads do not pretend to work without a configured database.
+ */
+test("readInterconnectDashboardFromDatabase returns not_configured without a database", async () => {
+  setInterconnectPoolForTests(null);
+
+  const result = await readInterconnectDashboardFromDatabase();
+
+  assert.equal(result.status, "not_configured");
+});
+
+/**
+ * Verifies the interconnect dashboard maps cable, fixture, and pin-map context together.
+ */
+test("readInterconnectDashboardFromDatabase returns cable, fixture, and pin-map rows", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool);
+
+    const result = await readInterconnectDashboardFromDatabase();
+
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+
+    assert.equal(result.response.state, "available");
+    assert.equal(result.response.summary.cableAssemblyCount, 1);
+    assert.equal(result.response.summary.fixtureCount, 1);
+    assert.equal(result.response.summary.fixturePortCount, 1);
+    assert.equal(result.response.summary.pinMapRowCount, 1);
+    assert.equal(result.response.summary.approvedCableAssemblyCount, 1);
+    assert.equal(result.response.summary.restrictedRecordCount, 1);
+    assert.equal(result.response.summary.lowConfidencePinRowCount, 1);
+
+    const cable = result.response.cableAssemblies[0];
+    assert.equal(cable?.cableKey, "CAB-100");
+    assert.equal(cable?.revisionLabel, "D");
+    assert.equal(cable?.ends[0]?.connectorRef, "J202");
+    assert.equal(cable?.ends[0]?.connectorPart.mpn, "D38999-26WJ202");
+    assert.equal(cable?.pinRowCount, 1);
+    assert.equal(cable?.fixturePortCount, 1);
+
+    const fixture = result.response.fixtures[0];
+    assert.equal(fixture?.fixtureKey, "TFX-42");
+    assert.equal(fixture?.fixtureStatus, "restricted");
+    assert.equal(fixture?.ports[0]?.connectorRef, "J202");
+    assert.equal(fixture?.ports[0]?.cableKey, "CAB-100");
+
+    const pinRow = result.response.pinMapRows[0];
+    assert.equal(pinRow?.connectorRef, "J202");
+    assert.equal(pinRow?.pinNumber, "47");
+    assert.equal(pinRow?.signalName, "RS422_TX+");
+    assert.equal(pinRow?.confidenceScore, 0.62);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the API route returns the typed interconnect dashboard envelope.
+ */
+test("GET /interconnects returns the interconnect dashboard", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool);
+
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGet("/interconnects", handleRequest);
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.headers["X-EE-Operation"], "api-interconnect-dashboard");
+    assert.equal(result.body.source, "database");
+    assert.equal(result.body.data.cableAssemblies[0]?.id, "cable-cab-100");
+    assert.equal(result.body.data.fixtures[0]?.id, "fixture-tfx-42");
+    assert.equal(result.body.data.pinMapRows[0]?.pinNumber, "47");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Creates an in-memory database with the tables needed by the interconnect reader.
+ */
+function createInterconnectPool(): TestPool {
+  const db = newDb();
+  db.public.none(`
+    CREATE TABLE manufacturers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
+
+    CREATE TABLE parts (
+      id TEXT PRIMARY KEY,
+      mpn TEXT NOT NULL,
+      manufacturer_id TEXT NOT NULL REFERENCES manufacturers(id)
+    );
+
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY,
+      project_key TEXT NOT NULL,
+      name TEXT NOT NULL
+    );
+
+    CREATE TABLE project_revisions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      revision_label TEXT NOT NULL
+    );
+
+    CREATE TABLE cable_assemblies (
+      id TEXT PRIMARY KEY,
+      cable_key TEXT NOT NULL,
+      revision_label TEXT NOT NULL,
+      assembly_status TEXT NOT NULL,
+      project_id TEXT REFERENCES projects(id),
+      project_revision_id TEXT REFERENCES project_revisions(id),
+      owner TEXT,
+      description TEXT,
+      source_document_ref TEXT,
+      provenance TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE cable_assembly_ends (
+      id TEXT PRIMARY KEY,
+      cable_assembly_id TEXT NOT NULL REFERENCES cable_assemblies(id),
+      end_label TEXT NOT NULL,
+      connector_ref TEXT NOT NULL,
+      connector_part_id TEXT REFERENCES parts(id),
+      mate_part_id TEXT REFERENCES parts(id),
+      backshell_part_id TEXT REFERENCES parts(id),
+      notes TEXT
+    );
+
+    CREATE TABLE test_fixtures (
+      id TEXT PRIMARY KEY,
+      fixture_key TEXT NOT NULL,
+      revision_label TEXT NOT NULL,
+      fixture_status TEXT NOT NULL,
+      project_id TEXT REFERENCES projects(id),
+      owner TEXT,
+      purpose TEXT,
+      source_document_ref TEXT,
+      provenance TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE fixture_ports (
+      id TEXT PRIMARY KEY,
+      fixture_id TEXT NOT NULL REFERENCES test_fixtures(id),
+      connector_ref TEXT NOT NULL,
+      connector_part_id TEXT REFERENCES parts(id),
+      mate_part_id TEXT REFERENCES parts(id),
+      cable_assembly_id TEXT REFERENCES cable_assemblies(id),
+      port_role TEXT,
+      notes TEXT
+    );
+
+    CREATE TABLE cable_pin_map_rows (
+      id TEXT PRIMARY KEY,
+      cable_assembly_id TEXT NOT NULL REFERENCES cable_assemblies(id),
+      cable_end_id TEXT REFERENCES cable_assembly_ends(id),
+      fixture_port_id TEXT REFERENCES fixture_ports(id),
+      end_label TEXT NOT NULL,
+      connector_ref TEXT NOT NULL,
+      pin_number TEXT NOT NULL,
+      signal_name TEXT NOT NULL,
+      wire_color TEXT,
+      wire_gauge INTEGER,
+      destination_connector_ref TEXT,
+      destination_pin_number TEXT,
+      confidence_score NUMERIC NOT NULL,
+      evidence_attachment_id TEXT,
+      source_document_ref TEXT,
+      notes TEXT,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+
+  const adapter = db.adapters.createPg();
+  return new adapter.Pool() as TestPool;
+}
+
+/**
+ * Seeds a deterministic cable-to-fixture story with one low-confidence pin row.
+ */
+async function seedInterconnectRows(pool: Pool): Promise<void> {
+  await pool.query(`
+    INSERT INTO manufacturers (id, name)
+    VALUES
+      ('manufacturer-shell', 'ShellCo'),
+      ('manufacturer-mate', 'MateCo'),
+      ('manufacturer-back', 'BackshellCo');
+
+    INSERT INTO parts (id, mpn, manufacturer_id)
+    VALUES
+      ('part-j202', 'D38999-26WJ202', 'manufacturer-shell'),
+      ('part-mate', 'D38999-20FJ202', 'manufacturer-mate'),
+      ('part-back', 'M85049-88', 'manufacturer-back');
+
+    INSERT INTO projects (id, project_key, name)
+    VALUES ('project-alpha', 'ALPHA', 'Alpha Test Set');
+
+    INSERT INTO project_revisions (id, project_id, revision_label)
+    VALUES ('revision-alpha-d', 'project-alpha', 'Rev D');
+
+    INSERT INTO cable_assemblies (
+      id,
+      cable_key,
+      revision_label,
+      assembly_status,
+      project_id,
+      project_revision_id,
+      owner,
+      description,
+      source_document_ref,
+      provenance,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      'cable-cab-100',
+      'CAB-100',
+      'D',
+      'approved',
+      'project-alpha',
+      'revision-alpha-d',
+      'Dana',
+      'Main DUT breakout cable.',
+      'CAB-100-RevD.xlsx',
+      'project_file',
+      '2026-06-01T12:00:00Z',
+      '2026-06-10T12:00:00Z'
+    );
+
+    INSERT INTO cable_assembly_ends (
+      id,
+      cable_assembly_id,
+      end_label,
+      connector_ref,
+      connector_part_id,
+      mate_part_id,
+      backshell_part_id,
+      notes
+    )
+    VALUES (
+      'cable-cab-100-end-a',
+      'cable-cab-100',
+      'A',
+      'J202',
+      'part-j202',
+      'part-mate',
+      'part-back',
+      'Fixture-facing end.'
+    );
+
+    INSERT INTO test_fixtures (
+      id,
+      fixture_key,
+      revision_label,
+      fixture_status,
+      project_id,
+      owner,
+      purpose,
+      source_document_ref,
+      provenance,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      'fixture-tfx-42',
+      'TFX-42',
+      'B',
+      'restricted',
+      'project-alpha',
+      'Morgan',
+      'DUT bring-up fixture.',
+      'TFX-42-port-list.pdf',
+      'project_file',
+      '2026-06-02T12:00:00Z',
+      '2026-06-11T12:00:00Z'
+    );
+
+    INSERT INTO fixture_ports (
+      id,
+      fixture_id,
+      connector_ref,
+      connector_part_id,
+      mate_part_id,
+      cable_assembly_id,
+      port_role,
+      notes
+    )
+    VALUES (
+      'fixture-tfx-42-port-j202',
+      'fixture-tfx-42',
+      'J202',
+      'part-j202',
+      'part-mate',
+      'cable-cab-100',
+      'DUT port',
+      'Use with Rev D cable only.'
+    );
+
+    INSERT INTO cable_pin_map_rows (
+      id,
+      cable_assembly_id,
+      cable_end_id,
+      fixture_port_id,
+      end_label,
+      connector_ref,
+      pin_number,
+      signal_name,
+      wire_color,
+      wire_gauge,
+      destination_connector_ref,
+      destination_pin_number,
+      confidence_score,
+      evidence_attachment_id,
+      source_document_ref,
+      notes,
+      updated_at
+    )
+    VALUES (
+      'pin-row-j202-47',
+      'cable-cab-100',
+      'cable-cab-100-end-a',
+      'fixture-tfx-42-port-j202',
+      'A',
+      'J202',
+      '47',
+      'RS422_TX+',
+      'blue',
+      24,
+      'J201',
+      '12',
+      0.62,
+      NULL,
+      'CAB-100-RevD.xlsx',
+      'Copied from Rev D spreadsheet.',
+      '2026-06-12T12:00:00Z'
+    );
+  `);
+}
+
+/**
+ * Invokes the API handler with a tiny in-memory GET request/response pair.
+ */
+async function invokeApiGet(url: string, handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>): Promise<{ statusCode: number; body: Record<string, any>; headers: Record<string, string> }> {
+  const request = Readable.from([]) as IncomingMessage;
+  let statusCode = 0;
+  let responseBody = "";
+  let headers: Record<string, string> = {};
+  const response = {
+    end(payload: string) {
+      responseBody = payload;
+    },
+    writeHead(nextStatusCode: number, nextHeaders?: Record<string, string>) {
+      statusCode = nextStatusCode;
+      headers = nextHeaders ?? {};
+      return response;
+    }
+  } as unknown as ServerResponse;
+
+  request.headers = { host: "localhost" };
+  request.method = "GET";
+  request.url = url;
+
+  await handleRequest(request, response);
+
+  return {
+    body: JSON.parse(responseBody) as Record<string, any>,
+    headers,
+    statusCode
+  };
+}

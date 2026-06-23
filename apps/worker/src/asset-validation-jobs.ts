@@ -45,6 +45,9 @@ const FOOTPRINT_GEOMETRY_VALIDATOR_VERSION = "footprint_geometry_v1";
 /** SymbolPinCountValidatorVersion identifies the active symbol pin-count validator schema. */
 const SYMBOL_PIN_COUNT_VALIDATOR_VERSION = "symbol_pin_mapping_v1";
 
+/** ThreeDGeometryValidatorVersion identifies the active STEP integrity validator schema. */
+const THREE_D_GEOMETRY_VALIDATOR_VERSION = "step_integrity_v1";
+
 /**
  * Tolerance (mm) we add to package body dimensions when checking pad bounding boxes.
  * KiCad and most CAD tools place pads slightly outside the body footprint for SMT parts
@@ -108,8 +111,21 @@ export interface SymbolPinCountCandidateRow {
   part_id: string;
   storage_key: string;
   file_format: string;
-  pin_table_confidence: number | null;
+  pin_table_confidence: number | string | null;
   pin_table_pin_count: number | null;
+}
+
+/**
+ * ThreeDGeometryCandidateRow is the minimum data we need to score one 3D-model asset.
+ * No package join is required: STEP integrity is a structural check on the file itself
+ * (valid ISO 10303-21 envelope + a real solid/surface body), not a cross-reference against
+ * package metadata, so a part with no package still yields an honest decision.
+ */
+interface ThreeDGeometryCandidateRow {
+  asset_id: string;
+  part_id: string;
+  storage_key: string;
+  file_format: string;
 }
 
 /**
@@ -160,6 +176,66 @@ export async function processSymbolPinCountValidations(
 }
 
 /**
+ * Reads up to `limit` 3D-model assets that have a stored file, runs the STEP integrity
+ * validator against each, and persists one `asset_validation_records` row per asset.
+ *
+ * Like the other validators, this intentionally does not filter on the asset's existing
+ * `validation_status`, so a regression that turns a previously-verified STEP into an empty
+ * or corrupt file lands as fresh `failed` evidence on the next run.
+ */
+export async function processThreeDGeometryValidations(
+  limit: number,
+  storage: FileStorageClient,
+  now: Date = new Date()
+): Promise<AssetValidationJobSummary> {
+  const pool = getWorkerDatabasePool();
+  const candidates = await readThreeDGeometryCandidates(pool, Math.max(1, limit));
+  const processed: AssetValidationJobOutcome[] = [];
+
+  for (const candidate of candidates) {
+    processed.push(await runThreeDGeometryValidation(pool, storage, candidate, now));
+  }
+
+  return { processed };
+}
+
+/**
+ * Reads 3D-model assets whose source file is locally stored. No package join is needed:
+ * the check is purely structural on the file. Non-STEP formats (for example a glb upload)
+ * are kept in the candidate set so the runner can persist an honest skip note.
+ */
+async function readThreeDGeometryCandidates(pool: Pool, limit: number): Promise<ThreeDGeometryCandidateRow[]> {
+  const result = await pool.query<ThreeDGeometryCandidateRow>(
+    `
+      SELECT
+        a.id AS asset_id,
+        a.part_id AS part_id,
+        a.storage_key AS storage_key,
+        a.file_format AS file_format
+      FROM assets a
+      LEFT JOIN (
+        SELECT asset_id, MAX(validated_at) AS last_validation_at
+        FROM asset_validation_records
+        WHERE validation_type = 'three_d_geometry'
+        GROUP BY asset_id
+      ) validation_cursor ON validation_cursor.asset_id = a.id
+      WHERE a.asset_type = 'three_d_model'
+        AND a.availability_status IN ('downloaded', 'validated')
+        AND a.storage_key IS NOT NULL
+      ORDER BY
+        CASE WHEN validation_cursor.last_validation_at IS NULL THEN 0 ELSE 1 END ASC,
+        validation_cursor.last_validation_at ASC,
+        a.last_updated_at ASC,
+        a.id ASC
+      LIMIT $1
+    `,
+    [limit]
+  );
+
+  return result.rows;
+}
+
+/**
  * Reads footprint assets whose source file is locally stored. The LEFT JOIN against
  * packages keeps assets whose part has no package_id in the candidate set so the
  * validator can persist an honest `needs_review` row instead of skipping silently.
@@ -181,10 +257,20 @@ async function readFootprintGeometryCandidates(
       FROM assets a
       JOIN parts p ON p.id = a.part_id
       LEFT JOIN packages pkg ON pkg.id = p.package_id
+      LEFT JOIN (
+        SELECT asset_id, MAX(validated_at) AS last_validation_at
+        FROM asset_validation_records
+        WHERE validation_type = 'footprint_geometry'
+        GROUP BY asset_id
+      ) validation_cursor ON validation_cursor.asset_id = a.id
       WHERE a.asset_type = 'footprint'
         AND a.availability_status IN ('downloaded', 'validated')
         AND a.storage_key IS NOT NULL
-      ORDER BY a.last_updated_at ASC, a.id ASC
+      ORDER BY
+        CASE WHEN validation_cursor.last_validation_at IS NULL THEN 0 ELSE 1 END ASC,
+        validation_cursor.last_validation_at ASC,
+        a.last_updated_at ASC,
+        a.id ASC
       LIMIT $1
     `,
     [limit]
@@ -199,7 +285,7 @@ interface RawSymbolPinCountCandidateRow {
   part_id: string;
   storage_key: string;
   file_format: string;
-  pin_table_confidence: number | null;
+  pin_table_confidence: number | string | null;
   pin_table_notes: string | null;
 }
 
@@ -259,10 +345,20 @@ async function readSymbolPinCountCandidates(
         sig.notes AS pin_table_notes
       FROM assets a
       LEFT JOIN strongest_pin_signal sig ON sig.part_id = a.part_id
+      LEFT JOIN (
+        SELECT asset_id, MAX(validated_at) AS last_validation_at
+        FROM asset_validation_records
+        WHERE validation_type = 'symbol_pin_mapping'
+        GROUP BY asset_id
+      ) validation_cursor ON validation_cursor.asset_id = a.id
       WHERE a.asset_type = 'symbol'
         AND a.availability_status IN ('downloaded', 'validated')
         AND a.storage_key IS NOT NULL
-      ORDER BY a.last_updated_at ASC, a.id ASC
+      ORDER BY
+        CASE WHEN validation_cursor.last_validation_at IS NULL THEN 0 ELSE 1 END ASC,
+        validation_cursor.last_validation_at ASC,
+        a.last_updated_at ASC,
+        a.id ASC
       LIMIT $1
     `,
     [limit]
@@ -272,10 +368,23 @@ async function readSymbolPinCountCandidates(
     asset_id: row.asset_id,
     file_format: row.file_format,
     part_id: row.part_id,
-    pin_table_confidence: row.pin_table_confidence,
+    pin_table_confidence: parseNullableNumeric(row.pin_table_confidence),
     pin_table_pin_count: parsePinCountFromExtractionNotes(row.pin_table_notes),
     storage_key: row.storage_key
   }));
+}
+
+/**
+ * node-pg returns NUMERIC columns as strings in real Postgres, while pg-mem tests return
+ * numbers. Normalize at the boundary before decision code calls numeric methods.
+ */
+function parseNullableNumeric(value: number | string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
@@ -390,6 +499,62 @@ async function runSymbolPinCountValidation(
   };
 }
 
+/**
+ * Validates one 3D-model asset's STEP file and persists the resulting evidence row.
+ */
+async function runThreeDGeometryValidation(
+  pool: Pool,
+  storage: FileStorageClient,
+  candidate: ThreeDGeometryCandidateRow,
+  now: Date
+): Promise<AssetValidationJobOutcome> {
+  if (candidate.file_format !== "step") {
+    return {
+      assetId: candidate.asset_id,
+      partId: candidate.part_id,
+      recordedStatus: null,
+      status: "skipped_unknown_file_format",
+      validationType: "three_d_geometry",
+      notes: `STEP integrity validator only parses step files (got '${candidate.file_format}').`
+    };
+  }
+
+  let stepBytes: Buffer;
+  try {
+    stepBytes = await storage.read(candidate.storage_key);
+  } catch (error) {
+    return {
+      assetId: candidate.asset_id,
+      partId: candidate.part_id,
+      recordedStatus: null,
+      status: "skipped_source_unreadable",
+      validationType: "three_d_geometry",
+      notes: formatValidationError(error)
+    };
+  }
+
+  const parsed = parseStepModel(stepBytes.toString("utf8"));
+  const decision = decideThreeDGeometryStatus(parsed);
+  await persistAssetValidationRecord(pool, {
+    assetId: candidate.asset_id,
+    notes: decision.notes,
+    partId: candidate.part_id,
+    status: decision.status,
+    validationType: "three_d_geometry",
+    validator: `${ASSET_VALIDATION_GENERATED_VALIDATOR_PREFIX}${THREE_D_GEOMETRY_VALIDATOR_VERSION}`,
+    when: now
+  });
+
+  return {
+    assetId: candidate.asset_id,
+    notes: decision.notes,
+    partId: candidate.part_id,
+    recordedStatus: decision.status,
+    status: "validated",
+    validationType: "three_d_geometry"
+  };
+}
+
 /** ParsedKicadFootprint is the small, validation-only shape we extract from kicad_mod. */
 export interface ParsedKicadFootprint {
   padCount: number;
@@ -436,6 +601,175 @@ export function countKicadSymbolPins(source: string): number {
     count += 1;
   }
   return count;
+}
+
+/** ParsedStepModel is the small, validation-only shape we extract from a STEP file. */
+export interface ParsedStepModel {
+  /** True when the ISO 10303-21 start and end markers are both present. */
+  hasIsoEnvelope: boolean;
+  /** True when a DATA; ... ENDSEC; section is present. */
+  hasDataSection: boolean;
+  /** AP schema identifiers declared in FILE_SCHEMA (for example AUTOMOTIVE_DESIGN, AP242). */
+  schemaNames: string[];
+  /** Count of `#N=` entity instances inside the DATA section. */
+  dataEntityCount: number;
+  /** Count of closed-solid topology entities (a watertight body lives here). */
+  closedSolidCount: number;
+  /** Count of face entities (surface geometry, present in both solids and surface models). */
+  faceCount: number;
+}
+
+/** STEP_ENTITY_INSTANCE_PATTERN matches `#123=` entity instance ids in the DATA section. */
+const STEP_ENTITY_INSTANCE_PATTERN = /#\d+\s*=/gu;
+
+/** STEP_CLOSED_SOLID_PATTERN matches the topology that represents a watertight solid body. */
+const STEP_CLOSED_SOLID_PATTERN = /\b(?:MANIFOLD_SOLID_BREP|CLOSED_SHELL|BREP_WITH_VOIDS)\b/gu;
+
+/** STEP_FACE_PATTERN matches face entities present in solids and surface-only models alike. */
+const STEP_FACE_PATTERN = /\b(?:ADVANCED_FACE|FACE_SURFACE)\b/gu;
+
+/**
+ * Extracts a shallow structural view of a STEP (ISO 10303-21) file: whether the ISO
+ * envelope and DATA section are present, which AP schema(s) it declares, how many entity
+ * instances live in DATA, and how many closed-solid and face entities exist.
+ *
+ * Deliberately shallow, matching the footprint/symbol validators: this is a Part 21 text
+ * structure scan, not a full B-rep geometry kernel. It is enough to separate "a real solid
+ * body" from "not a STEP file", "empty/header-only STEP", and "surface-only model", which
+ * are the failure modes that make an export bundle ship an unusable 3D file. A true
+ * watertightness / bounding-box pass is a future v2 concern; honest evidence over false
+ * precision.
+ */
+export function parseStepModel(source: string): ParsedStepModel {
+  const text = source.replace(/^﻿/u, "");
+  const hasIsoEnvelope = /\bISO-10303-21\s*;/u.test(text) && /\bEND-ISO-10303-21\s*;/u.test(text);
+
+  const dataStart = text.search(/\bDATA\s*;/u);
+  const dataBody = dataStart === -1 ? "" : extractStepDataSection(text, dataStart);
+  const hasDataSection = dataBody.length > 0;
+
+  return {
+    closedSolidCount: countMatches(dataBody, STEP_CLOSED_SOLID_PATTERN),
+    dataEntityCount: countMatches(dataBody, STEP_ENTITY_INSTANCE_PATTERN),
+    faceCount: countMatches(dataBody, STEP_FACE_PATTERN),
+    hasDataSection,
+    hasIsoEnvelope,
+    schemaNames: parseStepSchemaNames(text)
+  };
+}
+
+/**
+ * Returns the text of the DATA section body (between `DATA;` and its closing `ENDSEC;`).
+ */
+function extractStepDataSection(text: string, dataStart: number): string {
+  const afterData = text.slice(dataStart);
+  const endMatch = /\bENDSEC\s*;/u.exec(afterData);
+  return endMatch ? afterData.slice(0, endMatch.index) : afterData;
+}
+
+/**
+ * Parses the AP schema identifiers from the FILE_SCHEMA header entity. Each schema token
+ * looks like `'AUTOMOTIVE_DESIGN { 1 0 10303 214 ... }'`; we keep the leading identifier.
+ */
+function parseStepSchemaNames(text: string): string[] {
+  const schemaMatch = /FILE_SCHEMA\s*\(\s*\(([\s\S]*?)\)\s*\)/u.exec(text);
+  if (!schemaMatch || !schemaMatch[1]) {
+    return [];
+  }
+
+  const names: string[] = [];
+  for (const quoted of schemaMatch[1].matchAll(/'([^']*)'/gu)) {
+    const identifier = (quoted[1] ?? "").trim().split(/[\s{]/u)[0];
+    if (identifier) {
+      names.push(identifier);
+    }
+  }
+  return names;
+}
+
+/**
+ * Counts non-overlapping matches of a global regex without mutating shared lastIndex state.
+ */
+function countMatches(text: string, pattern: RegExp): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  for (const _ of text.matchAll(pattern)) {
+    count += 1;
+  }
+  return count;
+}
+
+/** ThreeDGeometryDecision is the persisted-shape decision for one STEP file. */
+interface ThreeDGeometryDecision {
+  status: ValidationStatus;
+  notes: string;
+}
+
+/**
+ * Maps a parsed STEP structure into a validation status + evidence note.
+ *
+ * Decision rules (in order):
+ *   1. No ISO 10303-21 envelope -> `failed` (the bytes are not a STEP file at all).
+ *   2. No DATA section / zero entities -> `failed` (header-only or empty: no geometry).
+ *   3. No faces and no closed solids -> `failed` (a header with metadata but no 3D body).
+ *   4. Faces present but no closed solid -> `needs_review` (surface-only, maybe not watertight).
+ *   5. Geometry present but no identifiable FILE_SCHEMA -> `needs_review` (AP conformance unknown).
+ *   6. All assertions pass -> `verified`.
+ *
+ * Note records the actual entity counts so a reviewer can audit the decision without re-running.
+ */
+export function decideThreeDGeometryStatus(parsed: ParsedStepModel): ThreeDGeometryDecision {
+  if (!parsed.hasIsoEnvelope) {
+    return {
+      notes: "The file is missing the ISO-10303-21 start/end markers, so it is not a valid STEP file.",
+      status: "failed"
+    };
+  }
+
+  if (!parsed.hasDataSection || parsed.dataEntityCount === 0) {
+    return {
+      notes: "The STEP file has no DATA-section entities, so it carries a header but no geometry to place.",
+      status: "failed"
+    };
+  }
+
+  if (parsed.faceCount === 0 && parsed.closedSolidCount === 0) {
+    return {
+      notes:
+        `The STEP file has ${parsed.dataEntityCount} data entities but no solid or surface geometry ` +
+        "(no CLOSED_SHELL/MANIFOLD_SOLID_BREP or ADVANCED_FACE entities), so there is no 3D body to use.",
+      status: "failed"
+    };
+  }
+
+  if (parsed.closedSolidCount === 0) {
+    return {
+      notes:
+        `The STEP file contains ${parsed.faceCount} surface ${parsed.faceCount === 1 ? "face" : "faces"} but no closed ` +
+        "solid shell, so it may be a surface-only model rather than a watertight body. Confirm it is a solid before relying on it for mechanical fit.",
+      status: "needs_review"
+    };
+  }
+
+  if (parsed.schemaNames.length === 0) {
+    return {
+      notes:
+        `STEP geometry is present (${parsed.closedSolidCount} closed solid ${parsed.closedSolidCount === 1 ? "shell" : "shells"}, ` +
+        `${parsed.faceCount} faces, ${parsed.dataEntityCount} data entities), but the FILE_SCHEMA could not be identified, ` +
+        "so AP203/AP214/AP242 conformance is unverified.",
+      status: "needs_review"
+    };
+  }
+
+  return {
+    notes:
+      `Valid STEP file: ISO 10303-21 envelope, schema ${parsed.schemaNames.join(", ")}, ` +
+      `${parsed.dataEntityCount} data entities including ${parsed.closedSolidCount} closed solid ` +
+      `${parsed.closedSolidCount === 1 ? "shell" : "shells"} and ${parsed.faceCount} faces.`,
+    status: "verified"
+  };
 }
 
 /** FootprintGeometryDecision is the persisted-shape decision for one footprint. */
@@ -553,7 +887,7 @@ export function decideSymbolPinCountStatus(
     };
   }
 
-  const confidence = candidate.pin_table_confidence;
+  const confidence = parseNullableNumeric(candidate.pin_table_confidence);
   const datasheetPinCount = candidate.pin_table_pin_count;
   if (confidence === null) {
     return {

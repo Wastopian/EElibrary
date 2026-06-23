@@ -9,7 +9,7 @@
  */
 
 import { validateLocalEnv } from "./lib/env-validate.mjs";
-import { DEMO_PROJECT_ID, DEMO_PROJECT_KEY } from "./seed-demo-project.mjs";
+import { DEMO_CABLE_ASSEMBLY_ID, DEMO_PROJECT_ID, DEMO_PROJECT_KEY } from "./seed-demo-project.mjs";
 
 const apiBaseUrl = (process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000").replace(/\/$/u, "");
 const webBaseUrl = (process.env.EE_LIBRARY_WEB_BASE_URL ?? `http://127.0.0.1:${process.env.WEB_PORT ?? "3000"}`).replace(/\/$/u, "");
@@ -183,6 +183,72 @@ async function main() {
     check("GET /where-used demo part", "pass", `${demoWhereUsedResponse.body.data.projectUsages.length} usage rows found`);
   } else {
     check("GET /where-used demo part", "fail", `unexpected payload: ${JSON.stringify(demoWhereUsedResponse.body)}`);
+  }
+
+  const demoProjectFilesResponse = await safeFetch(`/projects/${encodeURIComponent(demoProjectId)}/files`);
+  if (!demoProjectFilesResponse.ok) {
+    check("GET /projects demo files", "fail", demoProjectFilesResponse.error ?? `HTTP ${demoProjectFilesResponse.status}`);
+  } else if (
+    demoProjectFilesResponse.body?.data?.availability === "configured" &&
+    demoProjectFilesResponse.body?.data?.documentMap?.summary?.documentCount > 0 &&
+    demoProjectFilesResponse.body?.data?.documentMap?.summary?.folderPatternCount > 0 &&
+    demoProjectFilesResponse.body?.data?.documentMap?.summary?.moveSuggestionCount > 0 &&
+    demoProjectFilesResponse.body?.data?.documentMap?.summary?.pinMentionCount > 0 &&
+    demoProjectFilesResponse.body?.data?.documentMap?.documents?.some(
+      (entry) =>
+        entry.signals?.connectorRefs?.includes("J202") &&
+        entry.signals?.pinRefs?.includes("47") &&
+        entry.sortPlan?.action === "move_to_standard_folder"
+    ) &&
+    demoProjectFilesResponse.body?.data?.documentMap?.folderPatterns?.some(
+      (pattern) =>
+        pattern.folderPath === "Bob-drop/old-tests" &&
+        pattern.dominantDocumentType === "test_procedure" &&
+        pattern.suggestedAction === "use_file_copy_buttons"
+    )
+  ) {
+    check(
+      "GET /projects demo files",
+      "pass",
+      `${demoProjectFilesResponse.body.data.documentMap.summary.documentCount} mapped project files found`
+    );
+  } else {
+    check("GET /projects demo files", "fail", `unexpected payload: ${JSON.stringify(demoProjectFilesResponse.body)}`);
+  }
+
+  const documentWhereUsedResponse = await safeFetch("/where-used?targetType=document&q=Which%20test%20procedure%20uses%20connector%20J202%3F");
+  if (!documentWhereUsedResponse.ok) {
+    check("GET /where-used demo documents", "fail", documentWhereUsedResponse.error ?? `HTTP ${documentWhereUsedResponse.status}`);
+  } else if (
+    documentWhereUsedResponse.body?.data?.state === "available" &&
+    documentWhereUsedResponse.body?.data?.documentHits?.some(
+      (hit) =>
+        hit.project?.id === demoProjectId &&
+        hit.document?.filename === "J202-test-procedure-rev-d.md" &&
+        hit.matchedLabels?.includes("Connector: J202") &&
+        hit.matchedLabels?.includes("Type: Test procedure")
+    )
+  ) {
+    check(
+      "GET /where-used demo documents",
+      "pass",
+      `${documentWhereUsedResponse.body.data.documentHits.length} document clue hits found`
+    );
+  } else {
+    check("GET /where-used demo documents", "fail", `unexpected payload: ${JSON.stringify(documentWhereUsedResponse.body)}`);
+  }
+
+  const interconnectResponse = await safeFetch("/interconnects");
+  if (!interconnectResponse.ok) {
+    check("GET /interconnects", "fail", interconnectResponse.error ?? `HTTP ${interconnectResponse.status}`);
+  } else if (
+    interconnectResponse.body?.data?.state === "available" &&
+    interconnectResponse.body?.data?.cableAssemblies?.some((entry) => entry.id === DEMO_CABLE_ASSEMBLY_ID) &&
+    interconnectResponse.body?.data?.summary?.pinMapRowCount >= 24
+  ) {
+    check("GET /interconnects", "pass", `${interconnectResponse.body.data.summary.pinMapRowCount} interconnect pin rows found`);
+  } else {
+    check("GET /interconnects", "fail", `unexpected payload: ${JSON.stringify(interconnectResponse.body)}`);
   }
 
   // Optional web workspace reachability checks. These stay warnings by default so

@@ -70,6 +70,7 @@ import type {
   GenerationRequestCreateInput,
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
+  InterconnectDashboardResponse,
   PartDetailResponse,
   PartSubstitutionCreateInput,
   PartSubstitutionCreateResponse,
@@ -84,6 +85,10 @@ import type {
   ProjectBomHealthResponse,
   ProjectCreateInput,
   ProjectCreateResponse,
+  ProjectDocumentCopyInput,
+  ProjectDocumentCopyResponse,
+  ProjectDocumentExtractionRetryInput,
+  ProjectDocumentExtractionStatusResponse,
   ProjectEvidenceAttachmentsResponse,
   ProjectFilesResponse,
   ProjectFileUploadInput,
@@ -447,6 +452,73 @@ export async function uploadProjectFile(
   }
 
   const envelope = (await response.json()) as ApiEnvelope<ProjectFileUploadResponse>;
+  return envelope.data;
+}
+
+/**
+ * Copies one current document-map suggestion into its standard folder.
+ *
+ * The API owns the destination decision and collision suffixing; the browser only
+ * submits the mapped source path so the file map stays the source of truth.
+ */
+export async function copyProjectDocumentSuggestion(
+  projectId: string,
+  input: ProjectDocumentCopyInput
+): Promise<ProjectDocumentCopyResponse> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/document-map/copy-suggestion`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project document copy");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectDocumentCopyResponse>;
+  return envelope.data;
+}
+
+/**
+ * Requeues one failed project PDF/Office extraction.
+ */
+export async function retryProjectDocumentExtraction(
+  projectId: string,
+  input: ProjectDocumentExtractionRetryInput
+): Promise<void> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/document-map/retry-extraction`),
+    {
+      body: JSON.stringify(input),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+      method: "POST"
+    }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project document extraction retry");
+  }
+}
+
+/** Fetches lightweight project document-reader states without rescanning project files. */
+export async function fetchProjectDocumentExtractionStatuses(
+  projectId: string
+): Promise<ProjectDocumentExtractionStatusResponse> {
+  const response = await fetch(
+    buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files/document-map/extractions`),
+    { cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project document extraction status");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectDocumentExtractionStatusResponse>;
   return envelope.data;
 }
 
@@ -1500,23 +1572,57 @@ export async function updateSourceReconciliation(
   return envelope.data;
 }
 
+type ServerCookieReader = () => Promise<string | null> | string | null;
+
+let serverCookieReaderForTests: ServerCookieReader | null = null;
+
+/**
+ * Installs a cookie reader for focused tests of server-side API token minting.
+ */
+export function setApiClientServerCookieReaderForTests(reader: ServerCookieReader | null): void {
+  serverCookieReaderForTests = reader;
+}
+
 /**
  * Fetches a short-lived HS256 token from the Next.js /api/token route for API POST calls.
- * Works from both server components (absolute URL) and client components (relative URL).
+ * Works from both server components (absolute URL with forwarded cookies) and client
+ * components (relative URL that lets the browser include cookies).
  */
 async function getAuthHeaders(): Promise<Record<string, string>> {
   try {
+    const isServer = typeof globalThis.window === "undefined";
     const base =
-      typeof globalThis.window === "undefined"
+      isServer
         ? (process.env["NEXTAUTH_URL"] ?? "http://localhost:3000")
         : "";
-    const res = await fetch(`${base}/api/token`, { cache: "no-store" });
+    const cookieHeader = isServer ? await readServerCookieHeader() : null;
+    const tokenRequestInit: RequestInit = { cache: "no-store" };
+    if (cookieHeader) {
+      tokenRequestInit.headers = { cookie: cookieHeader };
+    }
+    const res = await fetch(`${base}/api/token`, tokenRequestInit);
     if (!res.ok) return {};
     const { token } = (await res.json()) as { token: string };
     if (typeof token !== "string" || token.length === 0) return {};
     return { Authorization: `Bearer ${token}` };
   } catch {
     return {};
+  }
+}
+
+/**
+ * Reads the current Next.js request cookie when API helpers run inside a server action.
+ */
+async function readServerCookieHeader(): Promise<string | null> {
+  if (serverCookieReaderForTests) {
+    return serverCookieReaderForTests();
+  }
+
+  try {
+    const { headers } = await import("next/headers");
+    return (await headers()).get("cookie");
+  } catch {
+    return null;
   }
 }
 
@@ -1847,6 +1953,14 @@ export async function fetchConnectorSetCatalog(filters: { connectorClass?: Conne
 }
 
 /**
+ * Fetches the interconnect dashboard for cable assemblies, fixtures, and pin maps.
+ */
+export async function fetchInterconnectDashboard(): Promise<InterconnectDashboardResponse> {
+  const envelope = await fetchApi<ApiEnvelope<InterconnectDashboardResponse>>("/interconnects");
+  return envelope.data;
+}
+
+/**
  * Resolves connector-set intent through the API without hiding incomplete buildability evidence.
  */
 export async function resolveConnectorSetIntent(input: ConnectorSetIntentInput): Promise<ConnectorSetIntentResolution> {
@@ -1896,7 +2010,7 @@ export async function applyApprovalBatch(projectId: string, input: ApprovalBatch
  * Builds the API download URL for one asset so the UI can link directly to the redirect endpoint.
  */
 export function buildAssetDownloadUrl(partId: string, assetId: string): string {
-  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`;
+  return buildBrowserApiUrl(`/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/download`);
 }
 
 /**
@@ -1905,7 +2019,7 @@ export function buildAssetDownloadUrl(partId: string, assetId: string): string {
  * the derived viewer artifact have separate availability and trust contracts.
  */
 export function buildAssetPreviewArtifactDownloadUrl(partId: string, assetId: string): string {
-  return `${getApiBaseUrl()}/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`;
+  return buildBrowserApiUrl(`/parts/${encodeURIComponent(partId)}/assets/${encodeURIComponent(assetId)}/preview-artifact/download`);
 }
 
 const MAX_COMPARE_PARTS = 4;
@@ -1929,13 +2043,29 @@ export function buildCompareUrl(partIds: string[]): string {
  */
 export function buildExportBundleDownloadUrl(storageKey: string | null): string | null {
   if (!storageKey) return null;
-  return `${getApiBaseUrl()}/storage/${encodeURIComponent(storageKey)}`;
+  return buildBrowserApiUrl(`/storage/${encodeURIComponent(storageKey)}`);
+}
+
+/**
+ * User-facing href/src values must stay same-origin even during server rendering. The
+ * server-only API base URL may be an internal Docker hostname that browsers cannot reach.
+ */
+function buildBrowserApiUrl(path: string): string {
+  return `/api-proxy${path}`;
 }
 
 /**
  * Resolves the API base URL for local and deployed web runtimes.
+ *
+ * In the browser this is always the same-origin /api-proxy path (rewritten to the API by
+ * next.config.mjs), so an engineer's machine only ever needs to reach the web app address —
+ * the API service can stay private to the server. Env URLs only apply server-side.
  */
 export function getApiBaseUrl(): string {
+  if (typeof globalThis.window !== "undefined") {
+    return "/api-proxy";
+  }
+
   return process.env.EE_LIBRARY_API_BASE_URL ?? "http://127.0.0.1:4000";
 }
 

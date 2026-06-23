@@ -176,6 +176,10 @@ function buildAssetAccessAction(asset: Asset, source: CatalogDataSource | undefi
     return { gated: false, href: asset.sourceUrl, label: "View source" };
   }
 
+  if (asset.availabilityStatus === "failed") {
+    return null;
+  }
+
   if (!isFileBackedAsset(asset)) {
     return null;
   }
