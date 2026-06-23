@@ -27,6 +27,26 @@ import type {
 /** InterconnectScope names the record family shown by the segmented control. */
 type InterconnectScope = "all" | "cables" | "fixtures" | "pins";
 
+/** InterconnectStatusFilter narrows cable and fixture records to one recorded status, or all. */
+type InterconnectStatusFilter = "all" | InterconnectRecordStatus;
+
+/** InterconnectStructuredFilters carries the discoverable project and status dropdown selections. */
+interface InterconnectStructuredFilters {
+  /** Selected project key, or "all"/null for every project. */
+  projectKey?: string | null;
+  /** Selected cable/fixture status, or "all" for every status. */
+  status?: InterconnectStatusFilter;
+}
+
+/** InterconnectProjectOption is one distinct project present in the loaded records. */
+interface InterconnectProjectOption {
+  key: string;
+  label: string;
+}
+
+/** STATUS_FILTER_OPTIONS lists the cable/fixture statuses an operator can isolate. */
+const STATUS_FILTER_OPTIONS: InterconnectRecordStatus[] = ["approved", "in_review", "draft", "restricted", "retired"];
+
 /** InterconnectBrowserProps carries the complete database-backed Area 2 read model. */
 interface InterconnectBrowserProps {
   /** Current cable, fixture, and pin-map records returned by the API. */
@@ -38,10 +58,14 @@ export function InterconnectBrowser({ response }: InterconnectBrowserProps) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<InterconnectScope>("all");
   const [needsCheckOnly, setNeedsCheckOnly] = useState(false);
+  const [projectKey, setProjectKey] = useState("all");
+  const [status, setStatus] = useState<InterconnectStatusFilter>("all");
+  const projectOptions = useMemo(() => buildInterconnectProjectOptions(response), [response]);
   const filtered = useMemo(
-    () => filterInterconnectRecords(response, query, needsCheckOnly),
-    [needsCheckOnly, query, response]
+    () => filterInterconnectRecords(response, query, needsCheckOnly, { projectKey, status }),
+    [needsCheckOnly, projectKey, query, response, status]
   );
+  const hasActiveFilters = query.trim().length > 0 || needsCheckOnly || scope !== "all" || projectKey !== "all" || status !== "all";
   const visibleCount =
     (scope === "all" || scope === "cables" ? filtered.cables.length : 0) +
     (scope === "all" || scope === "fixtures" ? filtered.fixtures.length : 0) +
@@ -71,6 +95,34 @@ export function InterconnectBrowser({ response }: InterconnectBrowserProps) {
                 type="search"
                 value={query}
               />
+            </label>
+
+            <label className="interconnect-browser__filter">
+              <span>Project</span>
+              <select
+                name="interconnect-project"
+                onChange={(event) => setProjectKey(event.target.value)}
+                value={projectKey}
+              >
+                <option value="all">All projects</option>
+                {projectOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="interconnect-browser__filter">
+              <span>Cable &amp; fixture status</span>
+              <select
+                name="interconnect-status"
+                onChange={(event) => setStatus(event.target.value as InterconnectStatusFilter)}
+                value={status}
+              >
+                <option value="all">Any status</option>
+                {STATUS_FILTER_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{formatRecordStatus(option)}</option>
+                ))}
+              </select>
             </label>
 
             <div className="interconnect-browser__scope" role="group" aria-label="Show record type">
@@ -113,7 +165,7 @@ export function InterconnectBrowser({ response }: InterconnectBrowserProps) {
           <div className="interconnect-browser__result-bar" aria-live="polite">
             <strong>{visibleCount} matching record{visibleCount === 1 ? "" : "s"}</strong>
             <span>
-              {query.trim() || needsCheckOnly || scope !== "all"
+              {hasActiveFilters
                 ? "Showing the current filters."
                 : "Showing all cable, fixture, and pin records."}
             </span>
@@ -199,34 +251,72 @@ function InterconnectResultSection({
   );
 }
 
-/** Filters all Area 2 record families against one normalized query and review toggle. */
+/** Filters all Area 2 record families against the query, review toggle, and structured filters. */
 export function filterInterconnectRecords(
   response: InterconnectDashboardResponse,
   rawQuery: string,
-  needsCheckOnly: boolean
+  needsCheckOnly: boolean,
+  filters: InterconnectStructuredFilters = {}
 ): {
   cables: CableAssembly[];
   fixtures: TestFixture[];
   pinRows: CablePinMapRow[];
 } {
   const query = rawQuery.trim().toLowerCase();
+  const projectKey = filters.projectKey && filters.projectKey !== "all" ? filters.projectKey : null;
+  const status = filters.status && filters.status !== "all" ? filters.status : null;
+  const cableProjectByKey = buildCableProjectMap(response);
   const cables = response.cableAssemblies.filter(
     (cable) =>
       (!needsCheckOnly || recordNeedsCheck(cable.assemblyStatus)) &&
+      (projectKey === null || cable.projectKey === projectKey) &&
+      (status === null || cable.assemblyStatus === status) &&
       matchesInterconnectQuery(buildCableSearchText(cable), query)
   );
   const fixtures = response.fixtures.filter(
     (fixture) =>
       (!needsCheckOnly || recordNeedsCheck(fixture.fixtureStatus)) &&
+      (projectKey === null || fixture.projectKey === projectKey) &&
+      (status === null || fixture.fixtureStatus === status) &&
       matchesInterconnectQuery(buildFixtureSearchText(fixture), query)
   );
   const pinRows = response.pinMapRows.filter(
     (row) =>
       (!needsCheckOnly || row.confidenceScore < 0.75) &&
+      (projectKey === null || cableProjectByKey.get(row.cableKey) === projectKey) &&
       matchesInterconnectQuery(buildPinRowSearchText(row), query)
   );
 
   return { cables, fixtures, pinRows };
+}
+
+/** Maps each cable key to its project key so pin rows can inherit project scope for filtering. */
+function buildCableProjectMap(response: InterconnectDashboardResponse): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const cable of response.cableAssemblies) {
+    if (cable.projectKey) {
+      map.set(cable.cableKey, cable.projectKey);
+    }
+  }
+  return map;
+}
+
+/** Builds the distinct project options present across cable and fixture records. */
+export function buildInterconnectProjectOptions(response: InterconnectDashboardResponse): InterconnectProjectOption[] {
+  const labelByKey = new Map<string, string>();
+  for (const cable of response.cableAssemblies) {
+    if (cable.projectKey) {
+      labelByKey.set(cable.projectKey, formatProjectLabel(cable.projectKey, cable.projectName, null));
+    }
+  }
+  for (const fixture of response.fixtures) {
+    if (fixture.projectKey) {
+      labelByKey.set(fixture.projectKey, formatProjectLabel(fixture.projectKey, fixture.projectName, null));
+    }
+  }
+  return [...labelByKey.entries()]
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Returns true when a normalized query occurs in one prebuilt record corpus. */

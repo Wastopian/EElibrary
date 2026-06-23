@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import InterconnectsPage from "./page";
-import { filterInterconnectRecords } from "./InterconnectBrowser";
+import { buildInterconnectProjectOptions, filterInterconnectRecords } from "./InterconnectBrowser";
 import type { InterconnectDashboardResponse } from "@ee-library/shared/types";
 
 /**
@@ -34,6 +34,8 @@ test("interconnect workspace renders cable, fixture, and pin-map rows", async ()
     assert.match(html, /Cable and fixture memory/u);
     assert.match(html, /Find interconnect records/u);
     assert.match(html, /Search interconnects/u);
+    assert.match(html, /All projects/u);
+    assert.match(html, /Cable &amp; fixture status/u);
     assert.match(html, /Needs check only/u);
     assert.match(html, /CAB-DEMO-PMC-JST-PWR/u);
     assert.match(html, /TFX-DEMO-PMC-BRINGUP/u);
@@ -67,6 +69,47 @@ test("interconnect browser filters across record families and review state", () 
   assert.equal(needsCheck.cables.length, 1);
   assert.equal(needsCheck.fixtures.length, 1);
   assert.equal(needsCheck.pinRows.length, 1);
+});
+
+/** Verifies the project dropdown scopes every record family, including pin rows via their cable. */
+test("interconnect browser filters by project across cables, fixtures, and pins", () => {
+  const response = buildInterconnectResponse();
+
+  const inProject = filterInterconnectRecords(response, "", false, { projectKey: "DEMO-POCKET-MCU" });
+  assert.equal(inProject.cables.length, 1);
+  assert.equal(inProject.fixtures.length, 1);
+  assert.equal(inProject.pinRows.length, 1);
+
+  const otherProject = filterInterconnectRecords(response, "", false, { projectKey: "SOME-OTHER-PROGRAM" });
+  assert.equal(otherProject.cables.length, 0);
+  assert.equal(otherProject.fixtures.length, 0);
+  assert.equal(otherProject.pinRows.length, 0);
+});
+
+/** Verifies the status dropdown isolates cable and fixture records by recorded status. */
+test("interconnect browser filters cables and fixtures by status", () => {
+  const response = buildInterconnectResponse();
+
+  const inReview = filterInterconnectRecords(response, "", false, { status: "in_review" });
+  assert.equal(inReview.cables.length, 1);
+  assert.equal(inReview.fixtures.length, 0);
+
+  const restricted = filterInterconnectRecords(response, "", false, { status: "restricted" });
+  assert.equal(restricted.cables.length, 0);
+  assert.equal(restricted.fixtures.length, 1);
+
+  const approved = filterInterconnectRecords(response, "", false, { status: "approved" });
+  assert.equal(approved.cables.length, 0);
+  assert.equal(approved.fixtures.length, 0);
+});
+
+/** Verifies the project options builder returns each distinct project present in the records. */
+test("buildInterconnectProjectOptions lists distinct projects from records", () => {
+  const options = buildInterconnectProjectOptions(buildInterconnectResponse());
+
+  assert.equal(options.length, 1);
+  assert.equal(options[0]?.key, "DEMO-POCKET-MCU");
+  assert.match(options[0]?.label ?? "", /DEMO-POCKET-MCU/u);
 });
 
 /**
