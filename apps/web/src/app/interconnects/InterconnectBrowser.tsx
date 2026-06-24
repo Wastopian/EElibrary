@@ -502,7 +502,7 @@ function TestFixtureTableRow({ fixture }: { fixture: TestFixture }) {
   return (
     <tr className={recordNeedsCheck(fixture.fixtureStatus) ? "interconnect-table__row--attention" : undefined}>
       <td>
-        <span className="ui-mono interconnect-table__identity">{fixture.fixtureKey}</span>
+        <Link className="ui-mono interconnect-table__identity interconnect-table__link" href={`/interconnects/fixtures/${encodeURIComponent(fixture.id)}`}>{fixture.fixtureKey}</Link>
         <p className="muted-copy">Revision {fixture.revisionLabel} - updated {formatDate(fixture.updatedAt)}</p>
         {fixture.purpose ? <p>{fixture.purpose}</p> : null}
       </td>

@@ -10,15 +10,21 @@ import {
   createCableAssemblyEndInDatabase,
   createCableAssemblyInDatabase,
   createCablePinMapRowInDatabase,
+  createFixturePortInDatabase,
+  createTestFixtureInDatabase,
   deleteCableAssemblyEndInDatabase,
   deleteCablePinMapRowInDatabase,
+  deleteFixturePortInDatabase,
   readCableAssemblyDetailFromDatabase,
   readInterconnectDashboardFromDatabase,
+  readTestFixtureDetailFromDatabase,
   searchInterconnectWhereUsed,
   setInterconnectPoolForTests,
   updateCableAssemblyEndInDatabase,
   updateCableAssemblyInDatabase,
-  updateCablePinMapRowInDatabase
+  updateCablePinMapRowInDatabase,
+  updateFixturePortInDatabase,
+  updateTestFixtureInDatabase
 } from "./interconnect-store";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
@@ -347,6 +353,90 @@ test("cable pin row create/update/delete enforces signal, pin, and confidence ru
 });
 
 /**
+ * Verifies a fixture can be created, edited, retired, and read back as detail.
+ */
+test("test fixture create / update / retire persists and reads back", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createTestFixtureInDatabase({ fixtureKey: "TFX-100", revisionLabel: "A", owner: "Morgan" });
+    assert.equal(created.status, "created");
+    if (created.status !== "created") return;
+    assert.equal(created.response.fixture.fixtureKey, "TFX-100");
+    assert.equal(created.response.fixture.fixtureStatus, "draft");
+    assert.equal(created.response.fixture.provenance, "manual_internal");
+    assert.match(created.response.boundary, /does not approve/u);
+    const fixtureId = created.response.fixture.id;
+
+    const blank = await createTestFixtureInDatabase({ fixtureKey: "  " });
+    assert.equal(blank.status, "invalid");
+
+    const dup = await createTestFixtureInDatabase({ fixtureKey: "TFX-100", revisionLabel: "A" });
+    assert.equal(dup.status, "invalid");
+
+    const retired = await updateTestFixtureInDatabase(fixtureId, { fixtureStatus: "retired" });
+    assert.equal(retired.status, "updated");
+    if (retired.status !== "updated") return;
+    assert.equal(retired.response.fixture.fixtureStatus, "retired");
+
+    const detail = await readTestFixtureDetailFromDatabase(fixtureId);
+    assert.equal(detail.status, "available");
+
+    const missing = await readTestFixtureDetailFromDatabase("fixture-nope");
+    assert.equal(missing.status, "not_found");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies fixture ports can be added, validated, edited, de-duplicated, and deleted.
+ */
+test("fixture port create / update / delete enforces validation and duplicates", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createTestFixtureInDatabase({ fixtureKey: "TFX-200" });
+    if (created.status !== "created") throw new Error("setup failed");
+    const fixtureId = created.response.fixture.id;
+
+    const blank = await createFixturePortInDatabase(fixtureId, { connectorRef: "  " });
+    assert.equal(blank.status, "invalid");
+
+    const port = await createFixturePortInDatabase(fixtureId, { connectorRef: "J202", portRole: "DUT port" });
+    assert.equal(port.status, "created");
+    if (port.status !== "created") return;
+    assert.equal(port.response.fixture.ports.length, 1);
+    const portId = port.response.fixture.ports[0]!.id;
+
+    const dup = await createFixturePortInDatabase(fixtureId, { connectorRef: "J202" });
+    assert.equal(dup.status, "invalid");
+
+    const badCable = await createFixturePortInDatabase(fixtureId, { connectorRef: "J203", cableAssemblyId: "cable-missing" });
+    assert.equal(badCable.status, "invalid");
+
+    const edited = await updateFixturePortInDatabase(fixtureId, portId, { connectorRef: "J202-RENAMED", portRole: "Power" });
+    assert.equal(edited.status, "updated");
+    if (edited.status !== "updated") return;
+    assert.equal(edited.response.fixture.ports[0]!.connectorRef, "J202-RENAMED");
+
+    const wrongFixture = await updateFixturePortInDatabase("fixture-nope", portId, { connectorRef: "J202" });
+    assert.equal(wrongFixture.status, "not_found");
+
+    const removed = await deleteFixturePortInDatabase(fixtureId, portId);
+    assert.equal(removed.status, "deleted");
+    if (removed.status !== "deleted") return;
+    assert.equal(removed.response.fixture.ports.length, 0);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies missing-cable detail reads do not invent a record.
  */
 test("readCableAssemblyDetailFromDatabase returns not_found for an unknown cable", async () => {
@@ -466,7 +556,9 @@ function createInterconnectPool(): TestPool {
       mate_part_id TEXT REFERENCES parts(id),
       cable_assembly_id TEXT REFERENCES cable_assemblies(id),
       port_role TEXT,
-      notes TEXT
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE cable_pin_map_rows (

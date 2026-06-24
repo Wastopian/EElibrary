@@ -38,15 +38,21 @@ import {
   createCableAssemblyEndInDatabase,
   createCableAssemblyInDatabase,
   createCablePinMapRowInDatabase,
+  createFixturePortInDatabase,
+  createTestFixtureInDatabase,
   deleteCableAssemblyEndInDatabase,
   deleteCablePinMapRowInDatabase,
+  deleteFixturePortInDatabase,
   readCableAssemblyDetailFromDatabase,
   readInterconnectDashboardFromDatabase,
+  readTestFixtureDetailFromDatabase,
   updateCableAssemblyEndInDatabase,
   updateCableAssemblyInDatabase,
-  updateCablePinMapRowInDatabase
+  updateCablePinMapRowInDatabase,
+  updateFixturePortInDatabase,
+  updateTestFixtureInDatabase
 } from "./interconnect-store";
-import type { CableAssemblyMutationResult } from "./interconnect-store";
+import type { CableAssemblyMutationResult, TestFixtureMutationResult } from "./interconnect-store";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
@@ -63,6 +69,9 @@ import type {
   CableAssemblyEndInput,
   CableAssemblyUpdateInput,
   CablePinMapRowInput,
+  FixturePortInput,
+  TestFixtureCreateInput,
+  TestFixtureUpdateInput,
   CadAvailabilityFilter,
   CatalogDataSource,
   CircuitBlockCreateInput,
@@ -267,6 +276,9 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const cablePinRowDetailMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows\/([^/]+)$/u.exec(url.pathname);
   const cablePinRowsMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows$/u.exec(url.pathname);
   const cableAssemblyDetailMatch = /^\/cable-assemblies\/([^/]+)$/u.exec(url.pathname);
+  const fixturePortDetailMatch = /^\/test-fixtures\/([^/]+)\/ports\/([^/]+)$/u.exec(url.pathname);
+  const fixturePortsMatch = /^\/test-fixtures\/([^/]+)\/ports$/u.exec(url.pathname);
+  const testFixtureDetailMatch = /^\/test-fixtures\/([^/]+)$/u.exec(url.pathname);
 
   try {
   if (request.method === "POST" && url.pathname === "/provider-lookups") {
@@ -521,6 +533,41 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/test-fixtures") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleTestFixtureCreate(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && fixturePortsMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleFixturePortCreate(request, response, decodeURIComponent(fixturePortsMatch[1]));
+    return;
+  }
+
+  if (request.method === "PATCH" && fixturePortDetailMatch?.[1] && fixturePortDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleFixturePortUpdate(request, response, decodeURIComponent(fixturePortDetailMatch[1]), decodeURIComponent(fixturePortDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "DELETE" && fixturePortDetailMatch?.[1] && fixturePortDetailMatch[2]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleFixturePortDelete(response, decodeURIComponent(fixturePortDetailMatch[1]), decodeURIComponent(fixturePortDetailMatch[2]));
+    return;
+  }
+
+  if (request.method === "PATCH" && testFixtureDetailMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleTestFixtureUpdate(request, response, decodeURIComponent(testFixtureDetailMatch[1]));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/imports/provider") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
@@ -733,6 +780,11 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method === "GET" && cableAssemblyDetailMatch?.[1]) {
     await handleCableAssemblyDetailRead(response, decodeURIComponent(cableAssemblyDetailMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && testFixtureDetailMatch?.[1]) {
+    await handleTestFixtureDetailRead(response, decodeURIComponent(testFixtureDetailMatch[1]));
     return;
   }
 
@@ -3700,6 +3752,124 @@ function isCablePinRowInputShape(body: CablePinMapRowInput | null): body is Cabl
 }
 
 /**
+ * Handles single-fixture detail reads for the authoring page.
+ */
+async function handleTestFixtureDetailRead(response: ServerResponse, fixtureId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "test-fixture-detail-read", () => readTestFixtureDetailFromDatabase(fixtureId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "FIXTURE_NOT_FOUND", "Test fixture not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Sends the shared fixture mutation result envelope: 201 create / 200 update-delete / 400 / 404 / 503. */
+function sendFixtureMutationResult(response: ServerResponse, result: TestFixtureMutationResult): void {
+  if (result.status === "not_configured") {
+    sendProjectMemoryNotConfigured(response);
+    return;
+  }
+  if (result.status === "not_found") {
+    sendProjectMemoryNotFound(response, result.code, result.message);
+    return;
+  }
+  if (result.status === "invalid") {
+    sendJson(response, 400, { error: { code: result.code, message: result.message } });
+    return;
+  }
+  sendCatalogJsonWithStatus(response, result.status === "created" ? 201 : 200, result.response, "database");
+}
+
+/** Handles test fixture creation from in-app authoring. */
+async function handleTestFixtureCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<TestFixtureCreateInput>(request);
+  if (!body || typeof body.fixtureKey !== "string" || body.fixtureKey.trim().length === 0) {
+    sendJson(response, 400, { error: { code: "INVALID_FIXTURE_KEY", message: "A fixture needs a fixture ID (for example TFX-42)." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "test-fixture-create", () => createTestFixtureInDatabase(body), (value) => value.status);
+    sendFixtureMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Handles test fixture header edits, including soft-retire via status. */
+async function handleTestFixtureUpdate(request: IncomingMessage, response: ServerResponse, fixtureId: string): Promise<void> {
+  const body = await readJsonBody<TestFixtureUpdateInput>(request);
+  if (!body || typeof body !== "object") {
+    sendJson(response, 400, { error: { code: "INVALID_FIXTURE_UPDATE", message: "Fixture edits require at least one field to change." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "test-fixture-update", () => updateTestFixtureInDatabase(fixtureId, body), (value) => value.status);
+    sendFixtureMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Handles adding one port to a fixture. */
+async function handleFixturePortCreate(request: IncomingMessage, response: ServerResponse, fixtureId: string): Promise<void> {
+  const body = await readJsonBody<FixturePortInput>(request);
+  if (!isFixturePortInputShape(body)) {
+    sendJson(response, 400, { error: { code: "INVALID_FIXTURE_PORT", message: "A port needs a connector reference." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "fixture-port-create", () => createFixturePortInDatabase(fixtureId, body), (value) => value.status);
+    sendFixtureMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Handles editing one port on a fixture. */
+async function handleFixturePortUpdate(request: IncomingMessage, response: ServerResponse, fixtureId: string, portId: string): Promise<void> {
+  const body = await readJsonBody<FixturePortInput>(request);
+  if (!isFixturePortInputShape(body)) {
+    sendJson(response, 400, { error: { code: "INVALID_FIXTURE_PORT", message: "A port needs a connector reference." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "fixture-port-update", () => updateFixturePortInDatabase(fixtureId, portId, body), (value) => value.status);
+    sendFixtureMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Handles deleting one port from a fixture. */
+async function handleFixturePortDelete(response: ServerResponse, fixtureId: string, portId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "fixture-port-delete", () => deleteFixturePortInDatabase(fixtureId, portId), (value) => value.status);
+    sendFixtureMutationResult(response, result);
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/** Confirms a fixture-port body has the minimal required string fields. */
+function isFixturePortInputShape(body: FixturePortInput | null): body is FixturePortInput {
+  return Boolean(body) && typeof body?.connectorRef === "string" && body.connectorRef.trim().length > 0;
+}
+
+/**
  * Handles connector-set catalog reads grouped by connector_class with mate context.
  */
 async function handleConnectorSetCatalogRead(response: ServerResponse, url: URL): Promise<void> {
@@ -5513,7 +5683,10 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/pin-rows$/u, targetType: "cable_assembly" },
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/ends\/([^/]+)$/u, targetType: "cable_assembly" },
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/ends$/u, targetType: "cable_assembly" },
-    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)$/u, targetType: "cable_assembly" }
+    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)$/u, targetType: "cable_assembly" },
+    { idIndex: 2, pattern: /^\/test-fixtures\/([^/]+)\/ports\/([^/]+)$/u, targetType: "fixture_port" },
+    { idIndex: 1, pattern: /^\/test-fixtures\/([^/]+)\/ports$/u, targetType: "test_fixture" },
+    { idIndex: 1, pattern: /^\/test-fixtures\/([^/]+)$/u, targetType: "test_fixture" }
   ];
 
   if (pathname === "/projects") return { targetId: null, targetType: "project" };
@@ -5523,6 +5696,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
   if (pathname === "/provider-acquisition-jobs") return { targetId: null, targetType: "provider_acquisition_job" };
   if (pathname === "/vendors") return { targetId: null, targetType: "vendor" };
   if (pathname === "/cable-assemblies") return { targetId: null, targetType: "cable_assembly" };
+  if (pathname === "/test-fixtures") return { targetId: null, targetType: "test_fixture" };
 
   for (const check of checks) {
     const match = check.pattern.exec(pathname);
@@ -5805,6 +5979,10 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "PATCH" && /^\/cable-assemblies\/[^/]+$/u.test(pathname)) return "api-cable-assembly-update";
   if (/^\/cable-assemblies\/[^/]+\/ends/u.test(pathname)) return "api-cable-assembly-end";
   if (/^\/cable-assemblies\/[^/]+\/pin-rows/u.test(pathname)) return "api-cable-pin-row";
+  if (method === "POST" && pathname === "/test-fixtures") return "api-test-fixture-create";
+  if (method === "GET" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-detail";
+  if (method === "PATCH" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-update";
+  if (/^\/test-fixtures\/[^/]+\/ports/u.test(pathname)) return "api-fixture-port";
   if (method === "GET" && pathname === "/health") return "api-health";
 
   return "api-route";

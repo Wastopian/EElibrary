@@ -72,6 +72,10 @@ import type {
   CableAssemblyEndInput,
   CableAssemblyUpdateInput,
   CablePinMapRowInput,
+  FixturePortInput,
+  TestFixtureCreateInput,
+  TestFixtureDetail,
+  TestFixtureUpdateInput,
   GenerationRequestCreateInput,
   GenerationRequestCreateResponse,
   GenerationTargetAssetType,
@@ -2034,6 +2038,54 @@ export async function updateCablePinMapRow(cableId: string, rowId: string, input
 /** Deletes one pin-map row from a cable. */
 export async function deleteCablePinMapRow(cableId: string, rowId: string): Promise<CableAssemblyDetail> {
   return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/pin-rows/${encodeURIComponent(rowId)}`, "DELETE", "Pin row delete");
+}
+
+/** Reads one test fixture's authoring detail (header + ports). */
+export async function fetchTestFixtureDetail(fixtureId: string): Promise<TestFixtureDetail> {
+  const envelope = await fetchApi<ApiEnvelope<TestFixtureDetail>>(`/test-fixtures/${encodeURIComponent(fixtureId)}`);
+  return envelope.data;
+}
+
+/** Sends one fixture-authoring mutation and returns the refreshed fixture detail. */
+async function sendFixtureMutation(path: string, method: "POST" | "PATCH" | "DELETE", action: string, input?: unknown): Promise<TestFixtureDetail> {
+  const response = await fetch(buildApiUrl(path), {
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method,
+    ...(input === undefined ? {} : { body: JSON.stringify(input) })
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, action);
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<TestFixtureDetail>;
+  return envelope.data;
+}
+
+/** Creates a test fixture header. */
+export async function createTestFixture(input: TestFixtureCreateInput): Promise<TestFixtureDetail> {
+  return sendFixtureMutation("/test-fixtures", "POST", "Fixture create", input);
+}
+
+/** Edits a test fixture header (status → retired soft-retires it). */
+export async function updateTestFixture(fixtureId: string, input: TestFixtureUpdateInput): Promise<TestFixtureDetail> {
+  return sendFixtureMutation(`/test-fixtures/${encodeURIComponent(fixtureId)}`, "PATCH", "Fixture update", input);
+}
+
+/** Adds one port to a fixture. */
+export async function createFixturePort(fixtureId: string, input: FixturePortInput): Promise<TestFixtureDetail> {
+  return sendFixtureMutation(`/test-fixtures/${encodeURIComponent(fixtureId)}/ports`, "POST", "Fixture port create", input);
+}
+
+/** Edits one port on a fixture. */
+export async function updateFixturePort(fixtureId: string, portId: string, input: FixturePortInput): Promise<TestFixtureDetail> {
+  return sendFixtureMutation(`/test-fixtures/${encodeURIComponent(fixtureId)}/ports/${encodeURIComponent(portId)}`, "PATCH", "Fixture port update", input);
+}
+
+/** Deletes one port from a fixture. */
+export async function deleteFixturePort(fixtureId: string, portId: string): Promise<TestFixtureDetail> {
+  return sendFixtureMutation(`/test-fixtures/${encodeURIComponent(fixtureId)}/ports/${encodeURIComponent(portId)}`, "DELETE", "Fixture port delete");
 }
 
 /**
