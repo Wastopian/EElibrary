@@ -1706,7 +1706,15 @@ export async function fetchEntityAuditEvents(targetType: string, targetId: strin
  * Builds a full API URL from a provider-neutral path.
  */
 function buildApiUrl(path: string): string {
-  return new URL(path, getApiBaseUrl()).toString();
+  const base = getApiBaseUrl();
+  // Browser-side the base is the same-origin "/api-proxy" rewrite — a relative base that
+  // `new URL(path, base)` cannot resolve (it throws "Invalid base URL"). Concatenate directly
+  // so client-side mutations resolve against the current origin. Server-side the base is an
+  // absolute URL, so `new URL` continues to apply.
+  if (base.startsWith("/")) {
+    return `${base}${path}`;
+  }
+  return new URL(path, base).toString();
 }
 
 /**

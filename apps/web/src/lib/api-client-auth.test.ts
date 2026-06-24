@@ -8,9 +8,42 @@ import {
   buildAssetDownloadUrl,
   buildAssetPreviewArtifactDownloadUrl,
   buildExportBundleDownloadUrl,
+  createCableAssembly,
   requestProviderImport,
   setApiClientServerCookieReaderForTests
 } from "./api-client";
+
+test("browser-side API mutations build same-origin /api-proxy URLs without throwing", async () => {
+  // Regression: buildApiUrl used `new URL(path, "/api-proxy")`, which throws "Invalid base URL"
+  // in the browser (relative base). Every client-side mutation was affected. With window present,
+  // the URL must resolve to the same-origin proxy path by concatenation.
+  const previousFetch = globalThis.fetch;
+  const hadWindow = "window" in globalThis;
+  const previousWindow = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = { location: { origin: "http://localhost:3000" } };
+  let mutationUrl: string | null = null;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const raw = input instanceof Request ? input.url : input.toString();
+    if (raw.endsWith("/api/token")) {
+      return new Response(JSON.stringify({ token: "browser-token" }), { headers: { "Content-Type": "application/json" }, status: 200 });
+    }
+    mutationUrl = raw;
+    return new Response(JSON.stringify({ data: { boundary: "b", cable: {}, pinRows: [] }, source: "database" }), { headers: { "Content-Type": "application/json" }, status: 201 });
+  }) as typeof fetch;
+
+  try {
+    await createCableAssembly({ cableKey: "CAB-T" });
+    assert.equal(mutationUrl, "/api-proxy/cable-assemblies");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (hadWindow) {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    } else {
+      delete (globalThis as { window?: unknown }).window;
+    }
+  }
+});
 
 test("browser-facing file URLs use the same-origin API proxy during SSR", () => {
   assert.equal(buildAssetDownloadUrl("part/a", "asset b"), "/api-proxy/parts/part%2Fa/assets/asset%20b/download");
