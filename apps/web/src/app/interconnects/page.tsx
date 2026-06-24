@@ -57,6 +57,8 @@ export default async function InterconnectsPage() {
             </div>
             <p className="projects-hero__lede">
               <Link className="button-primary" href="/interconnects/cables/new">New cable</Link>
+              {" "}
+              <Link className="button-link" href="/interconnects/fixtures/new">New fixture</Link>
             </p>
           </div>
           <InterconnectSnapshot response={response} />

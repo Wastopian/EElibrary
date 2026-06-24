@@ -15,11 +15,15 @@ import type {
   CablePinMapRow,
   CablePinMapRowInput,
   FixturePort,
+  FixturePortInput,
   InterconnectDashboardResponse,
   InterconnectProvenance,
   InterconnectRecordStatus,
   InterconnectPartSummary,
   TestFixture,
+  TestFixtureCreateInput,
+  TestFixtureDetail,
+  TestFixtureUpdateInput,
   WhereUsedInterconnectHitRecord
 } from "@ee-library/shared/types";
 
@@ -1679,7 +1683,7 @@ async function pinRowBelongsToCable(databasePool: Pool, cableId: string, rowId: 
 }
 
 /** Checks whether a row with the given id exists in a known table. */
-async function rowExists(databasePool: Pool, table: "projects" | "project_revisions" | "parts" | "cable_assemblies", id: string): Promise<boolean> {
+async function rowExists(databasePool: Pool, table: "projects" | "project_revisions" | "parts" | "cable_assemblies" | "test_fixtures", id: string): Promise<boolean> {
   const result = await databasePool.query(`SELECT 1 FROM ${table} WHERE id = $1 LIMIT 1`, [id]);
   return (result.rowCount ?? 0) > 0;
 }
@@ -1699,4 +1703,492 @@ function trimToNull(value: string | null | undefined): string | null {
 function buildInterconnectId(prefix: string, seed: string): string {
   const slug = seed.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 48) || "record";
   return `${prefix}-${slug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ===========================================================================
+// Test fixture authoring (create / edit / retire)
+//
+// Mirrors cable authoring. Same honesty boundary: recording fixture memory never
+// approves a part, validates an asset, proves a bench setup is safe, or unlocks export.
+// ===========================================================================
+
+/** FIXTURE_AUTHORING_BOUNDARY is repeated on every fixture mutation response. */
+export const FIXTURE_AUTHORING_BOUNDARY =
+  "Recording fixture memory keeps engineering history; it does not approve a part, validate an asset, prove a bench setup is safe, or unlock export. Status is recorded memory, not approval.";
+
+/** TestFixtureDetailReadResult reports single-fixture detail availability. */
+export type TestFixtureDetailReadResult =
+  | { status: "available"; response: TestFixtureDetail }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** TestFixtureMutationResult is the shared outcome union for every fixture write. */
+export type TestFixtureMutationResult =
+  | { status: "created" | "updated" | "deleted"; response: TestFixtureDetail }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string }
+  | { status: "invalid"; code: string; message: string };
+
+/** DatabaseFixtureEditableRow holds the raw editable header columns for merge-on-update. */
+interface DatabaseFixtureEditableRow {
+  fixture_key: string;
+  revision_label: string;
+  fixture_status: InterconnectRecordStatus;
+  project_id: string | null;
+  owner: string | null;
+  purpose: string | null;
+  source_document_ref: string | null;
+}
+
+/** Reads one fixture's full authoring detail (header + ports). */
+export async function readTestFixtureDetailFromDatabase(fixtureId: string): Promise<TestFixtureDetailReadResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const detail = await buildTestFixtureDetail(databasePool, fixtureId);
+    return detail ? { status: "available", response: detail } : { status: "not_found" };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Creates one test fixture header from in-app authoring input. */
+export async function createTestFixtureInDatabase(input: TestFixtureCreateInput): Promise<TestFixtureMutationResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const normalized = normalizeFixtureHeader({
+      fixtureKey: input.fixtureKey,
+      fixtureStatus: input.fixtureStatus ?? "draft",
+      owner: input.owner,
+      projectId: input.projectId,
+      purpose: input.purpose,
+      revisionLabel: input.revisionLabel,
+      sourceDocumentRef: input.sourceDocumentRef
+    });
+    if (!normalized.ok) {
+      return { code: normalized.code, message: normalized.message, status: "invalid" };
+    }
+
+    const referenceError = await checkFixtureReferences(databasePool, normalized.value);
+    if (referenceError) {
+      return referenceError;
+    }
+
+    if (await fixtureKeyRevisionExists(databasePool, normalized.value.fixtureKey, normalized.value.revisionLabel, null)) {
+      return {
+        code: "DUPLICATE_FIXTURE_KEY",
+        message: `A fixture "${normalized.value.fixtureKey}" revision "${normalized.value.revisionLabel}" already exists. Use a different revision label.`,
+        status: "invalid"
+      };
+    }
+
+    const now = new Date();
+    const fixtureId = buildInterconnectId("fixture", normalized.value.fixtureKey);
+    await databasePool.query(
+      `
+        INSERT INTO test_fixtures (
+          id, fixture_key, revision_label, fixture_status, project_id, owner, purpose, source_document_ref, provenance, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual_internal', $9, $9)
+      `,
+      [
+        fixtureId,
+        normalized.value.fixtureKey,
+        normalized.value.revisionLabel,
+        normalized.value.fixtureStatus,
+        normalized.value.projectId,
+        normalized.value.owner,
+        normalized.value.purpose,
+        normalized.value.sourceDocumentRef,
+        now
+      ]
+    );
+
+    return await respondWithFixtureDetail(databasePool, fixtureId, "created");
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Edits one test fixture header. Status → retired soft-retires it. */
+export async function updateTestFixtureInDatabase(fixtureId: string, input: TestFixtureUpdateInput): Promise<TestFixtureMutationResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const existing = await readFixtureEditableRow(databasePool, fixtureId);
+    if (!existing) {
+      return { code: "FIXTURE_NOT_FOUND", message: "Test fixture not found.", status: "not_found" };
+    }
+
+    const normalized = normalizeFixtureHeader({
+      fixtureKey: input.fixtureKey === undefined ? existing.fixture_key : input.fixtureKey,
+      fixtureStatus: input.fixtureStatus === undefined ? existing.fixture_status : (input.fixtureStatus ?? existing.fixture_status),
+      owner: input.owner === undefined ? existing.owner : input.owner,
+      projectId: input.projectId === undefined ? existing.project_id : input.projectId,
+      purpose: input.purpose === undefined ? existing.purpose : input.purpose,
+      revisionLabel: input.revisionLabel === undefined ? existing.revision_label : input.revisionLabel,
+      sourceDocumentRef: input.sourceDocumentRef === undefined ? existing.source_document_ref : input.sourceDocumentRef
+    });
+    if (!normalized.ok) {
+      return { code: normalized.code, message: normalized.message, status: "invalid" };
+    }
+
+    const referenceError = await checkFixtureReferences(databasePool, normalized.value);
+    if (referenceError) {
+      return referenceError;
+    }
+
+    if (await fixtureKeyRevisionExists(databasePool, normalized.value.fixtureKey, normalized.value.revisionLabel, fixtureId)) {
+      return {
+        code: "DUPLICATE_FIXTURE_KEY",
+        message: `A fixture "${normalized.value.fixtureKey}" revision "${normalized.value.revisionLabel}" already exists. Use a different revision label.`,
+        status: "invalid"
+      };
+    }
+
+    await databasePool.query(
+      `
+        UPDATE test_fixtures
+        SET fixture_key = $2, revision_label = $3, fixture_status = $4, project_id = $5, owner = $6, purpose = $7, source_document_ref = $8, updated_at = $9
+        WHERE id = $1
+      `,
+      [
+        fixtureId,
+        normalized.value.fixtureKey,
+        normalized.value.revisionLabel,
+        normalized.value.fixtureStatus,
+        normalized.value.projectId,
+        normalized.value.owner,
+        normalized.value.purpose,
+        normalized.value.sourceDocumentRef,
+        new Date()
+      ]
+    );
+
+    return await respondWithFixtureDetail(databasePool, fixtureId, "updated");
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Adds one port to a test fixture. */
+export async function createFixturePortInDatabase(fixtureId: string, input: FixturePortInput): Promise<TestFixtureMutationResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await rowExists(databasePool, "test_fixtures", fixtureId))) {
+      return { code: "FIXTURE_NOT_FOUND", message: "Test fixture not found.", status: "not_found" };
+    }
+
+    const normalized = normalizePortInput(input);
+    if (!normalized.ok) {
+      return { code: normalized.code, message: normalized.message, status: "invalid" };
+    }
+
+    const referenceError = await checkPortReferences(databasePool, normalized.value);
+    if (referenceError) {
+      return referenceError;
+    }
+
+    if (await fixturePortExists(databasePool, fixtureId, normalized.value.connectorRef, null)) {
+      return { code: "DUPLICATE_FIXTURE_PORT", message: `Connector ${normalized.value.connectorRef} already exists on this fixture.`, status: "invalid" };
+    }
+
+    const portId = buildInterconnectId("fixture-port", `${fixtureId}-${normalized.value.connectorRef}`);
+    await databasePool.query(
+      `
+        INSERT INTO fixture_ports (
+          id, fixture_id, connector_ref, connector_part_id, mate_part_id, cable_assembly_id, port_role, notes, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+      `,
+      [
+        portId,
+        fixtureId,
+        normalized.value.connectorRef,
+        normalized.value.connectorPartId,
+        normalized.value.matePartId,
+        normalized.value.cableAssemblyId,
+        normalized.value.portRole,
+        normalized.value.notes,
+        new Date()
+      ]
+    );
+
+    await touchFixture(databasePool, fixtureId);
+    return await respondWithFixtureDetail(databasePool, fixtureId, "created");
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Edits one port on a test fixture. */
+export async function updateFixturePortInDatabase(fixtureId: string, portId: string, input: FixturePortInput): Promise<TestFixtureMutationResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await fixturePortBelongsToFixture(databasePool, fixtureId, portId))) {
+      return { code: "FIXTURE_PORT_NOT_FOUND", message: "Port not found on this fixture.", status: "not_found" };
+    }
+
+    const normalized = normalizePortInput(input);
+    if (!normalized.ok) {
+      return { code: normalized.code, message: normalized.message, status: "invalid" };
+    }
+
+    const referenceError = await checkPortReferences(databasePool, normalized.value);
+    if (referenceError) {
+      return referenceError;
+    }
+
+    if (await fixturePortExists(databasePool, fixtureId, normalized.value.connectorRef, portId)) {
+      return { code: "DUPLICATE_FIXTURE_PORT", message: `Connector ${normalized.value.connectorRef} already exists on this fixture.`, status: "invalid" };
+    }
+
+    await databasePool.query(
+      `
+        UPDATE fixture_ports
+        SET connector_ref = $3, connector_part_id = $4, mate_part_id = $5, cable_assembly_id = $6, port_role = $7, notes = $8, updated_at = $9
+        WHERE id = $2 AND fixture_id = $1
+      `,
+      [
+        fixtureId,
+        portId,
+        normalized.value.connectorRef,
+        normalized.value.connectorPartId,
+        normalized.value.matePartId,
+        normalized.value.cableAssemblyId,
+        normalized.value.portRole,
+        normalized.value.notes,
+        new Date()
+      ]
+    );
+
+    await touchFixture(databasePool, fixtureId);
+    return await respondWithFixtureDetail(databasePool, fixtureId, "updated");
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Deletes one port from a test fixture. */
+export async function deleteFixturePortInDatabase(fixtureId: string, portId: string): Promise<TestFixtureMutationResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await fixturePortBelongsToFixture(databasePool, fixtureId, portId))) {
+      return { code: "FIXTURE_PORT_NOT_FOUND", message: "Port not found on this fixture.", status: "not_found" };
+    }
+
+    await databasePool.query("DELETE FROM fixture_ports WHERE id = $1 AND fixture_id = $2", [portId, fixtureId]);
+    await touchFixture(databasePool, fixtureId);
+    return await respondWithFixtureDetail(databasePool, fixtureId, "deleted");
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Builds a fixture mutation success result by re-reading the detail after a write. */
+async function respondWithFixtureDetail(databasePool: Pool, fixtureId: string, status: "created" | "updated" | "deleted"): Promise<TestFixtureMutationResult> {
+  const detail = await buildTestFixtureDetail(databasePool, fixtureId);
+  if (!detail) {
+    throw new CatalogStoreError("query_failed", "Fixture detail was missing immediately after a write.", new Error("missing_fixture_detail_after_write"));
+  }
+  return { response: detail, status };
+}
+
+/** Reads one fixture's header and ports into the shared detail contract. */
+async function buildTestFixtureDetail(databasePool: Pool, fixtureId: string): Promise<TestFixtureDetail | null> {
+  const fixtureRow = await readTestFixtureRow(databasePool, fixtureId);
+  if (!fixtureRow) {
+    return null;
+  }
+
+  const portRows = await readFixturePorts(databasePool, [fixtureId]);
+  return {
+    boundary: FIXTURE_AUTHORING_BOUNDARY,
+    fixture: mapTestFixtureRow(fixtureRow, portRows)
+  };
+}
+
+/** Reads one fixture header row with project context and child counts. */
+async function readTestFixtureRow(databasePool: Pool, fixtureId: string): Promise<DatabaseTestFixtureRow | null> {
+  const result = await databasePool.query<DatabaseTestFixtureRow>(
+    `
+      SELECT
+        tf.id, tf.fixture_key, tf.revision_label, tf.fixture_status, tf.project_id,
+        p.project_key, p.name AS project_name, tf.owner, tf.purpose, tf.source_document_ref, tf.provenance,
+        COALESCE(port_counts.port_count, 0)::text AS port_count,
+        COALESCE(pin_counts.pin_row_count, 0)::text AS pin_row_count,
+        tf.created_at, tf.updated_at
+      FROM test_fixtures tf
+      LEFT JOIN projects p ON p.id = tf.project_id
+      LEFT JOIN (
+        SELECT fixture_id, COUNT(*) AS port_count FROM fixture_ports GROUP BY fixture_id
+      ) port_counts ON port_counts.fixture_id = tf.id
+      LEFT JOIN (
+        SELECT fp.fixture_id, COUNT(cpm.id) AS pin_row_count
+        FROM fixture_ports fp
+        LEFT JOIN cable_pin_map_rows cpm ON cpm.fixture_port_id = fp.id
+        GROUP BY fp.fixture_id
+      ) pin_counts ON pin_counts.fixture_id = tf.id
+      WHERE tf.id = $1
+      LIMIT 1
+    `,
+    [fixtureId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/** Reads the raw editable fixture header columns for merge-on-update. */
+async function readFixtureEditableRow(databasePool: Pool, fixtureId: string): Promise<DatabaseFixtureEditableRow | null> {
+  const result = await databasePool.query<DatabaseFixtureEditableRow>(
+    `SELECT fixture_key, revision_label, fixture_status, project_id, owner, purpose, source_document_ref
+     FROM test_fixtures WHERE id = $1 LIMIT 1`,
+    [fixtureId]
+  );
+  return result.rows[0] ?? null;
+}
+
+/** NormalizedFixtureHeader is the validated, persistable fixture header. */
+interface NormalizedFixtureHeader {
+  fixtureKey: string;
+  revisionLabel: string;
+  fixtureStatus: InterconnectRecordStatus;
+  projectId: string | null;
+  owner: string | null;
+  purpose: string | null;
+  sourceDocumentRef: string | null;
+}
+
+/** Validates and normalizes a fixture header. */
+function normalizeFixtureHeader(input: {
+  fixtureKey: string | null | undefined;
+  revisionLabel: string | null | undefined;
+  fixtureStatus: InterconnectRecordStatus;
+  projectId: string | null | undefined;
+  owner: string | null | undefined;
+  purpose: string | null | undefined;
+  sourceDocumentRef: string | null | undefined;
+}): NormalizeResult<NormalizedFixtureHeader> {
+  const fixtureKey = (input.fixtureKey ?? "").trim();
+  if (!fixtureKey) {
+    return { code: "INVALID_FIXTURE_KEY", message: "A fixture needs a fixture ID (for example TFX-42).", ok: false };
+  }
+  if (!ALLOWED_INTERCONNECT_STATUSES.includes(input.fixtureStatus)) {
+    return { code: "INVALID_FIXTURE_STATUS", message: "Fixture status must be draft, in review, approved, restricted, or retired.", ok: false };
+  }
+
+  return {
+    ok: true,
+    value: {
+      fixtureKey,
+      fixtureStatus: input.fixtureStatus,
+      owner: trimToNull(input.owner),
+      projectId: trimToNull(input.projectId),
+      purpose: trimToNull(input.purpose),
+      revisionLabel: (input.revisionLabel ?? "").trim() || "Working",
+      sourceDocumentRef: trimToNull(input.sourceDocumentRef)
+    }
+  };
+}
+
+/** NormalizedPort is the validated, persistable fixture port. */
+interface NormalizedPort {
+  connectorRef: string;
+  connectorPartId: string | null;
+  matePartId: string | null;
+  cableAssemblyId: string | null;
+  portRole: string | null;
+  notes: string | null;
+}
+
+/** Validates and normalizes one fixture-port input. */
+function normalizePortInput(input: FixturePortInput): NormalizeResult<NormalizedPort> {
+  const connectorRef = (input.connectorRef ?? "").trim();
+  if (!connectorRef) {
+    return { code: "INVALID_CONNECTOR_REF", message: "A port needs a connector reference (for example J202).", ok: false };
+  }
+
+  return {
+    ok: true,
+    value: {
+      cableAssemblyId: trimToNull(input.cableAssemblyId),
+      connectorPartId: trimToNull(input.connectorPartId),
+      connectorRef,
+      matePartId: trimToNull(input.matePartId),
+      notes: trimToNull(input.notes),
+      portRole: trimToNull(input.portRole)
+    }
+  };
+}
+
+/** Verifies optional project reference on a fixture header exists. */
+async function checkFixtureReferences(databasePool: Pool, header: NormalizedFixtureHeader): Promise<TestFixtureMutationResult | null> {
+  if (header.projectId && !(await rowExists(databasePool, "projects", header.projectId))) {
+    return { code: "PROJECT_NOT_FOUND", message: "The linked project was not found.", status: "invalid" };
+  }
+  return null;
+}
+
+/** Verifies optional part and cable references on a fixture port exist. */
+async function checkPortReferences(databasePool: Pool, port: NormalizedPort): Promise<TestFixtureMutationResult | null> {
+  for (const partId of [port.connectorPartId, port.matePartId]) {
+    if (partId && !(await rowExists(databasePool, "parts", partId))) {
+      return { code: "PART_NOT_FOUND", message: `Linked part "${partId}" was not found in the catalog.`, status: "invalid" };
+    }
+  }
+  if (port.cableAssemblyId && !(await rowExists(databasePool, "cable_assemblies", port.cableAssemblyId))) {
+    return { code: "CABLE_NOT_FOUND", message: "The linked cable assembly was not found.", status: "invalid" };
+  }
+  return null;
+}
+
+/** Checks whether a (fixture_key, revision_label) already exists, optionally excluding one id. */
+async function fixtureKeyRevisionExists(databasePool: Pool, fixtureKey: string, revisionLabel: string, excludeId: string | null): Promise<boolean> {
+  const result = await databasePool.query(
+    "SELECT 1 FROM test_fixtures WHERE fixture_key = $1 AND revision_label = $2 AND ($3::text IS NULL OR id <> $3) LIMIT 1",
+    [fixtureKey, revisionLabel, excludeId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Checks whether a duplicate port (fixture, connector_ref) exists, excluding one id. */
+async function fixturePortExists(databasePool: Pool, fixtureId: string, connectorRef: string, excludeId: string | null): Promise<boolean> {
+  const result = await databasePool.query(
+    "SELECT 1 FROM fixture_ports WHERE fixture_id = $1 AND connector_ref = $2 AND ($3::text IS NULL OR id <> $3) LIMIT 1",
+    [fixtureId, connectorRef, excludeId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Checks whether a port belongs to the given fixture. */
+async function fixturePortBelongsToFixture(databasePool: Pool, fixtureId: string, portId: string): Promise<boolean> {
+  const result = await databasePool.query("SELECT 1 FROM fixture_ports WHERE id = $1 AND fixture_id = $2 LIMIT 1", [portId, fixtureId]);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Bumps a fixture's updated_at so listings re-sort after a child write. */
+async function touchFixture(databasePool: Pool, fixtureId: string): Promise<void> {
+  await databasePool.query("UPDATE test_fixtures SET updated_at = $2 WHERE id = $1", [fixtureId, new Date()]);
 }

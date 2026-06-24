@@ -1394,6 +1394,51 @@ export interface CablePinMapRowInput {
 }
 
 /**
+ * TestFixtureDetail is the single-record read and mutation response for fixture authoring.
+ * The fixture header carries its ports. The boundary reaffirms that recorded fixture memory
+ * never approves a part, validates an asset, proves a bench setup is safe, or unlocks export.
+ */
+export interface TestFixtureDetail {
+  fixture: TestFixture;
+  boundary: string;
+}
+
+/** TestFixtureCreateInput is the in-app form payload for a new fixture header. */
+export interface TestFixtureCreateInput {
+  fixtureKey: string;
+  revisionLabel?: string | null;
+  fixtureStatus?: InterconnectRecordStatus | null;
+  projectId?: string | null;
+  owner?: string | null;
+  purpose?: string | null;
+  sourceDocumentRef?: string | null;
+}
+
+/**
+ * TestFixtureUpdateInput edits a fixture header. Provided fields are applied; nullable fields
+ * passed as null are cleared. Setting `fixtureStatus` to `retired` is the soft-retire path.
+ */
+export interface TestFixtureUpdateInput {
+  fixtureKey?: string | null;
+  revisionLabel?: string | null;
+  fixtureStatus?: InterconnectRecordStatus | null;
+  projectId?: string | null;
+  owner?: string | null;
+  purpose?: string | null;
+  sourceDocumentRef?: string | null;
+}
+
+/** FixturePortInput is the create/edit payload for one fixture port (connector reference). */
+export interface FixturePortInput {
+  connectorRef: string;
+  connectorPartId?: string | null;
+  matePartId?: string | null;
+  cableAssemblyId?: string | null;
+  portRole?: string | null;
+  notes?: string | null;
+}
+
+/**
  * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
  * the UI can render consistent labels and group views without a free-form taxonomy.
  * Add categories here when the team starts working with a new class of supplier.
@@ -3551,11 +3596,13 @@ export type AuditEventTargetType =
   | "circuit_block_part"
   | "document_revision"
   | "evidence_attachment"
+  | "fixture_port"
   | "follow_up"
   | "part"
   | "project"
   | "project_revision"
   | "project_revision_approval_gate"
+  | "test_fixture"
   | "provider_acquisition_job"
   | "provider_import"
   | "substitution"
