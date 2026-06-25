@@ -1438,6 +1438,73 @@ export interface FixturePortInput {
   notes?: string | null;
 }
 
+/** InterconnectRevisionSummary is one sibling revision of a cable, for the revision picker. */
+export interface InterconnectRevisionSummary {
+  id: string;
+  revisionLabel: string;
+  status: InterconnectRecordStatus;
+  updatedAt: string;
+}
+
+/** CableRevisionListResponse lists every revision of one cable key (newest first). */
+export interface CableRevisionListResponse {
+  cableKey: string;
+  currentCableId: string;
+  revisions: InterconnectRevisionSummary[];
+}
+
+/** InterconnectFieldChange is one field that differs between two revisions. */
+export interface InterconnectFieldChange {
+  field: string;
+  from: string | null;
+  to: string | null;
+}
+
+/** InterconnectDiffKind names whether a record was added, removed, or changed across revisions. */
+export type InterconnectDiffKind = "added" | "removed" | "changed";
+
+/** CableEndDiff is one connector-end difference between two cable revisions, keyed by end label. */
+export interface CableEndDiff {
+  kind: InterconnectDiffKind;
+  endLabel: CableAssemblyEndLabel;
+  connectorRef: string | null;
+  changes: InterconnectFieldChange[];
+}
+
+/** CablePinRowDiff is one pin-row difference between two cable revisions, keyed by connector ref + pin. */
+export interface CablePinRowDiff {
+  kind: InterconnectDiffKind;
+  connectorRef: string;
+  pinNumber: string;
+  signalName: string | null;
+  changes: InterconnectFieldChange[];
+}
+
+/** InterconnectCompareSummary counts the diff outcome without compressing it into a score. */
+export interface InterconnectCompareSummary {
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+}
+
+/**
+ * CableRevisionCompareResponse diffs two revisions of the same cable key by connector ends and
+ * pin rows. It is recorded-memory context only; a clean diff never approves a part or unlocks export.
+ */
+export interface CableRevisionCompareResponse {
+  cableKey: string;
+  baseCableId: string;
+  baseRevisionLabel: string;
+  targetCableId: string;
+  targetRevisionLabel: string;
+  endDiffs: CableEndDiff[];
+  pinRowDiffs: CablePinRowDiff[];
+  endSummary: InterconnectCompareSummary;
+  pinRowSummary: InterconnectCompareSummary;
+  boundary: string;
+}
+
 /**
  * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
  * the UI can render consistent labels and group views without a free-form taxonomy.

@@ -72,6 +72,8 @@ import type {
   CableAssemblyEndInput,
   CableAssemblyUpdateInput,
   CablePinMapRowInput,
+  CableRevisionCompareResponse,
+  CableRevisionListResponse,
   FixturePortInput,
   TestFixtureCreateInput,
   TestFixtureDetail,
@@ -2038,6 +2040,20 @@ export async function updateCablePinMapRow(cableId: string, rowId: string, input
 /** Deletes one pin-map row from a cable. */
 export async function deleteCablePinMapRow(cableId: string, rowId: string): Promise<CableAssemblyDetail> {
   return sendCableMutation(`/cable-assemblies/${encodeURIComponent(cableId)}/pin-rows/${encodeURIComponent(rowId)}`, "DELETE", "Pin row delete");
+}
+
+/** Lists the sibling revisions of one cable for the revision picker. */
+export async function fetchCableAssemblyRevisions(cableId: string): Promise<CableRevisionListResponse> {
+  const envelope = await fetchApi<ApiEnvelope<CableRevisionListResponse>>(`/cable-assemblies/${encodeURIComponent(cableId)}/revisions`);
+  return envelope.data;
+}
+
+/** Diffs one cable revision against another by ends and pin rows. */
+export async function fetchCableRevisionCompare(cableId: string, againstCableId: string): Promise<CableRevisionCompareResponse> {
+  const envelope = await fetchApi<ApiEnvelope<CableRevisionCompareResponse>>(
+    `/cable-assemblies/${encodeURIComponent(cableId)}/revision-compare?against=${encodeURIComponent(againstCableId)}`
+  );
+  return envelope.data;
 }
 
 /** Reads one test fixture's authoring detail (header + ports). */

@@ -35,6 +35,7 @@ test("cable detail page renders the authoring editor for a found cable", async (
     assert.match(html, /Save cable details/u);
     assert.match(html, /Add a connector end/u);
     assert.match(html, /Add a pin row/u);
+    assert.match(html, /Compare revisions/u);
   } finally {
     restoreFetch();
   }
