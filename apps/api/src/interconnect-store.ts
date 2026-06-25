@@ -14,6 +14,13 @@ import type {
   CableAssemblyUpdateInput,
   CablePinMapRow,
   CablePinMapRowInput,
+  CableRevisionCompareResponse,
+  CableRevisionListResponse,
+  CableEndDiff,
+  CablePinRowDiff,
+  InterconnectCompareSummary,
+  InterconnectFieldChange,
+  InterconnectRevisionSummary,
   FixturePort,
   FixturePortInput,
   InterconnectDashboardResponse,
@@ -2192,3 +2199,210 @@ async function fixturePortBelongsToFixture(databasePool: Pool, fixtureId: string
 async function touchFixture(databasePool: Pool, fixtureId: string): Promise<void> {
   await databasePool.query("UPDATE test_fixtures SET updated_at = $2 WHERE id = $1", [fixtureId, new Date()]);
 }
+
+// ===========================================================================
+// Cable revision compare (read-only)
+//
+// Diffs two revisions of the same cable key by connector ends and pin rows.
+// A clean diff is recorded-memory context only; it never approves a part or unlocks export.
+// ===========================================================================
+
+/** CABLE_COMPARE_BOUNDARY is repeated on revision-compare reads. */
+const CABLE_COMPARE_BOUNDARY =
+  "Revision compare shows what changed in recorded cable memory between two revisions. It does not approve a part, validate an asset, prove a bench setup is safe, or unlock export.";
+
+/** CableRevisionListReadResult reports sibling-revision availability for one cable. */
+export type CableRevisionListReadResult =
+  | { status: "available"; response: CableRevisionListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** CableRevisionCompareReadResult reports revision-compare availability. */
+export type CableRevisionCompareReadResult =
+  | { status: "available"; response: CableRevisionCompareResponse }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** Reads every revision that shares this cable's cable_key, newest first. */
+export async function readCableAssemblyRevisionsFromDatabase(cableId: string): Promise<CableRevisionListReadResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const cableKey = await readCableKey(databasePool, cableId);
+    if (cableKey === null) {
+      return { status: "not_found" };
+    }
+
+    const result = await databasePool.query<{ id: string; revision_label: string; assembly_status: InterconnectRecordStatus; updated_at: Date | string }>(
+      `SELECT id, revision_label, assembly_status, updated_at FROM cable_assemblies WHERE cable_key = $1 ORDER BY updated_at DESC, revision_label ASC`,
+      [cableKey]
+    );
+
+    const revisions: InterconnectRevisionSummary[] = result.rows.map((row) => ({
+      id: row.id,
+      revisionLabel: row.revision_label,
+      status: row.assembly_status,
+      updatedAt: toIsoTimestamp(row.updated_at)
+    }));
+
+    return { response: { cableKey, currentCableId: cableId, revisions }, status: "available" };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Diffs two revisions of the same cable key by connector ends and pin rows. */
+export async function readCableRevisionCompareFromDatabase(baseCableId: string, targetCableId: string): Promise<CableRevisionCompareReadResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const [base, target] = await Promise.all([
+      buildCableAssemblyDetail(databasePool, baseCableId),
+      buildCableAssemblyDetail(databasePool, targetCableId)
+    ]);
+
+    if (!base) {
+      return { code: "CABLE_NOT_FOUND", message: "Base cable revision not found.", status: "not_found" };
+    }
+    if (!target) {
+      return { code: "COMPARE_CABLE_NOT_FOUND", message: "The revision to compare against was not found.", status: "not_found" };
+    }
+    if (base.cable.cableKey !== target.cable.cableKey) {
+      return { code: "CABLE_KEY_MISMATCH", message: "Revision compare only works between revisions of the same cable.", status: "not_found" };
+    }
+
+    const endDiffs = diffCableEnds(base, target);
+    const pinRowDiffs = diffCablePinRows(base, target);
+
+    return {
+      response: {
+        baseCableId,
+        baseRevisionLabel: base.cable.revisionLabel,
+        boundary: CABLE_COMPARE_BOUNDARY,
+        cableKey: base.cable.cableKey,
+        endDiffs,
+        endSummary: summarizeDiffs(endDiffs.map((diff) => diff.kind), base.cable.ends.length),
+        pinRowDiffs,
+        pinRowSummary: summarizeDiffs(pinRowDiffs.map((diff) => diff.kind), base.pinRows.length),
+        targetCableId,
+        targetRevisionLabel: target.cable.revisionLabel
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Reads one cable's cable_key, or null when the cable is gone. */
+async function readCableKey(databasePool: Pool, cableId: string): Promise<string | null> {
+  const result = await databasePool.query<{ cable_key: string }>("SELECT cable_key FROM cable_assemblies WHERE id = $1 LIMIT 1", [cableId]);
+  return result.rows[0]?.cable_key ?? null;
+}
+
+/** Diffs connector ends between two cable revisions, keyed by end label. */
+function diffCableEnds(base: CableAssemblyDetail, target: CableAssemblyDetail): CableEndDiff[] {
+  const baseByLabel = new Map(base.cable.ends.map((end) => [end.endLabel, end]));
+  const targetByLabel = new Map(target.cable.ends.map((end) => [end.endLabel, end]));
+  const labels = [...new Set([...baseByLabel.keys(), ...targetByLabel.keys()])].sort();
+  const diffs: CableEndDiff[] = [];
+
+  for (const label of labels) {
+    const baseEnd = baseByLabel.get(label) ?? null;
+    const targetEnd = targetByLabel.get(label) ?? null;
+
+    if (baseEnd && !targetEnd) {
+      diffs.push({ changes: [], connectorRef: baseEnd.connectorRef, endLabel: label, kind: "removed" });
+      continue;
+    }
+    if (!baseEnd && targetEnd) {
+      diffs.push({ changes: [], connectorRef: targetEnd.connectorRef, endLabel: label, kind: "added" });
+      continue;
+    }
+    if (baseEnd && targetEnd) {
+      const changes = collectChanges([
+        ["connector ref", baseEnd.connectorRef, targetEnd.connectorRef],
+        ["connector part", baseEnd.connectorPart.mpn, targetEnd.connectorPart.mpn],
+        ["mate part", baseEnd.matePart.mpn, targetEnd.matePart.mpn],
+        ["backshell part", baseEnd.backshellPart.mpn, targetEnd.backshellPart.mpn],
+        ["notes", baseEnd.notes, targetEnd.notes]
+      ]);
+      if (changes.length > 0) {
+        diffs.push({ changes, connectorRef: targetEnd.connectorRef, endLabel: label, kind: "changed" });
+      }
+    }
+  }
+
+  return diffs;
+}
+
+/** Diffs pin rows between two cable revisions, keyed by connector ref + pin number. */
+function diffCablePinRows(base: CableAssemblyDetail, target: CableAssemblyDetail): CablePinRowDiff[] {
+  const keyOf = (row: CablePinMapRow): string => `${row.connectorRef.toUpperCase()}|${row.pinNumber.toUpperCase()}`;
+  const baseByKey = new Map(base.pinRows.map((row) => [keyOf(row), row]));
+  const targetByKey = new Map(target.pinRows.map((row) => [keyOf(row), row]));
+  const keys = [...new Set([...baseByKey.keys(), ...targetByKey.keys()])].sort();
+  const diffs: CablePinRowDiff[] = [];
+
+  for (const key of keys) {
+    const baseRow = baseByKey.get(key) ?? null;
+    const targetRow = targetByKey.get(key) ?? null;
+    const identity = (targetRow ?? baseRow)!;
+
+    if (baseRow && !targetRow) {
+      diffs.push({ changes: [], connectorRef: baseRow.connectorRef, kind: "removed", pinNumber: baseRow.pinNumber, signalName: baseRow.signalName });
+      continue;
+    }
+    if (!baseRow && targetRow) {
+      diffs.push({ changes: [], connectorRef: targetRow.connectorRef, kind: "added", pinNumber: targetRow.pinNumber, signalName: targetRow.signalName });
+      continue;
+    }
+    if (baseRow && targetRow) {
+      const changes = collectChanges([
+        ["signal", baseRow.signalName, targetRow.signalName],
+        ["end", baseRow.endLabel, targetRow.endLabel],
+        ["wire color", baseRow.wireColor, targetRow.wireColor],
+        ["wire gauge", baseRow.wireGauge === null ? null : String(baseRow.wireGauge), targetRow.wireGauge === null ? null : String(targetRow.wireGauge)],
+        ["destination connector", baseRow.destinationConnectorRef, targetRow.destinationConnectorRef],
+        ["destination pin", baseRow.destinationPinNumber, targetRow.destinationPinNumber],
+        ["confidence", String(baseRow.confidenceScore), String(targetRow.confidenceScore)],
+        ["notes", baseRow.notes, targetRow.notes]
+      ]);
+      if (changes.length > 0) {
+        diffs.push({ changes, connectorRef: identity.connectorRef, kind: "changed", pinNumber: identity.pinNumber, signalName: targetRow.signalName });
+      }
+    }
+  }
+
+  return diffs;
+}
+
+/** Collects the fields that differ between two revisions into plain from/to changes. */
+function collectChanges(pairs: Array<[string, string | null, string | null]>): InterconnectFieldChange[] {
+  const changes: InterconnectFieldChange[] = [];
+  for (const [field, from, to] of pairs) {
+    if ((from ?? null) !== (to ?? null)) {
+      changes.push({ field, from: from ?? null, to: to ?? null });
+    }
+  }
+  return changes;
+}
+
+/** Summarizes diff kinds into added/removed/changed/unchanged counts. */
+function summarizeDiffs(kinds: InterconnectDiffKindLocal[], baseCount: number): InterconnectCompareSummary {
+  const added = kinds.filter((kind) => kind === "added").length;
+  const removed = kinds.filter((kind) => kind === "removed").length;
+  const changed = kinds.filter((kind) => kind === "changed").length;
+  // Unchanged = base records that were not removed or changed.
+  const unchanged = Math.max(0, baseCount - removed - changed);
+  return { added, changed, removed, unchanged };
+}
+
+/** Local alias for the diff-kind union to keep the summary helper readable. */
+type InterconnectDiffKindLocal = "added" | "removed" | "changed";

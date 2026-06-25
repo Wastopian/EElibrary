@@ -44,6 +44,8 @@ import {
   deleteCablePinMapRowInDatabase,
   deleteFixturePortInDatabase,
   readCableAssemblyDetailFromDatabase,
+  readCableAssemblyRevisionsFromDatabase,
+  readCableRevisionCompareFromDatabase,
   readInterconnectDashboardFromDatabase,
   readTestFixtureDetailFromDatabase,
   updateCableAssemblyEndInDatabase,
@@ -275,6 +277,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const cableAssemblyEndsMatch = /^\/cable-assemblies\/([^/]+)\/ends$/u.exec(url.pathname);
   const cablePinRowDetailMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows\/([^/]+)$/u.exec(url.pathname);
   const cablePinRowsMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows$/u.exec(url.pathname);
+  const cableRevisionsMatch = /^\/cable-assemblies\/([^/]+)\/revisions$/u.exec(url.pathname);
+  const cableRevisionCompareMatch = /^\/cable-assemblies\/([^/]+)\/revision-compare$/u.exec(url.pathname);
   const cableAssemblyDetailMatch = /^\/cable-assemblies\/([^/]+)$/u.exec(url.pathname);
   const fixturePortDetailMatch = /^\/test-fixtures\/([^/]+)\/ports\/([^/]+)$/u.exec(url.pathname);
   const fixturePortsMatch = /^\/test-fixtures\/([^/]+)\/ports$/u.exec(url.pathname);
@@ -775,6 +779,16 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (url.pathname === "/interconnects") {
     await handleInterconnectDashboardRead(response);
+    return;
+  }
+
+  if (request.method === "GET" && cableRevisionsMatch?.[1]) {
+    await handleCableRevisionListRead(response, decodeURIComponent(cableRevisionsMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && cableRevisionCompareMatch?.[1]) {
+    await handleCableRevisionCompareRead(response, decodeURIComponent(cableRevisionCompareMatch[1]), url);
     return;
   }
 
@@ -3572,6 +3586,56 @@ async function handleCableAssemblyDetailRead(response: ServerResponse, cableId: 
 }
 
 /**
+ * Handles listing the sibling revisions of one cable for the revision picker.
+ */
+async function handleCableRevisionListRead(response: ServerResponse, cableId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "cable-revision-list-read", () => readCableAssemblyRevisionsFromDatabase(cableId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "CABLE_NOT_FOUND", "Cable assembly not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles diffing one cable revision against another (?against=:cableId).
+ */
+async function handleCableRevisionCompareRead(response: ServerResponse, cableId: string, url: URL): Promise<void> {
+  const against = (url.searchParams.get("against") ?? "").trim();
+  if (!against) {
+    sendJson(response, 400, { error: { code: "MISSING_COMPARE_TARGET", message: "Revision compare requires an 'against' cable id." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-revision-compare-read", () => readCableRevisionCompareFromDatabase(cableId, against), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Sends the shared cable mutation result envelope: 201 on create, 200 on update/delete,
  * 400 on invalid input, 404 on a missing parent/child, 503 when persistence is unavailable.
  */
@@ -5979,6 +6043,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "PATCH" && /^\/cable-assemblies\/[^/]+$/u.test(pathname)) return "api-cable-assembly-update";
   if (/^\/cable-assemblies\/[^/]+\/ends/u.test(pathname)) return "api-cable-assembly-end";
   if (/^\/cable-assemblies\/[^/]+\/pin-rows/u.test(pathname)) return "api-cable-pin-row";
+  if (/^\/cable-assemblies\/[^/]+\/revision/u.test(pathname)) return "api-cable-revision-compare";
   if (method === "POST" && pathname === "/test-fixtures") return "api-test-fixture-create";
   if (method === "GET" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-detail";
   if (method === "PATCH" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-update";

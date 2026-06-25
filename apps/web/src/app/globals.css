@@ -7134,6 +7134,57 @@ details[open] .trust-breakdown__toggle::before {
   white-space: nowrap;
 }
 
+.cable-compare__controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.cable-compare__result {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.cable-compare__headline {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.cable-compare__group {
+  display: grid;
+  gap: 6px;
+}
+
+.cable-compare__badge {
+  align-self: center;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cable-compare__badge--added {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+}
+
+.cable-compare__badge--removed {
+  background: rgba(176, 0, 32, 0.12);
+  color: var(--color-danger, #b00020);
+}
+
+.cable-compare__badge--changed {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
 .interconnect-browser__filter {
   display: grid;
   gap: 6px;

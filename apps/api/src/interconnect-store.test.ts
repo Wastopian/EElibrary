@@ -16,6 +16,8 @@ import {
   deleteCablePinMapRowInDatabase,
   deleteFixturePortInDatabase,
   readCableAssemblyDetailFromDatabase,
+  readCableAssemblyRevisionsFromDatabase,
+  readCableRevisionCompareFromDatabase,
   readInterconnectDashboardFromDatabase,
   readTestFixtureDetailFromDatabase,
   searchInterconnectWhereUsed,
@@ -430,6 +432,82 @@ test("fixture port create / update / delete enforces validation and duplicates",
     assert.equal(removed.status, "deleted");
     if (removed.status !== "deleted") return;
     assert.equal(removed.response.fixture.ports.length, 0);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies revision listing and the end/pin diff between two revisions of one cable key.
+ */
+test("cable revision compare diffs ends and pin rows between two revisions", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const revA = await createCableAssemblyInDatabase({ cableKey: "CAB-CMP", revisionLabel: "A" });
+    const revB = await createCableAssemblyInDatabase({ cableKey: "CAB-CMP", revisionLabel: "B" });
+    if (revA.status !== "created" || revB.status !== "created") throw new Error("setup failed");
+    const aId = revA.response.cable.id;
+    const bId = revB.response.cable.id;
+
+    await createCableAssemblyEndInDatabase(aId, { endLabel: "A", connectorRef: "J1" });
+    await createCablePinMapRowInDatabase(aId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "SIG_A" });
+
+    await createCableAssemblyEndInDatabase(bId, { endLabel: "A", connectorRef: "J1" });
+    await createCablePinMapRowInDatabase(bId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "SIG_B" });
+    await createCablePinMapRowInDatabase(bId, { endLabel: "A", connectorRef: "J1", pinNumber: "2", signalName: "NEW_SIG" });
+
+    const revisions = await readCableAssemblyRevisionsFromDatabase(aId);
+    assert.equal(revisions.status, "available");
+    if (revisions.status !== "available") return;
+    assert.equal(revisions.response.revisions.length, 2);
+    assert.equal(revisions.response.cableKey, "CAB-CMP");
+
+    const compare = await readCableRevisionCompareFromDatabase(aId, bId);
+    assert.equal(compare.status, "available");
+    if (compare.status !== "available") return;
+    assert.equal(compare.response.baseRevisionLabel, "A");
+    assert.equal(compare.response.targetRevisionLabel, "B");
+    // End A is identical (J1 → J1), so no end diff.
+    assert.equal(compare.response.endDiffs.length, 0);
+    // Pin J1/1 changed signal, pin J1/2 added.
+    const changed = compare.response.pinRowDiffs.find((diff) => diff.pinNumber === "1");
+    const added = compare.response.pinRowDiffs.find((diff) => diff.pinNumber === "2");
+    assert.equal(changed?.kind, "changed");
+    assert.ok(changed?.changes.some((change) => change.field === "signal" && change.from === "SIG_A" && change.to === "SIG_B"));
+    assert.equal(added?.kind, "added");
+    assert.equal(compare.response.pinRowSummary.added, 1);
+    assert.equal(compare.response.pinRowSummary.changed, 1);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies compare refuses revisions of different cable keys and unknown ids.
+ */
+test("cable revision compare rejects mismatched cable keys and unknown revisions", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const a = await createCableAssemblyInDatabase({ cableKey: "CAB-AAA" });
+    const b = await createCableAssemblyInDatabase({ cableKey: "CAB-BBB" });
+    if (a.status !== "created" || b.status !== "created") throw new Error("setup failed");
+
+    const mismatch = await readCableRevisionCompareFromDatabase(a.response.cable.id, b.response.cable.id);
+    assert.equal(mismatch.status, "not_found");
+    if (mismatch.status !== "not_found") return;
+    assert.equal(mismatch.code, "CABLE_KEY_MISMATCH");
+
+    const unknown = await readCableRevisionCompareFromDatabase(a.response.cable.id, "cable-nope");
+    assert.equal(unknown.status, "not_found");
+
+    const missingList = await readCableAssemblyRevisionsFromDatabase("cable-nope");
+    assert.equal(missingList.status, "not_found");
   } finally {
     setInterconnectPoolForTests(null);
     await pool.end();
