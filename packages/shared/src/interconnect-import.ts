@@ -11,10 +11,14 @@ import type {
   BomImportPreviewRow,
   CableAssemblyEndLabel,
   CablePinMapRowInput,
+  FixturePortInput,
   PinMapColumnMapping,
   PinMapImportConfirmInput,
   PinMapImportPreviewInput,
-  PinMapImportPreviewResponse
+  PinMapImportPreviewResponse,
+  PortListColumnMapping,
+  PortListImportConfirmInput,
+  PortListImportPreviewResponse
 } from "./types";
 
 const PREVIEW_ROW_LIMIT = 20;
@@ -100,4 +104,52 @@ export function mapPinMapRowsToInputs(rows: BomImportPreviewRow[], mapping: PinM
       wireGauge: gauge !== null && Number.isFinite(gauge) && gauge > 0 ? gauge : null
     };
   });
+}
+
+/**
+ * Parses an uploaded fixture port-list file and returns headers, a row preview, and a suggested mapping.
+ */
+export function buildPortListImportPreview(input: PinMapImportPreviewInput): PortListImportPreviewResponse {
+  const parsed = input.sourceFormat === "xlsx" ? parseBomXlsx(input.rawContent) : parseBomCsv(input.rawContent);
+
+  return {
+    headers: parsed.headers,
+    rowCount: parsed.rowCount,
+    rowsPreview: parsed.rows.slice(0, PREVIEW_ROW_LIMIT),
+    sourceFilename: input.sourceFilename,
+    sourceFormat: input.sourceFormat,
+    suggestedMapping: suggestPortListColumnMapping(parsed.headers),
+    warnings: parsed.warnings
+  };
+}
+
+/** Suggests a port-list column mapping from header names. */
+export function suggestPortListColumnMapping(headers: string[]): PortListColumnMapping {
+  const findAny = (pattern: RegExp): string | null => headers.find((header) => pattern.test(header.toLowerCase())) ?? null;
+
+  return {
+    connectorRef: findAny(/conn(ector)?\b|connector ref|\bport\b|\bref\b/u),
+    notes: findAny(/note|comment|remark/u),
+    portRole: findAny(/role|function|purpose|use/u)
+  };
+}
+
+/** Parses a port-list file in full and maps every row to a fixture-port input (confirm path). */
+export function parsePortListFileToInputs(input: PortListImportConfirmInput): FixturePortInput[] {
+  const parsed = input.sourceFormat === "xlsx" ? parseBomXlsx(input.rawContent) : parseBomCsv(input.rawContent);
+  return mapPortListRowsToInputs(parsed.rows, input.columnMapping);
+}
+
+/**
+ * Turns parsed rows into fixture-port inputs using the chosen mapping. Connector ref left blank stays
+ * blank so the API's per-row validator can reject it as invalid (rather than guessing a value).
+ */
+export function mapPortListRowsToInputs(rows: BomImportPreviewRow[], mapping: PortListColumnMapping): FixturePortInput[] {
+  const value = (row: BomImportPreviewRow, header: string | null): string => (header ? (row.values[header] ?? "").trim() : "");
+
+  return rows.map((row) => ({
+    connectorRef: value(row, mapping.connectorRef),
+    notes: value(row, mapping.notes) || null,
+    portRole: value(row, mapping.portRole) || null
+  }));
 }

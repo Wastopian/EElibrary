@@ -23,6 +23,7 @@ import type {
   InterconnectRevisionSummary,
   PinMapImportResponse,
   PinMapImportSummary,
+  PortListImportResponse,
   FixturePort,
   FixturePortInput,
   InterconnectDashboardResponse,
@@ -2538,4 +2539,123 @@ async function readCablePinRowKeys(databasePool: Pool, cableId: string): Promise
     [cableId]
   );
   return new Set(result.rows.map((row) => `${row.connector_ref.toUpperCase()}|${row.pin_number.toUpperCase()}`));
+}
+
+// ===========================================================================
+// Fixture port-list import (bulk create from an uploaded spreadsheet)
+//
+// Mirrors pin-map import. Imported ports are recorded memory only; they never approve the part or
+// fixture. (Fixture ports carry no per-row confidence/source column, so the import action's
+// provenance lives in the audit log.)
+// ===========================================================================
+
+/** PORT_LIST_IMPORT_BOUNDARY is repeated on port-list import responses. */
+const PORT_LIST_IMPORT_BOUNDARY =
+  "Imported ports are recorded memory only — they do not approve the part or fixture, validate an asset, prove a bench setup is safe, or unlock export.";
+
+/** PortListImportResult reports bulk port-list import availability. */
+export type PortListImportResult =
+  | { status: "available"; response: PortListImportResponse }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/**
+ * Bulk-creates ports on one fixture from imported rows, skipping duplicates (by connector ref) and
+ * invalid rows. Reuses the per-row port validator and the same add/skip summary as pin-map import.
+ */
+export async function importFixturePortsInDatabase(
+  fixtureId: string,
+  input: { sourceFilename: string; rows: FixturePortInput[] }
+): Promise<PortListImportResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await rowExists(databasePool, "test_fixtures", fixtureId))) {
+      return { code: "FIXTURE_NOT_FOUND", message: "Test fixture not found.", status: "not_found" };
+    }
+
+    const existingKeys = await readFixturePortKeys(databasePool, fixtureId);
+    const seenInBatch = new Set<string>();
+    const summary: PinMapImportSummary = { added: 0, invalidSamples: [], skippedDuplicate: 0, skippedInvalid: 0 };
+    const inserts: NormalizedPort[] = [];
+
+    for (const row of input.rows) {
+      const normalized = normalizePortInput(row);
+      if (!normalized.ok) {
+        summary.skippedInvalid += 1;
+        if (summary.invalidSamples.length < MAX_INVALID_SAMPLES) {
+          summary.invalidSamples.push(normalized.message);
+        }
+        continue;
+      }
+
+      const key = normalized.value.connectorRef.toUpperCase();
+      if (existingKeys.has(key) || seenInBatch.has(key)) {
+        summary.skippedDuplicate += 1;
+        continue;
+      }
+
+      seenInBatch.add(key);
+      inserts.push(normalized.value);
+    }
+
+    if (inserts.length > 0) {
+      const client = await databasePool.connect();
+      try {
+        await client.query("BEGIN");
+        const now = new Date();
+        for (const value of inserts) {
+          const portId = buildInterconnectId("fixture-port", `${fixtureId}-${value.connectorRef}`);
+          await client.query(
+            `
+              INSERT INTO fixture_ports (
+                id, fixture_id, connector_ref, connector_part_id, mate_part_id, cable_assembly_id, port_role, notes, created_at, updated_at
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            `,
+            [
+              portId,
+              fixtureId,
+              value.connectorRef,
+              value.connectorPartId,
+              value.matePartId,
+              value.cableAssemblyId,
+              value.portRole,
+              value.notes,
+              now
+            ]
+          );
+          summary.added += 1;
+        }
+        await client.query("UPDATE test_fixtures SET updated_at = $2 WHERE id = $1", [fixtureId, now]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const detail = await buildTestFixtureDetail(databasePool, fixtureId);
+    if (!detail) {
+      throw new CatalogStoreError("query_failed", "Fixture detail was missing immediately after a port-list import.", new Error("missing_fixture_detail_after_import"));
+    }
+
+    return { response: { boundary: PORT_LIST_IMPORT_BOUNDARY, detail, summary }, status: "available" };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Reads the existing connector-ref keys for one fixture's ports, upper-cased. */
+async function readFixturePortKeys(databasePool: Pool, fixtureId: string): Promise<Set<string>> {
+  const result = await databasePool.query<{ connector_ref: string }>(
+    "SELECT connector_ref FROM fixture_ports WHERE fixture_id = $1",
+    [fixtureId]
+  );
+  return new Set(result.rows.map((row) => row.connector_ref.toUpperCase()));
 }

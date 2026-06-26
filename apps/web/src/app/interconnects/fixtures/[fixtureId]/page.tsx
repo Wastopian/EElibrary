@@ -6,6 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { FixtureDetailEditor } from "../../FixtureDetailEditor";
+import { FixturePortListImport } from "../../FixturePortListImport";
 import { loadCableProjectOptions } from "../../project-options";
 import { fetchTestFixtureDetail, isApiClientError } from "../../../../lib/api-client";
 import type { TestFixtureDetail } from "@ee-library/shared/types";
@@ -63,6 +64,12 @@ export default async function FixtureDetailPage({ params }: FixtureDetailPagePro
           ? <FixtureDetailEditor detail={detail} projectOptions={projectOptions} />
           : <EmptyState body={errorMessage ?? "Fixture not found."} title="Fixture unavailable" />}
       </section>
+
+      {detail ? (
+        <section className="detail-section">
+          <FixturePortListImport fixtureId={detail.fixture.id} fixtureKey={detail.fixture.fixtureKey} />
+        </section>
+      ) : null}
     </main>
   );
 }

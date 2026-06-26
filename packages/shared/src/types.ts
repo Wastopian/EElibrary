@@ -1567,6 +1567,46 @@ export interface PinMapImportResponse {
 }
 
 /**
+ * PortListColumnMapping maps a fixture port-list spreadsheet's headers to port fields. Each value is
+ * a header name, or null when absent. Connector ref is required to produce a usable port.
+ */
+export interface PortListColumnMapping {
+  connectorRef: string | null;
+  portRole: string | null;
+  notes: string | null;
+}
+
+/** PortListImportPreviewResponse returns parsed headers, a bounded row preview, and a suggested mapping. */
+export interface PortListImportPreviewResponse {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  headers: string[];
+  rowsPreview: BomImportPreviewRow[];
+  rowCount: number;
+  suggestedMapping: PortListColumnMapping;
+  warnings: string[];
+}
+
+/** PortListImportConfirmInput persists the mapped port rows into one fixture. */
+export interface PortListImportConfirmInput {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  rawContent: string;
+  columnMapping: PortListColumnMapping;
+}
+
+/**
+ * PortListImportResponse reports what a port-list import added/skipped plus the refreshed fixture
+ * detail. Imported ports are recorded memory only — never an approval, validation, or export signal.
+ * Reuses the generic PinMapImportSummary (added / skippedDuplicate / skippedInvalid / invalidSamples).
+ */
+export interface PortListImportResponse {
+  summary: PinMapImportSummary;
+  detail: TestFixtureDetail;
+  boundary: string;
+}
+
+/**
  * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
  * the UI can render consistent labels and group views without a free-form taxonomy.
  * Add categories here when the team starts working with a new class of supplier.

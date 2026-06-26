@@ -16,6 +16,7 @@ import {
   deleteCablePinMapRowInDatabase,
   deleteFixturePortInDatabase,
   importCablePinMapRowsInDatabase,
+  importFixturePortsInDatabase,
   readCableAssemblyDetailFromDatabase,
   readCableAssemblyRevisionsFromDatabase,
   readCableRevisionCompareFromDatabase,
@@ -553,6 +554,47 @@ test("importCablePinMapRowsInDatabase adds new rows and skips duplicates and inv
     assert.ok((imported?.confidenceScore ?? 1) < 0.75);
 
     const missing = await importCablePinMapRowsInDatabase("cable-nope", { sourceFilename: "x.csv", rows: [] });
+    assert.equal(missing.status, "not_found");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies fixture port-list import adds new ports and skips duplicates and invalid rows.
+ */
+test("importFixturePortsInDatabase adds new ports and skips duplicates and invalid rows", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createTestFixtureInDatabase({ fixtureKey: "TFX-IMP" });
+    if (created.status !== "created") throw new Error("setup failed");
+    const fixtureId = created.response.fixture.id;
+
+    await createFixturePortInDatabase(fixtureId, { connectorRef: "J1", portRole: "existing" });
+
+    const result = await importFixturePortsInDatabase(fixtureId, {
+      sourceFilename: "TFX-IMP-ports.csv",
+      rows: [
+        { connectorRef: "J1", portRole: "dup" }, // duplicate of existing
+        { connectorRef: "J2", portRole: "DUT port" }, // new
+        { connectorRef: "  ", portRole: "no ref" }, // invalid
+        { connectorRef: "J2", portRole: "dup in batch" } // duplicate within batch
+      ]
+    });
+
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+    assert.equal(result.response.summary.added, 1);
+    assert.equal(result.response.summary.skippedDuplicate, 2);
+    assert.equal(result.response.summary.skippedInvalid, 1);
+
+    const imported = result.response.detail.fixture.ports.find((port) => port.connectorRef === "J2");
+    assert.equal(imported?.portRole, "DUT port");
+
+    const missing = await importFixturePortsInDatabase("fixture-nope", { sourceFilename: "x.csv", rows: [] });
     assert.equal(missing.status, "not_found");
   } finally {
     setInterconnectPoolForTests(null);

@@ -78,6 +78,9 @@ import type {
   PinMapImportPreviewInput,
   PinMapImportPreviewResponse,
   PinMapImportResponse,
+  PortListImportConfirmInput,
+  PortListImportPreviewResponse,
+  PortListImportResponse,
   FixturePortInput,
   TestFixtureCreateInput,
   TestFixtureDetail,
@@ -2091,6 +2094,40 @@ export async function importCablePinMap(cableId: string, input: PinMapImportConf
   }
 
   const envelope = (await response.json()) as ApiEnvelope<PinMapImportResponse>;
+  return envelope.data;
+}
+
+/** Parses an uploaded port-list file and returns headers, a row preview, and a suggested column mapping. */
+export async function previewPortListImport(input: PinMapImportPreviewInput): Promise<PortListImportPreviewResponse> {
+  const response = await fetch(buildApiUrl("/port-list-import/preview"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Port-list preview");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PortListImportPreviewResponse>;
+  return envelope.data;
+}
+
+/** Imports a mapped port-list file into one fixture, skipping duplicate connector refs. */
+export async function importFixturePorts(fixtureId: string, input: PortListImportConfirmInput): Promise<PortListImportResponse> {
+  const response = await fetch(buildApiUrl(`/test-fixtures/${encodeURIComponent(fixtureId)}/port-list-import`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Port-list import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PortListImportResponse>;
   return envelope.data;
 }
 
