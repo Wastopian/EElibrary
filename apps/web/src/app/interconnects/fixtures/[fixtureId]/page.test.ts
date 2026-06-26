@@ -31,6 +31,7 @@ test("fixture detail page renders the authoring editor for a found fixture", asy
     assert.match(html, /Add a port/u);
     assert.match(html, /Save fixture details/u);
     assert.match(html, /Import ports/u);
+    assert.match(html, /Compare revisions/u);
   } finally {
     restoreFetch();
   }

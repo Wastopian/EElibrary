@@ -20,6 +20,8 @@ import {
   readCableAssemblyDetailFromDatabase,
   readCableAssemblyRevisionsFromDatabase,
   readCableRevisionCompareFromDatabase,
+  readFixtureRevisionCompareFromDatabase,
+  readTestFixtureRevisionsFromDatabase,
   readInterconnectDashboardFromDatabase,
   readTestFixtureDetailFromDatabase,
   searchInterconnectWhereUsed,
@@ -596,6 +598,54 @@ test("importFixturePortsInDatabase adds new ports and skips duplicates and inval
 
     const missing = await importFixturePortsInDatabase("fixture-nope", { sourceFilename: "x.csv", rows: [] });
     assert.equal(missing.status, "not_found");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies fixture revision listing and the port diff between two revisions of one fixture key.
+ */
+test("fixture revision compare diffs ports between two revisions", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const revA = await createTestFixtureInDatabase({ fixtureKey: "TFX-CMP", revisionLabel: "A" });
+    const revB = await createTestFixtureInDatabase({ fixtureKey: "TFX-CMP", revisionLabel: "B" });
+    if (revA.status !== "created" || revB.status !== "created") throw new Error("setup failed");
+    const aId = revA.response.fixture.id;
+    const bId = revB.response.fixture.id;
+
+    await createFixturePortInDatabase(aId, { connectorRef: "J1", portRole: "power" });
+    await createFixturePortInDatabase(aId, { connectorRef: "J2", portRole: "data" });
+
+    await createFixturePortInDatabase(bId, { connectorRef: "J1", portRole: "power" }); // unchanged
+    await createFixturePortInDatabase(bId, { connectorRef: "J2", portRole: "data-fast" }); // changed role
+    await createFixturePortInDatabase(bId, { connectorRef: "J3", portRole: "aux" }); // added
+
+    const revisions = await readTestFixtureRevisionsFromDatabase(aId);
+    assert.equal(revisions.status, "available");
+    if (revisions.status !== "available") return;
+    assert.equal(revisions.response.revisions.length, 2);
+
+    const compare = await readFixtureRevisionCompareFromDatabase(aId, bId);
+    assert.equal(compare.status, "available");
+    if (compare.status !== "available") return;
+
+    const changed = compare.response.portDiffs.find((diff) => diff.connectorRef === "J2");
+    const added = compare.response.portDiffs.find((diff) => diff.connectorRef === "J3");
+    assert.equal(changed?.kind, "changed");
+    assert.ok(changed?.changes.some((change) => change.field === "role" && change.from === "data" && change.to === "data-fast"));
+    assert.equal(added?.kind, "added");
+    assert.equal(compare.response.portSummary.added, 1);
+    assert.equal(compare.response.portSummary.changed, 1);
+
+    const fixtureB = await createTestFixtureInDatabase({ fixtureKey: "TFX-OTHER" });
+    if (fixtureB.status !== "created") throw new Error("setup failed");
+    const mismatch = await readFixtureRevisionCompareFromDatabase(aId, fixtureB.response.fixture.id);
+    assert.equal(mismatch.status, "not_found");
   } finally {
     setInterconnectPoolForTests(null);
     await pool.end();

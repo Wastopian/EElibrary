@@ -74,6 +74,8 @@ import type {
   CablePinMapRowInput,
   CableRevisionCompareResponse,
   CableRevisionListResponse,
+  FixtureRevisionCompareResponse,
+  FixtureRevisionListResponse,
   PinMapImportConfirmInput,
   PinMapImportPreviewInput,
   PinMapImportPreviewResponse,
@@ -2134,6 +2136,20 @@ export async function importFixturePorts(fixtureId: string, input: PortListImpor
 /** Reads one test fixture's authoring detail (header + ports). */
 export async function fetchTestFixtureDetail(fixtureId: string): Promise<TestFixtureDetail> {
   const envelope = await fetchApi<ApiEnvelope<TestFixtureDetail>>(`/test-fixtures/${encodeURIComponent(fixtureId)}`);
+  return envelope.data;
+}
+
+/** Lists the sibling revisions of one fixture for the revision picker. */
+export async function fetchTestFixtureRevisions(fixtureId: string): Promise<FixtureRevisionListResponse> {
+  const envelope = await fetchApi<ApiEnvelope<FixtureRevisionListResponse>>(`/test-fixtures/${encodeURIComponent(fixtureId)}/revisions`);
+  return envelope.data;
+}
+
+/** Diffs one fixture revision against another by ports. */
+export async function fetchFixtureRevisionCompare(fixtureId: string, againstFixtureId: string): Promise<FixtureRevisionCompareResponse> {
+  const envelope = await fetchApi<ApiEnvelope<FixtureRevisionCompareResponse>>(
+    `/test-fixtures/${encodeURIComponent(fixtureId)}/revision-compare?against=${encodeURIComponent(againstFixtureId)}`
+  );
   return envelope.data;
 }
 

@@ -18,6 +18,9 @@ import type {
   CableRevisionListResponse,
   CableEndDiff,
   CablePinRowDiff,
+  FixtureRevisionCompareResponse,
+  FixtureRevisionListResponse,
+  FixturePortDiff,
   InterconnectCompareSummary,
   InterconnectFieldChange,
   InterconnectRevisionSummary,
@@ -2658,4 +2661,145 @@ async function readFixturePortKeys(databasePool: Pool, fixtureId: string): Promi
     [fixtureId]
   );
   return new Set(result.rows.map((row) => row.connector_ref.toUpperCase()));
+}
+
+// ===========================================================================
+// Fixture revision compare (read-only)
+//
+// Mirrors cable revision compare: diffs two revisions of the same fixture key by ports.
+// A clean diff is recorded-memory context only; it never approves a part or unlocks export.
+// ===========================================================================
+
+/** FIXTURE_COMPARE_BOUNDARY is repeated on fixture revision-compare reads. */
+const FIXTURE_COMPARE_BOUNDARY =
+  "Revision compare shows what changed in recorded fixture memory between two revisions. It does not approve a part, validate an asset, prove a bench setup is safe, or unlock export.";
+
+/** FixtureRevisionListReadResult reports sibling-revision availability for one fixture. */
+export type FixtureRevisionListReadResult =
+  | { status: "available"; response: FixtureRevisionListResponse }
+  | { status: "not_configured" }
+  | { status: "not_found" };
+
+/** FixtureRevisionCompareReadResult reports fixture revision-compare availability. */
+export type FixtureRevisionCompareReadResult =
+  | { status: "available"; response: FixtureRevisionCompareResponse }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/** Reads every revision that shares this fixture's fixture_key, newest first. */
+export async function readTestFixtureRevisionsFromDatabase(fixtureId: string): Promise<FixtureRevisionListReadResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const fixtureKey = await readFixtureKey(databasePool, fixtureId);
+    if (fixtureKey === null) {
+      return { status: "not_found" };
+    }
+
+    const result = await databasePool.query<{ id: string; revision_label: string; fixture_status: InterconnectRecordStatus; updated_at: Date | string }>(
+      `SELECT id, revision_label, fixture_status, updated_at FROM test_fixtures WHERE fixture_key = $1 ORDER BY updated_at DESC, revision_label ASC`,
+      [fixtureKey]
+    );
+
+    const revisions: InterconnectRevisionSummary[] = result.rows.map((row) => ({
+      id: row.id,
+      revisionLabel: row.revision_label,
+      status: row.fixture_status,
+      updatedAt: toIsoTimestamp(row.updated_at)
+    }));
+
+    return { response: { currentFixtureId: fixtureId, fixtureKey, revisions }, status: "available" };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Diffs two revisions of the same fixture key by ports. */
+export async function readFixtureRevisionCompareFromDatabase(baseFixtureId: string, targetFixtureId: string): Promise<FixtureRevisionCompareReadResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    const [base, target] = await Promise.all([
+      buildTestFixtureDetail(databasePool, baseFixtureId),
+      buildTestFixtureDetail(databasePool, targetFixtureId)
+    ]);
+
+    if (!base) {
+      return { code: "FIXTURE_NOT_FOUND", message: "Base fixture revision not found.", status: "not_found" };
+    }
+    if (!target) {
+      return { code: "COMPARE_FIXTURE_NOT_FOUND", message: "The revision to compare against was not found.", status: "not_found" };
+    }
+    if (base.fixture.fixtureKey !== target.fixture.fixtureKey) {
+      return { code: "FIXTURE_KEY_MISMATCH", message: "Revision compare only works between revisions of the same fixture.", status: "not_found" };
+    }
+
+    const portDiffs = diffFixturePorts(base, target);
+
+    return {
+      response: {
+        baseFixtureId,
+        baseRevisionLabel: base.fixture.revisionLabel,
+        boundary: FIXTURE_COMPARE_BOUNDARY,
+        fixtureKey: base.fixture.fixtureKey,
+        portDiffs,
+        portSummary: summarizeDiffs(portDiffs.map((diff) => diff.kind), base.fixture.ports.length),
+        targetFixtureId,
+        targetRevisionLabel: target.fixture.revisionLabel
+      },
+      status: "available"
+    };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Reads one fixture's fixture_key, or null when the fixture is gone. */
+async function readFixtureKey(databasePool: Pool, fixtureId: string): Promise<string | null> {
+  const result = await databasePool.query<{ fixture_key: string }>("SELECT fixture_key FROM test_fixtures WHERE id = $1 LIMIT 1", [fixtureId]);
+  return result.rows[0]?.fixture_key ?? null;
+}
+
+/** Diffs ports between two fixture revisions, keyed by connector ref. */
+function diffFixturePorts(base: TestFixtureDetail, target: TestFixtureDetail): FixturePortDiff[] {
+  const keyOf = (port: FixturePort): string => port.connectorRef.toUpperCase();
+  const baseByKey = new Map(base.fixture.ports.map((port) => [keyOf(port), port]));
+  const targetByKey = new Map(target.fixture.ports.map((port) => [keyOf(port), port]));
+  const keys = [...new Set([...baseByKey.keys(), ...targetByKey.keys()])].sort();
+  const diffs: FixturePortDiff[] = [];
+
+  for (const key of keys) {
+    const basePort = baseByKey.get(key) ?? null;
+    const targetPort = targetByKey.get(key) ?? null;
+    const identity = (targetPort ?? basePort)!;
+
+    if (basePort && !targetPort) {
+      diffs.push({ changes: [], connectorRef: basePort.connectorRef, kind: "removed" });
+      continue;
+    }
+    if (!basePort && targetPort) {
+      diffs.push({ changes: [], connectorRef: targetPort.connectorRef, kind: "added" });
+      continue;
+    }
+    if (basePort && targetPort) {
+      const changes = collectChanges([
+        ["role", basePort.portRole, targetPort.portRole],
+        ["cable", basePort.cableKey, targetPort.cableKey],
+        ["matched part", basePort.connectorPart.mpn, targetPort.connectorPart.mpn],
+        ["mate part", basePort.matePart.mpn, targetPort.matePart.mpn],
+        ["notes", basePort.notes, targetPort.notes]
+      ]);
+      if (changes.length > 0) {
+        diffs.push({ changes, connectorRef: identity.connectorRef, kind: "changed" });
+      }
+    }
+  }
+
+  return diffs;
 }

@@ -7,6 +7,7 @@ import React from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { FixtureDetailEditor } from "../../FixtureDetailEditor";
 import { FixturePortListImport } from "../../FixturePortListImport";
+import { FixtureRevisionCompare } from "../../FixtureRevisionCompare";
 import { loadCableProjectOptions } from "../../project-options";
 import { fetchTestFixtureDetail, isApiClientError } from "../../../../lib/api-client";
 import type { TestFixtureDetail } from "@ee-library/shared/types";
@@ -68,6 +69,12 @@ export default async function FixtureDetailPage({ params }: FixtureDetailPagePro
       {detail ? (
         <section className="detail-section">
           <FixturePortListImport fixtureId={detail.fixture.id} fixtureKey={detail.fixture.fixtureKey} />
+        </section>
+      ) : null}
+
+      {detail ? (
+        <section className="detail-section">
+          <FixtureRevisionCompare fixtureId={detail.fixture.id} fixtureKey={detail.fixture.fixtureKey} currentRevisionLabel={detail.fixture.revisionLabel} />
         </section>
       ) : null}
     </main>

@@ -48,8 +48,10 @@ import {
   readCableAssemblyDetailFromDatabase,
   readCableAssemblyRevisionsFromDatabase,
   readCableRevisionCompareFromDatabase,
+  readFixtureRevisionCompareFromDatabase,
   readInterconnectDashboardFromDatabase,
   readTestFixtureDetailFromDatabase,
+  readTestFixtureRevisionsFromDatabase,
   updateCableAssemblyEndInDatabase,
   updateCableAssemblyInDatabase,
   updateCablePinMapRowInDatabase,
@@ -287,6 +289,8 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const cableRevisionCompareMatch = /^\/cable-assemblies\/([^/]+)\/revision-compare$/u.exec(url.pathname);
   const cablePinMapImportMatch = /^\/cable-assemblies\/([^/]+)\/pin-map-import$/u.exec(url.pathname);
   const fixturePortListImportMatch = /^\/test-fixtures\/([^/]+)\/port-list-import$/u.exec(url.pathname);
+  const fixtureRevisionsMatch = /^\/test-fixtures\/([^/]+)\/revisions$/u.exec(url.pathname);
+  const fixtureRevisionCompareMatch = /^\/test-fixtures\/([^/]+)\/revision-compare$/u.exec(url.pathname);
   const cableAssemblyDetailMatch = /^\/cable-assemblies\/([^/]+)$/u.exec(url.pathname);
   const fixturePortDetailMatch = /^\/test-fixtures\/([^/]+)\/ports\/([^/]+)$/u.exec(url.pathname);
   const fixturePortsMatch = /^\/test-fixtures\/([^/]+)\/ports$/u.exec(url.pathname);
@@ -830,6 +834,16 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
 
   if (request.method === "GET" && cableAssemblyDetailMatch?.[1]) {
     await handleCableAssemblyDetailRead(response, decodeURIComponent(cableAssemblyDetailMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && fixtureRevisionsMatch?.[1]) {
+    await handleFixtureRevisionListRead(response, decodeURIComponent(fixtureRevisionsMatch[1]));
+    return;
+  }
+
+  if (request.method === "GET" && fixtureRevisionCompareMatch?.[1]) {
+    await handleFixtureRevisionCompareRead(response, decodeURIComponent(fixtureRevisionCompareMatch[1]), url);
     return;
   }
 
@@ -3672,6 +3686,56 @@ async function handleCableRevisionCompareRead(response: ServerResponse, cableId:
 }
 
 /**
+ * Handles listing the sibling revisions of one fixture for the revision picker.
+ */
+async function handleFixtureRevisionListRead(response: ServerResponse, fixtureId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(response, "fixture-revision-list-read", () => readTestFixtureRevisionsFromDatabase(fixtureId), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "FIXTURE_NOT_FOUND", "Test fixture not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles diffing one fixture revision against another (?against=:fixtureId).
+ */
+async function handleFixtureRevisionCompareRead(response: ServerResponse, fixtureId: string, url: URL): Promise<void> {
+  const against = (url.searchParams.get("against") ?? "").trim();
+  if (!against) {
+    sendJson(response, 400, { error: { code: "MISSING_COMPARE_TARGET", message: "Revision compare requires an 'against' fixture id." } });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "fixture-revision-compare-read", () => readFixtureRevisionCompareFromDatabase(fixtureId, against), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Handles a no-write parse + preview of an uploaded pin-map file.
  */
 async function handlePinMapImportPreview(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -6224,6 +6288,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "POST" && pathname === "/pin-map-import/preview") return "api-pin-map-import-preview";
   if (/^\/test-fixtures\/[^/]+\/port-list-import/u.test(pathname)) return "api-fixture-port-list-import";
   if (method === "POST" && pathname === "/port-list-import/preview") return "api-port-list-import-preview";
+  if (/^\/test-fixtures\/[^/]+\/revision/u.test(pathname)) return "api-fixture-revision-compare";
   if (method === "POST" && pathname === "/test-fixtures") return "api-test-fixture-create";
   if (method === "GET" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-detail";
   if (method === "PATCH" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-update";
