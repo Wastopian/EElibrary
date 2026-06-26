@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mapPinMapRowsToInputs, suggestPinMapColumnMapping } from "./interconnect-import";
+import { mapPinMapRowsToInputs, mapPortListRowsToInputs, suggestPinMapColumnMapping, suggestPortListColumnMapping } from "./interconnect-import";
 import type { BomImportPreviewRow } from "./types";
 
 test("suggestPinMapColumnMapping maps source and destination columns separately", () => {
@@ -38,6 +38,23 @@ test("mapPinMapRowsToInputs applies the mapping, defaults end to A, and coerces 
   assert.equal(input.destinationConnectorRef, "J201");
   assert.equal(input.destinationPinNumber, "12");
   assert.equal(input.endLabel, "A");
+});
+
+test("suggestPortListColumnMapping maps connector, role, and notes columns", () => {
+  const mapping = suggestPortListColumnMapping(["Connector", "Port Role", "Notes"]);
+  assert.equal(mapping.connectorRef, "Connector");
+  assert.equal(mapping.portRole, "Port Role");
+  assert.equal(mapping.notes, "Notes");
+});
+
+test("mapPortListRowsToInputs applies the mapping and blanks unmapped optionals", () => {
+  const rows: BomImportPreviewRow[] = [{ rowNumber: 1, values: { Connector: "J202", "Port Role": "DUT port" } }];
+  const inputs = mapPortListRowsToInputs(rows, { connectorRef: "Connector", notes: null, portRole: "Port Role" });
+
+  assert.equal(inputs.length, 1);
+  assert.equal(inputs[0]!.connectorRef, "J202");
+  assert.equal(inputs[0]!.portRole, "DUT port");
+  assert.equal(inputs[0]!.notes, null);
 });
 
 test("mapPinMapRowsToInputs leaves required fields blank when unmapped so the API can reject them", () => {
