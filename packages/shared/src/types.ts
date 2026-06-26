@@ -1505,6 +1505,35 @@ export interface CableRevisionCompareResponse {
   boundary: string;
 }
 
+/** FixtureRevisionListResponse lists every revision of one fixture key (newest first). */
+export interface FixtureRevisionListResponse {
+  fixtureKey: string;
+  currentFixtureId: string;
+  revisions: InterconnectRevisionSummary[];
+}
+
+/** FixturePortDiff is one port difference between two fixture revisions, keyed by connector ref. */
+export interface FixturePortDiff {
+  kind: InterconnectDiffKind;
+  connectorRef: string;
+  changes: InterconnectFieldChange[];
+}
+
+/**
+ * FixtureRevisionCompareResponse diffs two revisions of the same fixture key by ports. It is
+ * recorded-memory context only; a clean diff never approves a part or unlocks export.
+ */
+export interface FixtureRevisionCompareResponse {
+  fixtureKey: string;
+  baseFixtureId: string;
+  baseRevisionLabel: string;
+  targetFixtureId: string;
+  targetRevisionLabel: string;
+  portDiffs: FixturePortDiff[];
+  portSummary: InterconnectCompareSummary;
+  boundary: string;
+}
+
 /**
  * PinMapColumnMapping maps a pin-map spreadsheet's headers to pin-row fields. Each value is a
  * header name from the uploaded file, or null when the field is not present. Connector ref, pin,
