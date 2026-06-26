@@ -74,6 +74,10 @@ import type {
   CablePinMapRowInput,
   CableRevisionCompareResponse,
   CableRevisionListResponse,
+  PinMapImportConfirmInput,
+  PinMapImportPreviewInput,
+  PinMapImportPreviewResponse,
+  PinMapImportResponse,
   FixturePortInput,
   TestFixtureCreateInput,
   TestFixtureDetail,
@@ -2053,6 +2057,40 @@ export async function fetchCableRevisionCompare(cableId: string, againstCableId:
   const envelope = await fetchApi<ApiEnvelope<CableRevisionCompareResponse>>(
     `/cable-assemblies/${encodeURIComponent(cableId)}/revision-compare?against=${encodeURIComponent(againstCableId)}`
   );
+  return envelope.data;
+}
+
+/** Parses an uploaded pin-map file and returns headers, a row preview, and a suggested column mapping. */
+export async function previewPinMapImport(input: PinMapImportPreviewInput): Promise<PinMapImportPreviewResponse> {
+  const response = await fetch(buildApiUrl("/pin-map-import/preview"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Pin-map preview");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PinMapImportPreviewResponse>;
+  return envelope.data;
+}
+
+/** Imports a mapped pin-map file into one cable, skipping duplicate connector ref + pin rows. */
+export async function importCablePinMap(cableId: string, input: PinMapImportConfirmInput): Promise<PinMapImportResponse> {
+  const response = await fetch(buildApiUrl(`/cable-assemblies/${encodeURIComponent(cableId)}/pin-map-import`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Pin-map import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<PinMapImportResponse>;
   return envelope.data;
 }
 

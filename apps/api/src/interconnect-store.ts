@@ -21,6 +21,8 @@ import type {
   InterconnectCompareSummary,
   InterconnectFieldChange,
   InterconnectRevisionSummary,
+  PinMapImportResponse,
+  PinMapImportSummary,
   FixturePort,
   FixturePortInput,
   InterconnectDashboardResponse,
@@ -2406,3 +2408,134 @@ function summarizeDiffs(kinds: InterconnectDiffKindLocal[], baseCount: number): 
 
 /** Local alias for the diff-kind union to keep the summary helper readable. */
 type InterconnectDiffKindLocal = "added" | "removed" | "changed";
+
+// ===========================================================================
+// Cable pin-map import (bulk create from an uploaded spreadsheet)
+//
+// Imported rows are recorded memory only: they never approve the part or cable. Each carries the
+// source filename and a sub-0.75 confidence so it surfaces in the "needs check" filter until reviewed.
+// ===========================================================================
+
+/** PIN_MAP_IMPORT_BOUNDARY is repeated on import responses. */
+const PIN_MAP_IMPORT_BOUNDARY =
+  "Imported pin rows are recorded memory only — they do not approve the part or cable, validate an asset, prove a bench setup is safe, or unlock export. Imported rows start below review confidence until an engineer checks them.";
+
+/** IMPORTED_PIN_CONFIDENCE keeps imported rows under the needs-check threshold (0.75) until reviewed. */
+const IMPORTED_PIN_CONFIDENCE = 0.5;
+
+/** MAX_INVALID_SAMPLES caps how many per-row invalid reasons are returned to the operator. */
+const MAX_INVALID_SAMPLES = 5;
+
+/** PinMapImportResult reports bulk pin-map import availability. */
+export type PinMapImportResult =
+  | { status: "available"; response: PinMapImportResponse }
+  | { status: "not_configured" }
+  | { status: "not_found"; code: string; message: string };
+
+/**
+ * Bulk-creates pin rows on one cable from imported rows, skipping duplicates (by connector ref +
+ * pin number) and invalid rows. New rows carry the source filename and a sub-review confidence.
+ */
+export async function importCablePinMapRowsInDatabase(
+  cableId: string,
+  input: { sourceFilename: string; rows: CablePinMapRowInput[] }
+): Promise<PinMapImportResult> {
+  const databasePool = getInterconnectDatabasePool();
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  try {
+    if (!(await cableExists(databasePool, cableId))) {
+      return { code: "CABLE_NOT_FOUND", message: "Cable assembly not found.", status: "not_found" };
+    }
+
+    const existingKeys = await readCablePinRowKeys(databasePool, cableId);
+    const seenInBatch = new Set<string>();
+    const summary: PinMapImportSummary = { added: 0, invalidSamples: [], skippedDuplicate: 0, skippedInvalid: 0 };
+    const inserts: NormalizedPinRow[] = [];
+
+    for (const row of input.rows) {
+      const normalized = normalizePinRowInput(row);
+      if (!normalized.ok) {
+        summary.skippedInvalid += 1;
+        if (summary.invalidSamples.length < MAX_INVALID_SAMPLES) {
+          summary.invalidSamples.push(normalized.message);
+        }
+        continue;
+      }
+
+      const key = `${normalized.value.connectorRef.toUpperCase()}|${normalized.value.pinNumber.toUpperCase()}`;
+      if (existingKeys.has(key) || seenInBatch.has(key)) {
+        summary.skippedDuplicate += 1;
+        continue;
+      }
+
+      seenInBatch.add(key);
+      inserts.push(normalized.value);
+    }
+
+    if (inserts.length > 0) {
+      const client = await databasePool.connect();
+      try {
+        await client.query("BEGIN");
+        const now = new Date();
+        for (const value of inserts) {
+          const rowId = buildInterconnectId("pin", `${cableId}-${value.connectorRef}-${value.pinNumber}`);
+          await client.query(
+            `
+              INSERT INTO cable_pin_map_rows (
+                id, cable_assembly_id, cable_end_id, fixture_port_id, end_label, connector_ref, pin_number,
+                signal_name, wire_color, wire_gauge, destination_connector_ref, destination_pin_number,
+                confidence_score, source_document_ref, notes, created_at, updated_at
+              )
+              VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+            `,
+            [
+              rowId,
+              cableId,
+              value.endLabel,
+              value.connectorRef,
+              value.pinNumber,
+              value.signalName,
+              value.wireColor,
+              value.wireGauge,
+              value.destinationConnectorRef,
+              value.destinationPinNumber,
+              IMPORTED_PIN_CONFIDENCE,
+              input.sourceFilename,
+              value.notes,
+              now
+            ]
+          );
+          summary.added += 1;
+        }
+        await client.query("UPDATE cable_assemblies SET updated_at = $2 WHERE id = $1", [cableId, now]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const detail = await buildCableAssemblyDetail(databasePool, cableId);
+    if (!detail) {
+      throw new CatalogStoreError("query_failed", "Cable detail was missing immediately after a pin-map import.", new Error("missing_cable_detail_after_import"));
+    }
+
+    return { response: { boundary: PIN_MAP_IMPORT_BOUNDARY, detail, summary }, status: "available" };
+  } catch (error) {
+    throw toInterconnectStoreError(error);
+  }
+}
+
+/** Reads the existing (connector ref | pin number) keys for one cable's pin rows, upper-cased. */
+async function readCablePinRowKeys(databasePool: Pool, cableId: string): Promise<Set<string>> {
+  const result = await databasePool.query<{ connector_ref: string; pin_number: string }>(
+    "SELECT connector_ref, pin_number FROM cable_pin_map_rows WHERE cable_assembly_id = $1",
+    [cableId]
+  );
+  return new Set(result.rows.map((row) => `${row.connector_ref.toUpperCase()}|${row.pin_number.toUpperCase()}`));
+}

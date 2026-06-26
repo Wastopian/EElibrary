@@ -22,6 +22,10 @@
       "types": "./src/bom-csv.ts",
       "default": "./src/bom-csv.ts"
     },
+    "./interconnect-import": {
+      "types": "./src/interconnect-import.ts",
+      "default": "./src/interconnect-import.ts"
+    },
     "./catalog-runtime": {
       "types": "./src/catalog-runtime.ts",
       "default": "./src/catalog-runtime.ts"

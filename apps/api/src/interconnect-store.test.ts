@@ -15,6 +15,7 @@ import {
   deleteCableAssemblyEndInDatabase,
   deleteCablePinMapRowInDatabase,
   deleteFixturePortInDatabase,
+  importCablePinMapRowsInDatabase,
   readCableAssemblyDetailFromDatabase,
   readCableAssemblyRevisionsFromDatabase,
   readCableRevisionCompareFromDatabase,
@@ -508,6 +509,51 @@ test("cable revision compare rejects mismatched cable keys and unknown revisions
 
     const missingList = await readCableAssemblyRevisionsFromDatabase("cable-nope");
     assert.equal(missingList.status, "not_found");
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies pin-map import adds new rows, skips duplicates and invalid rows, and tags provenance.
+ */
+test("importCablePinMapRowsInDatabase adds new rows and skips duplicates and invalid rows", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    const created = await createCableAssemblyInDatabase({ cableKey: "CAB-IMP" });
+    if (created.status !== "created") throw new Error("setup failed");
+    const cableId = created.response.cable.id;
+
+    // Seed one existing pin so an import duplicate can be detected.
+    await createCablePinMapRowInDatabase(cableId, { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "EXISTING" });
+
+    const result = await importCablePinMapRowsInDatabase(cableId, {
+      sourceFilename: "CAB-IMP-pins.csv",
+      rows: [
+        { endLabel: "A", connectorRef: "J1", pinNumber: "1", signalName: "DUPLICATE" }, // duplicate of existing
+        { endLabel: "A", connectorRef: "J1", pinNumber: "2", signalName: "CAN_H" }, // new
+        { endLabel: "A", connectorRef: "J1", pinNumber: "3", signalName: "  " }, // invalid (no signal)
+        { endLabel: "A", connectorRef: "J1", pinNumber: "2", signalName: "DUP_IN_BATCH" } // duplicate within batch
+      ]
+    });
+
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+    assert.equal(result.response.summary.added, 1);
+    assert.equal(result.response.summary.skippedDuplicate, 2);
+    assert.equal(result.response.summary.skippedInvalid, 1);
+    assert.ok(result.response.summary.invalidSamples.length >= 1);
+
+    const imported = result.response.detail.pinRows.find((row) => row.pinNumber === "2");
+    assert.equal(imported?.signalName, "CAN_H");
+    assert.equal(imported?.sourceDocumentRef, "CAB-IMP-pins.csv");
+    assert.ok((imported?.confidenceScore ?? 1) < 0.75);
+
+    const missing = await importCablePinMapRowsInDatabase("cable-nope", { sourceFilename: "x.csv", rows: [] });
+    assert.equal(missing.status, "not_found");
   } finally {
     setInterconnectPoolForTests(null);
     await pool.end();
