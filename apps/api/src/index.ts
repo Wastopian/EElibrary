@@ -43,6 +43,7 @@ import {
   deleteCableAssemblyEndInDatabase,
   deleteCablePinMapRowInDatabase,
   deleteFixturePortInDatabase,
+  importCablePinMapRowsInDatabase,
   readCableAssemblyDetailFromDatabase,
   readCableAssemblyRevisionsFromDatabase,
   readCableRevisionCompareFromDatabase,
@@ -55,6 +56,7 @@ import {
   updateTestFixtureInDatabase
 } from "./interconnect-store";
 import type { CableAssemblyMutationResult, TestFixtureMutationResult } from "./interconnect-store";
+import { buildPinMapImportPreview, parsePinMapFileToInputs } from "@ee-library/shared/interconnect-import";
 import { readPartSupplyOffersFromDatabase } from "./supply-offers";
 import { applyApprovalBatchInDatabase, createBomImportInDatabase, createCircuitBlockInDatabase, createCircuitBlockKnownRiskInDatabase, createCircuitBlockPartInDatabase, createEvidenceAttachmentInDatabase, createExportBundleInDatabase, createPartSubstitutionInDatabase, createProjectFromCsvInDatabase, createProjectInDatabase, instantiateCircuitBlockIntoProjectBomInDatabase, resolveCircuitBlockKnownRiskInDatabase, matchBomImportRowsInDatabase, readApprovalBatchCandidatesFromDatabase, readBomImportDiagnosticsFromDatabase, readBomImportLinesFromDatabase, readBomRevisionCompareFromDatabase, readCircuitBlockDetailFromDatabase, readCircuitBlockFollowUpsFromDatabase, readCircuitBlockProjectDependenciesFromDatabase, readCircuitBlocksFromDatabase, readConnectorSetCatalogFromDatabase, readEvidenceAttachmentsFromDatabase, readExportBundlesFromDatabase, verifyExportBundleInDatabase, createPartEngineeringRecordInDatabase, readPartEngineeringRecordsForPartFromDatabase, resolvePartEngineeringRecordInDatabase, decidePartEngineeringRecordDraftInDatabase, readPartSubstitutionsForPartFromDatabase, readPartWhereUsedFromDatabase, readProjectBomHealthFromDatabase, readProjectOverlapPanelFromDatabase, readProjectBomImportsFromDatabase, readProjectDetailFromDatabase, readProjectEvidenceAttachmentsFromDatabase, readProjectFleetRiskFromDatabase, readProjectFollowUpsFromDatabase, readProjectPartUsagesFromDatabase, readProjectRevisionApprovalGatesFromDatabase, readProjectRevisionCompareFromDatabase, readProjectRevisionsFromDatabase, readProjectsFromDatabase, readWhereUsedSearchFromDatabase, revokePartSubstitutionInDatabase, syncCircuitBlockFollowUpsFromReadinessInDatabase, syncProjectFollowUpsFromBomHealthInDatabase, updateCircuitBlockInDatabase, updateCircuitBlockPartInDatabase, updateEvidenceAttachmentInDatabase, updateFollowUpInDatabase, updateProjectInDatabase, updateProjectRevisionInDatabase, upsertProjectRevisionApprovalGateInDatabase } from "./project-memory-store";
 import type { CatalogQueryTiming } from "./catalog-store";
@@ -72,6 +74,8 @@ import type {
   CableAssemblyUpdateInput,
   CablePinMapRowInput,
   FixturePortInput,
+  PinMapImportConfirmInput,
+  PinMapImportPreviewInput,
   TestFixtureCreateInput,
   TestFixtureUpdateInput,
   CadAvailabilityFilter,
@@ -279,6 +283,7 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
   const cablePinRowsMatch = /^\/cable-assemblies\/([^/]+)\/pin-rows$/u.exec(url.pathname);
   const cableRevisionsMatch = /^\/cable-assemblies\/([^/]+)\/revisions$/u.exec(url.pathname);
   const cableRevisionCompareMatch = /^\/cable-assemblies\/([^/]+)\/revision-compare$/u.exec(url.pathname);
+  const cablePinMapImportMatch = /^\/cable-assemblies\/([^/]+)\/pin-map-import$/u.exec(url.pathname);
   const cableAssemblyDetailMatch = /^\/cable-assemblies\/([^/]+)$/u.exec(url.pathname);
   const fixturePortDetailMatch = /^\/test-fixtures\/([^/]+)\/ports\/([^/]+)$/u.exec(url.pathname);
   const fixturePortsMatch = /^\/test-fixtures\/([^/]+)\/ports$/u.exec(url.pathname);
@@ -534,6 +539,20 @@ export async function handleRequest(request: IncomingMessage, response: ServerRe
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleCableAssemblyUpdate(request, response, decodeURIComponent(cableAssemblyDetailMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/pin-map-import/preview") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handlePinMapImportPreview(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && cablePinMapImportMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleCablePinMapImport(request, response, decodeURIComponent(cablePinMapImportMatch[1]));
     return;
   }
 
@@ -3636,6 +3655,75 @@ async function handleCableRevisionCompareRead(response: ServerResponse, cableId:
 }
 
 /**
+ * Handles a no-write parse + preview of an uploaded pin-map file.
+ */
+async function handlePinMapImportPreview(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody<PinMapImportPreviewInput>(request);
+
+  if (!body || typeof body.rawContent !== "string" || (body.sourceFormat !== "csv" && body.sourceFormat !== "xlsx") || typeof body.sourceFilename !== "string") {
+    sendJson(response, 400, { error: { code: "INVALID_PIN_MAP_PREVIEW", message: "Pin-map preview requires a sourceFilename, rawContent, and a csv or xlsx sourceFormat." } });
+    return;
+  }
+
+  try {
+    const preview = timeSyncRouteOperation(response, "pin-map-import-preview", () => buildPinMapImportPreview(body), (value) => `${value.rowCount} rows`);
+    sendCatalogJson(response, preview, "database");
+  } catch (error) {
+    if (error instanceof BomCsvParseError) {
+      sendJson(response, 400, { error: { code: error.code, message: error.message } });
+      return;
+    }
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles importing a mapped pin-map file into one cable (bulk create, skip duplicates).
+ */
+async function handleCablePinMapImport(request: IncomingMessage, response: ServerResponse, cableId: string): Promise<void> {
+  const body = await readJsonBody<PinMapImportConfirmInput>(request);
+
+  if (!body || typeof body.rawContent !== "string" || (body.sourceFormat !== "csv" && body.sourceFormat !== "xlsx") || typeof body.sourceFilename !== "string" || !body.columnMapping || typeof body.columnMapping !== "object") {
+    sendJson(response, 400, { error: { code: "INVALID_PIN_MAP_IMPORT", message: "Pin-map import requires a sourceFilename, sourceFormat, rawContent, and a columnMapping." } });
+    return;
+  }
+
+  if (!body.columnMapping.connectorRef || !body.columnMapping.pinNumber || !body.columnMapping.signalName) {
+    sendJson(response, 400, { error: { code: "INVALID_PIN_MAP_MAPPING", message: "Map the connector reference, pin number, and signal columns before importing." } });
+    return;
+  }
+
+  let rows;
+  try {
+    rows = parsePinMapFileToInputs(body);
+  } catch (error) {
+    if (error instanceof BomCsvParseError) {
+      sendJson(response, 400, { error: { code: error.code, message: error.message } });
+      return;
+    }
+    sendCatalogStoreError(response, error);
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(response, "cable-pin-map-import", () => importCablePinMapRowsInDatabase(cableId, { rows, sourceFilename: body.sourceFilename }), (value) => value.status);
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, result.code, result.message);
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
  * Sends the shared cable mutation result envelope: 201 on create, 200 on update/delete,
  * 400 on invalid input, 404 on a missing parent/child, 503 when persistence is unavailable.
  */
@@ -5745,6 +5833,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 1, pattern: /^\/vendors\/([^/]+)\/files\/([^/]+)$/u, targetType: "vendor" },
     { idIndex: 2, pattern: /^\/cable-assemblies\/([^/]+)\/pin-rows\/([^/]+)$/u, targetType: "cable_pin_map_row" },
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/pin-rows$/u, targetType: "cable_assembly" },
+    { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/pin-map-import$/u, targetType: "cable_assembly" },
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/ends\/([^/]+)$/u, targetType: "cable_assembly" },
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)\/ends$/u, targetType: "cable_assembly" },
     { idIndex: 1, pattern: /^\/cable-assemblies\/([^/]+)$/u, targetType: "cable_assembly" },
@@ -6044,6 +6133,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (/^\/cable-assemblies\/[^/]+\/ends/u.test(pathname)) return "api-cable-assembly-end";
   if (/^\/cable-assemblies\/[^/]+\/pin-rows/u.test(pathname)) return "api-cable-pin-row";
   if (/^\/cable-assemblies\/[^/]+\/revision/u.test(pathname)) return "api-cable-revision-compare";
+  if (/^\/cable-assemblies\/[^/]+\/pin-map-import/u.test(pathname)) return "api-cable-pin-map-import";
+  if (method === "POST" && pathname === "/pin-map-import/preview") return "api-pin-map-import-preview";
   if (method === "POST" && pathname === "/test-fixtures") return "api-test-fixture-create";
   if (method === "GET" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-detail";
   if (method === "PATCH" && /^\/test-fixtures\/[^/]+$/u.test(pathname)) return "api-test-fixture-update";

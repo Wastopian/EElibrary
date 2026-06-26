@@ -1506,6 +1506,67 @@ export interface CableRevisionCompareResponse {
 }
 
 /**
+ * PinMapColumnMapping maps a pin-map spreadsheet's headers to pin-row fields. Each value is a
+ * header name from the uploaded file, or null when the field is not present. Connector ref, pin,
+ * and signal are required to produce a usable row; the rest are optional.
+ */
+export interface PinMapColumnMapping {
+  connectorRef: string | null;
+  pinNumber: string | null;
+  signalName: string | null;
+  endLabel: string | null;
+  wireColor: string | null;
+  wireGauge: string | null;
+  destinationConnectorRef: string | null;
+  destinationPinNumber: string | null;
+}
+
+/** PinMapImportPreviewInput carries one uploaded pin-map file for a no-write parse + preview. */
+export interface PinMapImportPreviewInput {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  rawContent: string;
+}
+
+/** PinMapImportPreviewResponse returns parsed headers, a bounded row preview, and a suggested mapping. */
+export interface PinMapImportPreviewResponse {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  headers: string[];
+  rowsPreview: BomImportPreviewRow[];
+  rowCount: number;
+  suggestedMapping: PinMapColumnMapping;
+  warnings: string[];
+}
+
+/** PinMapImportConfirmInput persists the mapped pin-map rows into one cable. */
+export interface PinMapImportConfirmInput {
+  sourceFilename: string;
+  sourceFormat: "csv" | "xlsx";
+  rawContent: string;
+  columnMapping: PinMapColumnMapping;
+}
+
+/** PinMapImportSummary counts the import outcome without compressing it into a score. */
+export interface PinMapImportSummary {
+  added: number;
+  skippedDuplicate: number;
+  skippedInvalid: number;
+  /** A few plain reasons for the first invalid rows, for operator feedback. */
+  invalidSamples: string[];
+}
+
+/**
+ * PinMapImportResponse reports what a pin-map import added/skipped plus the refreshed cable detail.
+ * Imported rows are recorded memory only — never an approval, validation, or export signal.
+ */
+export interface PinMapImportResponse {
+  summary: PinMapImportSummary;
+  detail: CableAssemblyDetail;
+  boundary: string;
+}
+
+/**
  * VendorCategory enumerates the supplier classes the team tracks. The list is fixed so
  * the UI can render consistent labels and group views without a free-form taxonomy.
  * Add categories here when the team starts working with a new class of supplier.

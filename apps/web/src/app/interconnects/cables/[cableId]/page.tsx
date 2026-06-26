@@ -6,6 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { EmptyState, StatusBadge } from "@ee-library/ui";
 import { CableDetailEditor } from "../../CableDetailEditor";
+import { CablePinMapImport } from "../../CablePinMapImport";
 import { CableRevisionCompare } from "../../CableRevisionCompare";
 import { loadCableProjectOptions } from "../../project-options";
 import { fetchCableAssemblyDetail, isApiClientError } from "../../../../lib/api-client";
@@ -64,6 +65,12 @@ export default async function CableDetailPage({ params }: CableDetailPageProps) 
           ? <CableDetailEditor detail={detail} projectOptions={projectOptions} />
           : <EmptyState body={errorMessage ?? "Cable not found."} title="Cable unavailable" />}
       </section>
+
+      {detail ? (
+        <section className="detail-section">
+          <CablePinMapImport cableId={detail.cable.id} cableKey={detail.cable.cableKey} />
+        </section>
+      ) : null}
 
       {detail ? (
         <section className="detail-section">
