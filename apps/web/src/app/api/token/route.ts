@@ -33,6 +33,7 @@ export async function GET() {
   const token = await new SignJWT({
     sub: session.user.id,
     role: session.user.role,
+    orgId: session.user.orgId,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()

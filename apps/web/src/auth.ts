@@ -11,20 +11,26 @@ import Credentials from "next-auth/providers/credentials";
 /** AppRole keeps auth state explicit and narrow across callbacks. */
 type AppRole = "admin" | "user";
 
+/** DEFAULT_ORG_ID is the tenant every existing user and (until enforcement lands) every sign-up belongs to. */
+const DEFAULT_ORG_ID = "org-default";
+
 /** AppJwtClaims describes the extra JWT claims mirrored into the session. */
 type AppJwtClaims = {
   id?: string;
   role?: AppRole;
+  orgId?: string;
 };
 
 declare module "next-auth" {
   interface User {
     role: AppRole;
+    orgId: string;
   }
   interface Session {
     user: {
       id: string;
       role: AppRole;
+      orgId: string;
     } & DefaultSession["user"];
   }
 }
@@ -57,7 +63,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        return { id: user.id, email: user.email, role: user.role as AppRole };
+        return { id: user.id, email: user.email, role: user.role as AppRole, orgId: user.orgId ?? DEFAULT_ORG_ID };
       }
     })
   ],
@@ -69,6 +75,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user) {
         appToken.id = user.id ?? "";
         appToken.role = user.role;
+        appToken.orgId = user.orgId ?? DEFAULT_ORG_ID;
       }
 
       return appToken;
@@ -79,7 +86,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user = {
         ...(session.user ?? {}),
         id: appToken.id ?? "",
-        role: appToken.role ?? "user"
+        role: appToken.role ?? "user",
+        orgId: appToken.orgId ?? DEFAULT_ORG_ID
       };
 
       return session;

@@ -105,6 +105,9 @@ function readAppRole(value: unknown): AppRole | null {
 async function buildApiProxyResponse(request: NextRequest, token: Record<string, unknown>): Promise<NextResponse> {
   const sub = typeof token.sub === "string" ? token.sub : null;
   const role = readAppRole(token.role);
+  // Carry the tenant claim through to the API. Default to the shared org during the foundation
+  // phase, before per-tenant isolation is enforced, so an older cookie without orgId still works.
+  const orgId = typeof token.orgId === "string" && token.orgId.length > 0 ? token.orgId : "org-default";
   const secret = readApiAuthSecret();
 
   if (!sub || !role) {
@@ -118,7 +121,7 @@ async function buildApiProxyResponse(request: NextRequest, token: Record<string,
     );
   }
 
-  const apiToken = await new SignJWT({ role, sub })
+  const apiToken = await new SignJWT({ role, sub, orgId })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("30s")
