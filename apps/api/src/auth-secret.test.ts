@@ -111,6 +111,31 @@ test("verifyBearerToken accepts a properly-signed token when AUTH_SECRET is conf
   });
 });
 
+test("verifyBearerToken exposes the orgId tenant claim when present", async () => {
+  await withEnv({ AUTH_SECRET: STRONG_SECRET, NODE_ENV: "production", EE_LIBRARY_ALLOW_TEST_AUTH: undefined }, async () => {
+    const key = new TextEncoder().encode(STRONG_SECRET);
+    const token = await new SignJWT({ sub: "u1", role: "admin", orgId: "org-acme" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(key);
+    const result = await verifyBearerToken(`Bearer ${token}`);
+
+    assert.ok(result, "expected a session for a valid token");
+    assert.equal(result.orgId, "org-acme", "the tenant claim must be exposed on the session");
+  });
+});
+
+test("verifyBearerToken defaults orgId to the shared org when the claim is absent (non-breaking foundation)", async () => {
+  await withEnv({ AUTH_SECRET: STRONG_SECRET, NODE_ENV: "production", EE_LIBRARY_ALLOW_TEST_AUTH: undefined }, async () => {
+    const valid = await mintTokenWithSecret(STRONG_SECRET, "user"); // signs { sub, role } with no orgId
+    const result = await verifyBearerToken(`Bearer ${valid}`);
+
+    assert.ok(result, "expected a session for a valid token");
+    assert.equal(result.orgId, "org-default", "a token without an orgId claim defaults to the shared org");
+  });
+});
+
 test("assertAuthSecretConfigured throws when AUTH_SECRET is unset", () => {
   assert.throws(
     () => assertAuthSecretConfigured({ NODE_ENV: "production" }),

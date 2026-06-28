@@ -124,8 +124,8 @@ export async function seedAdminUser(client, options) {
   const id = options.id ?? randomUUID();
   await client.query(
     `
-      INSERT INTO users (id, email, password_hash, role)
-      VALUES ($1, $2, $3, 'admin')
+      INSERT INTO users (id, email, password_hash, role, org_id)
+      VALUES ($1, $2, $3, 'admin', 'org-default')
     `,
     [id, email, passwordHash]
   );

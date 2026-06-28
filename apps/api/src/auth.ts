@@ -8,7 +8,12 @@ import { jwtVerify } from "jose";
 export interface ApiSession {
   sub: string;
   role: "admin" | "user";
+  /** Tenant the request acts within. Defaults to the shared org until per-tenant isolation is enforced. */
+  orgId: string;
 }
+
+/** DEFAULT_ORG_ID is the tenant a token without an explicit orgId claim is treated as. */
+const DEFAULT_ORG_ID = "org-default";
 
 /** apiSessionRequestKey stores the verified session on the current request for audit middleware. */
 const apiSessionRequestKey = Symbol.for("ee-library.api.session");
@@ -57,6 +62,7 @@ function readTestSession(env: NodeJS.ProcessEnv = process.env): ApiSession | nul
   }
 
   return {
+    orgId: DEFAULT_ORG_ID,
     role: "admin",
     sub: "test-admin"
   };
@@ -90,7 +96,12 @@ export async function verifyBearerToken(
       return null;
     }
 
-    return { sub: payload.sub, role };
+    // Tenant claim: honor it when present; default to the shared org otherwise. A later
+    // enforcement step will require it once every mint path guarantees it.
+    const rawOrgId = payload["orgId"];
+    const orgId = typeof rawOrgId === "string" && rawOrgId.length > 0 ? rawOrgId : DEFAULT_ORG_ID;
+
+    return { orgId, role, sub: payload.sub };
   } catch {
     return null;
   }

@@ -1437,6 +1437,19 @@ export const followUpRecords = pgTable(
   ]
 );
 
+/** organizations is the tenant boundary: each team's data belongs to one organization. */
+export const organizations = pgTable(
+  "organizations",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug"),
+    inviteCode: text("invite_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("organizations_slug_unique").on(t.slug)]
+);
+
 export const users = pgTable(
   "users",
   {
@@ -1444,11 +1457,13 @@ export const users = pgTable(
     email: text("email").notNull(),
     passwordHash: text("password_hash").notNull(),
     role: text("role").notNull().default("user"),
+    orgId: text("org_id").references(() => organizations.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
     check("users_role_check", literalCheck(`role IN ('admin', 'user')`)),
+    index("users_org_id_idx").on(t.orgId),
   ]
 );
 
