@@ -8,6 +8,7 @@ import { newDb } from "pg-mem";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getAllPartRecords } from "@ee-library/shared/search";
 import { readCatalogRecordsFromDatabase, setCatalogStorePoolForTests } from "../../../../../apps/api/src/catalog-store";
+import { enterRequestContextForTests } from "../../../../../apps/api/src/request-context";
 import { persistNormalizedPartRows, persistProviderImportFailureRows } from "../../../../../apps/worker/src/catalog-repository";
 import AdminPage from "./page";
 import type { Pool } from "pg";
@@ -387,7 +388,7 @@ function createAdminDbBackedPool(): TestPool {
     CREATE TABLE manufacturers (id TEXT PRIMARY KEY, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT PRIMARY KEY, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
     CREATE TABLE connector_families (id TEXT PRIMARY KEY, name TEXT, series TEXT, description TEXT);
-    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, org_id TEXT DEFAULT 'org-default', last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_extraction_signals (id TEXT PRIMARY KEY, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
@@ -412,6 +413,9 @@ function createAdminDbBackedPool(): TestPool {
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();
+
+  // The admin page reads the tenant-scoped catalog directly; render as an org-default teammate.
+  enterRequestContextForTests("org-default");
 
   return new MemoryPool() as TestPool;
 }

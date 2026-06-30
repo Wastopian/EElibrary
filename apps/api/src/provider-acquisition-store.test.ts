@@ -10,6 +10,7 @@ import {
   setCatalogStorePoolForTests,
   setProviderAcquisitionJobBeforeInsertHookForTests
 } from "./catalog-store";
+import { enterRequestContextForTests } from "./request-context";
 import type { Pool } from "pg";
 import type { ProviderAcquisitionJobCreateInput } from "@ee-library/shared/types";
 
@@ -137,7 +138,7 @@ function createProviderAcquisitionPool(): TestPool {
   const db = newDb();
 
   db.public.none(`
-    CREATE TABLE parts (id TEXT PRIMARY KEY);
+    CREATE TABLE parts (id TEXT PRIMARY KEY, org_id TEXT DEFAULT 'org-default');
     CREATE TABLE provider_acquisition_jobs (
       id TEXT PRIMARY KEY,
       provider_id TEXT NOT NULL,
@@ -159,6 +160,7 @@ function createProviderAcquisitionPool(): TestPool {
       error_message TEXT,
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
+      org_id TEXT DEFAULT 'org-default',
       last_updated_at TIMESTAMPTZ NOT NULL
     );
     CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_provider_part
@@ -175,6 +177,9 @@ function createProviderAcquisitionPool(): TestPool {
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();
+
+  // createProviderAcquisitionJobInDatabase stamps the acting org on the job; run as org-default.
+  enterRequestContextForTests("org-default");
 
   return new MemoryPool() as TestPool;
 }

@@ -3484,7 +3484,12 @@ test("tenant isolation: overlap and part where-used never surface another org's 
   setProjectMemoryStorePoolForTests(pool);
 
   try {
-    // A second org's project that uses the same global part (part-memory-ldo) as project-alpha.
+    // Per-tenant catalog: the other org holds its own copy of the same MPN as a distinct part id
+    // (part-other-ldo) — two orgs can never share a part_id, which is the isolation guarantee itself.
+    await pool.query(
+      `INSERT INTO parts (id, mpn, manufacturer_id, org_id, last_updated_at)
+       VALUES ('part-other-ldo', 'TPS7A02DBVR', 'mfg-ti', 'org-other', '2026-03-01T00:00:00.000Z')`
+    );
     await pool.query(
       `INSERT INTO projects (id, project_key, name, status, org_id, created_at, updated_at)
        VALUES ('project-other', 'OTHER', 'Other Org Build', 'active', 'org-other', '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z')`
@@ -3495,7 +3500,7 @@ test("tenant isolation: overlap and part where-used never surface another org's 
     );
     await pool.query(
       `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
-       VALUES ('usage-other-ldo', 'project-other', 'rev-other-a', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', 'org-other', '2026-03-01T00:02:00.000Z', '2026-03-01T00:02:00.000Z')`
+       VALUES ('usage-other-ldo', 'project-other', 'rev-other-a', NULL, 'part-other-ldo', '{"U1"}', 1, 'proposed', 'org-other', '2026-03-01T00:02:00.000Z', '2026-03-01T00:02:00.000Z')`
     );
 
     // Overlap for project-alpha (org-default) must not rank the other org's project.
@@ -3507,7 +3512,7 @@ test("tenant isolation: overlap and part where-used never surface another org's 
       "the other org's project is excluded from overlap ranking"
     );
 
-    // Part where-used under org-default sees only org-default usage of the shared part.
+    // Part where-used under org-default sees only org-default usage of its own part.
     const whereUsed = await readPartWhereUsedFromDatabase("part-memory-ldo");
     assert.equal(whereUsed.status, "available");
     if (whereUsed.status !== "available") throw new Error("whereUsed unavailable");
@@ -3516,9 +3521,13 @@ test("tenant isolation: overlap and part where-used never surface another org's 
       "the other org's usage is excluded from where-used under org-default"
     );
 
-    // Symmetric check: under org-other, where-used sees its own usage and not org-default's.
+    // org-default cannot even resolve the other org's part id (parts are tenant-scoped).
+    const crossOrgPart = await readPartWhereUsedFromDatabase("part-other-ldo");
+    assert.equal(crossOrgPart.status, "not_found", "org-default cannot read another org's part");
+
+    // Symmetric check: under org-other, where-used resolves its own part and sees only its usage.
     await runWithRequestContext("org-other", async () => {
-      const otherWhereUsed = await readPartWhereUsedFromDatabase("part-memory-ldo");
+      const otherWhereUsed = await readPartWhereUsedFromDatabase("part-other-ldo");
       assert.equal(otherWhereUsed.status, "available");
       if (otherWhereUsed.status !== "available") throw new Error("otherWhereUsed unavailable");
       assert.ok(
@@ -3556,6 +3565,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       category TEXT NOT NULL DEFAULT 'Other',
       lifecycle_status TEXT NOT NULL DEFAULT 'active',
       connector_family_id TEXT,
+      org_id TEXT DEFAULT 'org-default',
       last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 

@@ -1195,7 +1195,7 @@ function createMinimalImportPool(): TestPool {
     CREATE TABLE manufacturers (id TEXT PRIMARY KEY, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT PRIMARY KEY, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
     CREATE TABLE connector_families (id TEXT PRIMARY KEY, name TEXT, series TEXT, description TEXT);
-    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, org_id TEXT DEFAULT 'org-default', last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE supply_offerings (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, provider_part_key TEXT, supplier_name TEXT, provider_sku TEXT, inventory_status TEXT, inventory_quantity INTEGER, moq INTEGER, lead_time_days INTEGER, packaging TEXT, currency_code TEXT, preferred_rank INTEGER, last_seen_at TIMESTAMPTZ, retired_at TIMESTAMPTZ, retirement_reason TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
     CREATE TABLE price_breaks (id TEXT PRIMARY KEY, supply_offering_id TEXT, min_quantity INTEGER, unit_price NUMERIC, currency_code TEXT, captured_at TIMESTAMPTZ);
@@ -1231,7 +1231,7 @@ function createOperationalDiagnosticsPool(): TestPool {
   const db = newDb();
 
   db.public.none(`
-    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT);
+    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, org_id TEXT DEFAULT 'org-default');
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE generation_workflows (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, generation_status TEXT, confidence_score NUMERIC, output_asset_id TEXT);
     CREATE TABLE generation_requests (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, request_status TEXT, requested_at TIMESTAMPTZ, requested_by TEXT, workflow_id TEXT, last_updated_at TIMESTAMPTZ);

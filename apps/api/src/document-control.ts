@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { CatalogStoreError } from "./catalog-store";
+import { getRequestOrgId } from "./request-context";
 import type {
   AssetAvailabilityStatus,
   AssetProvenance,
@@ -230,7 +231,7 @@ export async function readDocumentRevisionsForPartFromDatabase(partId: string): 
   }
 
   try {
-    const partExists = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    const partExists = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2", [partId, getRequestOrgId()]);
 
     if (partExists.rowCount === 0) {
       return {

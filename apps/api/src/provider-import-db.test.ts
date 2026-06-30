@@ -7,6 +7,7 @@ import test from "node:test";
 import { newDb } from "pg-mem";
 import { buildPartDetailResponse } from "./detail-response";
 import { readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { enterRequestContextForTests, runWithRequestContext } from "./request-context";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type { Pool, PoolClient } from "pg";
 
@@ -73,6 +74,62 @@ test("DB-backed search and detail can read a jlcparts imported metadata record",
     assert.match(detailResponse.bundleReadiness.reason, /no stored CAD files/u);
     assert.equal(detailResponse.generationOptions.find((option) => option.targetAssetType === "symbol")?.canRequest, false);
     assert.match(detailResponse.generationOptions.find((option) => option.targetAssetType === "footprint")?.reason ?? "", /Package\/mechanical dimensions extraction/u);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the catalog is tenant-scoped: a part owned by another org is invisible to this org's
+ * search and detail reads, an anonymous (no-tenant) read sees nothing, and each org resolves only
+ * its own copy of a shared MPN.
+ */
+test("tenant isolation: catalog search and detail are scoped to the request org", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+
+    // A part owned by org-other, reusing the global manufacturer/package taxonomy of the seeded part.
+    await pool.query(
+      `INSERT INTO parts (id, mpn, description, manufacturer_id, category, lifecycle_status, package_id, connector_family_id, trust_score, org_id, last_updated_at)
+       VALUES ('part-other-only', 'OTHER-ONLY-9000', 'Other org part', 'mfr-jlcparts-guangdong-fenghua-advanced-tech', 'Resistors / Chip Resistor - Surface Mount', 'active', 'pkg-jlcparts-0402', NULL, 0.5, 'org-other', '2026-04-12T06:57:40.000Z')`
+    );
+
+    // org-default (the harness default context) cannot see the org-other part.
+    const ownSearch = await readPartSearchRecordsFromDatabase({ query: "OTHER-ONLY-9000" });
+    assert.equal(ownSearch.status, "available");
+    if (ownSearch.status !== "available") throw new Error("ownSearch unavailable");
+    assert.equal(ownSearch.pagination.totalRecords, 0, "org-default cannot find the org-other part");
+
+    const ownDetail = await readPartDetailRecordsFromDatabase("part-other-only");
+    assert.equal(ownDetail.status, "available");
+    if (ownDetail.status !== "available") throw new Error("ownDetail unavailable");
+    assert.equal(ownDetail.records.length, 0, "org-default cannot read the org-other part detail");
+
+    // org-other resolves its own part.
+    await runWithRequestContext("org-other", async () => {
+      const otherSearch = await readPartSearchRecordsFromDatabase({ query: "OTHER-ONLY-9000" });
+      assert.equal(otherSearch.status, "available");
+      if (otherSearch.status !== "available") throw new Error("otherSearch unavailable");
+      assert.equal(otherSearch.pagination.totalRecords, 1, "org-other sees its own part");
+      assert.ok(otherSearch.records.some((record) => record.part.id === "part-other-only"));
+
+      // ...and not org-default's seeded part.
+      const crossSearch = await readPartSearchRecordsFromDatabase({ query: "RC-02W300JT" });
+      assert.equal(crossSearch.status, "available");
+      if (crossSearch.status !== "available") throw new Error("crossSearch unavailable");
+      assert.equal(crossSearch.pagination.totalRecords, 0, "org-other cannot see org-default's part");
+    });
+
+    // No tenant context fails closed: an anonymous read sees nothing.
+    await runWithRequestContext(null, async () => {
+      const anonymous = await readPartSearchRecordsFromDatabase({ query: "RC-02W300JT" });
+      assert.equal(anonymous.status, "available");
+      if (anonymous.status !== "available") throw new Error("anonymous unavailable");
+      assert.equal(anonymous.pagination.totalRecords, 0, "no tenant => no catalog");
+    });
   } finally {
     setCatalogStorePoolForTests(null);
     await pool.end();
@@ -562,6 +619,9 @@ function createProviderImportPool(options: ProviderImportPoolOptions = {}): Test
 
   const { Pool: MemoryPool } = db.adapters.createPg();
 
+  // Catalog reads are tenant-scoped; run the test body as an org-default teammate.
+  enterRequestContextForTests("org-default");
+
   return new MemoryPool() as TestPool;
 }
 
@@ -701,7 +761,7 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE manufacturers (id TEXT, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
     CREATE TABLE connector_families (id TEXT, name TEXT, series TEXT, description TEXT);
-    CREATE TABLE parts (id TEXT, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE parts (id TEXT, mpn TEXT, description TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ, org_id TEXT DEFAULT 'org-default');
     CREATE TABLE source_records (id TEXT, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE source_extraction_signals (id TEXT, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE assets (id TEXT, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
@@ -723,7 +783,7 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE part_issues (id TEXT, part_id TEXT, issue_code TEXT, severity TEXT, status TEXT, assigned_to TEXT, resolution_notes TEXT, resolved_at TIMESTAMPTZ, summary TEXT, detail TEXT, source TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_source_reconciliations (part_id TEXT, preferred_source_record_id TEXT, resolution_status TEXT, notes TEXT, updated_by TEXT, updated_at TIMESTAMPTZ);
     CREATE TABLE part_risk_flags (id TEXT, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE provider_acquisition_jobs (id TEXT, provider_id TEXT, provider_part_key TEXT, requested_lookup TEXT, manufacturer_name TEXT, mpn TEXT, package_name TEXT, source_url TEXT, match_type TEXT, match_confidence NUMERIC, job_status TEXT, requested_by TEXT, requested_at TIMESTAMPTZ, part_id TEXT, import_outcome TEXT, previous_import_status TEXT, error_code TEXT, error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE provider_acquisition_jobs (id TEXT, provider_id TEXT, provider_part_key TEXT, requested_lookup TEXT, manufacturer_name TEXT, mpn TEXT, package_name TEXT, source_url TEXT, match_type TEXT, match_confidence NUMERIC, job_status TEXT, requested_by TEXT, requested_at TIMESTAMPTZ, part_id TEXT, import_outcome TEXT, previous_import_status TEXT, error_code TEXT, error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, last_updated_at TIMESTAMPTZ, org_id TEXT DEFAULT 'org-default');
     CREATE TABLE provider_acquisition_job_events (id TEXT, job_id TEXT, event_type TEXT, message TEXT, detail JSONB, created_at TIMESTAMPTZ);
     CREATE TABLE provider_enrichment_jobs (id TEXT, part_id TEXT, source_acquisition_job_id TEXT, job_type TEXT, job_status TEXT, requested_by TEXT, requested_at TIMESTAMPTZ, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, error_code TEXT, error_message TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE provider_enrichment_job_events (id TEXT, job_id TEXT, event_type TEXT, message TEXT, detail JSONB, created_at TIMESTAMPTZ);

@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { readPartSupplyOffersFromDatabase, setSupplyOfferPoolForTests } from "./supply-offers";
+import { enterRequestContextForTests } from "./request-context";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 
@@ -159,7 +160,8 @@ function createSupplyOfferPool(): TestPool {
 
   db.public.none(`
     CREATE TABLE parts (
-      id TEXT PRIMARY KEY
+      id TEXT PRIMARY KEY,
+      org_id TEXT DEFAULT 'org-default'
     );
 
     CREATE TABLE source_records (
@@ -211,6 +213,8 @@ function createSupplyOfferPool(): TestPool {
   `);
 
   const adapter = db.adapters.createPg();
+  // Supply-offer reads gate on the part being in the acting org; run as an org-default teammate.
+  enterRequestContextForTests("org-default");
   return new adapter.Pool() as TestPool;
 }
 

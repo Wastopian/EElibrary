@@ -14,6 +14,7 @@ import {
   setDocumentControlPoolForTests,
   updateDocumentRedlineInDatabase
 } from "./document-control";
+import { enterRequestContextForTests } from "./request-context";
 import type { Pool } from "pg";
 
 type TestPool = Pool & {
@@ -368,7 +369,8 @@ function createDocumentControlPool(): TestPool {
   const db = newDb();
   db.public.none(`
     CREATE TABLE parts (
-      id TEXT PRIMARY KEY
+      id TEXT PRIMARY KEY,
+      org_id TEXT DEFAULT 'org-default'
     );
 
     CREATE TABLE assets (
@@ -431,5 +433,7 @@ function createDocumentControlPool(): TestPool {
     );
   `);
   const adapter = db.adapters.createPg();
+  // Document-control gates on the part being in the acting org; run as an org-default teammate.
+  enterRequestContextForTests("org-default");
   return new adapter.Pool() as TestPool;
 }
