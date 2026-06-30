@@ -67,11 +67,25 @@ export const parts = pgTable(
       () => connectorFamilies.id
     ),
     trustScore: numeric("trust_score").notNull(),
+    orgId: text("org_id").references(() => organizations.id),
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
-  (t) => [unique().on(t.manufacturerId, t.mpn)]
+  // Per-tenant catalog: identity is unique per org so the same public part can exist once per team.
+  (t) => [
+    uniqueIndex("parts_org_mfr_mpn_unique").on(t.orgId, t.manufacturerId, t.mpn),
+    index("parts_org_id_idx").on(t.orgId),
+    index("idx_parts_org_search_filters").on(
+      t.orgId,
+      t.manufacturerId,
+      t.category,
+      t.packageId,
+      t.lifecycleStatus,
+      t.mpn,
+      t.id
+    ),
+  ]
 );
 
 export const sourceRecords = pgTable(
@@ -202,12 +216,14 @@ export const providerAcquisitionJobs = pgTable(
     errorMessage: text("error_message"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    orgId: text("org_id").references(() => organizations.id),
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("uq_provider_acquisition_jobs_active_provider_part")
       .on(t.providerId, t.providerPartKey)
       .where(sql`${t.jobStatus} IN ('queued', 'running')`),
+    index("provider_acquisition_jobs_org_id_idx").on(t.orgId),
     index("idx_provider_acquisition_jobs_status_requested_at").on(t.jobStatus, t.requestedAt, t.id),
     index("idx_provider_acquisition_jobs_provider_part").on(t.providerId, t.providerPartKey, t.requestedAt),
     index("idx_provider_acquisition_jobs_part_completed_at").on(t.partId, t.completedAt),

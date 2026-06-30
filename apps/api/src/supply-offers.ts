@@ -4,6 +4,7 @@
 
 import { Pool } from "pg";
 import { CatalogStoreError } from "./catalog-store";
+import { getRequestOrgId } from "./request-context";
 import { SUPPLY_OFFER_STALE_AFTER_DAYS } from "@ee-library/shared/supply-offers";
 import type {
   InventoryStatus,
@@ -198,7 +199,9 @@ async function readPriceBreakRows(databasePool: Pool, supplyOfferingIds: string[
  * Checks the canonical part table before returning scoped commercial context.
  */
 async function partExists(databasePool: Pool, partId: string): Promise<boolean> {
-  const result = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+  // Tenant scope: only the acting org's parts resolve, so supply offers can't be read for another
+  // org's part id.
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2 LIMIT 1", [partId, getRequestOrgId()]);
 
   return result.rows.length > 0;
 }

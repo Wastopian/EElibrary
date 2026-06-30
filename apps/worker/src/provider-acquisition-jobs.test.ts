@@ -83,6 +83,31 @@ test("provider acquisition worker claims the oldest queued job, marks running be
   }
 });
 
+test("provider acquisition worker threads the claimed job's org into the part import", async () => {
+  const pool = createProviderAcquisitionPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-jlcparts-c1091");
+  await seedQueuedJob(pool, "acqjob-acme", "2026-04-24T12:00:00.000Z", "C1091", "RC-02W300JT");
+  // The job belongs to a non-default org; the worker (which has no request context) must stamp that
+  // org onto the part it creates, so it passes the job's org to the import runner.
+  await pool.query("UPDATE provider_acquisition_jobs SET org_id = 'org-acme' WHERE id = 'acqjob-acme'");
+  let capturedOrgId: string | undefined;
+
+  setProviderAcquisitionImportRunnerForTests(async (_providerId, _request, orgId) => {
+    capturedOrgId = orgId;
+    return buildImportSummary("part-jlcparts-c1091", "C1091");
+  });
+
+  try {
+    await processNextProviderAcquisitionJob();
+    assert.equal(capturedOrgId, "org-acme", "the worker threads the job's org to the part import");
+  } finally {
+    setProviderAcquisitionImportRunnerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
 test("provider acquisition worker enqueues datasheet capture only when datasheet evidence is missing", async () => {
   const pool = createProviderAcquisitionPool();
   setWorkerRepositoryPoolForTests(pool);
@@ -233,7 +258,8 @@ function createProviderAcquisitionPool(): TestPool {
 
   db.public.none(`
     CREATE TABLE parts (
-      id TEXT PRIMARY KEY
+      id TEXT PRIMARY KEY,
+      org_id TEXT DEFAULT 'org-default'
     );
     CREATE TABLE provider_acquisition_jobs (
       id TEXT PRIMARY KEY,
@@ -256,6 +282,7 @@ function createProviderAcquisitionPool(): TestPool {
       error_message TEXT,
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
+      org_id TEXT DEFAULT 'org-default',
       last_updated_at TIMESTAMPTZ NOT NULL
     );
     CREATE TABLE provider_acquisition_job_events (

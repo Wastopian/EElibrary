@@ -4035,7 +4035,7 @@ export async function readPartEngineeringRecordsForPartFromDatabase(partId: stri
   }
 
   try {
-    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2", [partId, getRequestOrgId()]);
     if (partCheck.rowCount === 0) {
       return { status: "not_found" };
     }
@@ -4069,7 +4069,7 @@ export async function createPartEngineeringRecordInDatabase(
   }
 
   try {
-    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2", [partId, getRequestOrgId()]);
     if (partCheck.rowCount === 0) {
       return { code: "PART_NOT_FOUND", message: "Part not found.", status: "not_found" };
     }
@@ -4580,9 +4580,12 @@ async function readWhereUsedPartMatches(databasePool: Pool, query: string): Prom
       JOIN manufacturers m ON m.id = p.manufacturer_id
       LEFT JOIN part_approvals pa ON pa.part_id = p.id
       LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
-      WHERE lower(p.id) = lower($1)
-        OR lower(p.mpn) = lower($1)
-        OR lower(p.mpn) LIKE '%' || lower($1) || '%'
+      WHERE (
+          lower(p.id) = lower($1)
+          OR lower(p.mpn) = lower($1)
+          OR lower(p.mpn) LIKE '%' || lower($1) || '%'
+        )
+        AND p.org_id = $2
       ORDER BY
         CASE
           WHEN lower(p.id) = lower($1) THEN 0
@@ -4594,7 +4597,7 @@ async function readWhereUsedPartMatches(databasePool: Pool, query: string): Prom
         p.id ASC
       LIMIT 12
     `,
-    [query]
+    [query, getRequestOrgId()]
   );
 
   return result.rows.map(mapWhereUsedPartSummaryRow);
@@ -5540,6 +5543,8 @@ async function prefetchPartMatchCandidatesByMpn(
   // Dynamic placeholder IN-list (not `= ANY($1::text[])`) for pg-mem planner parity, consistent
   // with the rest of this module.
   const placeholders = distinctLowerMpns.map((_, index) => `$${index + 1}`).join(", ");
+  // Tenant scope: BOM rows only ever match parts in the acting org's catalog.
+  const orgPlaceholder = `$${distinctLowerMpns.length + 1}`;
   const result = await client.query<DatabasePartMatchCandidateRow>(
     `
       SELECT
@@ -5551,9 +5556,10 @@ async function prefetchPartMatchCandidatesByMpn(
       FROM parts p
       JOIN manufacturers m ON m.id = p.manufacturer_id
       WHERE lower(p.mpn) IN (${placeholders})
+        AND p.org_id = ${orgPlaceholder}
       ORDER BY lower(p.mpn) ASC, m.name ASC, p.id ASC
     `,
-    distinctLowerMpns
+    [...distinctLowerMpns, getRequestOrgId()]
   );
 
   for (const row of result.rows) {
@@ -6193,7 +6199,7 @@ async function projectExists(databasePool: Pool | PoolClient, projectId: string)
  * Checks whether one internal catalog part exists before returning where-used reads.
  */
 async function partExists(databasePool: Pool | PoolClient, partId: string): Promise<boolean> {
-  const result = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2 LIMIT 1", [partId, getRequestOrgId()]);
 
   return result.rows.length > 0;
 }
@@ -9816,13 +9822,14 @@ async function readWhereUsedConnectorMatches(databasePool: Pool, query: string):
       LEFT JOIN part_approvals pa ON pa.part_id = p.id
       LEFT JOIN part_readiness_summaries prs ON prs.part_id = p.id
       WHERE prs.connector_class IS NOT NULL
+        AND p.org_id = $2
         AND (LOWER(p.id) = LOWER($1) OR LOWER(p.mpn) = LOWER($1) OR LOWER(p.mpn) LIKE '%' || LOWER($1) || '%')
       ORDER BY
         CASE WHEN LOWER(p.mpn) = LOWER($1) THEN 0 ELSE 1 END,
         p.mpn ASC
       LIMIT 12
     `,
-    [query]
+    [query, getRequestOrgId()]
   );
 
   const matchedConnectors = connectors.rows.map(mapWhereUsedPartSummaryRow);
@@ -9916,8 +9923,8 @@ export async function createPartSubstitutionInDatabase(
 
   try {
     const partsCheck = await databasePool.query<{ id: string }>(
-      "SELECT id FROM parts WHERE id IN ($1, $2)",
-      [originalPartId, input.substitutePartId]
+      "SELECT id FROM parts WHERE id IN ($1, $2) AND org_id = $3",
+      [originalPartId, input.substitutePartId, getRequestOrgId()]
     );
     const foundIds = new Set(partsCheck.rows.map((row) => row.id));
     if (!foundIds.has(originalPartId)) {
@@ -10000,7 +10007,7 @@ export async function readPartSubstitutionsForPartFromDatabase(partId: string): 
   }
 
   try {
-    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1", [partId]);
+    const partCheck = await databasePool.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2", [partId, getRequestOrgId()]);
     if (partCheck.rowCount === 0) {
       return { status: "not_found" };
     }
@@ -10679,9 +10686,10 @@ export async function readConnectorSetCatalogFromDatabase(
   }
   sqlParams.push(CONNECTOR_SET_MAX_CONNECTORS);
   const limitPlaceholder = `$${sqlParams.length}`;
-  // Tenant scope for the usage-count hint: only count this org's confirmed usage.
+  // Tenant scope: the same org param filters the connector catalog itself and the usage-count hint.
   sqlParams.push(getRequestOrgId());
   const usageOrgPlaceholder = `$${sqlParams.length}`;
+  whereClauses.push(`p.org_id = ${usageOrgPlaceholder}`);
 
   try {
     const connectors = await databasePool.query<DatabaseConnectorRow>(
@@ -11011,7 +11019,7 @@ export async function applyApprovalBatchInDatabase(
       if (existingRow) {
         existingMap.set(partId, existingRow.approval_status);
       }
-      const partsCheck = await client.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+      const partsCheck = await client.query<{ id: string }>("SELECT id FROM parts WHERE id = $1 AND org_id = $2 LIMIT 1", [partId, getRequestOrgId()]);
       if (partsCheck.rows.length > 0) {
         presentPartIds.add(partId);
       }

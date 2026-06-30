@@ -9,6 +9,7 @@ import { buildSearchPagination, buildSearchQueryTokens, buildSearchTokenAlternat
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
+import { getRequestOrgId, requireRequestOrgId } from "./request-context";
 import type {
   AccessoryRequirement,
   AssetPromotionAuditRecord,
@@ -452,6 +453,7 @@ interface DatabaseProviderAcquisitionJobRow {
   match_confidence: string;
   job_status: ProviderAcquisitionJobStatus;
   requested_by: string;
+  org_id: string | null;
   requested_at: Date | string;
   part_id: string | null;
   import_outcome: ProviderImportOutcome | null;
@@ -729,7 +731,7 @@ export async function readConnectorIntentRecordsFromDatabase(options: CatalogRea
 
   try {
     const filters: PartSearchFilters = { connectorClass: "connector" };
-    const searchFilter = buildSearchSqlFilter(filters, "any");
+    const searchFilter = withOrgScopedSearchFilter(buildSearchSqlFilter(filters, "any"));
     const sort = buildSearchPagination(0, filters).sort;
     const candidateIds = await readSearchPartIds(databasePool, searchFilter, sort, CONNECTOR_INTENT_CANDIDATE_CAP, 0, options);
 
@@ -767,6 +769,23 @@ export async function readConnectorIntentRecordsFromDatabase(options: CatalogRea
 }
 
 /**
+ * Adds the per-request tenant filter to a built search filter. Appended as the last WHERE param so it
+ * never disturbs the existing placeholder indices (queryText / limit / offset are computed from
+ * params.length downstream). A null tenant filters on `p.org_id = NULL` and so matches no rows,
+ * keeping anonymous catalog reads fail-closed. Kept out of the pure buildSearchSqlFilter so its unit
+ * tests stay deterministic.
+ */
+function withOrgScopedSearchFilter(filter: SearchSqlFilter): SearchSqlFilter {
+  const params = [...filter.params, getRequestOrgId()];
+  const orgClause = `p.org_id = $${params.length}`;
+  return {
+    ...filter,
+    params,
+    whereSql: filter.whereSql ? `${filter.whereSql}\n    AND ${orgClause}` : `WHERE ${orgClause}`
+  };
+}
+
+/**
  * Returns SQL-filtered and paginated search summary records without loading the full catalog.
  */
 export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilters = {}, options: CatalogReadOptions = {}): Promise<CatalogSearchReadResult> {
@@ -777,7 +796,7 @@ export async function readPartSearchRecordsFromDatabase(filters: PartSearchFilte
   }
 
   const cadAvailability = filters.cadAvailability ?? "any";
-  const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
+  const searchFilter = withOrgScopedSearchFilter(buildSearchSqlFilter(filters, cadAvailability));
   const totalCount = await readSearchResultCount(databasePool, searchFilter, options);
   const pagination = buildSearchPagination(totalCount, filters);
   const offset = (pagination.page - 1) * pagination.pageSize;
@@ -809,7 +828,7 @@ export async function readPartSearchFacetsFromDatabase(filters: PartSearchFilter
   }
 
   const cadAvailability = filters.cadAvailability ?? "any";
-  const searchFilter = buildSearchSqlFilter(filters, cadAvailability);
+  const searchFilter = withOrgScopedSearchFilter(buildSearchSqlFilter(filters, cadAvailability));
   const facets = await readSearchFacets(databasePool, searchFilter, options);
 
   return {
@@ -962,9 +981,10 @@ export async function readAssetDownloadTargetFromDatabase(partId: string, assetI
         SELECT id, part_id, asset_type, file_format, availability_status, source_url, storage_key
         FROM assets
         WHERE id = $1 AND part_id = $2
+          AND EXISTS (SELECT 1 FROM parts p WHERE p.id = assets.part_id AND p.org_id = $3)
         LIMIT 1
       `,
-      [assetId, partId]
+      [assetId, partId, getRequestOrgId()]
     );
 
     const row = result.rows[0];
@@ -1024,9 +1044,10 @@ export async function readAssetPreviewArtifactDownloadTargetFromDatabase(
                preview_artifact_storage_key, preview_artifact_format
         FROM assets
         WHERE id = $1 AND part_id = $2
+          AND EXISTS (SELECT 1 FROM parts p WHERE p.id = assets.part_id AND p.org_id = $3)
         LIMIT 1
       `,
-      [assetId, partId]
+      [assetId, partId, getRequestOrgId()]
     );
 
     const row = result.rows[0];
@@ -1666,6 +1687,10 @@ export async function updateSourceReconciliationInDatabase(
 async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, options: CatalogReadOptions = {}): Promise<PartSearchRecord[]> {
   try {
     const params = [partIds];
+    // The parts query is org-scoped (PART_ROWS_SQL filters p.org_id = $2). The child queries below
+    // load by part_id and are joined to parts in JS, so non-org rows are discarded during assembly —
+    // scoping the parts query alone keeps the output tenant-correct.
+    const partParams = [partIds, getRequestOrgId()];
     const [
       partRows,
       metricRows,
@@ -1691,7 +1716,7 @@ async function readCatalogRecords(databasePool: Pool, partIds: string[] | null, 
       sourceReconciliationRows,
       riskFlagRows
     ] = await Promise.all([
-      timedCatalogQuery<DatabasePartRow>(databasePool, "parts", PART_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabasePartRow>(databasePool, "parts", PART_ROWS_SQL, partParams, options),
       timedCatalogQuery<DatabaseMetricRow>(databasePool, "metrics", METRIC_ROWS_SQL, params, options),
       timedCatalogQuery<DatabaseAssetRow>(databasePool, "assets", ASSET_ROWS_SQL, params, options),
       timedCatalogQuery<DatabaseDatasheetRow>(databasePool, "datasheets", DATASHEET_ROWS_SQL, params, options),
@@ -1819,7 +1844,7 @@ async function readPartSummaryRecords(databasePool: Pool, partIds: string[], opt
   }
 
   try {
-    const partRows = await timedCatalogQuery<DatabasePartRow>(databasePool, "related_part_summaries", PART_ROWS_SQL, [partIds], options);
+    const partRows = await timedCatalogQuery<DatabasePartRow>(databasePool, "related_part_summaries", PART_ROWS_SQL, [partIds, getRequestOrgId()], options);
 
     return buildPartRecords(partRows.rows, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []);
   } catch (error) {
@@ -1837,6 +1862,9 @@ async function readPartSearchSummaryRecords(databasePool: Pool, partIds: string[
 
   try {
     const params = [partIds];
+    // Org-scope only the parts query (PART_ROWS_SQL filters p.org_id = $2); the child-table queries
+    // load by part_id and are joined to parts in JS, so non-org rows never surface in the output.
+    const partParams = [partIds, getRequestOrgId()];
     const [
       partRows,
       assetRows,
@@ -1856,7 +1884,7 @@ async function readPartSearchSummaryRecords(databasePool: Pool, partIds: string[
       sourceReconciliationRows,
       riskFlagRows
     ] = await Promise.all([
-      timedCatalogQuery<DatabasePartRow>(databasePool, "search_parts", PART_ROWS_SQL, params, options),
+      timedCatalogQuery<DatabasePartRow>(databasePool, "search_parts", PART_ROWS_SQL, partParams, options),
       timedCatalogQuery<DatabaseAssetRow>(databasePool, "search_assets", ASSET_ROWS_SQL, params, options),
       timedCatalogQuery<DatabaseDatasheetRow>(databasePool, "search_datasheets", DATASHEET_ROWS_SQL, params, options),
       timedCatalogQuery<DatabaseSourceRow>(databasePool, "search_sources", SOURCE_ROWS_SQL, params, options),
@@ -1933,6 +1961,7 @@ async function readLatestPartAcquisitionJobRow(
         paj.match_confidence,
         paj.job_status,
         paj.requested_by,
+        paj.org_id,
         paj.requested_at,
         paj.part_id,
         paj.import_outcome,
@@ -1972,6 +2001,7 @@ async function readLatestPartAcquisitionJobRow(
         paj.match_confidence,
         paj.job_status,
         paj.requested_by,
+        paj.org_id,
         paj.requested_at,
         paj.part_id,
         paj.import_outcome,
@@ -2344,6 +2374,7 @@ async function readProviderAcquisitionJobDetail(databasePool: Pool, jobId: strin
           match_confidence,
           job_status,
           requested_by,
+          org_id,
           requested_at,
           part_id,
           import_outcome,
@@ -2414,6 +2445,7 @@ function buildProviderAcquisitionJobRecord(
     matchConfidence: input.matchConfidence,
     matchType: input.matchType,
     mpn: input.mpn?.trim() || null,
+    orgId: requireRequestOrgId(),
     package: input.package?.trim() || null,
     partId: null,
     previousImportStatus: null,
@@ -2474,9 +2506,10 @@ async function persistProviderAcquisitionJobRow(client: PoolClient, job: Provide
         error_message,
         started_at,
         completed_at,
-        last_updated_at
+        last_updated_at,
+        org_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
     `,
     [
       job.id,
@@ -2499,7 +2532,8 @@ async function persistProviderAcquisitionJobRow(client: PoolClient, job: Provide
       job.errorMessage,
       job.startedAt,
       job.completedAt,
-      job.lastUpdatedAt
+      job.lastUpdatedAt,
+      job.orgId
     ]
   );
 }
@@ -2540,6 +2574,7 @@ function mapProviderAcquisitionJobRow(row: DatabaseProviderAcquisitionJobRow): P
     matchConfidence: toNumber(row.match_confidence),
     matchType: row.match_type,
     mpn: row.mpn,
+    orgId: row.org_id ?? "org-default",
     package: row.package_name,
     partId: row.part_id,
     previousImportStatus: row.previous_import_status,
@@ -4280,7 +4315,10 @@ const PART_ROWS_SQL = `
   JOIN manufacturers m ON m.id = p.manufacturer_id
   JOIN packages pk ON pk.id = p.package_id
   LEFT JOIN connector_families cf ON cf.id = p.connector_family_id
-  WHERE ($1::text[] IS NULL OR p.id = ANY($1::text[]))
+  -- org filter is placed before the id-list OR-group so pg-mem's planner handles the multi-join
+  -- (its "lookups on joins" limit trips when an OR-group precedes the AND across these joins).
+  WHERE p.org_id = $2
+    AND ($1::text[] IS NULL OR p.id = ANY($1::text[]))
   ORDER BY p.mpn ASC
 `;
 

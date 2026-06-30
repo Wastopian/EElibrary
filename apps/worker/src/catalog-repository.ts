@@ -36,6 +36,13 @@ import type {
 } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter } from "./provider-adapters";
 
+/**
+ * DEFAULT_ORG_ID is the tenant a worker write is attributed to when no acquisition job supplies one
+ * (e.g. the no-argument CLI ingest). Today every team is org-default; once org-on-signup lands the
+ * acquisition job always carries the acting org.
+ */
+const DEFAULT_ORG_ID = "org-default";
+
 /** pool is lazy so worker status can run without requiring a database. */
 let pool: Pool | null = null;
 
@@ -291,13 +298,13 @@ export async function replayLocalCatalogCrossPartRelations(adapter: ProviderAdap
 /**
  * Persists a normalized provider part into canonical Postgres tables.
  */
-export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart): Promise<void> {
+export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<void> {
   const databasePool = getDatabasePool();
   const client = await databasePool.connect();
 
   try {
     await client.query("BEGIN");
-    await persistNormalizedPartRows(client, normalizedPart);
+    await persistNormalizedPartRows(client, normalizedPart, orgId);
 
     await client.query("COMMIT");
   } catch (error) {
@@ -611,7 +618,7 @@ async function listPromotionDiagnostics(limit: number): Promise<PromotionDiagnos
 /**
  * Persists normalized rows using an existing transaction-capable client.
  */
-export async function persistNormalizedPartRows(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
+export async function persistNormalizedPartRows(client: PoolClient, normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<void> {
   const previousPartIdentity = await readStoredPartIdentity(client, normalizedPart.part.id);
 
   await persistManufacturer(client, normalizedPart.manufacturer);
@@ -621,7 +628,7 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
     await persistConnectorFamily(client, normalizedPart.connectorFamily);
   }
 
-  await persistPart(client, normalizedPart.part);
+  await persistPart(client, normalizedPart.part, orgId);
   await persistSourceRecord(client, normalizedPart.sourceRecord);
 
   for (const asset of normalizedPart.assets) {
@@ -1027,7 +1034,7 @@ async function persistConnectorFamily(client: PoolClient, connectorFamily: Conne
 /**
  * Upserts one canonical part row.
  */
-async function persistPart(client: PoolClient, part: Part): Promise<void> {
+async function persistPart(client: PoolClient, part: Part, orgId: string): Promise<void> {
   await client.query(
     `
       INSERT INTO parts (
@@ -1040,9 +1047,10 @@ async function persistPart(client: PoolClient, part: Part): Promise<void> {
         package_id,
         connector_family_id,
         trust_score,
+        org_id,
         last_updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (id) DO UPDATE SET
         mpn = EXCLUDED.mpn,
         description = EXCLUDED.description,
@@ -1054,7 +1062,9 @@ async function persistPart(client: PoolClient, part: Part): Promise<void> {
         trust_score = EXCLUDED.trust_score,
         last_updated_at = EXCLUDED.last_updated_at
     `,
-    [part.id, part.mpn, part.description, part.manufacturerId, part.category, part.lifecycleStatus, part.packageId, part.connectorFamilyId, part.trustScore, part.lastUpdatedAt]
+    // org_id is intentionally NOT in the ON CONFLICT SET: a re-ingest must never change which org owns
+    // an existing part. The acting org comes from the acquisition job (the worker has no request context).
+    [part.id, part.mpn, part.description, part.manufacturerId, part.category, part.lifecycleStatus, part.packageId, part.connectorFamilyId, part.trustScore, orgId, part.lastUpdatedAt]
   );
 }
 

@@ -34,14 +34,15 @@ It is groundwork: the `orgId` is now threaded everywhere so the enforcement step
 
 ## Enforcement plan (Increment 2)
 
-The enforcement mechanism plus the first scoped domain shipped in **Increment 2a** (below). The
-remaining steps (other domains, RLS, org-on-signup) are still pending.
+The enforcement mechanism plus the first scoped domains shipped in **Increment 2a** (project-core)
+and **Increment 2b** (catalog/parts core), below. The remaining steps (the rest of the catalog
+child tables, other domains, RLS, org-on-signup) are still pending.
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
-   project-core tables; pending for the rest.*
+   project-core tables and `parts` / `provider_acquisition_jobs`; pending for the rest.*
 2. Thread `session.orgId` into every store read/write: **filter** on read, **stamp** on insert. Roll
    out and test domain by domain (projects → catalog → interconnects → the rest). — *done for
-   project-core.*
+   project-core and the parts catalog (read/search/detail + the worker that creates parts).*
 3. Add Postgres **Row-Level Security** policies as a defense-in-depth backstop, so a forgotten
    `WHERE org_id = ...` cannot leak across tenants. (Requires a per-request `SET LOCAL app.current_org`
    inside a transaction-scoped connection — a store-layer change to design carefully with the pool;
@@ -75,6 +76,36 @@ remaining steps (other domains, RLS, org-on-signup) are still pending.
   writes throw, a cross-tenant update is a no-op, and overlap / where-used never surface another org's
   projects. Full cross-org isolation in the browser awaits org-on-signup (step 4); today every user
   is `org-default`.
+
+### Increment 2b — catalog/parts core + worker (shipped)
+
+- **Per-tenant identity.** `parts` gains `org_id` (migration `049_org_scope_parts.sql`); the global
+  `(manufacturer_id, mpn)` uniqueness becomes per-tenant `(org_id, manufacturer_id, mpn)` so each team
+  can hold its own copy of a public part. Part **ids stay opaque** (no FK re-keying); existing rows
+  backfill to `org-default`. Org-scoped id *generation* (so two orgs ingesting the same MPN get
+  distinct ids) is deferred to org-on-signup — until then only `org-default` ingests, so the existing
+  deterministic ids cannot collide.
+- **Reads scoped.** Catalog search/facets (`buildSearchSqlFilter` call sites), detail, full-catalog,
+  and connector-intent reads filter `parts.org_id`; the asset-download / preview-artifact gates verify
+  the part is the org's. The cross-domain `parts` ripple is scoped too: `partExists` and the
+  BOM-match-by-MPN / connector pickers / where-used part matchers in `project-memory-store.ts` (plus
+  `supply-offers.ts` and `document-control.ts` part gates) only ever resolve the acting org's catalog.
+- **Worker write path.** Parts are created asynchronously by the worker (`catalog-repository.ts`
+  `persistPart`), which has no request context. `provider_acquisition_jobs` gains `org_id` (stamped by
+  the API at enqueue via `requireRequestOrgId()`); the worker reads it on claim and threads it
+  (`runProviderPartImport(..., orgId)` → `persistPart`) so the new part is stamped with the job's org.
+  `org_id` is intentionally not in `persistPart`'s `ON CONFLICT` update, so a re-ingest never changes
+  ownership. **Manufacturers / packages / connector families stay global.**
+- **Still global this increment** (accepted transitional state): the ~30 part-attached child tables
+  (assets, approvals, readiness, supply offerings, datasheets/documents, connector-intelligence,
+  issues, risk flags, reviews, engineering records). They are keyed by the now-org-scoped part, so
+  they are partitioned-by-association until scoped in follow-ups. The catalog is now tenant-private —
+  anonymous browse returns nothing (the seed fallback still serves demo data when the DB is
+  unconfigured).
+- **Proof.** `provider-import-db.test.ts` asserts a part owned by org A is invisible to org B's
+  search/detail, anonymous reads see nothing, and each org resolves only its own copy of a shared MPN;
+  `provider-acquisition-jobs.test.ts` asserts the worker threads the claimed job's org into the part
+  import.
 
 ## Later
 

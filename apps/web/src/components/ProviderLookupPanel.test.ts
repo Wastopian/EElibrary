@@ -310,6 +310,7 @@ function buildProviderJobDetail(
     matchConfidence: 1,
     matchType: "exact_provider_part_id",
     mpn: "RC-02W300JT",
+    orgId: "org-default",
     package: "0402",
     partId: jobStatus === "succeeded" ? "part-jlcparts-c1091" : null,
     previousImportStatus: null,

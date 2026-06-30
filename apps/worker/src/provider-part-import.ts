@@ -59,7 +59,7 @@ export function isRegisteredProviderImportId(providerId: string): boolean {
 /**
  * Fetches, normalizes, and persists one provider part request.
  */
-export async function runProviderPartImport(adapterId: string, request: ProviderPartRequest): Promise<ImportResultSummary> {
+export async function runProviderPartImport(adapterId: string, request: ProviderPartRequest, orgId: string = "org-default"): Promise<ImportResultSummary> {
   const adapter = getProviderAdapter(adapterId);
   const startedAt = performance.now();
   const timings: WorkerTiming[] = [];
@@ -79,7 +79,7 @@ export async function runProviderPartImport(adapterId: string, request: Provider
       (status) => status ?? "none"
     );
 
-    await timeWorkerOperation("repository.persist_normalized_part", () => persistNormalizedPart(normalizedPart), timings, () => normalizedPart.part.id);
+    await timeWorkerOperation("repository.persist_normalized_part", () => persistNormalizedPart(normalizedPart, orgId), timings, () => normalizedPart.part.id);
 
     return {
       durationMs: roundDuration(performance.now() - startedAt),

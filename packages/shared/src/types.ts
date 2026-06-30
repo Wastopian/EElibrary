@@ -3663,6 +3663,8 @@ export interface ProviderAcquisitionJob {
   matchConfidence: number;
   jobStatus: ProviderAcquisitionJobStatus;
   requestedBy: string;
+  /** Tenant the job acts within; the worker stamps it onto the part it creates. */
+  orgId: string;
   requestedAt: string;
   partId: string | null;
   importOutcome: ProviderImportOutcome | null;

@@ -57,6 +57,7 @@ interface DatabaseProviderAcquisitionJobRow {
   match_confidence: string;
   job_status: ProviderAcquisitionJobStatus;
   requested_by: string;
+  org_id: string | null;
   requested_at: Date | string;
   part_id: string | null;
   import_outcome: ProviderImportOutcome | null;
@@ -183,11 +184,11 @@ function buildBulkInsertQuery(
       )
       INSERT INTO provider_acquisition_jobs (
         id, provider_id, provider_part_key, requested_lookup, manufacturer_name, mpn,
-        match_type, match_confidence, job_status, requested_by, requested_at, last_updated_at
+        match_type, match_confidence, job_status, requested_by, org_id, requested_at, last_updated_at
       )
       SELECT
         c.id, $1, c.provider_part_key, c.provider_part_key, c.manufacturer_name, c.mpn,
-        'exact_provider_part_id', 1.0, 'queued', $2, now(), now()
+        'exact_provider_part_id', 1.0, 'queued', $2, 'org-default', now(), now()
       FROM candidates c
       WHERE NOT EXISTS (
         SELECT 1 FROM source_records sr
@@ -257,7 +258,8 @@ export async function processNextProviderAcquisitionJob(): Promise<ProviderAcqui
   try {
     const summary = await runProviderPartImportImpl(
       claimedJob.providerId,
-      buildProviderAcquisitionImportRequest(claimedJob)
+      buildProviderAcquisitionImportRequest(claimedJob),
+      claimedJob.orgId
     );
 
     if (summary.importStatus !== "imported") {
@@ -345,6 +347,7 @@ async function claimNextProviderAcquisitionJob(): Promise<ProviderAcquisitionJob
           match_confidence,
           job_status,
           requested_by,
+          org_id,
           requested_at,
           part_id,
           import_outcome,
@@ -609,6 +612,7 @@ function mapProviderAcquisitionJobRow(row: DatabaseProviderAcquisitionJobRow): P
     jobStatus: row.job_status,
     lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
     manufacturerName: row.manufacturer_name,
+    orgId: row.org_id ?? "org-default",
     matchConfidence: Number(row.match_confidence),
     matchType: row.match_type,
     mpn: row.mpn,
