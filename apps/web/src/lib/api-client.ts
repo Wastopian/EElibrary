@@ -2221,7 +2221,9 @@ export async function resolveConnectorSetIntent(input: ConnectorSetIntentInput):
   const response = await fetch(buildApiUrl("/connector-sets/resolve"), {
     body: JSON.stringify(input),
     cache: "no-store",
-    headers: { "Content-Type": "application/json" },
+    // Read-via-POST: it resolves the tenant-scoped connector catalog, so it must carry the token like
+    // every other read (a server-component caller does not pass through the cookie-minting proxy).
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     method: "POST"
   });
 
