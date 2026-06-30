@@ -535,8 +535,8 @@ async function seedProjects(client) {
 async function insertProject(client, project) {
   await client.query(
     `
-      INSERT INTO projects (id, project_key, name, description, owner, status, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO projects (id, project_key, name, description, owner, status, org_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, 'org-default', $7, $8)
     `,
     [
       project.id,
@@ -558,9 +558,9 @@ async function insertRevision(client, project, revision) {
   await client.query(
     `
       INSERT INTO project_revisions (
-        id, project_id, revision_label, revision_status, source_reference, released_at, created_at, updated_at
+        id, project_id, revision_label, revision_status, source_reference, released_at, org_id, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, 'org-default', $7, $8)
     `,
     [
       revision.id,
@@ -583,9 +583,9 @@ async function insertBomImport(client, project, bomImport) {
     `
       INSERT INTO bom_imports (
         id, project_id, project_revision_id, source_filename, source_format, storage_key,
-        import_status, column_mapping, import_summary, imported_by, created_at, updated_at
+        import_status, column_mapping, import_summary, imported_by, org_id, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, 'csv', NULL, 'processed', $5::jsonb, $6::jsonb, 'seed-demo-project', $7, $7)
+      VALUES ($1, $2, $3, $4, 'csv', NULL, 'processed', $5::jsonb, $6::jsonb, 'seed-demo-project', 'org-default', $7, $7)
     `,
     [
       bomImport.id,
@@ -608,11 +608,11 @@ async function insertBomLine(client, project, bomImport, line) {
       INSERT INTO bom_lines (
         id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity,
         raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes,
-        raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at
+        raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6::text[], $7, $8, $9, $10, $11, $12,
-        $13::jsonb, $14, $15, $16, $17, $17
+        $13::jsonb, $14, $15, $16, 'org-default', $17, $17
       )
     `,
     [
@@ -649,9 +649,9 @@ async function insertProjectUsage(client, project, bomImport, line, snapshot) {
     `
       INSERT INTO project_part_usages (
         id, project_id, project_revision_id, bom_line_id, part_id, usage_context,
-        designators, quantity, usage_status, approval_snapshot, readiness_snapshot, created_at, updated_at
+        designators, quantity, usage_status, approval_snapshot, readiness_snapshot, org_id, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10::jsonb, $11::jsonb, $12, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10::jsonb, $11::jsonb, 'org-default', $12, $12)
     `,
     [
       buildUsageId(line.id),

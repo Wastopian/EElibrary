@@ -28,7 +28,8 @@ import {
   syncProjectDocumentExtractions
 } from "./project-document-extraction-store";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
-import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionFromRequest, requireAdmin } from "./auth";
+import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionForContext, readSessionFromRequest, requireAdmin } from "./auth";
+import { runWithRequestContext } from "./request-context";
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
 import type { AuditEventListFilters } from "./audit-log";
@@ -217,7 +218,17 @@ const requestAuditContexts = new WeakMap<ServerResponse, RequestAuditContext>();
 /**
  * Handles every incoming HTTP request with explicit route boundaries.
  */
+/**
+ * Public entry point: resolves the acting tenant once and runs the request inside its org context
+ * so every store query can scope by org without threading orgId through handler/store signatures.
+ */
 export async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const session = await readSessionForContext(request);
+  return runWithRequestContext(session?.orgId ?? null, () => handleRequestImpl(request, response));
+}
+
+/** Internal request handler; always runs inside a tenant context established by handleRequest. */
+async function handleRequestImpl(request: IncomingMessage, response: ServerResponse): Promise<void> {
   if (!request.url) {
     sendJson(response, 400, { error: "Missing request URL" });
     return;

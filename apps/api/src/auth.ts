@@ -154,6 +154,21 @@ export async function requireAuth(
   return session;
 }
 
+/**
+ * Resolves the acting session for the per-request tenant context without erroring. Returns the
+ * test-mode admin session when the explicit opt-in is set, otherwise a verified bearer session, or
+ * null when neither is present. Used by handleRequest to establish the org context for every request.
+ */
+export async function readSessionForContext(request: IncomingMessage): Promise<ApiSession | null> {
+  const testSession = readTestSession();
+
+  if (testSession) {
+    return testSession;
+  }
+
+  return await verifyBearerToken(request.headers["authorization"] as string | undefined);
+}
+
 /** readOptionalSession returns a verified session when one is present without changing anonymous lookup flows. */
 export async function readOptionalSession(request: IncomingMessage): Promise<ApiSession | null> {
   const session = await verifyBearerToken(request.headers["authorization"] as string | undefined);
