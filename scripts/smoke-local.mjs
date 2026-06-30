@@ -8,6 +8,7 @@
  * `npm run dev` (or against a remote env where DATABASE_URL/API base url match).
  */
 
+import { createHmac } from "node:crypto";
 import { validateLocalEnv } from "./lib/env-validate.mjs";
 import { DEMO_CABLE_ASSEMBLY_ID, DEMO_PROJECT_ID, DEMO_PROJECT_KEY } from "./seed-demo-project.mjs";
 
@@ -16,14 +17,54 @@ const webBaseUrl = (process.env.EE_LIBRARY_WEB_BASE_URL ?? `http://127.0.0.1:${p
 const requireWebWorkspace = (process.env.EE_SMOKE_REQUIRE_WEB ?? "").trim() === "1";
 const checks = [];
 
+/** SMOKE_ORG_ID is the tenant the smoke runs as. The demo seed belongs to the shared default org. */
+const SMOKE_ORG_ID = "org-default";
+
+/**
+ * Mints an HS256 bearer token the API will accept, carrying the tenant so org-scoped reads
+ * (projects, BOM, where-used) resolve. Tenant isolation means an anonymous request has no org and
+ * sees nothing, so the smoke must authenticate the same way a signed-in teammate does. Returns null
+ * when AUTH_SECRET is unset (the auth-related checks then run anonymously and surface their own miss).
+ */
+function mintSmokeBearerToken(env = process.env) {
+  const secret = env.AUTH_SECRET;
+  if (typeof secret !== "string" || secret.length === 0) {
+    return null;
+  }
+
+  const base64url = (input) =>
+    Buffer.from(input).toString("base64").replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = base64url(
+    JSON.stringify({ sub: "smoke-admin", role: "admin", orgId: SMOKE_ORG_ID, iat: now, exp: now + 600 })
+  );
+  const signingInput = `${header}.${payload}`;
+  const signature = createHmac("sha256", Buffer.from(secret, "utf8"))
+    .update(signingInput)
+    .digest("base64")
+    .replace(/\+/gu, "-")
+    .replace(/\//gu, "_")
+    .replace(/=+$/u, "");
+
+  return `${signingInput}.${signature}`;
+}
+
+const smokeBearerToken = mintSmokeBearerToken();
+
 function check(name, status, detail) {
   checks.push({ detail, name, status });
 }
 
 async function safeFetch(path, init) {
   const url = `${apiBaseUrl}${path}`;
+  // Authenticate as an org-default teammate so tenant-scoped reads resolve. Caller-supplied headers
+  // win on conflict; global (unscoped) endpoints like /parts are unaffected by the extra header.
+  const authHeaders = smokeBearerToken ? { Authorization: `Bearer ${smokeBearerToken}` } : {};
+  const headers = { ...authHeaders, ...(init?.headers ?? {}) };
   try {
-    const response = await fetch(url, { cache: "no-store", ...init });
+    const response = await fetch(url, { cache: "no-store", ...init, headers });
     let body = null;
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {

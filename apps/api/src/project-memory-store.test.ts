@@ -40,6 +40,7 @@ import {
   readProjectFleetRiskFromDatabase,
   readProjectFollowUpsFromDatabase,
   readProjectOverlapPanelFromDatabase,
+  readProjectPartUsagesFromDatabase,
   readProjectRevisionApprovalGatesFromDatabase,
   readProjectRevisionCompareFromDatabase,
   readProjectsFromDatabase,
@@ -58,6 +59,7 @@ import {
   verifyExportBundleInDatabase
 } from "./project-memory-store";
 import { setStorageClientForTests } from "./file-storage";
+import { enterRequestContextForTests, runWithRequestContext } from "./request-context";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
@@ -177,8 +179,8 @@ test("readProjectOverlapPanelFromDatabase returns scanned_count=0 and no prior p
 
   try {
     await pool.query(
-      `INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
-       VALUES ('project-fresh', 'FRESH', 'Fresh Empty', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`
+      `INSERT INTO projects (id, project_key, name, status, org_id, created_at, updated_at)
+       VALUES ('project-fresh', 'FRESH', 'Fresh Empty', 'active', 'org-default', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`
     );
 
     const result = await readProjectOverlapPanelFromDatabase("project-fresh");
@@ -256,40 +258,40 @@ test("readProjectOverlapPanelFromDatabase ranks prior projects by shared confirm
     // Add a second confirmed usage for the current project (project-alpha) pointing at the connector,
     // so this BOM has two confirmed parts (LDO + Connector).
     await pool.query(
-      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
-       VALUES ('usage-alpha-j1', 'project-alpha', 'rev-alpha-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', '2026-04-30T00:06:30.000Z', '2026-04-30T00:06:30.000Z')`
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-alpha-j1', 'project-alpha', 'rev-alpha-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', 'org-default', '2026-04-30T00:06:30.000Z', '2026-04-30T00:06:30.000Z')`
     );
 
     // Prior project beta: shares the LDO part. Heavier overlap target.
     await pool.query(
-      `INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
-       VALUES ('project-beta', 'BETA', 'Beta Build', 'active', '2026-04-15T00:00:00.000Z', '2026-04-15T00:00:00.000Z')`
+      `INSERT INTO projects (id, project_key, name, status, org_id, created_at, updated_at)
+       VALUES ('project-beta', 'BETA', 'Beta Build', 'active', 'org-default', '2026-04-15T00:00:00.000Z', '2026-04-15T00:00:00.000Z')`
     );
     await pool.query(
-      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
-       VALUES ('rev-beta-a', 'project-beta', 'A', 'released', 'beta-a', '2026-04-15T00:01:00.000Z', '2026-04-15T00:01:00.000Z')`
+      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at)
+       VALUES ('rev-beta-a', 'project-beta', 'A', 'released', 'beta-a', 'org-default', '2026-04-15T00:01:00.000Z', '2026-04-15T00:01:00.000Z')`
     );
     await pool.query(
-      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
-       VALUES ('usage-beta-u1', 'project-beta', 'rev-beta-a', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', '2026-04-15T00:02:00.000Z', '2026-04-15T00:02:00.000Z')`
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-beta-u1', 'project-beta', 'rev-beta-a', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', 'org-default', '2026-04-15T00:02:00.000Z', '2026-04-15T00:02:00.000Z')`
     );
     await pool.query(
-      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
-       VALUES ('usage-beta-j1', 'project-beta', 'rev-beta-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', '2026-04-15T00:03:00.000Z', '2026-04-15T00:03:00.000Z')`
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-beta-j1', 'project-beta', 'rev-beta-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', 'org-default', '2026-04-15T00:03:00.000Z', '2026-04-15T00:03:00.000Z')`
     );
 
     // Prior project gamma: shares only the connector. Lighter overlap target.
     await pool.query(
-      `INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
-       VALUES ('project-gamma', 'GAMMA', 'Gamma Tester', 'active', '2026-04-20T00:00:00.000Z', '2026-04-20T00:00:00.000Z')`
+      `INSERT INTO projects (id, project_key, name, status, org_id, created_at, updated_at)
+       VALUES ('project-gamma', 'GAMMA', 'Gamma Tester', 'active', 'org-default', '2026-04-20T00:00:00.000Z', '2026-04-20T00:00:00.000Z')`
     );
     await pool.query(
-      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
-       VALUES ('rev-gamma-a', 'project-gamma', 'A', 'released', 'gamma-a', '2026-04-20T00:01:00.000Z', '2026-04-20T00:01:00.000Z')`
+      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at)
+       VALUES ('rev-gamma-a', 'project-gamma', 'A', 'released', 'gamma-a', 'org-default', '2026-04-20T00:01:00.000Z', '2026-04-20T00:01:00.000Z')`
     );
     await pool.query(
-      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
-       VALUES ('usage-gamma-j1', 'project-gamma', 'rev-gamma-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', '2026-04-20T00:02:00.000Z', '2026-04-20T00:02:00.000Z')`
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-gamma-j1', 'project-gamma', 'rev-gamma-a', NULL, 'part-connector-jst', '{"J1"}', 1, 'proposed', 'org-default', '2026-04-20T00:02:00.000Z', '2026-04-20T00:02:00.000Z')`
     );
 
     const result = await readProjectOverlapPanelFromDatabase("project-alpha");
@@ -1133,8 +1135,8 @@ test("overlap panel surfaces confirmed bit_us/blocking engineering memory for co
   try {
     // project-alpha confirms the LDO so it is in scannedParts for overlap.
     await pool.query(
-      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
-       VALUES ('usage-alpha-ldo', 'project-alpha', 'rev-alpha-a', NULL, 'part-memory-ldo', '{"U9"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-alpha-ldo', 'project-alpha', 'rev-alpha-a', NULL, 'part-memory-ldo', '{"U9"}', 1, 'proposed', 'org-default', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`
     );
 
     const bitUs = await createPartEngineeringRecordInDatabase("part-memory-ldo", {
@@ -1184,8 +1186,8 @@ test("BOM match passively drafts a lifecycle-risk record for a non-active part r
   try {
     // A prior project already confirmed the LDO, and it has since gone non-active.
     await pool.query(
-      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, created_at, updated_at)
-       VALUES ('usage-prior-ldo', 'project-prior-x', 'rev-prior-x', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-prior-ldo', 'project-prior-x', 'rev-prior-x', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', 'org-default', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
     );
     await pool.query("UPDATE parts SET lifecycle_status = 'not_recommended' WHERE id = 'part-memory-ldo'");
 
@@ -1431,8 +1433,12 @@ test("project memory store matches BOM rows and creates usage only for confirmed
  */
 test("project memory routes return project, BOM line, and usage read contracts", async () => {
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   const pool = createProjectMemoryPool(true);
   process.env.NODE_ENV = "test";
+  // Tenant scoping means the handler resolves the acting org from the session; the test session
+  // puts the request in org-default so these read routes return the seeded org-default data.
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   setProjectMemoryStorePoolForTests(pool);
 
   try {
@@ -1531,6 +1537,7 @@ test("project memory routes return project, BOM line, and usage read contracts",
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
     restoreNodeEnv(previousNodeEnv);
+    restoreTestAuth(previousTestAuth);
   }
 });
 
@@ -2292,8 +2299,8 @@ test("readBomImportDiagnosticsFromDatabase surfaces approvedSubstituteHints for 
     // The seeded weak row 'RC-UNKNOWN' is already weak_match. Let's add a substitution where the raw MPN
     // 'RC-UNKNOWN' itself can't match — instead, seed a row with raw MPN matching the LDO.
     await pool.query(
-      `INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at)
-         VALUES ('line-alpha-3', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 3, '{"R2"}', 5, 'RC0603FR-0710KL', 'Yageo', 'Resistor (orphan)', '{"row":3}'::jsonb, NULL, 'weak_match', 0.5, '2026-04-30T00:11:00.000Z', '2026-04-30T00:11:00.000Z')`
+      `INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at)
+         VALUES ('line-alpha-3', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 3, '{"R2"}', 5, 'RC0603FR-0710KL', 'Yageo', 'Resistor (orphan)', '{"row":3}'::jsonb, NULL, 'weak_match', 0.5, 'org-default', '2026-04-30T00:11:00.000Z', '2026-04-30T00:11:00.000Z')`
     );
 
     // Approve LDO -> Resistor substitution (artificial; just enough to wire matching to raw MPN 'RC0603FR-0710KL')
@@ -2566,7 +2573,7 @@ test("readApprovalBatchCandidatesFromDatabase returns matched parts with approva
 
   try {
     // Add a second matched line to project-alpha that points at a different (un-approved) part.
-    await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at) VALUES ('line-alpha-3', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 3, '{"R2"}', 1, 'RC0603FR-0710KL', 'Yageo', '10K resistor', '{"row":3}'::jsonb, 'part-memory-resistor', 'matched', 1, '2026-04-30T00:05:30.000Z', '2026-04-30T00:05:30.000Z')`);
+    await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at) VALUES ('line-alpha-3', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 3, '{"R2"}', 1, 'RC0603FR-0710KL', 'Yageo', '10K resistor', '{"row":3}'::jsonb, 'part-memory-resistor', 'matched', 1, 'org-default', '2026-04-30T00:05:30.000Z', '2026-04-30T00:05:30.000Z')`);
 
     const result = await readApprovalBatchCandidatesFromDatabase("project-alpha");
     assert.equal(result.status, "available");
@@ -2819,10 +2826,10 @@ test("createExportBundleInDatabase assigns unique asset paths when project parts
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_mod'");
     await pool.query("ALTER TABLE assets ADD COLUMN provenance TEXT NOT NULL DEFAULT 'official'");
     await pool.query(`
-      INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, created_at, updated_at)
+      INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, org_id, created_at, updated_at)
       VALUES
-        ('usage-alpha-dup-a', 'project-alpha', 'rev-alpha-a', NULL, 'part-dup-alpha', 'Second-source regulator', '{"U2"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z'),
-        ('usage-alpha-dup-b', 'project-alpha', 'rev-alpha-a', NULL, 'part-dup-beta', 'Alternate-source regulator', '{"U3"}', 1, 'proposed', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')
+        ('usage-alpha-dup-a', 'project-alpha', 'rev-alpha-a', NULL, 'part-dup-alpha', 'Second-source regulator', '{"U2"}', 1, 'proposed', 'org-default', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z'),
+        ('usage-alpha-dup-b', 'project-alpha', 'rev-alpha-a', NULL, 'part-dup-beta', 'Alternate-source regulator', '{"U3"}', 1, 'proposed', 'org-default', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')
     `);
     await pool.query(`
       INSERT INTO assets (id, part_id, asset_type, storage_key, file_hash, source_url, export_status, validation_status, last_updated_at, file_format, provenance)
@@ -3362,6 +3369,174 @@ test("verifyExportBundleInDatabase returns not_found for an unknown bundle id", 
 });
 
 /**
+ * Verifies tenant isolation: project-core reads only return the request org's rows. The seeded
+ * project-alpha belongs to org-default (the harness default context); a read under a different org
+ * sees nothing, and a read with no tenant context fails closed to empty / not_found.
+ */
+test("tenant isolation: project-core reads are scoped to the request org", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // Sanity: project-alpha is visible to its own org (org-default, the harness default context).
+    const own = await readProjectsFromDatabase();
+    assert.equal(own.status, "available");
+    if (own.status !== "available") throw new Error("own read unavailable");
+    assert.ok(own.response.projects.some((entry) => entry.project.id === "project-alpha"), "alpha is visible to org-default");
+
+    // A different org sees nothing of org-default's project, BOM, or usage.
+    await runWithRequestContext("org-other", async () => {
+      const list = await readProjectsFromDatabase();
+      assert.equal(list.status, "available");
+      if (list.status !== "available") throw new Error("list unavailable");
+      assert.deepEqual(list.response.projects, [], "alpha is invisible to org-other");
+
+      const detail = await readProjectDetailFromDatabase("project-alpha");
+      assert.equal(detail.status, "not_found", "alpha detail reads not_found for org-other");
+
+      const usages = await readProjectPartUsagesFromDatabase("project-alpha");
+      assert.equal(usages.status, "not_found", "alpha usages read not_found for org-other");
+
+      const lines = await readBomImportDiagnosticsFromDatabase("bom-alpha-a");
+      assert.equal(lines.status, "not_found", "alpha BOM import is not_found for org-other");
+    });
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the fail-closed default: a request with no resolved tenant (anonymous) reads nothing and
+ * cannot write. This is the property that keeps an unauthenticated request from seeing tenant data.
+ */
+test("tenant isolation: requests with no tenant context fail closed", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await runWithRequestContext(null, async () => {
+      const list = await readProjectsFromDatabase();
+      assert.equal(list.status, "available");
+      if (list.status !== "available") throw new Error("list unavailable");
+      assert.deepEqual(list.response.projects, [], "no tenant => no projects");
+
+      const detail = await readProjectDetailFromDatabase("project-alpha");
+      assert.equal(detail.status, "not_found", "no tenant => detail not_found");
+
+      // Writes must refuse rather than create an orphaned, tenant-less row.
+      await assert.rejects(
+        () =>
+          createProjectInDatabase({
+            initialRevisionLabel: "Rev A",
+            name: "No Tenant",
+            owner: "hardware",
+            projectKey: "NOORG",
+            status: "prototype"
+          }),
+        /tenant/i,
+        "a write with no tenant context throws"
+      );
+    });
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a cross-tenant mutation is a no-op: another org cannot update org-default's project, and
+ * the row is left untouched. Guards against the "scope reads but forget writes" half-measure.
+ */
+test("tenant isolation: a cross-tenant update affects nothing", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await runWithRequestContext("org-other", async () => {
+      const result = await updateProjectInDatabase("project-alpha", {
+        description: "Hijacked notes.",
+        name: "Hijacked Name",
+        owner: "attacker",
+        status: "production"
+      });
+      assert.equal(result.status, "not_found", "org-other cannot update org-default's project");
+    });
+
+    // Under its own org the project is untouched.
+    const detail = await readProjectDetailFromDatabase("project-alpha");
+    assert.equal(detail.status, "available");
+    if (detail.status !== "available") throw new Error("detail unavailable");
+    assert.equal(detail.response.project.name, "Alpha Controller", "name is unchanged by the cross-tenant write");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies cross-project signals (overlap ranking and part where-used) never leak across tenants
+ * even when two orgs use the same global catalog part. This is the highest-value isolation case:
+ * the reuse signals are exactly the queries that scan usage across projects.
+ */
+test("tenant isolation: overlap and part where-used never surface another org's projects", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // A second org's project that uses the same global part (part-memory-ldo) as project-alpha.
+    await pool.query(
+      `INSERT INTO projects (id, project_key, name, status, org_id, created_at, updated_at)
+       VALUES ('project-other', 'OTHER', 'Other Org Build', 'active', 'org-other', '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at)
+       VALUES ('rev-other-a', 'project-other', 'A', 'released', 'other-a', 'org-other', '2026-03-01T00:01:00.000Z', '2026-03-01T00:01:00.000Z')`
+    );
+    await pool.query(
+      `INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, designators, quantity, usage_status, org_id, created_at, updated_at)
+       VALUES ('usage-other-ldo', 'project-other', 'rev-other-a', NULL, 'part-memory-ldo', '{"U1"}', 1, 'proposed', 'org-other', '2026-03-01T00:02:00.000Z', '2026-03-01T00:02:00.000Z')`
+    );
+
+    // Overlap for project-alpha (org-default) must not rank the other org's project.
+    const overlap = await readProjectOverlapPanelFromDatabase("project-alpha");
+    assert.equal(overlap.status, "available");
+    if (overlap.status !== "available") throw new Error("overlap unavailable");
+    assert.ok(
+      !overlap.response.priorProjects.some((entry) => entry.project.id === "project-other"),
+      "the other org's project is excluded from overlap ranking"
+    );
+
+    // Part where-used under org-default sees only org-default usage of the shared part.
+    const whereUsed = await readPartWhereUsedFromDatabase("part-memory-ldo");
+    assert.equal(whereUsed.status, "available");
+    if (whereUsed.status !== "available") throw new Error("whereUsed unavailable");
+    assert.ok(
+      whereUsed.response.usages.every((usage) => usage.project.id !== "project-other"),
+      "the other org's usage is excluded from where-used under org-default"
+    );
+
+    // Symmetric check: under org-other, where-used sees its own usage and not org-default's.
+    await runWithRequestContext("org-other", async () => {
+      const otherWhereUsed = await readPartWhereUsedFromDatabase("part-memory-ldo");
+      assert.equal(otherWhereUsed.status, "available");
+      if (otherWhereUsed.status !== "available") throw new Error("otherWhereUsed unavailable");
+      assert.ok(
+        otherWhereUsed.response.usages.some((usage) => usage.project.id === "project-other"),
+        "org-other sees its own usage"
+      );
+      assert.ok(
+        otherWhereUsed.response.usages.every((usage) => usage.project.id !== "project-alpha"),
+        "org-other does not see org-default's usage"
+      );
+    });
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates a pg-mem project-memory database with optional fixture rows.
  */
 function createProjectMemoryPool(seedRows: boolean): TestPool {
@@ -3426,6 +3601,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       description TEXT NOT NULL DEFAULT '',
       owner TEXT,
       status TEXT NOT NULL DEFAULT 'active',
+      org_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -3437,6 +3613,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       revision_status TEXT NOT NULL DEFAULT 'draft',
       source_reference TEXT,
       released_at TIMESTAMPTZ,
+      org_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -3452,6 +3629,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       column_mapping JSONB NOT NULL DEFAULT '{}'::jsonb,
       import_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
       imported_by TEXT,
+      org_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -3476,6 +3654,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       instantiated_from_circuit_block_id TEXT,
       instantiated_from_circuit_block_part_id TEXT,
       instantiated_at TIMESTAMPTZ,
+      org_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -3538,6 +3717,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       usage_status TEXT NOT NULL DEFAULT 'proposed',
       approval_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
       readiness_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      org_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -3688,8 +3868,16 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
 
   const { Pool: MemoryPool } = db.adapters.createPg();
 
+  // Establish the default tenant for the rest of this test's async execution. Store reads/writes
+  // fail closed without a tenant context; production sets it via handleRequest, tests via this
+  // synchronous call at the top of each test body. Isolation tests override with runWithRequestContext.
+  enterRequestContextForTests(DEFAULT_TEST_ORG_ID);
+
   return new MemoryPool() as TestPool;
 }
+
+/** DEFAULT_TEST_ORG_ID is the tenant the seeded project-memory rows belong to. */
+const DEFAULT_TEST_ORG_ID = "org-default";
 
 /**
  * Seeds internal catalog identity rows used by deterministic BOM matching tests.
@@ -3744,22 +3932,22 @@ async function seedConnectorCatalogRowsViaPool(pool: TestPool): Promise<void> {
  */
 function seedProjectMemoryRows(db: ReturnType<typeof newDb>): void {
   db.public.none(`
-    INSERT INTO projects (id, project_key, name, description, owner, status, created_at, updated_at)
-    VALUES ('project-alpha', 'ALPHA', 'Alpha Controller', 'Memory API test project', 'hardware', 'active', '2026-04-30T00:00:00.000Z', '2026-04-30T00:01:00.000Z');
+    INSERT INTO projects (id, project_key, name, description, owner, status, org_id, created_at, updated_at)
+    VALUES ('project-alpha', 'ALPHA', 'Alpha Controller', 'Memory API test project', 'hardware', 'active', 'org-default', '2026-04-30T00:00:00.000Z', '2026-04-30T00:01:00.000Z');
 
-    INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
-    VALUES ('rev-alpha-a', 'project-alpha', 'A', 'draft', 'alpha-a', '2026-04-30T00:02:00.000Z', '2026-04-30T00:02:00.000Z');
+    INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at)
+    VALUES ('rev-alpha-a', 'project-alpha', 'A', 'draft', 'alpha-a', 'org-default', '2026-04-30T00:02:00.000Z', '2026-04-30T00:02:00.000Z');
 
-    INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by, created_at, updated_at)
-    VALUES ('bom-alpha-a', 'project-alpha', 'rev-alpha-a', 'alpha-bom.csv', 'csv', 'mapped', '{"mpn":"MPN","quantity":"Qty"}'::jsonb, '{"rowCount":2}'::jsonb, 'api-test', '2026-04-30T00:03:00.000Z', '2026-04-30T00:03:00.000Z');
+    INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by, org_id, created_at, updated_at)
+    VALUES ('bom-alpha-a', 'project-alpha', 'rev-alpha-a', 'alpha-bom.csv', 'csv', 'mapped', '{"mpn":"MPN","quantity":"Qty"}'::jsonb, '{"rowCount":2}'::jsonb, 'api-test', 'org-default', '2026-04-30T00:03:00.000Z', '2026-04-30T00:03:00.000Z');
 
-    INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at)
+    INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at)
     VALUES
-      ('line-alpha-1', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 1, '{"U1"}', 1, 'TPS7A02DBVR', 'Texas Instruments', 'LDO regulator', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1, '2026-04-30T00:04:00.000Z', '2026-04-30T00:04:00.000Z'),
-      ('line-alpha-2', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 2, '{"R1"}', 1, 'RC-UNKNOWN', 'Unknown', 'Weak resistor row', '{"row":2}'::jsonb, NULL, 'weak_match', 0.4, '2026-04-30T00:05:00.000Z', '2026-04-30T00:05:00.000Z');
+      ('line-alpha-1', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 1, '{"U1"}', 1, 'TPS7A02DBVR', 'Texas Instruments', 'LDO regulator', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1, 'org-default', '2026-04-30T00:04:00.000Z', '2026-04-30T00:04:00.000Z'),
+      ('line-alpha-2', 'bom-alpha-a', 'project-alpha', 'rev-alpha-a', 2, '{"R1"}', 1, 'RC-UNKNOWN', 'Unknown', 'Weak resistor row', '{"row":2}'::jsonb, NULL, 'weak_match', 0.4, 'org-default', '2026-04-30T00:05:00.000Z', '2026-04-30T00:05:00.000Z');
 
-    INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, created_at, updated_at)
-    VALUES ('usage-alpha-u1', 'project-alpha', 'rev-alpha-a', 'line-alpha-1', 'part-memory-ldo', 'Main rail regulator', '{"U1"}', 1, 'proposed', '{"approvalStatus":"not_requested"}'::jsonb, '{"readinessStatus":"blocked"}'::jsonb, '2026-04-30T00:06:00.000Z', '2026-04-30T00:06:00.000Z');
+    INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, org_id, created_at, updated_at)
+    VALUES ('usage-alpha-u1', 'project-alpha', 'rev-alpha-a', 'line-alpha-1', 'part-memory-ldo', 'Main rail regulator', '{"U1"}', 1, 'proposed', '{"approvalStatus":"not_requested"}'::jsonb, '{"readinessStatus":"blocked"}'::jsonb, 'org-default', '2026-04-30T00:06:00.000Z', '2026-04-30T00:06:00.000Z');
 
     INSERT INTO circuit_blocks (id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at)
     VALUES ('cblock-alpha-power', 'ALPHA-POWER', 'Alpha power rail', 'Reusable LDO rail for memory tests.', 'power', 'hardware', 'approved', 'Fixture power rails only', '{"note":"Keep near load"}'::jsonb, '2026-04-30T00:09:00.000Z', '2026-04-30T00:09:00.000Z');
@@ -3773,20 +3961,20 @@ function seedProjectMemoryRows(db: ReturnType<typeof newDb>): void {
  * Adds a second revision to project-alpha that triggers add/remove and an MPN swap against rev-alpha-a.
  */
 async function seedSecondRevisionForCompare(pool: TestPool): Promise<void> {
-  await pool.query(`INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at) VALUES ('rev-alpha-b', 'project-alpha', 'B', 'draft', 'alpha-b', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`);
-  await pool.query(`INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by, created_at, updated_at) VALUES ('bom-alpha-b', 'project-alpha', 'rev-alpha-b', 'alpha-bom-b.csv', 'csv', 'mapped', '{"mpn":"MPN","quantity":"Qty"}'::jsonb, '{"rowCount":2}'::jsonb, 'api-test', '2026-05-01T00:01:00.000Z', '2026-05-01T00:01:00.000Z')`);
-  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at) VALUES ('line-beta-1', 'bom-alpha-b', 'project-alpha', 'rev-alpha-b', 1, '{"U1"}', 1, 'TPS7A02DBVR-Q1', 'Texas Instruments', 'LDO regulator (auto)', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1, '2026-05-01T00:02:00.000Z', '2026-05-01T00:02:00.000Z')`);
-  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at) VALUES ('line-beta-2', 'bom-alpha-b', 'project-alpha', 'rev-alpha-b', 2, '{"R1"}', 10, 'RC0603FR-0710KL', 'Yageo', 'New 10K resistor', '{"row":2}'::jsonb, 'part-memory-resistor', 'matched', 1, '2026-05-01T00:03:00.000Z', '2026-05-01T00:03:00.000Z')`);
+  await pool.query(`INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at) VALUES ('rev-alpha-b', 'project-alpha', 'B', 'draft', 'alpha-b', 'org-default', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`);
+  await pool.query(`INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by, org_id, created_at, updated_at) VALUES ('bom-alpha-b', 'project-alpha', 'rev-alpha-b', 'alpha-bom-b.csv', 'csv', 'mapped', '{"mpn":"MPN","quantity":"Qty"}'::jsonb, '{"rowCount":2}'::jsonb, 'api-test', 'org-default', '2026-05-01T00:01:00.000Z', '2026-05-01T00:01:00.000Z')`);
+  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at) VALUES ('line-beta-1', 'bom-alpha-b', 'project-alpha', 'rev-alpha-b', 1, '{"U1"}', 1, 'TPS7A02DBVR-Q1', 'Texas Instruments', 'LDO regulator (auto)', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1, 'org-default', '2026-05-01T00:02:00.000Z', '2026-05-01T00:02:00.000Z')`);
+  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at) VALUES ('line-beta-2', 'bom-alpha-b', 'project-alpha', 'rev-alpha-b', 2, '{"R1"}', 10, 'RC0603FR-0710KL', 'Yageo', 'New 10K resistor', '{"row":2}'::jsonb, 'part-memory-resistor', 'matched', 1, 'org-default', '2026-05-01T00:03:00.000Z', '2026-05-01T00:03:00.000Z')`);
 }
 
 /**
  * Adds a third revision to project-alpha that triggers a quantity-only change against rev-alpha-a.
  */
 async function seedThirdRevisionForCompare(pool: TestPool): Promise<void> {
-  await pool.query(`INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at) VALUES ('rev-alpha-c', 'project-alpha', 'C', 'draft', 'alpha-c', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`);
-  await pool.query(`INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by, created_at, updated_at) VALUES ('bom-alpha-c', 'project-alpha', 'rev-alpha-c', 'alpha-bom-c.csv', 'csv', 'mapped', '{"mpn":"MPN","quantity":"Qty"}'::jsonb, '{"rowCount":2}'::jsonb, 'api-test', '2026-05-02T00:01:00.000Z', '2026-05-02T00:01:00.000Z')`);
-  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at) VALUES ('line-gamma-1', 'bom-alpha-c', 'project-alpha', 'rev-alpha-c', 1, '{"U1"}', 3, 'TPS7A02DBVR', 'Texas Instruments', 'LDO regulator', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1, '2026-05-02T00:02:00.000Z', '2026-05-02T00:02:00.000Z')`);
-  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at) VALUES ('line-gamma-2', 'bom-alpha-c', 'project-alpha', 'rev-alpha-c', 2, '{"R1"}', 1, 'RC-UNKNOWN', 'Unknown', 'Weak resistor row', '{"row":2}'::jsonb, NULL, 'weak_match', 0.4, '2026-05-02T00:03:00.000Z', '2026-05-02T00:03:00.000Z')`);
+  await pool.query(`INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at) VALUES ('rev-alpha-c', 'project-alpha', 'C', 'draft', 'alpha-c', 'org-default', '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')`);
+  await pool.query(`INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, import_status, column_mapping, import_summary, imported_by, org_id, created_at, updated_at) VALUES ('bom-alpha-c', 'project-alpha', 'rev-alpha-c', 'alpha-bom-c.csv', 'csv', 'mapped', '{"mpn":"MPN","quantity":"Qty"}'::jsonb, '{"rowCount":2}'::jsonb, 'api-test', 'org-default', '2026-05-02T00:01:00.000Z', '2026-05-02T00:01:00.000Z')`);
+  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at) VALUES ('line-gamma-1', 'bom-alpha-c', 'project-alpha', 'rev-alpha-c', 1, '{"U1"}', 3, 'TPS7A02DBVR', 'Texas Instruments', 'LDO regulator', '{"row":1}'::jsonb, 'part-memory-ldo', 'matched', 1, 'org-default', '2026-05-02T00:02:00.000Z', '2026-05-02T00:02:00.000Z')`);
+  await pool.query(`INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at) VALUES ('line-gamma-2', 'bom-alpha-c', 'project-alpha', 'rev-alpha-c', 2, '{"R1"}', 1, 'RC-UNKNOWN', 'Unknown', 'Weak resistor row', '{"row":2}'::jsonb, NULL, 'weak_match', 0.4, 'org-default', '2026-05-02T00:03:00.000Z', '2026-05-02T00:03:00.000Z')`);
 }
 
 /**

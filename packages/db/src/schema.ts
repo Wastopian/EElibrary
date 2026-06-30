@@ -1110,12 +1110,14 @@ export const projects = pgTable(
     description: text("description").notNull().default(""),
     owner: text("owner"),
     status: text("status").notNull().default("active"),
+    orgId: text("org_id").references(() => organizations.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("uq_projects_project_key").on(t.projectKey),
     index("idx_projects_status_updated_at").on(t.status, t.updatedAt),
+    index("projects_org_id_idx").on(t.orgId),
     check(
       "projects_status_check",
       literalCheck(`status IN ('active', 'archived', 'prototype', 'production', 'deprecated')`)
@@ -1135,12 +1137,14 @@ export const projectRevisions = pgTable(
     revisionStatus: text("revision_status").notNull().default("draft"),
     sourceReference: text("source_reference"),
     releasedAt: timestamp("released_at", { withTimezone: true }),
+    orgId: text("org_id").references(() => organizations.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique().on(t.projectId, t.revisionLabel),
     index("idx_project_revisions_project_status").on(t.projectId, t.revisionStatus, t.updatedAt),
+    index("project_revisions_org_id_idx").on(t.orgId),
     check(
       "project_revisions_status_check",
       literalCheck(`revision_status IN ('draft', 'in_review', 'released', 'superseded', 'archived')`)
@@ -1166,11 +1170,13 @@ export const bomImports = pgTable(
     columnMapping: jsonb("column_mapping").notNull().default({}),
     importSummary: jsonb("import_summary").notNull().default({}),
     importedBy: text("imported_by"),
+    orgId: text("org_id").references(() => organizations.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("idx_bom_imports_project_revision").on(t.projectId, t.projectRevisionId, t.createdAt),
+    index("bom_imports_org_id_idx").on(t.orgId),
     index("idx_bom_imports_status").on(t.importStatus, t.updatedAt),
     check(
       "bom_imports_source_format_check",
@@ -1209,11 +1215,13 @@ export const bomLines = pgTable(
     matchedPartId: text("matched_part_id").references(() => parts.id),
     matchStatus: text("match_status").notNull().default("unmatched"),
     matchConfidenceScore: numeric("match_confidence_score"),
+    orgId: text("org_id").references(() => organizations.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique().on(t.bomImportId, t.rowNumber),
+    index("bom_lines_org_id_idx").on(t.orgId),
     index("idx_bom_lines_import_status").on(t.bomImportId, t.matchStatus, t.rowNumber),
     index("idx_bom_lines_project_revision").on(t.projectId, t.projectRevisionId, t.rowNumber),
     index("idx_bom_lines_matched_part").on(t.matchedPartId, t.projectId, t.projectRevisionId),
@@ -1250,10 +1258,12 @@ export const projectPartUsages = pgTable(
     usageStatus: text("usage_status").notNull().default("proposed"),
     approvalSnapshot: jsonb("approval_snapshot").notNull().default({}),
     readinessSnapshot: jsonb("readiness_snapshot").notNull().default({}),
+    orgId: text("org_id").references(() => organizations.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    index("project_part_usages_org_part_idx").on(t.orgId, t.partId),
     index("idx_project_part_usages_part").on(t.partId, t.usageStatus, t.updatedAt),
     index("idx_project_part_usages_project_revision").on(t.projectId, t.projectRevisionId, t.usageStatus),
     index("idx_project_part_usages_bom_line").on(t.bomLineId),

@@ -11,6 +11,7 @@ import {
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { CatalogStoreError } from "./catalog-store";
+import { getRequestOrgId, requireRequestOrgId } from "./request-context";
 import { searchInterconnectWhereUsed } from "./interconnect-store";
 import { searchProjectDocumentsForWhereUsed } from "./project-files";
 import { searchProjectDocumentExtractions } from "./project-document-extraction-store";
@@ -1057,6 +1058,7 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
     return { status: "not_configured" };
   }
 
+  const orgId = requireRequestOrgId();
   const normalizedProjectKey = normalizeProjectKey(input.projectKey);
   const normalizedName = input.name.trim();
   const revisionLabel = normalizeOptionalText(input.initialRevisionLabel) ?? "Working";
@@ -1072,8 +1074,8 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
       const now = new Date();
       const projectResult = await client.query<DatabaseProjectRow>(
         `
-          INSERT INTO projects (id, project_key, name, description, owner, status, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          INSERT INTO projects (id, project_key, name, description, owner, status, org_id, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
           RETURNING id, project_key, name, description, owner, status, created_at, updated_at
         `,
         [
@@ -1083,16 +1085,17 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
           normalizeOptionalText(input.description) ?? "",
           normalizeOptionalText(input.owner),
           input.status ?? "active",
+          orgId,
           now
         ]
       );
       const revisionResult = await client.query<DatabaseProjectRevisionRow>(
         `
-          INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
-          VALUES ($1, $2, $3, 'draft', $4, $5, $5)
+          INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at)
+          VALUES ($1, $2, $3, 'draft', $4, $5, $6, $6)
           RETURNING id, project_id, revision_label, revision_status, source_reference, released_at, created_at, updated_at
         `,
-        [revisionId, projectId, revisionLabel, "Created with project memory setup", now]
+        [revisionId, projectId, revisionLabel, "Created with project memory setup", orgId, now]
       );
 
       await client.query("COMMIT");
@@ -1356,7 +1359,7 @@ export async function updateProjectInDatabase(projectId: string, input: ProjectU
           owner = $4,
           status = $5,
           updated_at = $6
-        WHERE id = $1
+        WHERE id = $1 AND org_id = $7
         RETURNING id, project_key, name, description, owner, status, created_at, updated_at
       `,
       [
@@ -1365,7 +1368,8 @@ export async function updateProjectInDatabase(projectId: string, input: ProjectU
         normalized.input.description,
         normalized.input.owner,
         normalized.input.status,
-        now
+        now,
+        getRequestOrgId()
       ]
     );
     const row = result.rows[0];
@@ -1662,6 +1666,8 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
     return { status: "not_configured" };
   }
 
+  const orgId = requireRequestOrgId();
+
   try {
     const parsedCsv = input.sourceFormat === "xlsx"
       ? parseBomXlsx(input.rawContent)
@@ -1710,8 +1716,8 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
       };
       const bomImportResult = await client.query<DatabaseBomImportRow>(
         `
-          INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, 'mapped', $7::jsonb, $8::jsonb, $9, $10, $10)
+          INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, org_id, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, 'mapped', $7::jsonb, $8::jsonb, $9, $10, $11, $11)
           RETURNING id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at
         `,
         [
@@ -1724,6 +1730,7 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
           JSON.stringify(columnMapping),
           JSON.stringify(importSummary),
           importedBy,
+          orgId,
           now
         ]
       );
@@ -1732,8 +1739,8 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
       for (const draft of lineDrafts) {
         const lineResult = await client.query<DatabaseBomLineRow>(
           `
-            INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, NULL, $14, NULL, $15, $15)
+            INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, org_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, NULL, $14, NULL, $15, $16, $16)
             RETURNING id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at
           `,
           [
@@ -1751,6 +1758,7 @@ export async function createBomImportInDatabase(projectId: string, input: BomImp
             draft.rawNotes,
             JSON.stringify(draft.rawRowPayload),
             "unmatched" satisfies BomLineMatchStatus,
+            orgId,
             now
           ]
         );
@@ -1824,10 +1832,10 @@ export async function matchBomImportRowsInDatabase(bomImportId: string): Promise
         `
           SELECT id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at
           FROM bom_imports
-          WHERE id = $1
+          WHERE id = $1 AND org_id = $2
           LIMIT 1
         `,
-        [bomImportId]
+        [bomImportId, getRequestOrgId()]
       );
       const bomImport = bomImportResult.rows[0];
 
@@ -2240,11 +2248,12 @@ async function readPriorProjectOverlap(
       FROM project_part_usages ppu
       WHERE ppu.project_id <> $1
         AND ppu.part_id = ANY ($2::text[])
+        AND ppu.org_id = $4
       GROUP BY ppu.project_id
       ORDER BY COUNT(DISTINCT ppu.part_id) DESC, ppu.project_id ASC
       LIMIT $3
     `,
-    [currentProjectId, scannedPartIds, topProjectsLimit]
+    [currentProjectId, scannedPartIds, topProjectsLimit, getRequestOrgId()]
   );
 
   if (result.rows.length === 0) {
@@ -2490,6 +2499,10 @@ async function readConnectorWhereUsedHitCount(
   // placeholder list. This is identical to `= ANY` in Postgres' planner.
   const partIdPlaceholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
   const currentProjectIdPlaceholder = `$${scannedPartIds.length + 1}`;
+  // Tenant scope: only count prior usage within the request's org. parts.category is global
+  // (catalog is not yet scoped) but project_part_usages is, so the org filter here keeps the
+  // "someone else already wired this" signal from leaking across tenants.
+  const orgPlaceholder = `$${scannedPartIds.length + 2}`;
   const result = await databasePool.query<{ count: string }>(
     `
       SELECT COUNT(DISTINCT p.id)::text AS count
@@ -2501,9 +2514,10 @@ async function readConnectorWhereUsedHitCount(
           FROM project_part_usages other_usage
           WHERE other_usage.project_id <> ${currentProjectIdPlaceholder}
             AND other_usage.part_id IN (${partIdPlaceholders})
+            AND other_usage.org_id = ${orgPlaceholder}
         )
     `,
-    [...scannedPartIds, currentProjectId]
+    [...scannedPartIds, currentProjectId, getRequestOrgId()]
   );
 
   return Number.parseInt(result.rows[0]?.count ?? "0", 10) || 0;
@@ -4266,6 +4280,9 @@ async function autoDraftLifecycleRiskFromBomMatch(
   try {
     // $1 is projectId; matched part ids start at $2. Dynamic IN-list for pg-mem PK-planner parity.
     const placeholders = matchedPartIds.map((_, index) => `$${index + 2}`).join(", ");
+    // Tenant scope: "reused from a prior project" only considers prior usage within this org, so the
+    // passive lifecycle-risk draft never leaks that another tenant uses the part.
+    const orgPlaceholder = `$${matchedPartIds.length + 2}`;
     const result = await databasePool.query<{ part_id: string; mpn: string; lifecycle_status: string }>(
       `
         SELECT DISTINCT p.id AS part_id, p.mpn AS mpn, p.lifecycle_status AS lifecycle_status
@@ -4273,10 +4290,11 @@ async function autoDraftLifecycleRiskFromBomMatch(
         WHERE p.id IN (${placeholders})
           AND p.lifecycle_status <> 'active'
           AND p.id IN (
-            SELECT ppu.part_id FROM project_part_usages ppu WHERE ppu.project_id <> $1
+            SELECT ppu.part_id FROM project_part_usages ppu
+            WHERE ppu.project_id <> $1 AND ppu.org_id = ${orgPlaceholder}
           )
       `,
-      [projectId, ...matchedPartIds]
+      [projectId, ...matchedPartIds, getRequestOrgId()]
     );
 
     for (const row of result.rows) {
@@ -4372,16 +4390,20 @@ export async function decidePartEngineeringRecordDraftInDatabase(
  * Reads compact project summaries in stable workbench order.
  */
 async function readProjectSummaries(databasePool: Pool): Promise<ProjectSummary[]> {
-  const result = await databasePool.query<DatabaseProjectSummaryRow>(`${PROJECT_SUMMARIES_SQL}\nORDER BY p.updated_at DESC, p.project_key ASC, p.id ASC`);
+  // Tenant-scoped: only the request's org's projects. A null tenant matches nothing (fail closed).
+  const result = await databasePool.query<DatabaseProjectSummaryRow>(
+    `${PROJECT_SUMMARIES_SQL}\nWHERE p.org_id = $1\nORDER BY p.updated_at DESC, p.project_key ASC, p.id ASC`,
+    [getRequestOrgId()]
+  );
 
   return result.rows.map(mapProjectSummaryRow);
 }
 
 /**
- * Reads one compact project summary by project id.
+ * Reads one compact project summary by project id, scoped to the request's org.
  */
 async function readProjectSummary(databasePool: Pool, projectId: string): Promise<ProjectSummary | null> {
-  const result = await databasePool.query<DatabaseProjectSummaryRow>(`${PROJECT_SUMMARIES_SQL}\nWHERE p.id = $1`, [projectId]);
+  const result = await databasePool.query<DatabaseProjectSummaryRow>(`${PROJECT_SUMMARIES_SQL}\nWHERE p.id = $1 AND p.org_id = $2`, [projectId, getRequestOrgId()]);
 
   return result.rows[0] ? mapProjectSummaryRow(result.rows[0]) : null;
 }
@@ -4530,9 +4552,10 @@ async function readPartWhereUsed(databasePool: Pool, partId: string): Promise<Pa
       JOIN project_revisions r ON r.id = u.project_revision_id
       LEFT JOIN bom_lines bl ON bl.id = u.bom_line_id
       WHERE u.part_id = $1
+        AND u.org_id = $2
       ORDER BY p.project_key ASC, r.created_at DESC, u.updated_at DESC, u.id ASC
     `,
-    [partId]
+    [partId, getRequestOrgId()]
   );
 
   return result.rows.map(mapPartWhereUsedRow);
@@ -5590,8 +5613,8 @@ async function upsertProjectPartUsageForMatchedLine(
 
   const result = await client.query<DatabaseProjectPartUsageRow>(
     `
-      INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'proposed', $9::jsonb, $10::jsonb, $11, $11)
+      INSERT INTO project_part_usages (id, project_id, project_revision_id, bom_line_id, part_id, usage_context, designators, quantity, usage_status, approval_snapshot, readiness_snapshot, org_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'proposed', $9::jsonb, $10::jsonb, $11, $12, $12)
       ON CONFLICT (id) DO UPDATE
       SET project_id = EXCLUDED.project_id,
         project_revision_id = EXCLUDED.project_revision_id,
@@ -5617,6 +5640,7 @@ async function upsertProjectPartUsageForMatchedLine(
       line.quantity,
       JSON.stringify(approvalSnapshot),
       JSON.stringify(readinessSnapshot),
+      requireRequestOrgId(),
       now
     ]
   );
@@ -6158,7 +6182,9 @@ function uniqueStrings(values: string[]): string[] {
  * Checks whether one project id exists before returning scoped empty child reads.
  */
 async function projectExists(databasePool: Pool | PoolClient, projectId: string): Promise<boolean> {
-  const result = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 LIMIT 1", [projectId]);
+  // Tenant-scoped: a project id from another org reads as not-found, not forbidden. A null tenant
+  // (no request context) matches nothing, failing closed.
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 AND org_id = $2 LIMIT 1", [projectId, getRequestOrgId()]);
 
   return result.rows.length > 0;
 }
@@ -6176,7 +6202,8 @@ async function partExists(databasePool: Pool | PoolClient, partId: string): Prom
  * Checks whether one BOM import exists before returning scoped empty line reads.
  */
 async function bomImportExists(databasePool: Pool | PoolClient, bomImportId: string): Promise<boolean> {
-  const result = await databasePool.query<{ id: string }>("SELECT id FROM bom_imports WHERE id = $1 LIMIT 1", [bomImportId]);
+  // Tenant-scoped (see projectExists): cross-org or context-less reads fail closed.
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM bom_imports WHERE id = $1 AND org_id = $2 LIMIT 1", [bomImportId, getRequestOrgId()]);
 
   return result.rows.length > 0;
 }
@@ -6294,11 +6321,11 @@ async function resolveProjectRevisionForBomImport(client: PoolClient, projectId:
   const now = new Date();
   const revisionResult = await client.query<DatabaseProjectRevisionRow>(
     `
-      INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, created_at, updated_at)
-      VALUES ($1, $2, $3, 'draft', $4, $5, $5)
+      INSERT INTO project_revisions (id, project_id, revision_label, revision_status, source_reference, org_id, created_at, updated_at)
+      VALUES ($1, $2, $3, 'draft', $4, $5, $6, $6)
       RETURNING id, project_id, revision_label, revision_status, source_reference, released_at, created_at, updated_at
     `,
-    [buildProjectRevisionId(projectId, revisionLabel), projectId, revisionLabel, "Created during BOM import", now]
+    [buildProjectRevisionId(projectId, revisionLabel), projectId, revisionLabel, "Created during BOM import", requireRequestOrgId(), now]
   );
   const revisionRow = revisionResult.rows[0];
 
@@ -7709,7 +7736,7 @@ export async function createExportBundleInDatabase(
   const applicableTypeSql = applicableTypes.map((t) => `'${t}'`).join(", ");
 
   try {
-    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 AND org_id = $2", [projectId, getRequestOrgId()]);
 
     if (projectCheck.rowCount === 0) {
       return { status: "not_found" };
@@ -8322,7 +8349,7 @@ export async function readExportBundlesFromDatabase(
   }
 
   try {
-    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 AND org_id = $2", [projectId, getRequestOrgId()]);
 
     if (projectCheck.rowCount === 0) {
       return { status: "not_found" };
@@ -8654,8 +8681,8 @@ export async function readBomImportDiagnosticsFromDatabase(importId: string): Pr
 
   try {
     const importCheck = await databasePool.query<{ id: string; project_id: string }>(
-      "SELECT id, project_id FROM bom_imports WHERE id = $1",
-      [importId]
+      "SELECT id, project_id FROM bom_imports WHERE id = $1 AND org_id = $2",
+      [importId, getRequestOrgId()]
     );
 
     if (importCheck.rowCount === 0) {
@@ -8887,7 +8914,7 @@ export async function readProjectRevisionCompareFromDatabase(
   }
 
   try {
-    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+    const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 AND org_id = $2", [projectId, getRequestOrgId()]);
 
     if ((projectCheck.rowCount ?? 0) === 0) {
       return { status: "not_found", code: "PROJECT_NOT_FOUND", message: "Project was not found." };
@@ -9901,7 +9928,7 @@ export async function createPartSubstitutionInDatabase(
     }
 
     if (projectId !== null) {
-      const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+      const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 AND org_id = $2", [projectId, getRequestOrgId()]);
       if (projectCheck.rowCount === 0) {
         return { status: "not_found", code: "PROJECT_NOT_FOUND", message: "Scoped project not found." };
       }
@@ -10353,6 +10380,7 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
       };
     }
 
+    const orgId = requireRequestOrgId();
     const now = new Date();
     const bomImportId = `bomimp-${randomUUID()}`;
     const importSummary = {
@@ -10366,8 +10394,8 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
       persistedLineCount: eligibleRoles.length
     };
     const bomImportResult = await client.query<DatabaseBomImportRow>(
-      `INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'manual', NULL, 'processed', '{}'::jsonb, $5::jsonb, $6, $7, $7)
+      `INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, org_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'manual', NULL, 'processed', '{}'::jsonb, $5::jsonb, $6, $7, $8, $8)
          RETURNING id, project_id, project_revision_id, source_filename, source_format, storage_key, import_status, column_mapping, import_summary, imported_by, created_at, updated_at`,
       [
         bomImportId,
@@ -10376,6 +10404,7 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
         `Circuit block: ${block.name} (${block.block_key})`,
         JSON.stringify(importSummary),
         createdBy,
+        orgId,
         now
       ]
     );
@@ -10401,8 +10430,8 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
         isRequired: role.is_required
       };
       const lineResult = await client.query<DatabaseBomLineRow>(
-        `INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12::jsonb, $13, 'matched', 1, $14, $15, $16, $16, $16)
+        `INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, org_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12::jsonb, $13, 'matched', 1, $14, $15, $16, $17, $16, $16)
            RETURNING id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, raw_description, raw_supplier_reference, raw_notes, raw_row_payload, matched_part_id, match_status, match_confidence_score, instantiated_from_circuit_block_id, instantiated_from_circuit_block_part_id, instantiated_at, created_at, updated_at`,
         [
           `bomline-${randomUUID()}`,
@@ -10420,7 +10449,8 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
           role.part_id,
           input.circuitBlockId,
           role.id,
-          now
+          now,
+          orgId
         ]
       );
       const lineRow = lineResult.rows[0];
@@ -10649,6 +10679,9 @@ export async function readConnectorSetCatalogFromDatabase(
   }
   sqlParams.push(CONNECTOR_SET_MAX_CONNECTORS);
   const limitPlaceholder = `$${sqlParams.length}`;
+  // Tenant scope for the usage-count hint: only count this org's confirmed usage.
+  sqlParams.push(getRequestOrgId());
+  const usageOrgPlaceholder = `$${sqlParams.length}`;
 
   try {
     const connectors = await databasePool.query<DatabaseConnectorRow>(
@@ -10670,6 +10703,7 @@ export async function readConnectorSetCatalogFromDatabase(
         LEFT JOIN (
           SELECT part_id, COUNT(*) AS usage_count
           FROM project_part_usages
+          WHERE org_id = ${usageOrgPlaceholder}
           GROUP BY part_id
         ) usage_counts ON usage_counts.part_id = p.id
         WHERE ${whereClauses.join(" AND ")}
@@ -10706,6 +10740,7 @@ export async function readConnectorSetCatalogFromDatabase(
           LEFT JOIN (
             SELECT part_id, COUNT(*) AS usage_count
             FROM project_part_usages
+            WHERE org_id = $2
             GROUP BY part_id
           ) mate_usage ON mate_usage.part_id = mp.id
           WHERE mr.part_id = ANY($1::text[])
@@ -10714,7 +10749,7 @@ export async function readConnectorSetCatalogFromDatabase(
             CASE mr.relationship_type WHEN 'best_mate' THEN 0 ELSE 1 END,
             mp.mpn ASC
         `,
-        [connectorIds]
+        [connectorIds, getRequestOrgId()]
       );
       mateRows = mateResult.rows;
     }
