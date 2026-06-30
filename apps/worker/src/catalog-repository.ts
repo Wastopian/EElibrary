@@ -352,8 +352,17 @@ export async function persistProviderImportFailureRows(client: PoolClient, input
     sourceUrl: input.sourceUrl ?? null
   });
 
+  // Stamp the failure source record's org: from its attached part if any, else the shared default
+  // (a part-less failed import carries no tenant data). Keeps RLS-ready tables free of null org rows.
+  const failureOrgId = attachedPartId ? await readPartOrgId(client, attachedPartId) : DEFAULT_ORG_ID;
+  await client.query(
+    "UPDATE source_records SET org_id = $1 WHERE id = $2 AND org_id IS NULL",
+    [failureOrgId, buildSourceRecordId(input.providerId, input.providerPartKey)]
+  );
+
   if (attachedPartId) {
     await refreshStoredPartProjectionRows(client, attachedPartId);
+    await stampPartChildOrgIds(client, attachedPartId);
   }
 }
 
@@ -672,6 +681,55 @@ export async function persistNormalizedPartRows(client: PoolClient, normalizedPa
   }
 
   await persistPartProjectionRows(client, normalizedPart, previousPartIdentity);
+
+  await stampPartChildOrgIds(client, normalizedPart.part.id);
+}
+
+/**
+ * Stamps org_id on the part's just-written catalog child rows, using the part's own authoritative org
+ * (persistPart preserves it across re-ingests, so children always follow their part regardless of
+ * which caller is refreshing). Newly inserted rows have a null org_id; the `IS NULL` guard means a
+ * re-ingest never re-owns an existing child. connector_family_conflicts is intentionally excluded: it
+ * is a global family-level taxonomy.
+ */
+async function stampPartChildOrgIds(client: PoolClient, partId: string): Promise<void> {
+  const orgId = await readPartOrgId(client, partId);
+  const partChildTables = [
+    "source_records",
+    "assets",
+    "datasheet_revisions",
+    "part_metrics",
+    "supply_offerings",
+    "source_extraction_signals",
+    "mate_relations",
+    "accessory_requirements",
+    "cable_compatibilities",
+    "similar_part_relations",
+    "companion_recommendations",
+    "generation_workflows",
+    "generation_requests",
+    "review_records",
+    "asset_validation_records",
+    "asset_promotion_audits",
+    "part_readiness_summaries",
+    "part_approvals",
+    "part_issues",
+    "part_source_reconciliations",
+    "part_risk_flags"
+  ];
+
+  for (const table of partChildTables) {
+    // Table names are hardcoded constants, not user input.
+    await client.query(`UPDATE ${table} SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
+  }
+
+  // price_breaks hang off supply_offerings, which hang off the part.
+  await client.query(
+    `UPDATE price_breaks SET org_id = $1
+       WHERE org_id IS NULL
+         AND supply_offering_id IN (SELECT id FROM supply_offerings WHERE part_id = $2)`,
+    [orgId, partId]
+  );
 }
 
 /**
@@ -745,12 +803,19 @@ export async function captureReferencedDatasheetEvidenceForPart(
   await persistAsset(client, asset);
   await persistDatasheetRevision(client, datasheetRevision);
   await refreshStoredPartProjectionRows(client, input.partId);
+  await stampPartChildOrgIds(client, input.partId);
 
   return {
     assetId,
     datasheetRevisionId: datasheetRevision.id,
     reusedExistingRevision: Boolean(existingDatasheetRevision)
   };
+}
+
+/** Reads the org that owns a part, defaulting to the shared org when the part is missing/unstamped. */
+async function readPartOrgId(client: PoolClient, partId: string): Promise<string> {
+  const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+  return result.rows[0]?.org_id ?? DEFAULT_ORG_ID;
 }
 
 /** DownloadedDatasheetInput carries file evidence to persist after a successful datasheet download. */

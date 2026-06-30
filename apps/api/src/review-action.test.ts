@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { createReviewInDatabase, promoteAssetForExportInDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { enterRequestContextForTests } from "./request-context";
 import type { Pool } from "pg";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -320,6 +321,9 @@ function createFakeReviewPool() {
       return { rows: [] };
     }
   };
+
+  // Review/promote writes stamp requireRequestOrgId(); run the test body as an org-default teammate.
+  enterRequestContextForTests("org-default");
 
   return pool;
 }

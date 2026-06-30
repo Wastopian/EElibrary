@@ -1227,16 +1227,17 @@ export async function createGenerationRequestInDatabase(partId: string, targetAs
           source_asset_id,
           generation_status,
           confidence_score,
-          output_asset_id
+          output_asset_id,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, 'requested', $6, NULL)
+        VALUES ($1, $2, $3, $4, $5, 'requested', $6, NULL, $7)
         ON CONFLICT (id) DO UPDATE SET
           source_datasheet_revision_id = EXCLUDED.source_datasheet_revision_id,
           source_asset_id = EXCLUDED.source_asset_id,
           generation_status = 'requested',
           confidence_score = EXCLUDED.confidence_score
       `,
-      [workflowId, partId, targetAssetType, generationOption.sourceDatasheetRevisionId, generationOption.sourceAssetId, generationOption.confidenceScore]
+      [workflowId, partId, targetAssetType, generationOption.sourceDatasheetRevisionId, generationOption.sourceAssetId, generationOption.confidenceScore, requireRequestOrgId()]
     );
     await client.query(
       `
@@ -1250,14 +1251,15 @@ export async function createGenerationRequestInDatabase(partId: string, targetAs
           requested_at,
           requested_by,
           workflow_id,
-          last_updated_at
+          last_updated_at,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, 'requested', $6, $7, $8, $6)
+        VALUES ($1, $2, $3, $4, $5, 'requested', $6, $7, $8, $6, $9)
         ON CONFLICT (id) DO UPDATE SET
           request_status = generation_requests.request_status,
           last_updated_at = generation_requests.last_updated_at
       `,
-      [requestId, partId, targetAssetType, generationOption.sourceDatasheetRevisionId, generationOption.sourceAssetId, requestedAt, requestedBy, workflowId]
+      [requestId, partId, targetAssetType, generationOption.sourceDatasheetRevisionId, generationOption.sourceAssetId, requestedAt, requestedBy, workflowId, requireRequestOrgId()]
     );
     await client.query("COMMIT");
   } catch (error) {
@@ -1348,9 +1350,10 @@ export async function createReviewInDatabase(partId: string, input: ReviewAction
           reviewer,
           notes,
           reviewed_at,
-          last_updated_at
+          last_updated_at,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10)
         ON CONFLICT (id) DO UPDATE SET
           outcome = EXCLUDED.outcome,
           reviewer = EXCLUDED.reviewer,
@@ -1358,7 +1361,7 @@ export async function createReviewInDatabase(partId: string, input: ReviewAction
           reviewed_at = EXCLUDED.reviewed_at,
           last_updated_at = EXCLUDED.last_updated_at
       `,
-      [reviewRecord.id, reviewRecord.partId, reviewRecord.targetType, reviewRecord.assetId, reviewRecord.generationWorkflowId, reviewRecord.outcome, reviewRecord.reviewer, reviewRecord.notes, reviewRecord.reviewedAt]
+      [reviewRecord.id, reviewRecord.partId, reviewRecord.targetType, reviewRecord.assetId, reviewRecord.generationWorkflowId, reviewRecord.outcome, reviewRecord.reviewer, reviewRecord.notes, reviewRecord.reviewedAt, requireRequestOrgId()]
     );
 
     if (updatedAsset) {
@@ -1645,9 +1648,10 @@ export async function updateSourceReconciliationInDatabase(
           resolution_status,
           notes,
           updated_by,
-          updated_at
+          updated_at,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (part_id) DO UPDATE SET
           preferred_source_record_id = EXCLUDED.preferred_source_record_id,
           resolution_status = EXCLUDED.resolution_status,
@@ -1655,7 +1659,7 @@ export async function updateSourceReconciliationInDatabase(
           updated_by = EXCLUDED.updated_by,
           updated_at = EXCLUDED.updated_at
       `,
-      [partId, preferredSourceRecordId, input.resolutionStatus, notes, updatedBy, updatedAt]
+      [partId, preferredSourceRecordId, input.resolutionStatus, notes, updatedBy, updatedAt, requireRequestOrgId()]
     );
     await client.query("COMMIT");
   } catch (error) {
@@ -2774,9 +2778,10 @@ async function persistPromotionAuditRows(client: PoolClient, auditRecord: AssetP
         blocker_reasons,
         validation_record_id,
         actor,
-        created_at
+        created_at,
+        org_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (id) DO UPDATE SET
         part_id = EXCLUDED.part_id,
         asset_id = EXCLUDED.asset_id,
@@ -2798,7 +2803,8 @@ async function persistPromotionAuditRows(client: PoolClient, auditRecord: AssetP
       auditRecord.blockerReasons,
       auditRecord.validationRecordId,
       auditRecord.actor,
-      auditRecord.createdAt
+      auditRecord.createdAt,
+      requireRequestOrgId()
     ]
   );
 }
@@ -2862,9 +2868,10 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
         blocker_summary,
         recommended_actions,
         detail,
-        last_evaluated_at
+        last_evaluated_at,
+        org_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (part_id) DO UPDATE SET
         readiness_status = EXCLUDED.readiness_status,
         identity_status = EXCLUDED.identity_status,
@@ -2884,7 +2891,8 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
       projection.readinessSummary.blockerSummary,
       projection.readinessSummary.recommendedActions,
       projection.readinessSummary.detail,
-      projection.readinessSummary.lastEvaluatedAt
+      projection.readinessSummary.lastEvaluatedAt,
+      requireRequestOrgId()
     ]
   );
   await client.query(
@@ -2897,9 +2905,10 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
         evidence,
         decided_by,
         decided_at,
-        last_updated_at
+        last_updated_at,
+        org_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (part_id) DO UPDATE SET
         approval_status = EXCLUDED.approval_status,
         summary = EXCLUDED.summary,
@@ -2917,7 +2926,8 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
       projection.approval.evidence,
       projection.approval.decidedBy,
       projection.approval.decidedAt,
-      projection.approval.lastUpdatedAt
+      projection.approval.lastUpdatedAt,
+      requireRequestOrgId()
     ]
   );
   await syncPartIssueRows(client, record.part.id, projection.issues);
@@ -2933,11 +2943,12 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
           label,
           detail,
           tone,
-          last_updated_at
+          last_updated_at,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
-      [riskFlag.id, riskFlag.partId, riskFlag.code, riskFlag.label, riskFlag.detail, riskFlag.tone, riskFlag.lastUpdatedAt]
+      [riskFlag.id, riskFlag.partId, riskFlag.code, riskFlag.label, riskFlag.detail, riskFlag.tone, riskFlag.lastUpdatedAt, requireRequestOrgId()]
     );
   }
 }
@@ -2968,9 +2979,10 @@ async function syncPartIssueRows(client: PoolClient, partId: string, issues: Par
           summary,
           detail,
           source,
-          last_updated_at
+          last_updated_at,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (part_id, issue_code) DO UPDATE SET
           id = EXCLUDED.id,
           severity = EXCLUDED.severity,
@@ -2991,7 +3003,8 @@ async function syncPartIssueRows(client: PoolClient, partId: string, issues: Par
         issue.summary,
         issue.detail,
         issue.source,
-        issue.lastUpdatedAt
+        issue.lastUpdatedAt,
+        requireRequestOrgId()
       ]
     );
   }

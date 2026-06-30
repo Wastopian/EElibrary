@@ -34,15 +34,16 @@ It is groundwork: the `orgId` is now threaded everywhere so the enforcement step
 
 ## Enforcement plan (Increment 2)
 
-The enforcement mechanism plus the first scoped domains shipped in **Increment 2a** (project-core)
-and **Increment 2b** (catalog/parts core), below. The remaining steps (the rest of the catalog
-child tables, other domains, RLS, org-on-signup) are still pending.
+The enforcement mechanism plus the first scoped domains shipped in **Increment 2a** (project-core),
+**Increment 2b** (catalog/parts core), and **Increment 2c** (the part-attached catalog child tables),
+below. The remaining steps (other domains, RLS, org-on-signup) are still pending.
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
-   project-core tables and `parts` / `provider_acquisition_jobs`; pending for the rest.*
+   project-core tables, `parts` / `provider_acquisition_jobs`, and the ~22 part-attached catalog child
+   tables (migration `050`); pending for the remaining domains.*
 2. Thread `session.orgId` into every store read/write: **filter** on read, **stamp** on insert. Roll
    out and test domain by domain (projects → catalog → interconnects → the rest). — *done for
-   project-core and the parts catalog (read/search/detail + the worker that creates parts).*
+   project-core and the full parts catalog (parts + all part-attached children stamped on write).*
 3. Add Postgres **Row-Level Security** policies as a defense-in-depth backstop, so a forgotten
    `WHERE org_id = ...` cannot leak across tenants. (Requires a per-request `SET LOCAL app.current_org`
    inside a transaction-scoped connection — a store-layer change to design carefully with the pool;
@@ -106,6 +107,26 @@ child tables, other domains, RLS, org-on-signup) are still pending.
   search/detail, anonymous reads see nothing, and each org resolves only its own copy of a shared MPN;
   `provider-acquisition-jobs.test.ts` asserts the worker threads the claimed job's org into the part
   import.
+
+### Increment 2c — part-attached catalog child tables (shipped)
+
+- **What.** Every part-attached child table now carries `org_id` (migration `050`), backfilled from
+  its parent part (`price_breaks` via `supply_offerings`; document ACL/redlines via `document_revisions`).
+  This completes the catalog data model for the future RLS backstop and guarantees no tenant-less child
+  rows. **`connector_family_conflicts` stays global** (a family-level taxonomy), as do the reference
+  taxonomies.
+- **Why it's not a leak fix.** 2b already routed every catalog read through an org-scoped parts query,
+  so the children were already partitioned-by-association. This increment is **RLS-readiness +
+  write-hygiene**; the `*_ROWS_SQL` child reads are intentionally left un-filtered (RLS will enforce
+  `org_id` centrally rather than via ~20 per-query edits).
+- **Write-stamping.** The worker stamps children via a single post-pass
+  (`stampPartChildOrgIds`, `apps/worker/src/catalog-repository.ts`) that derives the org from the
+  part itself and only fills `org_id IS NULL` rows — so a re-ingest/refresh by any caller never
+  re-owns an existing child (matching `persistPart`'s ownership rule). API request paths
+  (`createReview`, `promoteAsset`, source-reconciliation, the projection refresh in `catalog-store.ts`,
+  and `document-control.ts`) stamp `requireRequestOrgId()` on insert.
+- **Proof.** `catalog-repository.test.ts` asserts a part's child rows (source record, readiness
+  projection) inherit the part's org and that a re-ingest under a different org preserves ownership.
 
 ## Later
 

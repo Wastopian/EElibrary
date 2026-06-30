@@ -452,6 +452,36 @@ test("persistNormalizedPartRows repeat import updates stable canonical rows", as
   }
 });
 
+test("persistNormalizedPartRows stamps the part's org on its children and re-ingest preserves ownership", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    // Ingest under org-acme: the part and its just-written children inherit org-acme.
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6), "org-acme");
+
+    const part = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = 'part-repeat-c1'");
+    const source = await client.query<{ org_id: string | null }>("SELECT org_id FROM source_records WHERE id = 'source-repeat-provider-c1'");
+    const readiness = await client.query<{ org_id: string | null }>("SELECT org_id FROM part_readiness_summaries WHERE part_id = 'part-repeat-c1'");
+
+    assert.equal(part.rows[0]?.org_id, "org-acme");
+    assert.equal(source.rows[0]?.org_id, "org-acme", "the part's source record inherits its org");
+    assert.equal(readiness.rows[0]?.org_id, "org-acme", "the projection row inherits the part's org");
+
+    // Re-ingest under a different org: persistPart keeps the part's original org, so children stay put.
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.7), "org-other");
+
+    const partAfter = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = 'part-repeat-c1'");
+    const sourceAfter = await client.query<{ org_id: string | null }>("SELECT org_id FROM source_records WHERE id = 'source-repeat-provider-c1'");
+
+    assert.equal(partAfter.rows[0]?.org_id, "org-acme", "re-ingest does not re-own the part");
+    assert.equal(sourceAfter.rows[0]?.org_id, "org-acme", "re-ingest does not re-own an existing child");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 /**
  * Verifies worker operational diagnostics summarize imports, generation, review, validation, and promotion records.
  */
@@ -1217,6 +1247,33 @@ function createMinimalImportPool(): TestPool {
     CREATE TABLE part_issues (id TEXT PRIMARY KEY, part_id TEXT, issue_code TEXT, severity TEXT, status TEXT, assigned_to TEXT, resolution_notes TEXT, resolved_at TIMESTAMPTZ, summary TEXT, detail TEXT, source TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, issue_code));
     CREATE TABLE part_source_reconciliations (part_id TEXT PRIMARY KEY, preferred_source_record_id TEXT, resolution_status TEXT, notes TEXT, updated_by TEXT, updated_at TIMESTAMPTZ);
     CREATE TABLE part_risk_flags (id TEXT PRIMARY KEY, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE similar_part_relations (id TEXT PRIMARY KEY, part_id TEXT, similar_part_id TEXT, confidence_score NUMERIC, reason TEXT);
+    CREATE TABLE companion_recommendations (id TEXT PRIMARY KEY, part_id TEXT, companion_part_id TEXT, confidence_score NUMERIC, usage_context TEXT);
+
+    -- Tenant isolation (2c): the part-attached children carry org_id (connector_family_conflicts stays
+    -- global). No DEFAULT, so the worker's post-pass stamping from the part is observable in tests.
+    ALTER TABLE source_records ADD COLUMN org_id TEXT;
+    ALTER TABLE supply_offerings ADD COLUMN org_id TEXT;
+    ALTER TABLE price_breaks ADD COLUMN org_id TEXT;
+    ALTER TABLE assets ADD COLUMN org_id TEXT;
+    ALTER TABLE datasheet_revisions ADD COLUMN org_id TEXT;
+    ALTER TABLE part_metrics ADD COLUMN org_id TEXT;
+    ALTER TABLE source_extraction_signals ADD COLUMN org_id TEXT;
+    ALTER TABLE mate_relations ADD COLUMN org_id TEXT;
+    ALTER TABLE accessory_requirements ADD COLUMN org_id TEXT;
+    ALTER TABLE cable_compatibilities ADD COLUMN org_id TEXT;
+    ALTER TABLE similar_part_relations ADD COLUMN org_id TEXT;
+    ALTER TABLE companion_recommendations ADD COLUMN org_id TEXT;
+    ALTER TABLE generation_workflows ADD COLUMN org_id TEXT;
+    ALTER TABLE generation_requests ADD COLUMN org_id TEXT;
+    ALTER TABLE review_records ADD COLUMN org_id TEXT;
+    ALTER TABLE asset_validation_records ADD COLUMN org_id TEXT;
+    ALTER TABLE asset_promotion_audits ADD COLUMN org_id TEXT;
+    ALTER TABLE part_readiness_summaries ADD COLUMN org_id TEXT;
+    ALTER TABLE part_approvals ADD COLUMN org_id TEXT;
+    ALTER TABLE part_issues ADD COLUMN org_id TEXT;
+    ALTER TABLE part_source_reconciliations ADD COLUMN org_id TEXT;
+    ALTER TABLE part_risk_flags ADD COLUMN org_id TEXT;
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();
