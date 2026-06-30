@@ -542,7 +542,10 @@ test("homepage does not automatically call provider lookup or import during norm
   try {
     await renderHomepage({ q: "TPS7A02DBVR-999" });
 
-    assert.deepEqual(requestedPaths, ["/health", "/parts/facets", "/parts"]);
+    // /api/token is auth plumbing (reads now carry the tenant token); the behavior under test is
+    // which API endpoints the search hits, so ignore the token mints.
+    const apiPaths = requestedPaths.filter((path) => path !== "/api/token");
+    assert.deepEqual(apiPaths, ["/health", "/parts/facets", "/parts"]);
   } finally {
     restoreFetch();
   }

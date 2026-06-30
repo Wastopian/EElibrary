@@ -404,7 +404,8 @@ export async function updateProjectRevision(projectId: string, revisionId: strin
  */
 export async function fetchProjectDetail(projectId: string): Promise<ProjectDetailResponse | null> {
   const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -429,7 +430,8 @@ export async function fetchProjectDetail(projectId: string): Promise<ProjectDeta
  */
 export async function fetchProjectFiles(projectId: string): Promise<ProjectFilesResponse | null> {
   const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/files`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -627,7 +629,8 @@ export async function uploadVendorFile(
  */
 export async function fetchProjectBomHealth(projectId: string): Promise<ProjectBomHealthResponse | null> {
   const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-health`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -648,7 +651,8 @@ export async function fetchProjectBomHealth(projectId: string): Promise<ProjectB
  */
 export async function fetchProjectEvidenceAttachments(projectId: string): Promise<ProjectEvidenceAttachmentsResponse | null> {
   const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/evidence`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -729,7 +733,8 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
  */
 export async function fetchBomImportLines(bomImportId: string): Promise<BomImportLinesResponse | null> {
   const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/lines`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -829,7 +834,8 @@ export async function updateEvidenceAttachment(evidenceAttachmentId: string, inp
  */
 export async function fetchProjectFollowUps(projectId: string): Promise<FollowUpListResponse | null> {
   const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/follow-ups`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -856,7 +862,8 @@ export async function fetchProjectFollowUps(projectId: string): Promise<FollowUp
  */
 export async function fetchProjectOverlapPanel(projectId: string): Promise<ProjectOverlapPanelResponse | null> {
   const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/overlap`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -900,7 +907,8 @@ export async function syncProjectFollowUps(projectId: string): Promise<FollowUpS
  */
 export async function fetchCircuitBlockProjectDependencies(circuitBlockId: string): Promise<CircuitBlockProjectDependency[]> {
   const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/project-dependencies`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -918,7 +926,8 @@ export async function fetchCircuitBlockProjectDependencies(circuitBlockId: strin
 
 export async function fetchCircuitBlockFollowUps(circuitBlockId: string): Promise<FollowUpListResponse | null> {
   const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}/follow-ups`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -1042,7 +1051,8 @@ export async function updateCircuitBlock(circuitBlockId: string, input: CircuitB
  */
 export async function fetchCircuitBlockDetail(circuitBlockId: string): Promise<CircuitBlockDetailResponse | null> {
   const response = await fetch(buildApiUrl(`/circuit-blocks/${encodeURIComponent(circuitBlockId)}`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -1244,7 +1254,8 @@ export async function decidePartEngineeringRecordDraft(
  */
 export async function fetchPartDetailEnvelope(partId: string): Promise<ApiEnvelope<PartDetailResponse> | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -1274,7 +1285,8 @@ export async function fetchPartDetail(partId: string): Promise<PartDetailRespons
  */
 export async function fetchPartWhereUsed(partId: string): Promise<PartWhereUsedResponse | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/usages`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -1295,7 +1307,8 @@ export async function fetchPartWhereUsed(partId: string): Promise<PartWhereUsedR
  */
 export async function fetchPartSupplyOffers(partId: string): Promise<PartSupplyOffersResponse | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/supply-offers`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -1316,7 +1329,8 @@ export async function fetchPartSupplyOffers(partId: string): Promise<PartSupplyO
  */
 export async function fetchPartDocumentRevisions(partId: string): Promise<DocumentRevisionListResponse | null> {
   const response = await fetch(buildApiUrl(`/parts/${encodeURIComponent(partId)}/document-revisions`), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (response.status === 404) {
@@ -1650,8 +1664,13 @@ async function readServerCookieHeader(): Promise<string | null> {
  * Fetches and parses JSON from the API service.
  */
 async function fetchApi<TResponse>(path: string): Promise<TResponse> {
+  // Attach the tenant-bearing token. Tenant isolation means an unauthenticated read resolves no org
+  // and sees nothing, so server-component reads (which call the API directly, not through the
+  // cookie-minting /api-proxy) must carry the token explicitly the same way mutations and audit
+  // reads already do. getAuthHeaders fails soft to {} so global/unauthenticated reads still work.
   const response = await fetch(buildApiUrl(path), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: await getAuthHeaders()
   });
 
   if (!response.ok) {
