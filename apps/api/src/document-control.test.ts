@@ -431,6 +431,11 @@ function createDocumentControlPool(): TestPool {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Tenant isolation (2c): document-control rows carry org_id, stamped on write.
+    ALTER TABLE document_revisions ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE document_acl_entries ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE document_redlines ADD COLUMN org_id TEXT DEFAULT 'org-default';
   `);
   const adapter = db.adapters.createPg();
   // Document-control gates on the part being in the acting org; run as an org-default teammate.

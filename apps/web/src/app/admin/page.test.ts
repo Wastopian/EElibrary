@@ -410,6 +410,32 @@ function createAdminDbBackedPool(): TestPool {
     CREATE TABLE part_issues (id TEXT PRIMARY KEY, part_id TEXT, issue_code TEXT, severity TEXT, status TEXT, assigned_to TEXT, resolution_notes TEXT, resolved_at TIMESTAMPTZ, summary TEXT, detail TEXT, source TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, issue_code));
     CREATE TABLE part_source_reconciliations (part_id TEXT PRIMARY KEY, preferred_source_record_id TEXT, resolution_status TEXT, notes TEXT, updated_by TEXT, updated_at TIMESTAMPTZ);
     CREATE TABLE part_risk_flags (id TEXT PRIMARY KEY, part_id TEXT, risk_code TEXT, label TEXT, detail TEXT, tone TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE supply_offerings (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, provider_part_key TEXT, supplier_name TEXT, provider_sku TEXT, inventory_status TEXT, inventory_quantity INTEGER, moq INTEGER, lead_time_days INTEGER, packaging TEXT, currency_code TEXT, preferred_rank INTEGER, last_seen_at TIMESTAMPTZ, retired_at TIMESTAMPTZ, retirement_reason TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
+    CREATE TABLE price_breaks (id TEXT PRIMARY KEY, supply_offering_id TEXT, min_quantity INTEGER, unit_price NUMERIC, currency_code TEXT, captured_at TIMESTAMPTZ);
+
+    -- Tenant isolation (2c): part-attached children carry org_id (connector_family_conflicts stays global).
+    ALTER TABLE source_records ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE source_extraction_signals ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE assets ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE datasheet_revisions ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_metrics ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE mate_relations ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE accessory_requirements ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE cable_compatibilities ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE similar_part_relations ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE companion_recommendations ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE generation_workflows ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE generation_requests ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE review_records ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE asset_validation_records ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE asset_promotion_audits ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_readiness_summaries ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_approvals ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_issues ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_source_reconciliations ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_risk_flags ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE supply_offerings ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE price_breaks ADD COLUMN org_id TEXT DEFAULT 'org-default';
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();

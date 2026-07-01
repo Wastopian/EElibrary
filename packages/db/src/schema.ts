@@ -112,6 +112,7 @@ export const sourceRecords = pgTable(
     }),
     importStatus: text("import_status").notNull().default("imported"),
     importErrorDetails: text("import_error_details"),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.providerId, t.providerPartKey, t.fetchedAt),
@@ -150,6 +151,7 @@ export const supplyOfferings = pgTable(
     retirementReason: text("retirement_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     uniqueIndex("uq_supply_offerings_provider_supplier_sku").on(t.partId, t.providerId, t.providerPartKey, t.supplierName, t.providerSku),
@@ -182,6 +184,7 @@ export const priceBreaks = pgTable(
     unitPrice: numeric("unit_price", { precision: 18, scale: 8 }).notNull(),
     currencyCode: text("currency_code").notNull().default("USD"),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.supplyOfferingId, t.minQuantity, t.currencyCode, t.capturedAt),
@@ -356,6 +359,7 @@ export const assets = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_assets_part_id").on(t.partId),
@@ -411,6 +415,7 @@ export const datasheetRevisions = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_datasheet_revisions_part_id").on(t.partId),
@@ -447,6 +452,7 @@ export const documentRevisions = pgTable(
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.partId, t.assetId, t.revisionLabel),
@@ -484,6 +490,7 @@ export const documentAclEntries = pgTable(
     grantedBy: text("granted_by").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.documentRevisionId, t.principalType, t.principalId, t.permission),
@@ -518,6 +525,7 @@ export const documentRedlines = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_document_redlines_revision").on(t.documentRevisionId, t.redlineStatus, t.createdAt),
@@ -551,6 +559,7 @@ export const partMetrics = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.partId, t.metricKey, t.sourceRevisionId),
@@ -577,6 +586,7 @@ export const mateRelations = pgTable(
       .references(() => datasheetRevisions.id),
     sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
     notes: text("notes"),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_mate_relations_part_id").on(t.partId),
@@ -614,6 +624,7 @@ export const accessoryRequirements = pgTable(
       .references(() => datasheetRevisions.id),
     sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
     notes: text("notes"),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_accessory_requirements_part_id").on(t.partId),
@@ -654,6 +665,7 @@ export const cableCompatibilities = pgTable(
       .references(() => datasheetRevisions.id),
     sourceRecordId: text("source_record_id").references(() => sourceRecords.id),
     notes: text("notes"),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_cable_compatibilities_part_id").on(t.partId),
@@ -716,6 +728,7 @@ export const similarPartRelations = pgTable(
       .references(() => parts.id),
     confidenceScore: numeric("confidence_score").notNull(),
     reason: text("reason").notNull(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [index("idx_similar_part_relations_part_id").on(t.partId)]
 );
@@ -732,6 +745,7 @@ export const companionRecommendations = pgTable(
       .references(() => parts.id),
     confidenceScore: numeric("confidence_score").notNull(),
     usageContext: text("usage_context").notNull(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [index("idx_companion_recommendations_part_id").on(t.partId)]
 );
@@ -751,6 +765,7 @@ export const generationWorkflows = pgTable(
     generationStatus: text("generation_status").notNull(),
     confidenceScore: numeric("confidence_score").notNull(),
     outputAssetId: text("output_asset_id").references(() => assets.id),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_generation_workflows_part_id").on(t.partId),
@@ -789,6 +804,7 @@ export const generationRequests = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_generation_requests_part_id_target_asset_type").on(
@@ -832,6 +848,7 @@ export const reviewRecords = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_review_records_part_id").on(t.partId, t.reviewedAt),
@@ -871,6 +888,7 @@ export const sourceExtractionSignals = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_source_extraction_signals_part_type").on(t.partId, t.signalType),
@@ -917,6 +935,7 @@ export const assetValidationRecords = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_asset_validation_records_part_id").on(t.partId, t.validatedAt),
@@ -957,6 +976,7 @@ export const assetPromotionAudits = pgTable(
     ),
     actor: text("actor").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_asset_promotion_audits_part_id").on(t.partId, t.createdAt),
@@ -995,6 +1015,7 @@ export const partReadinessSummaries = pgTable(
     recommendedActions: text("recommended_actions").array().notNull().default([]),
     detail: text("detail").notNull(),
     lastEvaluatedAt: timestamp("last_evaluated_at", { withTimezone: true }).notNull(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_part_readiness_summaries_status").on(t.readinessStatus, t.lastEvaluatedAt),
@@ -1028,6 +1049,7 @@ export const partApprovals = pgTable(
     decidedBy: text("decided_by"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_part_approvals_status").on(t.approvalStatus, t.lastUpdatedAt),
@@ -1055,6 +1077,7 @@ export const partIssues = pgTable(
     detail: text("detail").notNull(),
     source: text("source").notNull(),
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.partId, t.issueCode),
@@ -1081,6 +1104,7 @@ export const partSourceReconciliations = pgTable(
     notes: text("notes"),
     updatedBy: text("updated_by"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_part_source_reconciliations_status").on(t.resolutionStatus, t.updatedAt),
@@ -1103,6 +1127,7 @@ export const partRiskFlags = pgTable(
     detail: text("detail").notNull(),
     tone: text("tone").notNull(),
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.partId, t.riskCode),

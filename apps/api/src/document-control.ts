@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { CatalogStoreError } from "./catalog-store";
-import { getRequestOrgId } from "./request-context";
+import { getRequestOrgId, requireRequestOrgId } from "./request-context";
 import type {
   AssetAvailabilityStatus,
   AssetProvenance,
@@ -342,9 +342,10 @@ export async function createDocumentRevisionInDatabase(
           source_asset_hash,
           created_by,
           created_at,
-          updated_at
+          updated_at,
+          org_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16)
       `,
       [
         revisionId,
@@ -361,7 +362,8 @@ export async function createDocumentRevisionInDatabase(
         supersedesId,
         asset.file_hash,
         actor,
-        now
+        now,
+        requireRequestOrgId()
       ]
     );
 
@@ -465,9 +467,10 @@ export async function createDocumentRedlineInDatabase(
           severity,
           created_by,
           created_at,
-          updated_at
+          updated_at,
+          org_id
         )
-        VALUES ($1, $2, 'open', $3, $4, $5, $6, $7, $8, $8)
+        VALUES ($1, $2, 'open', $3, $4, $5, $6, $7, $8, $8, $9)
       `,
       [
         redlineId,
@@ -477,7 +480,8 @@ export async function createDocumentRedlineInDatabase(
         normalized.input.note,
         normalized.input.severity,
         actor,
-        now
+        now,
+        requireRequestOrgId()
       ]
     );
 
@@ -723,9 +727,10 @@ async function insertAclEntry(
         permission,
         granted_by,
         expires_at,
-        created_at
+        created_at,
+        org_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     `,
     [
       randomUUID(),
@@ -735,7 +740,8 @@ async function insertAclEntry(
       aclEntry.permission,
       actor,
       aclEntry.expiresAt ? new Date(aclEntry.expiresAt) : null,
-      new Date()
+      new Date(),
+      requireRequestOrgId()
     ]
   );
 }
