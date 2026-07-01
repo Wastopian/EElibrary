@@ -35,15 +35,16 @@ It is groundwork: the `orgId` is now threaded everywhere so the enforcement step
 ## Enforcement plan (Increment 2)
 
 The enforcement mechanism plus the first scoped domains shipped in **Increment 2a** (project-core),
-**Increment 2b** (catalog/parts core), and **Increment 2c** (the part-attached catalog child tables),
-below. The remaining steps (other domains, RLS, org-on-signup) are still pending.
+**2b** (catalog/parts core), **2c** (part-attached catalog child tables), and **2d** (interconnect
+memory), below. The remaining steps (the last domains, RLS, org-on-signup) are still pending.
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
-   project-core tables, `parts` / `provider_acquisition_jobs`, and the ~22 part-attached catalog child
-   tables (migration `050`); pending for the remaining domains.*
+   project-core tables, `parts` / `provider_acquisition_jobs`, the ~22 part-attached catalog child
+   tables (migration `050`), and the interconnect tables (migration `051`); pending for the last
+   domains (circuit blocks, evidence, document-extraction, engineering memory, export bundles).*
 2. Thread `session.orgId` into every store read/write: **filter** on read, **stamp** on insert. Roll
    out and test domain by domain (projects → catalog → interconnects → the rest). — *done for
-   project-core and the full parts catalog (parts + all part-attached children stamped on write).*
+   project-core, the full parts catalog, and interconnect memory.*
 3. Add Postgres **Row-Level Security** policies as a defense-in-depth backstop, so a forgotten
    `WHERE org_id = ...` cannot leak across tenants. (Requires a per-request `SET LOCAL app.current_org`
    inside a transaction-scoped connection — a store-layer change to design carefully with the pool;
@@ -127,6 +128,26 @@ below. The remaining steps (other domains, RLS, org-on-signup) are still pending
   and `document-control.ts`) stamp `requireRequestOrgId()` on insert.
 - **Proof.** `catalog-repository.test.ts` asserts a part's child rows (source record, readiness
   projection) inherit the part's org and that a re-ingest under a different org preserves ownership.
+
+### Increment 2d — interconnect memory (shipped)
+
+- **What.** The 5 interconnect tables (`cable_assemblies`, `cable_assembly_ends`, `test_fixtures`,
+  `fixture_ports`, `cable_pin_map_rows`) gain `org_id` (migration `051`), denormalized onto the child
+  tables so every query filters directly. This closes a **live cross-tenant leak** — before it, any
+  signed-in user could read or edit any org's cables/fixtures/pin maps, and the global where-used
+  workspace surfaced interconnect hits from every org.
+- **Backfill / identity.** `cable_assemblies` / `test_fixtures` have a nullable `project_id`, so org is
+  stored per-row: backfilled from the linked project when present, else `org-default`; children from
+  their parent. The global `(cable_key, revision_label)` / `(fixture_key, revision_label)` uniqueness
+  becomes per-tenant.
+- **Store (`apps/api/src/interconnect-store.ts`).** Same 2a pattern: the dashboard counts + list reads,
+  detail/revisions/compare reads, and `searchInterconnectWhereUsed` (the global where-used feed) filter
+  `org_id`; writes stamp `requireRequestOrgId()`. One change to the shared `rowExists` gate scopes
+  every existence check **and** the cross-domain link validation at once — a tenant can't link a
+  cable/fixture/port to another org's project or part (both already scoped).
+- **Proof.** `interconnect-store.test.ts` asserts a cable/fixture created under org A is invisible to
+  org B's dashboard / detail / where-used, an anonymous read sees nothing, and each org resolves only
+  its own records.
 
 ## Later
 

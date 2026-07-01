@@ -909,9 +909,9 @@ async function seedInterconnects(client) {
     `
       INSERT INTO cable_assemblies (
         id, cable_key, revision_label, assembly_status, project_id, project_revision_id,
-        owner, description, source_document_ref, provenance, created_at, updated_at
+        owner, description, source_document_ref, provenance, org_id, created_at, updated_at
       )
-      VALUES ($1, $2, 'R0.2', 'in_review', $3, $4, $5, $6, $7, 'project_file', $8, $8)
+      VALUES ($1, $2, 'R0.2', 'in_review', $3, $4, $5, $6, $7, 'project_file', 'org-default', $8, $8)
     `,
     [
       DEMO_CABLE_ASSEMBLY_ID,
@@ -929,11 +929,11 @@ async function seedInterconnects(client) {
     `
       INSERT INTO cable_assembly_ends (
         id, cable_assembly_id, end_label, connector_ref, connector_part_id, mate_part_id, backshell_part_id,
-        notes, created_at, updated_at
+        notes, org_id, created_at, updated_at
       )
       VALUES
-        ($1, $2, 'A', 'J1', $3, $4, NULL, $5, $7, $7),
-        ($6, $2, 'B', 'J202', NULL, NULL, NULL, $8, $7, $7)
+        ($1, $2, 'A', 'J1', $3, $4, NULL, $5, 'org-default', $7, $7),
+        ($6, $2, 'B', 'J202', NULL, NULL, NULL, $8, 'org-default', $7, $7)
     `,
     [
       cableEndAId,
@@ -951,9 +951,9 @@ async function seedInterconnects(client) {
     `
       INSERT INTO test_fixtures (
         id, fixture_key, revision_label, fixture_status, project_id, owner, purpose,
-        source_document_ref, provenance, created_at, updated_at
+        source_document_ref, provenance, org_id, created_at, updated_at
       )
-      VALUES ($1, 'TFX-DEMO-PMC-BRINGUP', 'B', 'restricted', $2, 'demo-lab', $3, $4, 'project_file', $5, $5)
+      VALUES ($1, 'TFX-DEMO-PMC-BRINGUP', 'B', 'restricted', $2, 'demo-lab', $3, $4, 'project_file', 'org-default', $5, $5)
     `,
     [
       DEMO_FIXTURE_ID,
@@ -968,11 +968,11 @@ async function seedInterconnects(client) {
     `
       INSERT INTO fixture_ports (
         id, fixture_id, connector_ref, connector_part_id, mate_part_id, cable_assembly_id,
-        port_role, notes, created_at, updated_at
+        port_role, notes, org_id, created_at, updated_at
       )
       VALUES
-        ($1, $2, 'J201', NULL, NULL, NULL, 'SWD/programming header', 'Fixture-side programming port. No catalog part matched yet.', $5, $5),
-        ($3, $2, 'J202', NULL, NULL, $4, 'Battery harness input', 'Use only with the seeded R0.2 cable until bench review is complete.', $5, $5)
+        ($1, $2, 'J201', NULL, NULL, NULL, 'SWD/programming header', 'Fixture-side programming port. No catalog part matched yet.', 'org-default', $5, $5),
+        ($3, $2, 'J202', NULL, NULL, $4, 'Battery harness input', 'Use only with the seeded R0.2 cable until bench review is complete.', 'org-default', $5, $5)
     `,
     [
       fixturePortJ201Id,
@@ -990,13 +990,13 @@ async function seedInterconnects(client) {
           id, cable_assembly_id, cable_end_id, fixture_port_id, end_label, connector_ref,
           pin_number, signal_name, wire_color, wire_gauge, destination_connector_ref,
           destination_pin_number, confidence_score, evidence_attachment_id, source_document_ref,
-          notes, created_at, updated_at
+          notes, org_id, created_at, updated_at
         )
         VALUES (
           $1, $2, $3, $4, 'B', 'J202',
           $5, $6, $7, $8, $9,
           $10, $11, $12, $13,
-          $14, $15, $15
+          $14, 'org-default', $15, $15
         )
       `,
       [
