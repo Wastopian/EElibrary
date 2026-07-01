@@ -32,6 +32,7 @@ import {
   updateFixturePortInDatabase,
   updateTestFixtureInDatabase
 } from "./interconnect-store";
+import { enterRequestContextForTests, runWithRequestContext } from "./request-context";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 
@@ -95,6 +96,66 @@ test("readInterconnectDashboardFromDatabase returns cable, fixture, and pin-map 
     assert.equal(pinRow?.pinNumber, "47");
     assert.equal(pinRow?.signalName, "RS422_TX+");
     assert.equal(pinRow?.confidenceScore, 0.62);
+  } finally {
+    setInterconnectPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("tenant isolation: interconnect reads and where-used are scoped to the request org", async () => {
+  const pool = createInterconnectPool();
+  setInterconnectPoolForTests(pool);
+
+  try {
+    await seedInterconnectRows(pool); // org-default: cable-cab-100 / fixture-tfx-42 / a J202 pin row
+
+    // A second org's cable + pin row + fixture.
+    await pool.query(
+      `INSERT INTO cable_assemblies (id, cable_key, revision_label, assembly_status, provenance, org_id, created_at, updated_at)
+       VALUES ('cable-other', 'OTHER-1', 'A', 'draft', 'manual_internal', 'org-other', now(), now())`
+    );
+    await pool.query(
+      `INSERT INTO cable_pin_map_rows (id, cable_assembly_id, end_label, connector_ref, pin_number, signal_name, confidence_score, org_id)
+       VALUES ('pin-other', 'cable-other', 'A', 'J202', '9', 'OTHER_SIG', 0.9, 'org-other')`
+    );
+    await pool.query(
+      `INSERT INTO test_fixtures (id, fixture_key, revision_label, fixture_status, provenance, org_id, created_at, updated_at)
+       VALUES ('fixture-other', 'OTHERFX', 'A', 'draft', 'manual_internal', 'org-other', now(), now())`
+    );
+
+    // org-default (the harness default context) sees only its own rows.
+    const own = await readInterconnectDashboardFromDatabase();
+    assert.equal(own.status, "available");
+    if (own.status !== "available") return;
+    assert.equal(own.response.summary.cableAssemblyCount, 1, "org-default counts only its own cable");
+    assert.ok(own.response.cableAssemblies.every((c) => c.id !== "cable-other"), "org-other cable is hidden");
+    assert.equal((await readCableAssemblyDetailFromDatabase("cable-other")).status, "not_found", "org-default cannot read org-other's cable");
+
+    // where-used for a connector both orgs use (J202) returns only org-default hits.
+    const ownHits = await searchInterconnectWhereUsed(pool, "J202");
+    assert.ok(ownHits.length > 0, "org-default has its own J202 hits");
+    assert.ok(ownHits.every((hit) => hit.cableKey !== "OTHER-1"), "org-other wiring never leaks into where-used");
+
+    // No tenant context fails closed.
+    await runWithRequestContext(null, async () => {
+      const anon = await readInterconnectDashboardFromDatabase();
+      assert.equal(anon.status, "available");
+      if (anon.status !== "available") return;
+      assert.equal(anon.response.summary.cableAssemblyCount, 0, "no tenant => no cables");
+      assert.deepEqual(anon.response.cableAssemblies, []);
+      assert.deepEqual(await searchInterconnectWhereUsed(pool, "J202"), []);
+    });
+
+    // org-other sees only its own cable and can read its detail, not org-default's.
+    await runWithRequestContext("org-other", async () => {
+      const other = await readInterconnectDashboardFromDatabase();
+      assert.equal(other.status, "available");
+      if (other.status !== "available") return;
+      assert.equal(other.response.summary.cableAssemblyCount, 1);
+      assert.ok(other.response.cableAssemblies.some((c) => c.id === "cable-other"));
+      assert.equal((await readCableAssemblyDetailFromDatabase("cable-other")).status, "available");
+      assert.equal((await readCableAssemblyDetailFromDatabase("cable-cab-100")).status, "not_found", "org-other cannot read org-default's cable");
+    });
   } finally {
     setInterconnectPoolForTests(null);
     await pool.end();
@@ -672,7 +733,13 @@ test("readCableAssemblyDetailFromDatabase returns not_found for an unknown cable
  * Verifies the API route returns the typed interconnect dashboard envelope.
  */
 test("GET /interconnects returns the interconnect dashboard", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
   const pool = createInterconnectPool();
+  process.env.NODE_ENV = "test";
+  // Tenant scoping: handleRequest resolves the acting org from the session; the test session puts the
+  // request in org-default so the dashboard returns the seeded org-default rows.
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   setInterconnectPoolForTests(pool);
 
   try {
@@ -690,6 +757,10 @@ test("GET /interconnects returns the interconnect dashboard", async () => {
   } finally {
     setInterconnectPoolForTests(null);
     await pool.end();
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousTestAuth === undefined) delete process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+    else process.env.EE_LIBRARY_ALLOW_TEST_AUTH = previousTestAuth;
   }
 });
 
@@ -797,9 +868,22 @@ function createInterconnectPool(): TestPool {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Tenant isolation (2d): the interconnect tables carry org_id; parts/projects/project_revisions
+    -- also (scoped by earlier increments) since rowExists validates cross-domain links by org.
+    ALTER TABLE parts ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE projects ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE project_revisions ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE cable_assemblies ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE cable_assembly_ends ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE test_fixtures ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE fixture_ports ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE cable_pin_map_rows ADD COLUMN org_id TEXT DEFAULT 'org-default';
   `);
 
   const adapter = db.adapters.createPg();
+  // Interconnect reads/writes are tenant-scoped; run each test body as an org-default teammate.
+  enterRequestContextForTests("org-default");
   return new adapter.Pool() as TestPool;
 }
 
