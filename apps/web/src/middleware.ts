@@ -163,6 +163,7 @@ export const config = {
     "/parts/:path*",
     "/projects/:path*",
     "/system/:path*",
+    "/team/:path*",
     "/vendors/:path*",
     "/where-used/:path*"
   ],
