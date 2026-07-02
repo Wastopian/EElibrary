@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { getRequestOrgId } from "./request-context";
+import { getRequestDb } from "./request-db";
 import {
   buildProjectDocumentSourceFingerprint,
   estimateProjectDocumentExtractionSeconds,
@@ -671,6 +672,13 @@ function buildProjectDocumentExtractionId(projectId: string, relativePath: strin
 function getProjectDocumentExtractionPool(): Pool | null {
   if (pool !== undefined) {
     return pool;
+  }
+
+  // RLS backstop: requests run on the shared per-request tenant transaction (see request-db.ts).
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
   }
 
   const databaseUrl = process.env.DATABASE_URL?.trim();

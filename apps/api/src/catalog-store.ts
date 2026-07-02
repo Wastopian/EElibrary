@@ -10,6 +10,7 @@ import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligen
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
 import { getRequestOrgId, requireRequestOrgId } from "./request-context";
+import { getRequestDb } from "./request-db";
 import type {
   AccessoryRequirement,
   AssetPromotionAuditRecord,
@@ -2300,6 +2301,13 @@ export async function getCatalogStoreStatus(): Promise<CatalogStoreStatus> {
 function getDatabasePool(): Pool | null {
   if (pool) {
     return pool;
+  }
+
+  // RLS backstop: requests run on the shared per-request tenant transaction (see request-db.ts).
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
   }
 
   if (!process.env.DATABASE_URL) {

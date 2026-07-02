@@ -5,6 +5,7 @@
 import { Pool } from "pg";
 import { CatalogStoreError } from "./catalog-store";
 import { getRequestOrgId } from "./request-context";
+import { getRequestDb } from "./request-db";
 import { SUPPLY_OFFER_STALE_AFTER_DAYS } from "@ee-library/shared/supply-offers";
 import type {
   InventoryStatus,
@@ -341,6 +342,13 @@ function getSupplyOfferDatabasePool(): Pool | null {
 
   if (pool) {
     return pool;
+  }
+
+  // RLS backstop: requests run on the shared per-request tenant transaction (see request-db.ts).
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
   }
 
   if (!process.env.DATABASE_URL) {

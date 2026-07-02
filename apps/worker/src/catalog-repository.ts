@@ -1096,7 +1096,13 @@ function getDatabasePool(): Pool {
   }
 
   pool = new Pool({
-    connectionString: process.env.DATABASE_URL
+    connectionString: process.env.DATABASE_URL,
+    // The worker is a trusted system component: its job claim is legitimately cross-org and every
+    // write derives/preserves the owning org explicitly (persistPart ownership rules, org-threaded
+    // acquisition jobs). It is therefore exempt from the RLS backstop, which guards interactive API
+    // requests (migration 055). Only code already executing SQL can set this, so it does not weaken
+    // the backstop against application query bugs.
+    options: "-c app.rls_bypass=on"
   });
 
   return pool;

@@ -22,7 +22,8 @@ function getPool(): Pool {
     throw new Error("DATABASE_URL is required to emit worker heartbeats.");
   }
 
-  sharedPool ??= new Pool({ connectionString: process.env.DATABASE_URL });
+  // Trusted worker connection, exempt from the tenant RLS backstop (see catalog-repository.ts).
+  sharedPool ??= new Pool({ connectionString: process.env.DATABASE_URL, options: "-c app.rls_bypass=on" });
   return sharedPool;
 }
 

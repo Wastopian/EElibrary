@@ -5,6 +5,7 @@
 import { Pool } from "pg";
 import { CatalogStoreError } from "./catalog-store";
 import { getRequestOrgId, requireRequestOrgId } from "./request-context";
+import { getRequestDb } from "./request-db";
 import type {
   CableAssembly,
   CableAssemblyDetail,
@@ -863,6 +864,13 @@ function getInterconnectDatabasePool(): Pool | null {
 
   if (pool) {
     return pool;
+  }
+
+  // RLS backstop: requests run on the shared per-request tenant transaction (see request-db.ts).
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
   }
 
   if (!process.env.DATABASE_URL) {

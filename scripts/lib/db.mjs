@@ -10,11 +10,19 @@ const { Client, Pool } = pg;
 export { requireDatabaseUrl };
 
 /**
+ * Operator-run scripts (migrations, seeds, status checks) are trusted and legitimately cross-tenant:
+ * migration backfills and demo seeds must see and write every org's rows even under the FORCE
+ * ROW LEVEL SECURITY backstop (migration 055). Only code already executing SQL can set this GUC, so it
+ * does not weaken the backstop against application query bugs.
+ */
+const RLS_BYPASS_OPTIONS = "-c app.rls_bypass=on";
+
+/**
  * Connects a single pg.Client using DATABASE_URL and returns it.
  * Callers are responsible for calling client.end().
  */
 export async function connectClient() {
-  const client = new Client({ connectionString: requireDatabaseUrl() });
+  const client = new Client({ connectionString: requireDatabaseUrl(), options: RLS_BYPASS_OPTIONS });
   await client.connect();
   return client;
 }
@@ -23,7 +31,7 @@ export async function connectClient() {
  * Creates a short-lived pool for higher-throughput callers.
  */
 export function createPool() {
-  return new Pool({ connectionString: requireDatabaseUrl() });
+  return new Pool({ connectionString: requireDatabaseUrl(), options: RLS_BYPASS_OPTIONS });
 }
 
 /**

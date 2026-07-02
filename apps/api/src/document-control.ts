@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { CatalogStoreError } from "./catalog-store";
 import { getRequestOrgId, requireRequestOrgId } from "./request-context";
+import { getRequestDb } from "./request-db";
 import type {
   AssetAvailabilityStatus,
   AssetProvenance,
@@ -1013,6 +1014,13 @@ function getDocumentControlDatabasePool(): Pool | null {
 
   if (process.env.NODE_ENV === "test") {
     return null;
+  }
+
+  // RLS backstop: requests run on the shared per-request tenant transaction (see request-db.ts).
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
   }
 
   if (!process.env.DATABASE_URL) {
