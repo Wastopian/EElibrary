@@ -2536,13 +2536,15 @@ async function readCircuitBlockWhereUsedHitCount(
   }
 
   const partIdPlaceholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
+  const orgPlaceholder = `$${scannedPartIds.length + 1}`;
   const result = await databasePool.query<{ count: string }>(
     `
       SELECT COUNT(DISTINCT cbp.id)::text AS count
       FROM circuit_block_parts cbp
       WHERE cbp.part_id IN (${partIdPlaceholders})
+        AND cbp.org_id = ${orgPlaceholder}
     `,
-    scannedPartIds
+    [...scannedPartIds, getRequestOrgId()]
   );
 
   return Number.parseInt(result.rows[0]?.count ?? "0", 10) || 0;
@@ -2564,6 +2566,7 @@ async function readCircuitBlockWhereUsedPreview(
 
   const partIdPlaceholders = scannedPartIds.map((_, index) => `$${index + 1}`).join(", ");
   const limitPlaceholder = `$${scannedPartIds.length + 1}`;
+  const orgPlaceholder = `$${scannedPartIds.length + 2}`;
   const result = await databasePool.query<{
     block_part_id: string;
     circuit_block_id: string;
@@ -2594,10 +2597,11 @@ async function readCircuitBlockWhereUsedPreview(
       JOIN circuit_blocks cb ON cb.id = cbp.circuit_block_id
       LEFT JOIN parts p ON p.id = cbp.part_id
       WHERE cbp.part_id IN (${partIdPlaceholders})
+        AND cbp.org_id = ${orgPlaceholder}
       ORDER BY cb.block_key ASC, cbp.is_required DESC, cbp.role ASC, cbp.id ASC
       LIMIT ${limitPlaceholder}
     `,
-    [...scannedPartIds, limit]
+    [...scannedPartIds, limit, getRequestOrgId()]
   );
 
   return result.rows.map((row) => ({
@@ -2954,8 +2958,8 @@ export async function createEvidenceAttachmentInDatabase(input: EvidenceAttachme
     const now = new Date();
     const result = await databasePool.query<DatabaseEvidenceAttachmentRow>(
       `
-        INSERT INTO evidence_attachments (id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+        INSERT INTO evidence_attachments (id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, org_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)
         RETURNING id, target_type, target_id, evidence_type, title, source_url, storage_key, file_hash, mime_type, notes, provenance, review_status, uploaded_by, created_at, updated_at
       `,
       [
@@ -2972,6 +2976,7 @@ export async function createEvidenceAttachmentInDatabase(input: EvidenceAttachme
         normalized.input.provenance,
         normalized.input.reviewStatus,
         uploadedBy,
+        requireRequestOrgId(),
         now
       ]
     );
@@ -3337,8 +3342,8 @@ export async function createCircuitBlockInDatabase(input: CircuitBlockCreateInpu
     const now = new Date();
     const result = await databasePool.query<DatabaseCircuitBlockRow>(
       `
-        INSERT INTO circuit_blocks (id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $10)
+        INSERT INTO circuit_blocks (id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, org_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $11)
         RETURNING id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at
       `,
       [
@@ -3351,6 +3356,7 @@ export async function createCircuitBlockInDatabase(input: CircuitBlockCreateInpu
         normalized.input.status,
         normalized.input.reuseScope,
         JSON.stringify(normalized.input.constraints),
+        requireRequestOrgId(),
         now
       ]
     );
@@ -3499,8 +3505,8 @@ export async function createCircuitBlockPartInDatabase(circuitBlockId: string, i
     const now = new Date();
     const result = await databasePool.query<DatabaseCircuitBlockPartRow>(
       `
-        INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+        INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, org_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
         ON CONFLICT (circuit_block_id, part_id, role) DO UPDATE
         SET quantity = EXCLUDED.quantity,
           is_required = EXCLUDED.is_required,
@@ -3518,6 +3524,7 @@ export async function createCircuitBlockPartInDatabase(circuitBlockId: string, i
         normalized.input.isRequired,
         normalized.input.substitutionPolicy,
         normalized.input.notes,
+        requireRequestOrgId(),
         now
       ]
     );
@@ -3679,9 +3686,9 @@ export async function createCircuitBlockKnownRiskInDatabase(
     const result = await databasePool.query<DatabaseCircuitBlockKnownRiskRow>(
       `
         INSERT INTO circuit_block_known_risks (
-          id, circuit_block_id, title, detail, severity, recorded_by, recorded_at, evidence_url, created_at, updated_at
+          id, circuit_block_id, title, detail, severity, recorded_by, recorded_at, evidence_url, org_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $7, $7)
         RETURNING id, circuit_block_id, title, detail, severity, recorded_by, recorded_at,
                   resolved_at, resolved_by, resolution_notes, evidence_url, created_at, updated_at
       `,
@@ -3693,7 +3700,8 @@ export async function createCircuitBlockKnownRiskInDatabase(
         normalized.input.severity,
         normalized.input.recordedBy,
         now,
-        normalized.input.evidenceUrl
+        normalized.input.evidenceUrl,
+        requireRequestOrgId()
       ]
     );
 
@@ -4081,9 +4089,9 @@ export async function createPartEngineeringRecordInDatabase(
         INSERT INTO part_engineering_records (
           id, part_id, record_kind, title, detail, severity, outcome,
           related_asset_id, datasheet_revision_id, related_mpn, depended_on_by,
-          recorded_by, recorded_at, evidence_url, created_at, updated_at
+          recorded_by, recorded_at, evidence_url, org_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $13, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $13, $13)
         RETURNING ${PART_ENGINEERING_RECORD_RETURNING}
       `,
       [
@@ -4100,7 +4108,8 @@ export async function createPartEngineeringRecordInDatabase(
         normalized.input.dependedOnBy,
         normalized.input.recordedBy,
         now,
-        normalized.input.evidenceUrl
+        normalized.input.evidenceUrl,
+        requireRequestOrgId()
       ]
     );
 
@@ -4221,9 +4230,9 @@ async function autoDraftPartEngineeringRecord(databasePool: Pool, params: AutoDr
           related_asset_id, datasheet_revision_id, related_mpn, depended_on_by,
           recorded_by, recorded_at, evidence_url,
           draft_status, draft_source, trigger_ref,
-          created_at, updated_at
+          org_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, NULL, 'proposed', $13, $14, $12, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, NULL, 'proposed', $13, $14, $15, $12, $12)
         ON CONFLICT (id) DO NOTHING
       `,
       [
@@ -4240,7 +4249,8 @@ async function autoDraftPartEngineeringRecord(databasePool: Pool, params: AutoDr
         params.recordedBy ?? null,
         now,
         params.draftSource,
-        params.triggerRef
+        params.triggerRef,
+        requireRequestOrgId()
       ]
     );
   } catch (error) {
@@ -4610,10 +4620,13 @@ async function readWhereUsedCircuitBlockMatches(databasePool: Pool, query: strin
   const result = await databasePool.query<DatabaseCircuitBlockSummaryRow>(
     `
       ${CIRCUIT_BLOCK_SUMMARIES_SQL}
-      WHERE lower(cb.id) = lower($1)
-        OR lower(cb.block_key) = lower($1)
-        OR lower(cb.block_key) LIKE '%' || lower($1) || '%'
-        OR lower(cb.name) LIKE '%' || lower($1) || '%'
+      WHERE (
+          lower(cb.id) = lower($1)
+          OR lower(cb.block_key) = lower($1)
+          OR lower(cb.block_key) LIKE '%' || lower($1) || '%'
+          OR lower(cb.name) LIKE '%' || lower($1) || '%'
+        )
+        AND cb.org_id = $2
       ORDER BY
         CASE
           WHEN lower(cb.id) = lower($1) THEN 0
@@ -4624,7 +4637,7 @@ async function readWhereUsedCircuitBlockMatches(databasePool: Pool, query: strin
         cb.id ASC
       LIMIT 12
     `,
-    [query]
+    [query, getRequestOrgId()]
   );
 
   return result.rows.map(mapCircuitBlockSummaryRow);
@@ -4906,7 +4919,11 @@ async function readProjectEvidenceAttachments(databasePool: Pool | PoolClient, p
  */
 async function readEvidenceAttachments(databasePool: Pool | PoolClient, filters: EvidenceAttachmentListFilters): Promise<EvidenceAttachment[]> {
   const clauses: string[] = [];
-  const values: Array<string> = [];
+  const values: Array<string | null> = [];
+
+  // Tenant scope: the evidence vault only ever lists the acting org's evidence (null tenant ⇒ none).
+  values.push(getRequestOrgId());
+  clauses.push(`org_id = $${values.length}`);
 
   if (filters.targetType) {
     values.push(filters.targetType);
@@ -5066,8 +5083,8 @@ async function upsertFollowUpSeeds(client: PoolClient, seeds: FollowUpSeedRecord
 
     await client.query(
       `
-        INSERT INTO follow_up_records (id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status, source_inputs, evidence_attachment_ids, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', $10::jsonb, $11::jsonb, $12, $12)
+        INSERT INTO follow_up_records (id, target_type, target_id, source_type, source_finding_id, title, detail, next_action, severity, status, source_inputs, evidence_attachment_ids, org_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', $10::jsonb, $11::jsonb, $12, $13, $13)
         ON CONFLICT (target_type, target_id, source_type, source_finding_id) DO UPDATE
         SET title = EXCLUDED.title,
           detail = EXCLUDED.detail,
@@ -5088,6 +5105,7 @@ async function upsertFollowUpSeeds(client: PoolClient, seeds: FollowUpSeedRecord
         seed.severity,
         JSON.stringify(seed.sourceInputs),
         JSON.stringify(seed.evidenceAttachmentIds),
+        requireRequestOrgId(),
         now
       ]
     );
@@ -5112,6 +5130,10 @@ async function readCircuitBlockSummaries(
 ): Promise<CircuitBlockSummary[]> {
   const whereClauses: string[] = [];
   const params: unknown[] = [];
+
+  // Tenant scope: the block list only ever shows the acting org's reusable blocks.
+  params.push(getRequestOrgId());
+  whereClauses.push(`cb.org_id = $${params.length}`);
 
   if (filters.query) {
     params.push(`%${filters.query.toLowerCase()}%`);
@@ -5165,9 +5187,9 @@ async function readCircuitBlockSummary(databasePool: Pool | PoolClient, circuitB
   const result = await databasePool.query<DatabaseCircuitBlockSummaryRow>(
     `
       ${CIRCUIT_BLOCK_SUMMARIES_SQL}
-      WHERE cb.id = $1
+      WHERE cb.id = $1 AND cb.org_id = $2
     `,
-    [circuitBlockId]
+    [circuitBlockId, getRequestOrgId()]
   );
 
   return result.rows[0] ? mapCircuitBlockSummaryRow(result.rows[0]) : null;
@@ -6218,7 +6240,9 @@ async function bomImportExists(databasePool: Pool | PoolClient, bomImportId: str
  * Checks whether one reusable circuit block exists before returning scoped reads or writes.
  */
 async function circuitBlockExists(databasePool: Pool | PoolClient, circuitBlockId: string): Promise<boolean> {
-  const result = await databasePool.query<{ id: string }>("SELECT id FROM circuit_blocks WHERE id = $1 LIMIT 1", [circuitBlockId]);
+  // Tenant scope: a circuit block id from another org reads as absent, so opening / editing /
+  // instantiating / following-up a reusable block is confined to the acting org.
+  const result = await databasePool.query<{ id: string }>("SELECT id FROM circuit_blocks WHERE id = $1 AND org_id = $2 LIMIT 1", [circuitBlockId, getRequestOrgId()]);
 
   return result.rows.length > 0;
 }
@@ -7936,13 +7960,13 @@ export async function createExportBundleInDatabase(
     await databasePool.query(
       `INSERT INTO export_bundles (id, project_id, revision_label, bundle_format, storage_key, manifest,
          part_count, included_asset_count, omitted_asset_count, warning_count, created_by, created_at,
-         assembly_status, assembly_error, assembly_completed_at, assembly_attempt_count, archive_storage_key)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NULL, NULL, 0, NULL)`,
+         assembly_status, assembly_error, assembly_completed_at, assembly_attempt_count, archive_storage_key, org_id)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NULL, NULL, 0, NULL, $14)`,
       [
         bundleId, projectId, input.revisionLabel ?? null, format, storageKey,
         JSON.stringify(manifest), partIds.length, includedAssets.length,
         omissions.length, warnings.length, actor, new Date(generatedAt),
-        assemblyStatus
+        assemblyStatus, requireRequestOrgId()
       ]
     );
 
@@ -9423,10 +9447,11 @@ export async function upsertProjectRevisionApprovalGateInDatabase(
           created_by,
           decided_by,
           decided_at,
+          org_id,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13)
         ON CONFLICT (project_id, from_project_revision_id, to_project_revision_id, diff_fingerprint)
         DO UPDATE SET
           gate_status = EXCLUDED.gate_status,
@@ -9462,6 +9487,7 @@ export async function upsertProjectRevisionApprovalGateInDatabase(
         actor,
         decidedBy,
         decidedAt,
+        requireRequestOrgId(),
         now
       ]
     );
@@ -9690,7 +9716,7 @@ export async function readCircuitBlockProjectDependenciesFromDatabase(blockId: s
   }
 
   try {
-    const blockCheck = await databasePool.query<{ id: string }>("SELECT id FROM circuit_blocks WHERE id = $1", [blockId]);
+    const blockCheck = await databasePool.query<{ id: string }>("SELECT id FROM circuit_blocks WHERE id = $1 AND org_id = $2", [blockId, getRequestOrgId()]);
 
     if ((blockCheck.rowCount ?? 0) === 0) {
       return { status: "not_found" };
@@ -9960,9 +9986,9 @@ export async function createPartSubstitutionInDatabase(
     const now = new Date();
     await databasePool.query(
       `INSERT INTO part_substitutions
-         (id, original_part_id, substitute_part_id, scope, project_id, signoff_notes, approved_by, approval_status, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', $8)`,
-      [id, originalPartId, input.substitutePartId, scope, projectId, signoffNotes, approvedBy, now]
+         (id, original_part_id, substitute_part_id, scope, project_id, signoff_notes, approved_by, approval_status, org_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', $8, $9)`,
+      [id, originalPartId, input.substitutePartId, scope, projectId, signoffNotes, approvedBy, requireRequestOrgId(), now]
     );
 
     const summary = await readOnePartSubstitutionSummary(databasePool, id);
@@ -10354,8 +10380,8 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
     }
 
     const blockResult = await client.query<{ id: string; name: string; block_key: string }>(
-      "SELECT id, name, block_key FROM circuit_blocks WHERE id = $1",
-      [input.circuitBlockId]
+      "SELECT id, name, block_key FROM circuit_blocks WHERE id = $1 AND org_id = $2",
+      [input.circuitBlockId, getRequestOrgId()]
     );
     if (blockResult.rowCount === 0) {
       await client.query("ROLLBACK");
@@ -10479,8 +10505,8 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
 
     const instantiationId = `cbinst-${randomUUID()}`;
     const instantiationResult = await client.query<DatabaseCircuitBlockInstantiationRow>(
-      `INSERT INTO circuit_block_instantiations (id, circuit_block_id, project_id, project_revision_id, bom_import_id, include_optional, designator_prefix, notes, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO circuit_block_instantiations (id, circuit_block_id, project_id, project_revision_id, bom_import_id, include_optional, designator_prefix, notes, created_by, org_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id, circuit_block_id, project_id, project_revision_id, bom_import_id, include_optional, designator_prefix, notes, created_by, created_at`,
       [
         instantiationId,
@@ -10492,6 +10518,7 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
         designatorPrefix,
         notes,
         createdBy,
+        requireRequestOrgId(),
         now
       ]
     );

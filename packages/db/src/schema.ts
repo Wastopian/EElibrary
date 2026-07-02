@@ -1338,6 +1338,7 @@ export const projectRevisionApprovalGates = pgTable(
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.projectId, t.fromProjectRevisionId, t.toProjectRevisionId, t.diffFingerprint),
@@ -1365,6 +1366,7 @@ export const circuitBlocks = pgTable(
     constraints: jsonb("constraints").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     uniqueIndex("uq_circuit_blocks_block_key").on(t.blockKey),
@@ -1399,6 +1401,7 @@ export const circuitBlockParts = pgTable(
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.circuitBlockId, t.partId, t.role),
@@ -1431,6 +1434,7 @@ export const evidenceAttachments = pgTable(
     uploadedBy: text("uploaded_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_evidence_attachments_target").on(t.targetType, t.targetId, t.createdAt),
@@ -1475,6 +1479,7 @@ export const followUpRecords = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     unique().on(t.targetType, t.targetId, t.sourceType, t.sourceFindingId),
@@ -1567,6 +1572,7 @@ export const exportBundles = pgTable(
     warningCount: integer("warning_count").notNull().default(0),
     createdBy: text("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id").references(() => organizations.id),
   },
   (t) => [
     index("idx_export_bundles_project").on(t.projectId, t.createdAt),
