@@ -177,6 +177,31 @@ and org-on-signup.
   under org A is invisible to org B's list / detail / where-used (and to an anonymous request), and
   that the evidence vault only ever returns the acting org's evidence.
 
+### Increment 3a — org-scoped id generation (shipped)
+
+- **Why.** Several entity ids are derived deterministically from a natural key and were **globally**
+  unique: `buildProjectId` = `project-<projectKey>`, `buildCircuitBlockId` = `cblock-<blockKey>`, and
+  the worker's provider part id (`part-<provider>-<identity>`) plus its source/asset/datasheet/metric/
+  supply-offering child ids. With only `org-default` writing, they could not collide — but the moment a
+  second org reuses a project/block key or imports a part another org already holds, the second write
+  would hit a primary-key collision (or, for parts, `persistPart`'s `ON CONFLICT (id)` would silently
+  refresh the first org's row). This is a hard prerequisite for org-on-signup.
+- **What.** A shared helper `scopeEntityId(orgId, legacyId)` (`@ee-library/shared/tenant`) namespaces
+  such ids: `org-default` keeps the historical unprefixed id (so existing rows, foreign keys, and
+  deterministic re-import/refresh are untouched — a pure no-op for it), every other org gets
+  `<orgId>__<legacyId>`. Applied at the roots: `buildProjectId` / `buildCircuitBlockId`
+  (`project-memory-store.ts`) and, in the worker, a single `namespaceNormalizedPartIds` pass at the
+  `persistNormalizedPartRows` boundary that rewrites the part + every org-scoped child id and
+  cross-reference (leaving the **global** manufacturer / package / connector-family taxonomy alone).
+  Interconnect ids (random) and doc-extraction ids (hash of the org-scoped project id) were already
+  collision-safe.
+- **Identity.** The global project-key uniqueness (`uq_projects_project_key`) becomes per-tenant
+  `(org_id, project_key)` (migration `053`), mirroring the circuit-block key swap in `052`.
+- **Proof.** Two orgs reusing the same project/block key get distinct ids and both persist; a provider
+  part imported by two orgs yields two distinct rows with no cross-update, while `org-default` keeps its
+  legacy ids and refreshes in place. This increment is a no-op for the live single tenant; org-on-signup
+  (3b) activates it.
+
 ## Later
 
 - Increment 3: per-org invite codes/links, basic org management UI.
