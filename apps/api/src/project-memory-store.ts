@@ -10,6 +10,7 @@ import {
   matchesCircuitBlockReuseReadinessFilter
 } from "@ee-library/shared/circuit-block-readiness";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
+import { scopeEntityId } from "@ee-library/shared/tenant";
 import { CatalogStoreError } from "./catalog-store";
 import { getRequestOrgId, requireRequestOrgId } from "./request-context";
 import { searchInterconnectWhereUsed } from "./interconnect-store";
@@ -1069,7 +1070,7 @@ export async function createProjectInDatabase(input: ProjectCreateInput): Promis
     try {
       await client.query("BEGIN");
 
-      const projectId = buildProjectId(normalizedProjectKey);
+      const projectId = buildProjectId(orgId, normalizedProjectKey);
       const revisionId = buildProjectRevisionId(projectId, revisionLabel);
       const now = new Date();
       const projectResult = await client.query<DatabaseProjectRow>(
@@ -3339,6 +3340,7 @@ export async function createCircuitBlockInDatabase(input: CircuitBlockCreateInpu
   }
 
   try {
+    const orgId = requireRequestOrgId();
     const now = new Date();
     const result = await databasePool.query<DatabaseCircuitBlockRow>(
       `
@@ -3347,7 +3349,7 @@ export async function createCircuitBlockInDatabase(input: CircuitBlockCreateInpu
         RETURNING id, block_key, name, description, block_type, owner, status, reuse_scope, constraints, created_at, updated_at
       `,
       [
-        buildCircuitBlockId(normalized.input.blockKey),
+        buildCircuitBlockId(orgId, normalized.input.blockKey),
         normalized.input.blockKey,
         normalized.input.name,
         normalized.input.description,
@@ -3356,7 +3358,7 @@ export async function createCircuitBlockInDatabase(input: CircuitBlockCreateInpu
         normalized.input.status,
         normalized.input.reuseScope,
         JSON.stringify(normalized.input.constraints),
-        requireRequestOrgId(),
+        orgId,
         now
       ]
     );
@@ -7563,10 +7565,11 @@ function normalizeReleasedAt(value: string | null | undefined): Date | null | "i
 }
 
 /**
- * Builds a deterministic project id from the unique project key.
+ * Builds a deterministic project id from the unique project key, namespaced to the owning org so two
+ * teams can hold a project with the same key without colliding on the primary key.
  */
-function buildProjectId(projectKey: string): string {
-  return `project-${slugify(projectKey)}`;
+function buildProjectId(orgId: string, projectKey: string): string {
+  return scopeEntityId(orgId, `project-${slugify(projectKey)}`);
 }
 
 /**
@@ -7584,10 +7587,11 @@ function buildProjectPartUsageId(bomLineId: string): string {
 }
 
 /**
- * Builds a deterministic circuit block id from the block key.
+ * Builds a deterministic circuit block id from the block key, namespaced to the owning org so two
+ * teams can hold a block with the same key without colliding on the primary key.
  */
-function buildCircuitBlockId(blockKey: string): string {
-  return `cblock-${slugify(blockKey)}`;
+function buildCircuitBlockId(orgId: string, blockKey: string): string {
+  return scopeEntityId(orgId, `cblock-${slugify(blockKey)}`);
 }
 
 /**

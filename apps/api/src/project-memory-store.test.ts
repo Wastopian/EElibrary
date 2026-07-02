@@ -3700,6 +3700,83 @@ test("tenant isolation: the evidence vault only returns the acting org's evidenc
 });
 
 /**
+ * Verifies org-scoped id generation: a project and a circuit block have deterministic ids derived from
+ * a natural key, so two orgs reusing the same key must get distinct ids and both persist. org-default
+ * keeps the legacy unprefixed id; other orgs get a namespaced id. This is what lets the app hold a
+ * per-tenant copy of the same key without a primary-key collision.
+ */
+test("tenant isolation: project and circuit-block ids are namespaced per org so two teams can share a key", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // org-default (the harness default context) keeps the legacy unprefixed ids.
+    const defaultProject = await createProjectInDatabase({
+      initialRevisionLabel: "Rev A",
+      name: "Shared Board",
+      owner: "hardware",
+      projectKey: "SHARED",
+      status: "prototype"
+    });
+    assert.equal(defaultProject.status, "created");
+    if (defaultProject.status !== "created") throw new Error("default project create failed");
+    assert.equal(defaultProject.response.project.id, "project-shared", "org-default keeps the legacy project id");
+
+    const defaultBlock = await createCircuitBlockInDatabase({
+      blockKey: "SHARED-BLK",
+      blockType: "protection",
+      constraints: {},
+      name: "Shared block",
+      owner: "hardware",
+      reuseScope: "Tenant isolation test",
+      status: "in_review"
+    });
+    assert.equal(defaultBlock.status, "created");
+    if (defaultBlock.status !== "created") throw new Error("default block create failed");
+    assert.equal(defaultBlock.response.circuitBlock.id, "cblock-shared-blk", "org-default keeps the legacy block id");
+
+    // A different org reuses the SAME keys: both persist with distinct, org-namespaced ids.
+    await runWithRequestContext("org-other", async () => {
+      const otherProject = await createProjectInDatabase({
+        initialRevisionLabel: "Rev A",
+        name: "Shared Board",
+        owner: "hardware",
+        projectKey: "SHARED",
+        status: "prototype"
+      });
+      assert.equal(otherProject.status, "created", "org-other can reuse the same project key");
+      if (otherProject.status !== "created") throw new Error("other project create failed");
+      assert.equal(otherProject.response.project.id, "org-other__project-shared");
+
+      const otherBlock = await createCircuitBlockInDatabase({
+        blockKey: "SHARED-BLK",
+        blockType: "protection",
+        constraints: {},
+        name: "Shared block",
+        owner: "hardware",
+        reuseScope: "Tenant isolation test",
+        status: "in_review"
+      });
+      assert.equal(otherBlock.status, "created", "org-other can reuse the same block key");
+      if (otherBlock.status !== "created") throw new Error("other block create failed");
+      assert.equal(otherBlock.response.circuitBlock.id, "org-other__cblock-shared-blk");
+
+      // The namespaced ids are distinct rows; org-other cannot resolve org-default's block by its
+      // legacy id.
+      const crossOrg = await readCircuitBlockDetailFromDatabase("cblock-shared-blk");
+      assert.equal(crossOrg.status, "not_found", "org-other cannot see org-default's block by its legacy id");
+    });
+
+    // org-default still resolves its own legacy-id rows after the other org's writes.
+    const defaultDetail = await readCircuitBlockDetailFromDatabase("cblock-shared-blk");
+    assert.equal(defaultDetail.status, "available", "org-default still resolves its own block");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates a pg-mem project-memory database with optional fixture rows.
  */
 function createProjectMemoryPool(seedRows: boolean): TestPool {
@@ -3944,7 +4021,7 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
 
     CREATE TABLE circuit_blocks (
       id TEXT PRIMARY KEY,
-      block_key TEXT NOT NULL UNIQUE,
+      block_key TEXT NOT NULL,
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       block_type TEXT NOT NULL DEFAULT 'other',
@@ -4033,6 +4110,10 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
     ALTER TABLE part_engineering_records ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE project_revision_approval_gates ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE part_substitutions ADD COLUMN org_id TEXT DEFAULT 'org-default';
+
+    -- Circuit-block key uniqueness is per-tenant (migration 052), so two orgs can each hold a block
+    -- with the same key. The org_id column exists after the ALTER above.
+    CREATE UNIQUE INDEX circuit_blocks_org_block_key_unique ON circuit_blocks (org_id, block_key);
   `);
 
   seedInternalCatalogRows(db);

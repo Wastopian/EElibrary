@@ -73,6 +73,10 @@
     "./supply-offers": {
       "types": "./src/supply-offers.ts",
       "default": "./src/supply-offers.ts"
+    },
+    "./tenant": {
+      "types": "./src/tenant.ts",
+      "default": "./src/tenant.ts"
     }
   },
   "scripts": {

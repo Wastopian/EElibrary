@@ -7,6 +7,7 @@ import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/as
 import { buildBuildableMatingSet, getConnectorRelationEffectiveConfidence } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { SUPPLY_OFFER_MISSING_FROM_PROVIDER_REASON } from "@ee-library/shared/supply-offers";
+import { scopeEntityId } from "@ee-library/shared/tenant";
 import type {
   AccessoryRequirement,
   Asset,
@@ -625,9 +626,84 @@ async function listPromotionDiagnostics(limit: number): Promise<PromotionDiagnos
 }
 
 /**
+ * Namespaces every org-scoped id (and cross-reference) in a normalized part to its owning org so two
+ * teams importing the same provider part never collide on a primary key. Provider ids are derived
+ * deterministically from provider/mpn slugs and are identical across orgs; without this, the second
+ * org's import would hit `ON CONFLICT (id)` and silently cross-update the first org's rows.
+ *
+ * `org-default` keeps the historical unprefixed ids (this is a pure no-op for it, so existing data and
+ * deterministic re-import/refresh are untouched). The **global taxonomy** — manufacturer, package,
+ * connector-family — is intentionally left alone (those tables are shared across tenants), as are the
+ * relation collections, which only the org-default seed/local-catalog provider ever populates. The real
+ * distributor / JLC / Octopart import paths that non-default orgs use populate only the core
+ * collections handled here.
+ */
+export function namespaceNormalizedPartIds(normalizedPart: NormalizedProviderPart, orgId: string): NormalizedProviderPart {
+  if (orgId === DEFAULT_ORG_ID) {
+    return normalizedPart;
+  }
+
+  const scope = (id: string): string => scopeEntityId(orgId, id);
+  const scopeNullable = (id: string | null): string | null => (id === null ? null : scope(id));
+
+  return {
+    ...normalizedPart,
+    // Global taxonomy (manufacturer / package / connectorFamily) and the relation collections are left
+    // as-is on purpose; see the doc comment.
+    part: { ...normalizedPart.part, id: scope(normalizedPart.part.id) },
+    sourceRecord: {
+      ...normalizedPart.sourceRecord,
+      id: scope(normalizedPart.sourceRecord.id),
+      partId: scopeNullable(normalizedPart.sourceRecord.partId)
+    },
+    assets: normalizedPart.assets.map((asset) => ({
+      ...asset,
+      id: scope(asset.id),
+      partId: scope(asset.partId),
+      sourceRecordId: scopeNullable(asset.sourceRecordId),
+      generationSourceAssetId: scopeNullable(asset.generationSourceAssetId)
+    })),
+    datasheetRevisions: normalizedPart.datasheetRevisions.map((revision) => ({
+      ...revision,
+      id: scope(revision.id),
+      partId: scope(revision.partId),
+      sourceRecordId: scopeNullable(revision.sourceRecordId),
+      fileAssetId: scopeNullable(revision.fileAssetId)
+    })),
+    metrics: normalizedPart.metrics.map((metric) => ({
+      ...metric,
+      id: scope(metric.id),
+      partId: scope(metric.partId),
+      sourceRecordId: scopeNullable(metric.sourceRecordId),
+      sourceRevisionId: scope(metric.sourceRevisionId)
+    })),
+    supplyOfferings: normalizedPart.supplyOfferings.map((offering) => ({
+      ...offering,
+      id: scope(offering.id),
+      partId: scope(offering.partId),
+      sourceRecordId: scope(offering.sourceRecordId),
+      priceBreaks: offering.priceBreaks.map((priceBreak) => ({
+        ...priceBreak,
+        id: scope(priceBreak.id),
+        supplyOfferingId: scope(priceBreak.supplyOfferingId)
+      }))
+    })),
+    extractionSignals: normalizedPart.extractionSignals.map((signal) => ({
+      ...signal,
+      id: scope(signal.id),
+      partId: scope(signal.partId),
+      sourceRecordId: scopeNullable(signal.sourceRecordId),
+      datasheetRevisionId: scopeNullable(signal.datasheetRevisionId),
+      assetId: scopeNullable(signal.assetId)
+    }))
+  };
+}
+
+/**
  * Persists normalized rows using an existing transaction-capable client.
  */
-export async function persistNormalizedPartRows(client: PoolClient, normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<void> {
+export async function persistNormalizedPartRows(client: PoolClient, rawNormalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<void> {
+  const normalizedPart = namespaceNormalizedPartIds(rawNormalizedPart, orgId);
   const previousPartIdentity = await readStoredPartIdentity(client, normalizedPart.part.id);
 
   await persistManufacturer(client, normalizedPart.manufacturer);

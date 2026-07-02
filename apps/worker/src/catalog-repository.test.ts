@@ -452,30 +452,66 @@ test("persistNormalizedPartRows repeat import updates stable canonical rows", as
   }
 });
 
-test("persistNormalizedPartRows stamps the part's org on its children and re-ingest preserves ownership", async () => {
+test("persistNormalizedPartRows namespaces ids per org so a shared provider part never collides across teams", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
 
   try {
-    // Ingest under org-acme: the part and its just-written children inherit org-acme.
+    // Ingest under org-acme: the part and its just-written children carry the org-namespaced id and
+    // inherit org-acme.
     await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6), "org-acme");
 
-    const part = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = 'part-repeat-c1'");
-    const source = await client.query<{ org_id: string | null }>("SELECT org_id FROM source_records WHERE id = 'source-repeat-provider-c1'");
-    const readiness = await client.query<{ org_id: string | null }>("SELECT org_id FROM part_readiness_summaries WHERE part_id = 'part-repeat-c1'");
+    const acmePartId = "org-acme__part-repeat-c1";
+    const acmeSourceId = "org-acme__source-repeat-provider-c1";
+    const part = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = $1", [acmePartId]);
+    const source = await client.query<{ org_id: string | null }>("SELECT org_id FROM source_records WHERE id = $1", [acmeSourceId]);
+    const readiness = await client.query<{ org_id: string | null }>("SELECT org_id FROM part_readiness_summaries WHERE part_id = $1", [acmePartId]);
 
     assert.equal(part.rows[0]?.org_id, "org-acme");
     assert.equal(source.rows[0]?.org_id, "org-acme", "the part's source record inherits its org");
     assert.equal(readiness.rows[0]?.org_id, "org-acme", "the projection row inherits the part's org");
 
-    // Re-ingest under a different org: persistPart keeps the part's original org, so children stay put.
+    // A DIFFERENT org importing the SAME provider part gets its own namespaced copy — no ON CONFLICT
+    // cross-update of org-acme's rows. This is the collision fix org-scoped ids exist for.
     await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.7), "org-other");
 
-    const partAfter = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = 'part-repeat-c1'");
-    const sourceAfter = await client.query<{ org_id: string | null }>("SELECT org_id FROM source_records WHERE id = 'source-repeat-provider-c1'");
+    const otherPart = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = $1", ["org-other__part-repeat-c1"]);
+    assert.equal(otherPart.rows[0]?.org_id, "org-other", "the other org gets its own part copy");
 
-    assert.equal(partAfter.rows[0]?.org_id, "org-acme", "re-ingest does not re-own the part");
-    assert.equal(sourceAfter.rows[0]?.org_id, "org-acme", "re-ingest does not re-own an existing child");
+    const acmeAfter = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = $1", [acmePartId]);
+    assert.equal(acmeAfter.rows[0]?.org_id, "org-acme", "the other org's import does not touch org-acme's part");
+
+    const copies = await client.query<{ count: number | string }>("SELECT COUNT(*) AS count FROM parts WHERE mpn = 'REPEAT-1'");
+    assert.equal(Number(copies.rows[0]?.count), 2, "each org holds its own row for the shared MPN");
+
+    // Same-org re-ingest still refreshes in place (one row) and never re-owns it.
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T06:00:00.000Z", 0.9), "org-acme");
+
+    const acmeReingest = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = $1", [acmePartId]);
+    assert.equal(acmeReingest.rows[0]?.org_id, "org-acme", "same-org re-ingest preserves ownership");
+
+    const acmeCount = await client.query<{ count: number | string }>("SELECT COUNT(*) AS count FROM parts WHERE id = $1", [acmePartId]);
+    assert.equal(Number(acmeCount.rows[0]?.count), 1, "same-org re-ingest refreshes in place, no duplicate");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows keeps org-default on legacy ids so existing data and refresh are untouched", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    // org-default is the pre-multi-tenant tenant: its ids stay unprefixed so existing rows, foreign
+    // keys, and deterministic ON CONFLICT refreshes keep resolving to the same id.
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6), "org-default");
+
+    const part = await client.query<{ org_id: string }>("SELECT org_id FROM parts WHERE id = 'part-repeat-c1'");
+    const source = await client.query<{ org_id: string | null }>("SELECT org_id FROM source_records WHERE id = 'source-repeat-provider-c1'");
+
+    assert.equal(part.rows[0]?.org_id, "org-default", "org-default keeps the legacy part id");
+    assert.equal(source.rows[0]?.org_id, "org-default", "org-default keeps the legacy source id");
   } finally {
     client.release();
     await pool.end();

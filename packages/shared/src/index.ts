@@ -16,3 +16,4 @@ export * from "./provider-lookup";
 export * from "./review-workflow";
 export * from "./system-health-types";
 export * from "./supply-offers";
+export * from "./tenant";
