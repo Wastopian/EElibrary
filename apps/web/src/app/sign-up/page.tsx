@@ -11,6 +11,7 @@ import {
   resolveSignUpNotice
 } from "@/lib/auth-form-state";
 import { buildNewTeamRecords, normalizeTeamName } from "@/lib/sign-up";
+import { buildJoiningUserRecord, normalizeInviteCode } from "@/lib/team-invite";
 import { createDbPool, organizations, users } from "@ee-library/db";
 import { hashSync } from "bcryptjs";
 import { eq } from "drizzle-orm";
@@ -18,10 +19,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createHash, timingSafeEqual } from "node:crypto";
 
-/** SignUpSearchParams carries callback and validation state for the account creation route. */
+/** SignUpSearchParams carries callback, validation state, and the create/join mode for the route. */
 type SignUpSearchParams = {
   callbackUrl?: string | string[];
   error?: string | string[];
+  join?: string | string[];
 };
 
 /** SignUpPageProps describes optional App Router search params for the signup route. */
@@ -47,6 +49,13 @@ function readRequiredInviteCode(): string | null {
 }
 
 /**
+ * Reads the first value of an App Router search param that may arrive as a string or string array.
+ */
+function readFirstQueryFlag(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
  * Renders the sign-up page or redirects authenticated operators to the requested workspace.
  */
 export default async function SignUpPage({ searchParams }: SignUpPageProps) {
@@ -54,6 +63,7 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
   const callbackUrl = resolveSafeCallbackUrl(resolvedSearchParams.callbackUrl);
   const notice = resolveSignUpNotice(resolvedSearchParams.error);
   const inviteCodeRequired = readRequiredInviteCode() !== null;
+  const isJoinMode = readFirstQueryFlag(resolvedSearchParams.join) === "1";
   const session = await auth();
   if (session) redirect(callbackUrl);
 
@@ -61,9 +71,13 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
     <main className="auth-page sign-up-page">
       <div className="auth-card sign-up-card">
         <div className="auth-card__header">
-          <p className="app-kicker">Create access</p>
-          <h2>Sign up for EE Library</h2>
-          <p>Create a workstation account for search, project memory, and review workflows. Admin-only actions still require an admin role.</p>
+          <p className="app-kicker">{isJoinMode ? "Join a team" : "Create access"}</p>
+          <h2>{isJoinMode ? "Join a team on EE Library" : "Sign up for EE Library"}</h2>
+          <p>
+            {isJoinMode
+              ? "Enter the invite code a teammate shared to join their team and see its shared parts, projects, and files."
+              : "Create a workstation account for search, project memory, and review workflows. You'll start your own team; teammates can join it later with an invite code."}
+          </p>
         </div>
         {notice ? (
           <div className={`auth-feedback auth-feedback--${notice.tone}`} role="alert">
@@ -75,7 +89,7 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
           className="auth-form"
           action={async (formData: FormData) => {
             "use server";
-            await submitSignUpForm(formData, callbackUrl);
+            await submitSignUpForm(formData, callbackUrl, isJoinMode);
           }}
         >
           <label htmlFor="email">Email</label>
@@ -105,31 +119,64 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
             required
             type="password"
           />
-          <label htmlFor="team-name">Team name</label>
-          <input
-            autoComplete="organization"
-            id="team-name"
-            maxLength={120}
-            name="teamName"
-            placeholder="Your team or company, e.g. Acme Instruments"
-            required
-            type="text"
-          />
-          {inviteCodeRequired ? (
+          {isJoinMode ? (
             <>
-              <label htmlFor="invite-code">Team invite code</label>
+              <label htmlFor="team-invite-code">Team invite code</label>
               <input
                 autoComplete="off"
-                id="invite-code"
-                name="inviteCode"
-                placeholder="Ask the person who runs your EE Library server"
+                id="team-invite-code"
+                name="teamInviteCode"
+                placeholder="e.g. TEAM-7F3K-92AB"
                 required
                 type="text"
               />
             </>
-          ) : null}
-          <button className="auth-form__primary-action" type="submit">Create account</button>
+          ) : (
+            <>
+              <label htmlFor="team-name">Team name</label>
+              <input
+                autoComplete="organization"
+                id="team-name"
+                maxLength={120}
+                name="teamName"
+                placeholder="Your team or company, e.g. Acme Instruments"
+                required
+                type="text"
+              />
+              {inviteCodeRequired ? (
+                <>
+                  <label htmlFor="invite-code">Server invite code</label>
+                  <input
+                    autoComplete="off"
+                    id="invite-code"
+                    name="inviteCode"
+                    placeholder="Ask the person who runs your EE Library server"
+                    required
+                    type="text"
+                  />
+                </>
+              ) : null}
+            </>
+          )}
+          <button className="auth-form__primary-action" type="submit">{isJoinMode ? "Join team" : "Create account"}</button>
         </form>
+        <div className="auth-switch">
+          {isJoinMode ? (
+            <>
+              <span>Starting fresh?</span>
+              <Link className="button-link button-link--quiet" href={buildAuthRoutePath("/sign-up", callbackUrl)}>
+                Create a new team
+              </Link>
+            </>
+          ) : (
+            <>
+              <span>Have an invite code from a teammate?</span>
+              <Link className="button-link button-link--quiet" href={buildAuthRoutePath("/sign-up", callbackUrl, { join: "1" })}>
+                Join a team
+              </Link>
+            </>
+          )}
+        </div>
         <div className="auth-switch">
           <span>Already have access?</span>
           <Link className="button-link button-link--quiet" href={buildAuthRoutePath("/sign-in", callbackUrl)}>
@@ -142,38 +189,55 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
 }
 
 /**
- * Validates and creates a standard user account, then returns the operator to sign in.
+ * Validates a sign-up and either creates a new team (the operator becomes its admin) or joins an
+ * existing team via its invite code, then returns the operator to sign in. `isJoinMode` is captured at
+ * render time from `?join=1`, so it cannot be tampered with through the form body.
  */
-async function submitSignUpForm(formData: FormData, callbackUrl: string): Promise<void> {
+async function submitSignUpForm(formData: FormData, callbackUrl: string, isJoinMode: boolean): Promise<void> {
+  // Every failed redirect keeps the operator on the variant they were using.
+  const modeParams: Record<string, string> = isJoinMode ? { join: "1" } : {};
   const email = normalizeEmail(readTrimmedFormString(formData.get("email")));
   const password = readPasswordFormString(formData.get("password"));
   const confirmPassword = readPasswordFormString(formData.get("confirmPassword"));
 
   if (!email) {
-    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "invalid_email" }));
+    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "invalid_email", ...modeParams }));
   }
 
   if (password.length < 8) {
-    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "weak_password" }));
+    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "weak_password", ...modeParams }));
   }
 
   if (password !== confirmPassword) {
-    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "password_mismatch" }));
+    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "password_mismatch", ...modeParams }));
   }
 
-  const teamName = normalizeTeamName(readTrimmedFormString(formData.get("teamName")));
+  // Mode-specific pre-validation (before touching the database) for clearer, cheaper errors.
+  let teamName: string | null = null;
+  let joinCode: string | null = null;
 
-  if (!teamName) {
-    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "missing_team_name" }));
-  }
+  if (isJoinMode) {
+    joinCode = normalizeInviteCode(readTrimmedFormString(formData.get("teamInviteCode")));
 
-  const requiredInviteCode = readRequiredInviteCode();
+    if (!joinCode) {
+      redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "invite_not_found", ...modeParams }));
+    }
+  } else {
+    teamName = normalizeTeamName(readTrimmedFormString(formData.get("teamName")));
 
-  if (requiredInviteCode !== null) {
-    const submittedInviteCode = readTrimmedFormString(formData.get("inviteCode"));
+    if (!teamName) {
+      redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "missing_team_name" }));
+    }
 
-    if (!inviteCodeMatches(submittedInviteCode, requiredInviteCode)) {
-      redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "invite_mismatch" }));
+    // The global env code gates who may CREATE a team; joining is gated by the per-org invite code.
+    const requiredInviteCode = readRequiredInviteCode();
+
+    if (requiredInviteCode !== null) {
+      const submittedInviteCode = readTrimmedFormString(formData.get("inviteCode"));
+
+      if (!inviteCodeMatches(submittedInviteCode, requiredInviteCode)) {
+        redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "invite_mismatch" }));
+      }
     }
   }
 
@@ -185,11 +249,27 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string): Promis
 
     if (existingUser) {
       creationError = "account_exists";
+    } else if (isJoinMode) {
+      // Teammate invite (Increment 4): resolve the org by its reusable code and add the user to it as a
+      // full-access admin. No org is created; the org id comes from the resolved invite, never input.
+      const [organization] = await db
+        .select({ id: organizations.id })
+        .from(organizations)
+        .where(eq(organizations.inviteCode, joinCode as string))
+        .limit(1);
+
+      if (!organization) {
+        creationError = "invite_not_found";
+      } else {
+        await db.insert(users).values(
+          buildJoiningUserRecord({ email, orgId: organization.id, passwordHash: hashSync(password, BCRYPT_COST) })
+        );
+      }
     } else {
       // Org-on-signup (Increment 3): a new sign-up creates its own organization and the user becomes
       // its admin. The org and user are inserted in one transaction so a failed user insert never
       // leaves an orphaned org behind.
-      const records = buildNewTeamRecords({ email, passwordHash: hashSync(password, BCRYPT_COST), teamName });
+      const records = buildNewTeamRecords({ email, passwordHash: hashSync(password, BCRYPT_COST), teamName: teamName as string });
 
       await db.transaction(async (tx) => {
         await tx.insert(organizations).values(records.organization);
@@ -201,7 +281,7 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string): Promis
   }
 
   if (creationError) {
-    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: creationError }));
+    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: creationError, ...modeParams }));
   }
 
   redirect(buildAuthRoutePath("/sign-in", callbackUrl, { notice: "account_created" }));

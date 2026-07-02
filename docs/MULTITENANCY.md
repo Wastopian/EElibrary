@@ -39,7 +39,8 @@ The enforcement mechanism plus the scoped domains shipped in **Increment 2a** (p
 memory), and **2e** (the last app domains), below. After 2e **every team-data table carries `org_id`
 and the whole app is tenant-isolated at the app layer**. **Increment 3** then *activated* it: org-scoped
 id generation (3a) plus org-on-signup (3b) so a new sign-up creates its own organization instead of
-sharing `org-default`. The remaining steps are the RLS backstop and per-org teammate invites.
+sharing `org-default`. **Increment 4** then added per-org teammate invites so a second person can join
+an existing team. The remaining step is the RLS backstop.
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
    project-core tables, `parts` / `provider_acquisition_jobs`, the ~22 part-attached catalog child
@@ -223,12 +224,34 @@ sharing `org-default`. The remaining steps are the RLS backstop and per-org team
   org id; `auth-form-state.test.ts` covers the missing-team-name notice. (The end-to-end browser signup
   is exercised by CI, not locally — the local port was occupied by an unrelated app.)
 
+### Increment 4 — per-org teammate invites (shipped)
+
+- **What.** A second person can now join an **existing** team. Each org has one reusable invite code
+  (`organizations.invite_code`, unused since `047`; a partial unique index in migration `054` maps a code
+  to exactly one org). `buildNewTeamRecords` now stamps a readable code (`TEAM-XXXX-XXXX`) on every new
+  org, and a small **Team page** (`apps/web/src/app/team/page.tsx`, linked in the nav, protected by the
+  middleware matcher) lets a member view / copy / **regenerate** it (regenerating invalidates the old
+  code). Regeneration updates the code **for the session's org only** — the org id is read from the
+  session at action time, never from input.
+- **Join at sign-up.** The sign-up page gained a `?join=1` server-rendered variant (no client JS beyond a
+  copy button): create mode collects a team name, join mode collects the invite code. The action resolves
+  the org by the normalized code and inserts the user into it as a full-access **admin** — no org is
+  created. A bad code returns an `invite_not_found` notice.
+- **Two gates, two purposes.** The global `EE_LIBRARY_SIGNUP_INVITE_CODE` env var gates *who may create a
+  team*; the per-org `invite_code` gates *joining* one. A join skips the global create-gate (the org code
+  is the gate). Teammates join as `admin` (full access) — the team is small and trusted; restrict no one
+  by default.
+- **Proof.** `team-invite.test.ts` covers code generation/normalization, the joining-user record
+  (`role: admin`, org from the resolved invite), and the Team-page view model; `sign-up.test.ts` asserts
+  every new team gets a well-formed code; `auth-form-state.test.ts` covers the `invite_not_found` notice.
+  (End-to-end join is exercised by CI, same local-port caveat as 3b.)
+
 ## Later
 
-- **Per-org teammate invites**: invite codes/links so a second user joins an *existing* org (3b only
-  creates a new org per sign-up); basic org-management UI (rename, member list); requiring the API
-  `orgId` claim (drop the `org-default` fallback).
+- **Org management depth**: single-use / expiring invite tokens + an invite audit list; org rename,
+  member list, remove/transfer; restricted member roles (RBAC v1); requiring the API `orgId` claim (drop
+  the `org-default` fallback).
 - The Postgres **RLS backstop** (centralize the ~8 per-store pools into a per-request transaction client
-  for `SET LOCAL app.current_org`, add policies + a non-owner app role).
+  for `SET LOCAL app.current_org`, add policies + a non-owner app role) — the remaining core item.
 - Hardening tracks: per-tenant + global rate limiting / abuse controls, onboarding / first-run UX,
   ops (scheduled backup/restore, monitoring, tested upgrade path).

@@ -155,6 +155,14 @@ export function resolveSignUpNotice(error: AuthQueryValue): AuthNotice | null {
     };
   }
 
+  if (errorKey === "invite_not_found") {
+    return {
+      body: "That team invite code did not match a team. Check the code with your teammate, or create a new team instead.",
+      tone: "error",
+      title: "Invite code did not match a team"
+    };
+  }
+
   return null;
 }
 

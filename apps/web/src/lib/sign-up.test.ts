@@ -29,6 +29,7 @@ test("buildNewTeamRecords makes the signer the admin of a fresh org", () => {
   assert.match(records.organization.id, /^org-[0-9a-f]{8}$/u, "org id is generated, not org-default");
   assert.equal(records.organization.name, "Acme Instruments", "the org is named from the form field");
   assert.equal(records.organization.slug, records.organization.id, "slug reuses the unique org id");
+  assert.match(records.organization.inviteCode, /^TEAM-[0-9A-HJ-NP-TV-Z]{4}-[0-9A-HJ-NP-TV-Z]{4}$/u, "the new team gets a shareable invite code");
 
   assert.equal(records.user.email, "lead@acme.test");
   assert.equal(records.user.passwordHash, "hash-value");

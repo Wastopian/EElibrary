@@ -123,6 +123,12 @@ export function AppNavigationLinks({ currentLocation }: { currentLocation: strin
           href: "/system",
           label: "System",
           match: { path: "/system", type: "path" }
+        },
+        {
+          description: "Invite teammates and manage your team's join code.",
+          href: "/team",
+          label: "Team",
+          match: { path: "/team", type: "path" }
         }
       ],
       label: "Workspaces"

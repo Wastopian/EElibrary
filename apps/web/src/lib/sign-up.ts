@@ -8,6 +8,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { generateInviteCode } from "./team-invite";
 
 /** MAX_TEAM_NAME_LENGTH caps the org name so a stray paste can't fill the column. */
 export const MAX_TEAM_NAME_LENGTH = 120;
@@ -18,6 +19,7 @@ export interface NewTeamRecords {
     id: string;
     name: string;
     slug: string;
+    inviteCode: string;
   };
   user: {
     id: string;
@@ -46,7 +48,8 @@ export function normalizeTeamName(rawTeamName: string): string | null {
  * Builds the organization and its first user for a new team sign-up. The user is the org's `admin`
  * (they created the team), and the org id is generated fresh so two teams never share one. The slug
  * reuses the unique org id so it satisfies the unique-slug index without a naming collision — a
- * human-friendly slug can follow with org-management UI.
+ * human-friendly slug can follow with org-management UI. The org also gets a reusable invite code so a
+ * teammate can join it from day one (Increment 4).
  */
 export function buildNewTeamRecords(input: { email: string; passwordHash: string; teamName: string }): NewTeamRecords {
   const orgId = `org-${randomUUID().slice(0, 8)}`;
@@ -54,6 +57,7 @@ export function buildNewTeamRecords(input: { email: string; passwordHash: string
   return {
     organization: {
       id: orgId,
+      inviteCode: generateInviteCode(),
       name: input.teamName,
       slug: orgId
     },
