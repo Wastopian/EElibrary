@@ -10,12 +10,13 @@ import {
   resolveSafeCallbackUrl,
   resolveSignUpNotice
 } from "@/lib/auth-form-state";
-import { createDbPool, users } from "@ee-library/db";
+import { buildNewTeamRecords, normalizeTeamName } from "@/lib/sign-up";
+import { createDbPool, organizations, users } from "@ee-library/db";
 import { hashSync } from "bcryptjs";
 import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 /** SignUpSearchParams carries callback and validation state for the account creation route. */
 type SignUpSearchParams = {
@@ -104,6 +105,16 @@ export default async function SignUpPage({ searchParams }: SignUpPageProps) {
             required
             type="password"
           />
+          <label htmlFor="team-name">Team name</label>
+          <input
+            autoComplete="organization"
+            id="team-name"
+            maxLength={120}
+            name="teamName"
+            placeholder="Your team or company, e.g. Acme Instruments"
+            required
+            type="text"
+          />
           {inviteCodeRequired ? (
             <>
               <label htmlFor="invite-code">Team invite code</label>
@@ -150,6 +161,12 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string): Promis
     redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "password_mismatch" }));
   }
 
+  const teamName = normalizeTeamName(readTrimmedFormString(formData.get("teamName")));
+
+  if (!teamName) {
+    redirect(buildAuthRoutePath("/sign-up", callbackUrl, { error: "missing_team_name" }));
+  }
+
   const requiredInviteCode = readRequiredInviteCode();
 
   if (requiredInviteCode !== null) {
@@ -169,11 +186,14 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string): Promis
     if (existingUser) {
       creationError = "account_exists";
     } else {
-      await db.insert(users).values({
-        email,
-        id: randomUUID(),
-        passwordHash: hashSync(password, BCRYPT_COST),
-        role: "user"
+      // Org-on-signup (Increment 3): a new sign-up creates its own organization and the user becomes
+      // its admin. The org and user are inserted in one transaction so a failed user insert never
+      // leaves an orphaned org behind.
+      const records = buildNewTeamRecords({ email, passwordHash: hashSync(password, BCRYPT_COST), teamName });
+
+      await db.transaction(async (tx) => {
+        await tx.insert(organizations).values(records.organization);
+        await tx.insert(users).values(records.user);
       });
     }
   } catch (error) {

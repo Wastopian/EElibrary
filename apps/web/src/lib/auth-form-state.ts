@@ -147,6 +147,14 @@ export function resolveSignUpNotice(error: AuthQueryValue): AuthNotice | null {
     };
   }
 
+  if (errorKey === "missing_team_name") {
+    return {
+      body: "Enter a name for your team or organization (up to 120 characters). It labels your private workspace and you can be the only member.",
+      tone: "error",
+      title: "Team name is required"
+    };
+  }
+
   return null;
 }
 

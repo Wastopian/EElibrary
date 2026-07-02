@@ -37,8 +37,9 @@ It is groundwork: the `orgId` is now threaded everywhere so the enforcement step
 The enforcement mechanism plus the scoped domains shipped in **Increment 2a** (project-core),
 **2b** (catalog/parts core), **2c** (part-attached catalog child tables), **2d** (interconnect
 memory), and **2e** (the last app domains), below. After 2e **every team-data table carries `org_id`
-and the whole app is tenant-isolated at the app layer**; the only remaining steps are the RLS backstop
-and org-on-signup.
+and the whole app is tenant-isolated at the app layer**. **Increment 3** then *activated* it: org-scoped
+id generation (3a) plus org-on-signup (3b) so a new sign-up creates its own organization instead of
+sharing `org-default`. The remaining steps are the RLS backstop and per-org teammate invites.
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
    project-core tables, `parts` / `provider_acquisition_jobs`, the ~22 part-attached catalog child
@@ -53,8 +54,9 @@ and org-on-signup.
    `WHERE org_id = ...` cannot leak across tenants. (Requires a per-request `SET LOCAL app.current_org`
    inside a transaction-scoped connection — a store-layer change to design carefully with the pool;
    today there are ~8 separate per-store pools that must be centralized first.) — *pending.*
-4. Make sign-up **create a new organization** (first user is its admin); tighten the API to require
-   the `orgId` claim. Per-org invites for teammates follow in Increment 3. — *pending.*
+4. Make sign-up **create a new organization** (first user is its admin). — *done in Increment 3b; the
+   API still keeps a defensive `org-default` fallback for a missing `orgId` claim (harmless — every mint
+   path sets it). Per-org invites for teammates and requiring the claim are follow-ups.*
 
 ### Increment 2a — scoping mechanism + projects/BOM core (shipped)
 
@@ -202,8 +204,31 @@ and org-on-signup.
   legacy ids and refreshes in place. This increment is a no-op for the live single tenant; org-on-signup
   (3b) activates it.
 
+### Increment 3b — org-on-signup (shipped)
+
+- **What.** A new sign-up now **creates its own organization** and the user becomes its `admin`, instead
+  of every account falling to the shared `org-default`. This *activates* the app-layer isolation built in
+  2a–2e: real tenants finally exist, so the scoping is observable in the browser rather than only in
+  two-context unit tests. The sign-up form gains a required **Team name** field; `submitSignUpForm`
+  (`apps/web/src/app/sign-up/page.tsx`) inserts the `organizations` row and the admin `users` row in one
+  transaction (a failed user insert never orphans an org). The org id is generated (`org-<8 hex>`) so two
+  teams never share one, and the slug reuses that unique id. Existing `org-default` users are unaffected.
+- **No auth change.** `apps/web/src/auth.ts` already read `user.orgId` and threaded it through
+  jwt → session → the minted API bearer token → the API's per-request tenant context; a brand-new admin
+  simply carries their real org id instead of the `org-default` fallback.
+- **Invite gate unchanged.** The global `EE_LIBRARY_SIGNUP_INVITE_CODE` still gates *who may create a
+  team*; per-org invite codes so **teammates join an existing org** are the next increment.
+- **Proof.** `sign-up.test.ts` asserts the signer becomes the `admin` of a freshly-generated org, the
+  org is named from the form field, the user joins the org it created, and two sign-ups never share an
+  org id; `auth-form-state.test.ts` covers the missing-team-name notice. (The end-to-end browser signup
+  is exercised by CI, not locally — the local port was occupied by an unrelated app.)
+
 ## Later
 
-- Increment 3: per-org invite codes/links, basic org management UI.
+- **Per-org teammate invites**: invite codes/links so a second user joins an *existing* org (3b only
+  creates a new org per sign-up); basic org-management UI (rename, member list); requiring the API
+  `orgId` claim (drop the `org-default` fallback).
+- The Postgres **RLS backstop** (centralize the ~8 per-store pools into a per-request transaction client
+  for `SET LOCAL app.current_org`, add policies + a non-owner app role).
 - Hardening tracks: per-tenant + global rate limiting / abuse controls, onboarding / first-run UX,
   ops (scheduled backup/restore, monitoring, tested upgrade path).
