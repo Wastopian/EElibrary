@@ -2767,7 +2767,8 @@ test("createExportBundleInDatabase writes archive content when storage is availa
         assembly_completed_at TIMESTAMPTZ,
         assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        org_id TEXT DEFAULT 'org-default'
       )
     `);
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
@@ -2820,7 +2821,8 @@ test("createExportBundleInDatabase assigns unique asset paths when project parts
         assembly_completed_at TIMESTAMPTZ,
         assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        org_id TEXT DEFAULT 'org-default'
       )
     `);
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_mod'");
@@ -2888,7 +2890,8 @@ test("createExportBundleInDatabase surfaces archive write failures as bundle war
         assembly_completed_at TIMESTAMPTZ,
         assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        org_id TEXT DEFAULT 'org-default'
       )
     `);
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
@@ -2934,7 +2937,8 @@ test("createExportBundleInDatabase tags controlled assets in the manifest", asyn
         assembly_completed_at TIMESTAMPTZ,
         assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        org_id TEXT DEFAULT 'org-default'
       )
     `);
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
@@ -2994,7 +2998,8 @@ test("createExportBundleInDatabase embeds defensible per-part provenance in the 
         assembly_completed_at TIMESTAMPTZ,
         assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        org_id TEXT DEFAULT 'org-default'
       )
     `);
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'kicad_sym'");
@@ -3064,7 +3069,8 @@ test("createExportBundleInDatabase reports empty control summary when no control
         assembly_completed_at TIMESTAMPTZ,
         assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        org_id TEXT DEFAULT 'org-default'
       )
     `);
     await pool.query("ALTER TABLE assets ADD COLUMN file_format TEXT NOT NULL DEFAULT 'step'");
@@ -3546,6 +3552,154 @@ test("tenant isolation: overlap and part where-used never surface another org's 
 });
 
 /**
+ * Verifies circuit blocks — reusable patterns with no project/part owner — are tenant-scoped. Before
+ * 2e the block list, existence gates, and where-used search surfaced every org's blocks; this asserts a
+ * block created under one org is invisible to another org's list, detail, and where-used, and that an
+ * anonymous (no-tenant) request reads nothing.
+ */
+test("tenant isolation: circuit blocks are invisible to another org", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // org-default (the harness default context) owns a distinctive block.
+    const created = await createCircuitBlockInDatabase({
+      blockKey: "ISO-GUARD",
+      blockType: "protection",
+      constraints: { note: "Isolation fixture." },
+      name: "Isolation guard block",
+      owner: "hardware",
+      reuseScope: "Tenant isolation test",
+      status: "in_review"
+    });
+    assert.equal(created.status, "created");
+    if (created.status !== "created") throw new Error("block create failed");
+    const blockId = created.response.circuitBlock.id;
+
+    // Visible to its own org across list, detail, and where-used.
+    const ownList = await readCircuitBlocksFromDatabase();
+    assert.equal(ownList.status, "available");
+    if (ownList.status !== "available") throw new Error("own list unavailable");
+    assert.ok(
+      ownList.response.circuitBlocks.some((entry) => entry.circuitBlock.id === blockId),
+      "block is visible to its own org"
+    );
+
+    // Another org sees nothing of it.
+    await runWithRequestContext("org-other", async () => {
+      const list = await readCircuitBlocksFromDatabase();
+      assert.equal(list.status, "available");
+      if (list.status !== "available") throw new Error("org-other list unavailable");
+      assert.ok(
+        !list.response.circuitBlocks.some((entry) => entry.circuitBlock.id === blockId),
+        "block is invisible to org-other's list"
+      );
+
+      const detail = await readCircuitBlockDetailFromDatabase(blockId);
+      assert.equal(detail.status, "not_found", "block detail reads not_found for org-other");
+
+      const whereUsed = await readWhereUsedSearchFromDatabase("circuit_block", "Isolation guard");
+      assert.equal(whereUsed.status, "available");
+      if (whereUsed.status !== "available") throw new Error("org-other where-used unavailable");
+      assert.ok(
+        !whereUsed.response.matchedCircuitBlocks.some((entry) => entry.circuitBlock.id === blockId),
+        "where-used never matches another org's block"
+      );
+    });
+
+    // An anonymous request (no tenant) reads nothing.
+    await runWithRequestContext(null, async () => {
+      const list = await readCircuitBlocksFromDatabase();
+      assert.equal(list.status, "available");
+      if (list.status !== "available") throw new Error("anon list unavailable");
+      assert.ok(
+        !list.response.circuitBlocks.some((entry) => entry.circuitBlock.id === blockId),
+        "no tenant => block invisible"
+      );
+
+      const detail = await readCircuitBlockDetailFromDatabase(blockId);
+      assert.equal(detail.status, "not_found", "no tenant => block detail not_found");
+    });
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies the evidence vault only returns the acting org's evidence. `readEvidenceAttachmentsFromDatabase`
+ * (the unreviewed-evidence vault) previously listed every org's evidence; this asserts evidence created
+ * under one org never appears in another org's vault, and an anonymous request reads nothing.
+ */
+test("tenant isolation: the evidence vault only returns the acting org's evidence", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // org-default owns a block and one piece of evidence attached to it.
+    const block = await createCircuitBlockInDatabase({
+      blockKey: "ISO-EVIDENCE",
+      blockType: "protection",
+      constraints: { note: "Evidence isolation fixture." },
+      name: "Evidence isolation block",
+      owner: "hardware",
+      reuseScope: "Tenant isolation test",
+      status: "in_review"
+    });
+    assert.equal(block.status, "created");
+    if (block.status !== "created") throw new Error("block create failed");
+
+    const evidence = await createEvidenceAttachmentInDatabase(
+      {
+        evidenceType: "link",
+        sourceUrl: "https://example.test/iso-evidence",
+        targetId: block.response.circuitBlock.id,
+        targetType: "circuit_block",
+        title: "Isolation evidence"
+      },
+      "test-admin"
+    );
+    assert.equal(evidence.status, "created");
+    if (evidence.status !== "created") throw new Error("evidence create failed");
+    const evidenceId = evidence.response.attachment.id;
+
+    // The acting org's vault contains it.
+    const ownVault = await readEvidenceAttachmentsFromDatabase();
+    assert.equal(ownVault.status, "available");
+    if (ownVault.status !== "available") throw new Error("own vault unavailable");
+    assert.ok(
+      ownVault.response.attachments.some((entry) => entry.id === evidenceId),
+      "evidence is visible in its own org's vault"
+    );
+
+    // Another org's vault never surfaces it.
+    await runWithRequestContext("org-other", async () => {
+      const vault = await readEvidenceAttachmentsFromDatabase();
+      assert.equal(vault.status, "available");
+      if (vault.status !== "available") throw new Error("org-other vault unavailable");
+      assert.ok(
+        !vault.response.attachments.some((entry) => entry.id === evidenceId),
+        "evidence is invisible in org-other's vault"
+      );
+    });
+
+    // An anonymous request reads nothing.
+    await runWithRequestContext(null, async () => {
+      const vault = await readEvidenceAttachmentsFromDatabase();
+      assert.equal(vault.status, "available");
+      if (vault.status !== "available") throw new Error("anon vault unavailable");
+      assert.ok(
+        !vault.response.attachments.some((entry) => entry.id === evidenceId),
+        "no tenant => vault empty of the org's evidence"
+      );
+    });
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Creates a pg-mem project-memory database with optional fixture rows.
  */
 function createProjectMemoryPool(seedRows: boolean): TestPool {
@@ -3868,6 +4022,17 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Tenant isolation (2e): the remaining app domains carry org_id, stamped on write / filtered on read.
+    ALTER TABLE circuit_blocks ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE circuit_block_parts ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE circuit_block_known_risks ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE circuit_block_instantiations ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE evidence_attachments ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE follow_up_records ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_engineering_records ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE project_revision_approval_gates ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_substitutions ADD COLUMN org_id TEXT DEFAULT 'org-default';
   `);
 
   seedInternalCatalogRows(db);

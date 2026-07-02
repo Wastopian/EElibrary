@@ -8,6 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
+import { getRequestOrgId } from "./request-context";
 import {
   buildProjectDocumentSourceFingerprint,
   estimateProjectDocumentExtractionSeconds,
@@ -161,7 +162,7 @@ export async function syncProjectDocumentExtractions(
     );
     const values: unknown[] = [];
     const valueRows = supportedDocuments.map(({ document, format }, index) => {
-      const offset = index * 10;
+      const offset = index * 11;
       const sourceFingerprint = buildProjectDocumentSourceFingerprint(document);
       const existing = existingByPath.get(document.relativePath);
       if (
@@ -181,12 +182,13 @@ export async function syncProjectDocumentExtractions(
         PROJECT_DOCUMENT_EXTRACTOR_VERSION,
         sourceFingerprint,
         document.sizeBytes,
-        document.modifiedAt
+        document.modifiedAt,
+        getRequestOrgId()
       );
       return `(
         $${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5},
         $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10},
-        'queued', 0, 'Waiting for the document reader.', now(), now()
+        'queued', 0, 'Waiting for the document reader.', now(), now(), $${offset + 11}
       )`;
     });
     await client.query(
@@ -206,7 +208,8 @@ export async function syncProjectDocumentExtractions(
           progress_percent,
           progress_message,
           requested_at,
-          last_updated_at
+          last_updated_at,
+          org_id
         )
         VALUES ${valueRows.join(",\n")}
         ON CONFLICT (project_id, relative_path) DO UPDATE

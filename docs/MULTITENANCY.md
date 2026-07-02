@@ -34,17 +34,21 @@ It is groundwork: the `orgId` is now threaded everywhere so the enforcement step
 
 ## Enforcement plan (Increment 2)
 
-The enforcement mechanism plus the first scoped domains shipped in **Increment 2a** (project-core),
-**2b** (catalog/parts core), **2c** (part-attached catalog child tables), and **2d** (interconnect
-memory), below. The remaining steps (the last domains, RLS, org-on-signup) are still pending.
+The enforcement mechanism plus the scoped domains shipped in **Increment 2a** (project-core),
+**2b** (catalog/parts core), **2c** (part-attached catalog child tables), **2d** (interconnect
+memory), and **2e** (the last app domains), below. After 2e **every team-data table carries `org_id`
+and the whole app is tenant-isolated at the app layer**; the only remaining steps are the RLS backstop
+and org-on-signup.
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
    project-core tables, `parts` / `provider_acquisition_jobs`, the ~22 part-attached catalog child
-   tables (migration `050`), and the interconnect tables (migration `051`); pending for the last
-   domains (circuit blocks, evidence, document-extraction, engineering memory, export bundles).*
+   tables (migration `050`), the interconnect tables (migration `051`), and the last app domains —
+   circuit blocks (+ parts/known-risks/instantiations), evidence, follow-ups, engineering memory,
+   substitutions, approval gates, export bundles, and document-extractions (migration `052`). **All
+   team-data tables are now scoped.***
 2. Thread `session.orgId` into every store read/write: **filter** on read, **stamp** on insert. Roll
-   out and test domain by domain (projects → catalog → interconnects → the rest). — *done for
-   project-core, the full parts catalog, and interconnect memory.*
+   out and test domain by domain (projects → catalog → interconnects → the rest). — *done for every
+   app domain.*
 3. Add Postgres **Row-Level Security** policies as a defense-in-depth backstop, so a forgotten
    `WHERE org_id = ...` cannot leak across tenants. (Requires a per-request `SET LOCAL app.current_org`
    inside a transaction-scoped connection — a store-layer change to design carefully with the pool;
@@ -148,6 +152,30 @@ memory), below. The remaining steps (the last domains, RLS, org-on-signup) are s
 - **Proof.** `interconnect-store.test.ts` asserts a cable/fixture created under org A is invisible to
   org B's dashboard / detail / where-used, an anonymous read sees nothing, and each org resolves only
   its own records.
+
+### Increment 2e — the remaining app domains (shipped)
+
+- **What.** The last still-global domains gain `org_id` (migration `052`): circuit blocks (+
+  `circuit_block_parts`, `circuit_block_known_risks`, `circuit_block_instantiations`),
+  `evidence_attachments`, `follow_up_records`, `part_engineering_records`, `part_substitutions`,
+  `project_revision_approval_gates`, `export_bundles`, and `project_document_extractions`. **After
+  this, every team-data table is scoped** — only the RLS backstop and org-on-signup remain.
+- **Two live leaks closed.** Most of these were already partitioned-by-association behind a now-scoped
+  project or part gate, so for them 2e is `org_id` + write-hygiene. The genuine cross-tenant leaks were
+  the *standalone* reads: **circuit blocks** (reusable patterns with no project/part owner — the block
+  list, the existence gates that let any user open/edit/instantiate any block, and the where-used
+  search surfaced every org's blocks) and the **evidence vault** (`readEvidenceAttachmentsFromDatabase`
+  listed every org's unreviewed evidence). Both now filter `org_id`.
+- **Store (`apps/api/src/project-memory-store.ts` + `project-document-extraction-store.ts`).** Same 2a
+  pattern: the circuit-block list/detail/where-used reads, the overlap-panel block hit-count/preview,
+  and the evidence vault filter `org_id`; the circuit-block existence gates are org-scoped; every
+  insert stamps `requireRequestOrgId()`. Document-extraction reads stay gated by the scoped
+  `projectExists` (partition-by-association); its write stamps the org.
+- **Identity.** The global circuit-block `block_key` uniqueness (`uq_circuit_blocks_block_key`) becomes
+  per-tenant `(org_id, block_key)`, so the same block key can exist once per team.
+- **Proof.** New two-context tests in `project-memory-store.test.ts` assert a circuit block created
+  under org A is invisible to org B's list / detail / where-used (and to an anonymous request), and
+  that the evidence vault only ever returns the acting org's evidence.
 
 ## Later
 

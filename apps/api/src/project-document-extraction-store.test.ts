@@ -15,6 +15,7 @@ import {
   setProjectDocumentExtractionStorePoolForTests,
   syncProjectDocumentExtractions
 } from "./project-document-extraction-store";
+import { enterRequestContextForTests } from "./request-context";
 
 test("project document extraction store queues changed files and reuses completed text", async () => {
   const databasePool = createExtractionPool();
@@ -517,9 +518,14 @@ function createExtractionPool(onQuery?: (sql: string) => void): Pool {
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
       last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      org_id TEXT DEFAULT 'org-default',
       UNIQUE (project_id, relative_path)
     );
   `);
+
+  // Tenant isolation (2e): extractions are stamped with the acting org on write. Establish the default
+  // tenant for the rest of this test's async execution so the store's insert stamps a non-null org.
+  enterRequestContextForTests("org-default");
   if (onQuery) {
     db.public.interceptQueries((sql) => {
       onQuery(sql);
