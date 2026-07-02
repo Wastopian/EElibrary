@@ -39,8 +39,9 @@ The enforcement mechanism plus the scoped domains shipped in **Increment 2a** (p
 memory), and **2e** (the last app domains), below. After 2e **every team-data table carries `org_id`
 and the whole app is tenant-isolated at the app layer**. **Increment 3** then *activated* it: org-scoped
 id generation (3a) plus org-on-signup (3b) so a new sign-up creates its own organization instead of
-sharing `org-default`. **Increment 4** then added per-org teammate invites so a second person can join
-an existing team. The remaining step is the RLS backstop.
+sharing `org-default`. **Increment 4** added per-org teammate invites so a second person can join an
+existing team, and **Increment 5** finished the plan with the Postgres RLS backstop. **All four
+enforcement steps below are complete**; what remains is hardening (see "Later").
 
 1. Add `org_id` to every team-data table (+ backfill to `org-default`); index it. — *done for the
    project-core tables, `parts` / `provider_acquisition_jobs`, the ~22 part-attached catalog child
@@ -52,9 +53,9 @@ an existing team. The remaining step is the RLS backstop.
    out and test domain by domain (projects → catalog → interconnects → the rest). — *done for every
    app domain.*
 3. Add Postgres **Row-Level Security** policies as a defense-in-depth backstop, so a forgotten
-   `WHERE org_id = ...` cannot leak across tenants. (Requires a per-request `SET LOCAL app.current_org`
-   inside a transaction-scoped connection — a store-layer change to design carefully with the pool;
-   today there are ~8 separate per-store pools that must be centralized first.) — *pending.*
+   `WHERE org_id = ...` cannot leak across tenants. — *done in Increment 5: every request runs on one
+   per-request tenant transaction (`apps/api/src/request-db.ts`) and migration `055` forces a policy on
+   all 47 scoped tables.*
 4. Make sign-up **create a new organization** (first user is its admin). — *done in Increment 3b; the
    API still keeps a defensive `org-default` fallback for a missing `orgId` claim (harmless — every mint
    path sets it). Per-org invites for teammates and requiring the claim are follow-ups.*
@@ -246,12 +247,46 @@ an existing team. The remaining step is the RLS backstop.
   every new team gets a well-formed code; `auth-form-state.test.ts` covers the `invite_not_found` notice.
   (End-to-end join is exercised by CI, same local-port caveat as 3b.)
 
+### Increment 5 — Postgres RLS backstop (shipped)
+
+- **What.** Database-level defense-in-depth: migration `055` enables + **forces** Row-Level Security on
+  all **47 scoped tables** with one policy each — a row is visible/writable only when
+  `org_id = current_setting('app.current_org')` (or the trusted-path bypass below). A forgotten
+  `WHERE org_id = …` in future application SQL can no longer leak across tenants: Postgres filters it.
+- **How requests bind the tenant.** `apps/api/src/request-db.ts`: each API request lazily checks out
+  **one** pooled client on its first store query, opens a transaction, and binds the org with
+  `set_config('app.current_org', <orgId or ''>, true)` (transaction-scoped, so it can never leak onto a
+  pooled connection). All store queries for that request run on that client; commit/rollback + release
+  at request end. Store-level `BEGIN`/`COMMIT`/`ROLLBACK` transactions map transparently onto
+  **savepoints** inside the request transaction — the 20 existing store transaction sites are unedited.
+  Store pool getters prefer (test override → request facade → module pool), consolidating the ~8
+  per-store pools into one bounded pool (`EE_LIBRARY_DB_POOL_SIZE`, default 10) on request paths.
+- **Fail-closed.** Anonymous requests bind `''` (matches no org); a connection that never bound the
+  setting sees no rows on policied tables.
+- **Trusted paths (bypass GUC).** The worker (its job claim is legitimately cross-org; every write
+  derives/preserves org per job — proven in 2b/2c/3a), migrations, and operator scripts connect with
+  `options: -c app.rls_bypass=on` and are exempt. Only code already executing SQL can set a GUC, so this
+  does not weaken the backstop against application query bugs. A separate **non-owner DB role** is the
+  documented future tightening (single-role + `FORCE` avoids compose/env/provisioning churn today).
+- **Excluded on purpose.** `users`/`organizations` (web auth must read them before a tenant is known —
+  sign-in, sign-up, invite lookup); `audit_events` (org-agnostic operational log on a dedicated pool so
+  the audit flush survives failed/rolled-back requests); reference taxonomies (global by design).
+- **Functional/efficiency notes.** Lazy checkout means health checks, 404s, and seed-fallback routes pay
+  nothing; the file-download route commits and releases its connection **before** streaming; policy
+  predicates ride the existing `org_id` indexes; a request that fails mid-way now rolls back atomically.
+  System-health job counts are now org-scoped (what a tenant-facing status page should show).
+- **Proof.** `request-db.test.ts` pins the exact transaction protocol (lazy checkout, tenant binding,
+  savepoint mapping, tolerant unmatched rollbacks, early release). RLS itself runs only on real
+  Postgres: the CI smoke's **cross-org probes** assert a never-provisioned org sees none of the
+  org-default demo data (project/part/interconnects/where-used) while the org-default probes stay green,
+  and the double `db:migrate` asserts `055` idempotency.
+
 ## Later
 
 - **Org management depth**: single-use / expiring invite tokens + an invite audit list; org rename,
   member list, remove/transfer; restricted member roles (RBAC v1); requiring the API `orgId` claim (drop
   the `org-default` fallback).
-- The Postgres **RLS backstop** (centralize the ~8 per-store pools into a per-request transaction client
-  for `SET LOCAL app.current_org`, add policies + a non-owner app role) — the remaining core item.
+- **RLS tightening**: move the app off the table-owner role onto a dedicated non-owner role and drop the
+  `app.rls_bypass` GUC in favor of role-based exemption for the worker/migrations.
 - Hardening tracks: per-tenant + global rate limiting / abuse controls, onboarding / first-run UX,
   ops (scheduled backup/restore, monitoring, tested upgrade path).

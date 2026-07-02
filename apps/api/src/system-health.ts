@@ -12,6 +12,7 @@ import {
   type WorkerLivenessStatus
 } from "@ee-library/shared";
 import { getStorageClient } from "./file-storage";
+import { getRequestDb } from "./request-db";
 
 /** sharedPool is lazy so health checks can run when DATABASE_URL is unset. */
 let sharedPool: Pool | null = null;
@@ -20,6 +21,15 @@ let sharedPool: Pool | null = null;
  * Returns a process-wide Pool when DATABASE_URL is configured.
  */
 function getDatabasePool(): Pool | null {
+  // RLS backstop: requests run on the shared per-request tenant transaction (see request-db.ts).
+  // Job counts in the health response are therefore scoped to the acting org, which is what a
+  // tenant-facing status page should show.
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
+  }
+
   if (!process.env.DATABASE_URL) {
     return null;
   }

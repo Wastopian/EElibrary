@@ -13,6 +13,7 @@ import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import { scopeEntityId } from "@ee-library/shared/tenant";
 import { CatalogStoreError } from "./catalog-store";
 import { getRequestOrgId, requireRequestOrgId } from "./request-context";
+import { getRequestDb } from "./request-db";
 import { searchInterconnectWhereUsed } from "./interconnect-store";
 import { searchProjectDocumentsForWhereUsed } from "./project-files";
 import { searchProjectDocumentExtractions } from "./project-document-extraction-store";
@@ -6517,6 +6518,14 @@ const WHERE_USED_CIRCUIT_BLOCK_DEPENDENCIES_SQL = `
 function getProjectMemoryDatabasePool(): Pool | null {
   if (pool) {
     return pool;
+  }
+
+  // RLS backstop: requests run on the shared per-request tenant transaction so the database-level
+  // org policies see the acting org. Tests inject `pool` above; scripts/worker use their own pools.
+  const requestDb = getRequestDb();
+
+  if (requestDb) {
+    return requestDb;
   }
 
   if (!process.env.DATABASE_URL) {

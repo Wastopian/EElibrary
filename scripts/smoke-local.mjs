@@ -26,7 +26,7 @@ const SMOKE_ORG_ID = "org-default";
  * sees nothing, so the smoke must authenticate the same way a signed-in teammate does. Returns null
  * when AUTH_SECRET is unset (the auth-related checks then run anonymously and surface their own miss).
  */
-function mintSmokeBearerToken(env = process.env) {
+function mintSmokeBearerToken(orgId = SMOKE_ORG_ID, sub = "smoke-admin", env = process.env) {
   const secret = env.AUTH_SECRET;
   if (typeof secret !== "string" || secret.length === 0) {
     return null;
@@ -38,7 +38,7 @@ function mintSmokeBearerToken(env = process.env) {
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload = base64url(
-    JSON.stringify({ sub: "smoke-admin", role: "admin", orgId: SMOKE_ORG_ID, iat: now, exp: now + 600 })
+    JSON.stringify({ sub, role: "admin", orgId, iat: now, exp: now + 600 })
   );
   const signingInput = `${header}.${payload}`;
   const signature = createHmac("sha256", Buffer.from(secret, "utf8"))
@@ -52,6 +52,14 @@ function mintSmokeBearerToken(env = process.env) {
 }
 
 const smokeBearerToken = mintSmokeBearerToken();
+
+/**
+ * A second, never-provisioned tenant used by the cross-org isolation probes: everything the
+ * org-default smoke can see must be invisible to this org. With the RLS backstop live, these probes
+ * exercise the whole chain against real Postgres — token orgId → request context → per-request
+ * transaction GUC → row-security policies.
+ */
+const ghostOrgBearerToken = mintSmokeBearerToken("org-smoke-ghost", "smoke-ghost");
 
 function check(name, status, detail) {
   checks.push({ detail, name, status });
@@ -290,6 +298,45 @@ async function main() {
     check("GET /interconnects", "pass", `${interconnectResponse.body.data.summary.pinMapRowCount} interconnect pin rows found`);
   } else {
     check("GET /interconnects", "fail", `unexpected payload: ${JSON.stringify(interconnectResponse.body)}`);
+  }
+
+  // Cross-org isolation probes: a different (never-provisioned) tenant must see NONE of the
+  // org-default demo data the checks above just confirmed. Runs the full enforcement chain against
+  // real Postgres: token orgId → request context → per-request transaction GUC → RLS policies.
+  if (ghostOrgBearerToken) {
+    const ghostHeaders = { Authorization: `Bearer ${ghostOrgBearerToken}` };
+
+    const ghostProject = await safeFetch(`/projects/${encodeURIComponent(demoProjectId)}`, { headers: ghostHeaders });
+    if (ghostProject.status === 404) {
+      check("cross-org: demo project invisible", "pass", "another org reads not_found for org-default's project");
+    } else {
+      check("cross-org: demo project invisible", "fail", `expected HTTP 404, got HTTP ${ghostProject.status}`);
+    }
+
+    const ghostPart = await safeFetch(`/parts/${encodeURIComponent(demoPartId)}`, { headers: ghostHeaders });
+    if (ghostPart.status === 404) {
+      check("cross-org: demo part invisible", "pass", "another org cannot resolve org-default's part");
+    } else {
+      check("cross-org: demo part invisible", "fail", `expected HTTP 404, got HTTP ${ghostPart.status}`);
+    }
+
+    const ghostInterconnects = await safeFetch("/interconnects", { headers: ghostHeaders });
+    const ghostSeesCable = ghostInterconnects.body?.data?.cableAssemblies?.some((entry) => entry.id === DEMO_CABLE_ASSEMBLY_ID);
+    if (ghostInterconnects.ok && !ghostSeesCable) {
+      check("cross-org: interconnects empty", "pass", "another org sees none of org-default's cables");
+    } else {
+      check("cross-org: interconnects empty", "fail", ghostInterconnects.ok ? "org-default's demo cable leaked across tenants" : `HTTP ${ghostInterconnects.status}`);
+    }
+
+    const ghostWhereUsed = await safeFetch("/where-used?targetType=part&q=part-tps7a02dbvr", { headers: ghostHeaders });
+    const ghostUsageCount = ghostWhereUsed.body?.data?.projectUsages?.length ?? 0;
+    if (ghostWhereUsed.ok && ghostUsageCount === 0) {
+      check("cross-org: where-used empty", "pass", "another org's where-used surfaces no org-default usage");
+    } else {
+      check("cross-org: where-used empty", "fail", ghostWhereUsed.ok ? `${ghostUsageCount} usage rows leaked across tenants` : `HTTP ${ghostWhereUsed.status}`);
+    }
+  } else {
+    check("cross-org isolation probes", "warn", "AUTH_SECRET unset; cross-org probes skipped");
   }
 
   // Optional web workspace reachability checks. These stay warnings by default so

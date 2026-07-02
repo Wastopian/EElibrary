@@ -30,6 +30,7 @@ import {
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
 import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionForContext, readSessionFromRequest, requireAdmin } from "./auth";
 import { runWithRequestContext } from "./request-context";
+import { releaseRequestDbEarly, runWithRequestDb } from "./request-db";
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
 import type { AuditEventListFilters } from "./audit-log";
@@ -224,7 +225,11 @@ const requestAuditContexts = new WeakMap<ServerResponse, RequestAuditContext>();
  */
 export async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const session = await readSessionForContext(request);
-  return runWithRequestContext(session?.orgId ?? null, () => handleRequestImpl(request, response));
+  const orgId = session?.orgId ?? null;
+
+  // runWithRequestDb lazily binds the tenant onto one pooled connection per request so the Postgres
+  // RLS policies (migration 055) see the acting org; without it every scoped table reads empty.
+  return runWithRequestContext(orgId, () => runWithRequestDb(orgId, () => handleRequestImpl(request, response)));
 }
 
 /** Internal request handler; always runs inside a tenant context established by handleRequest. */
@@ -4672,6 +4677,10 @@ async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: s
   const contentType = inferStorageContentType(ext);
   const isInline = contentType === "application/pdf" || contentType.startsWith("image/");
   const filename = basename(fullPath);
+
+  // All database gates for this download have passed; commit and release the request's pooled
+  // connection now so a slow file transfer never holds one of the bounded tenant-pool slots.
+  await releaseRequestDbEarly();
 
   response.writeHead(200, {
     "Content-Disposition": isInline ? "inline" : `attachment; filename="${filename}"`,

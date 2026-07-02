@@ -272,6 +272,11 @@ function mapAuditEventRow(row: DatabaseAuditEventRow): AuditEvent {
 
 /**
  * Lazily creates the Postgres pool when DATABASE_URL exists.
+ *
+ * Intentionally NOT the request-scoped tenant facade (request-db.ts): the audit flush runs in the
+ * request `finally`, including after failures when the request transaction has already aborted, and an
+ * audit row must never be lost to a rolled-back request. audit_events carries no org_id and has no RLS
+ * policy, so writes on this dedicated pool always succeed.
  */
 function getAuditLogDatabasePool(): Pool | null {
   if (auditLogPoolOverride !== undefined) {
