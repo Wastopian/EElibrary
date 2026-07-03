@@ -636,7 +636,7 @@ function buildMissingCadDetail(fileBackedCadCount: number, referencedAssetCount:
   }
 
   if (generatedDraftCount > 0) {
-    return `${generatedDraftCount} generated CAD ${pluralize("draft", generatedDraftCount)} exist, but generated files cannot be exported until review is complete and they are marked verified.`;
+    return `${generatedDraftCount} generated CAD ${pluralize("draft", generatedDraftCount)} ${pluralize("exists", generatedDraftCount, "exist")}, but generated files cannot be exported until review is complete and they are marked verified.`;
   }
 
   if (referencedAssetCount > 0) {
@@ -760,10 +760,10 @@ function readinessDetail(status: PartReadinessStatus, issueCount: number, blocke
   }
 
   if (blockerSummary.length === 0) {
-    return issueCount > 0 ? `${issueCount} follow-up items remain.` : "No readiness blockers are currently recorded.";
+    return issueCount > 0 ? `${issueCount} follow-up ${pluralize("item", issueCount)} ${pluralize("remains", issueCount, "remain")}.` : "No readiness blockers are currently recorded.";
   }
 
-  return `${issueCount} ${pluralize("issue", issueCount)} remain: ${blockerSummary.join(" ")}`;
+  return `${issueCount} ${pluralize("issue", issueCount)} ${pluralize("remains", issueCount, "remain")}: ${blockerSummary.join(" ")}`;
 }
 
 /**

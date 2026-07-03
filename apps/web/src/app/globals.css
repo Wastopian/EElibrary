@@ -7135,7 +7135,7 @@ details[open] .trust-breakdown__toggle::before {
 }
 
 .cable-compare__controls {
-  align-items: end;
+  align-items: flex-end;
   display: flex;
   flex-wrap: wrap;
   gap: 12px;

@@ -442,9 +442,12 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               body={
                 activeFilterPills.length > 0
                   ? "Nothing matched. Try a shorter or different part number, or clear the filters above to widen the search."
-                  : "Nothing matched. Try a shorter or different part number."
+                  : // No query and no filters means the team's catalog itself came back empty — a search
+                    // tip would be misleading. Say what actually helps: import parts, or check System
+                    // if parts were expected (a sign-in/config problem also reads as an empty catalog).
+                    "Your team's catalog has no parts yet. Import a part by number below to get started. If you expected parts here, check the System page and that you are signed in."
               }
-              title="No matching parts"
+              title={activeFilterPills.length > 0 ? "No matching parts" : "No parts in the catalog yet"}
             />
           )}
           <SearchPaginationControls filters={filters} pagination={pagination} />

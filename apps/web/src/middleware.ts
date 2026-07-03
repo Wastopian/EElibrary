@@ -164,6 +164,7 @@ export const config = {
     "/projects/:path*",
     "/system/:path*",
     "/team/:path*",
+    "/tools/:path*",
     "/vendors/:path*",
     "/where-used/:path*"
   ],

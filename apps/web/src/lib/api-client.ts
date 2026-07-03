@@ -1623,24 +1623,50 @@ export function setApiClientServerCookieReaderForTests(reader: ServerCookieReade
  * components (relative URL that lets the browser include cookies).
  */
 async function getAuthHeaders(): Promise<Record<string, string>> {
+  const isServer = typeof globalThis.window === "undefined";
+
   try {
-    const isServer = typeof globalThis.window === "undefined";
-    const base =
-      isServer
-        ? (process.env["NEXTAUTH_URL"] ?? "http://localhost:3000")
-        : "";
+    const base = isServer ? resolveServerSelfBaseUrl() : "";
     const cookieHeader = isServer ? await readServerCookieHeader() : null;
     const tokenRequestInit: RequestInit = { cache: "no-store" };
     if (cookieHeader) {
       tokenRequestInit.headers = { cookie: cookieHeader };
     }
     const res = await fetch(`${base}/api/token`, tokenRequestInit);
-    if (!res.ok) return {};
+    if (!res.ok) {
+      warnTokenMintFailure(isServer, `HTTP ${res.status} from ${base || "same-origin"}/api/token`);
+      return {};
+    }
     const { token } = (await res.json()) as { token: string };
     if (typeof token !== "string" || token.length === 0) return {};
     return { Authorization: `Bearer ${token}` };
-  } catch {
+  } catch (error) {
+    warnTokenMintFailure(isServer, error instanceof Error ? error.message : String(error));
     return {};
+  }
+}
+
+/**
+ * Resolves the base URL a server component can use to reach its OWN /api/token route. Explicit
+ * configuration (NEXTAUTH_URL) wins; otherwise the process's own listener (localhost + the port this
+ * server is bound to) — which is always dialable from inside the same process/container. The incoming
+ * request's Host header is deliberately NOT used: behind a port mapping or reverse proxy it names an
+ * EXTERNAL address (e.g. localhost:8080 for the team Docker stack) that the container cannot reach,
+ * which would silently turn every SSR read anonymous. When this resolution is wrong anyway, the
+ * warnTokenMintFailure log below says so instead of letting the workspace render empty without a trace.
+ */
+function resolveServerSelfBaseUrl(): string {
+  return process.env["NEXTAUTH_URL"] ?? `http://localhost:${process.env["PORT"] ?? "3000"}`;
+}
+
+/**
+ * Logs a server-side warning when the tenant token cannot be minted. Without the token every read is
+ * anonymous and tenant scoping shows an empty workspace with no error anywhere — the least debuggable
+ * failure mode possible — so the server log must say what actually happened.
+ */
+function warnTokenMintFailure(isServer: boolean, reason: string): void {
+  if (isServer && process.env.NODE_ENV !== "test") {
+    console.warn(`api-client: could not mint the tenant token (${reason}); this request's API reads run anonymously and will see no tenant data.`);
   }
 }
 

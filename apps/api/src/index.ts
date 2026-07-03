@@ -1001,7 +1001,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   if (storageServeMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleStorageFileServe(response, storageServeMatch[1]);
+    await handleStorageFileServe(request, response, storageServeMatch[1]);
     return;
   }
 
@@ -4644,32 +4644,70 @@ async function handleReviewActionCreate(request: IncomingMessage, response: Serv
  * Handles explicit promotion from approved draft/reviewed asset into export verification.
  */
 /**
- * Streams a stored asset file from local storage after validating the key against path traversal.
+ * Returns true when the client is a person navigating in a browser (Accept prefers text/html)
+ * rather than programmatic code expecting JSON.
  */
-async function handleStorageFileServe(response: ServerResponse, rawEncodedKey: string): Promise<void> {
+function prefersHtmlResponse(request: IncomingMessage | null): boolean {
+  const accept = request?.headers.accept;
+  return typeof accept === "string" && accept.includes("text/html");
+}
+
+/**
+ * Reports a download failure honestly in the shape the caller can use: a small plain-language HTML
+ * page for a person who clicked a download link (raw JSON error bodies are unreadable to the
+ * engineers this app serves), and the existing JSON error contract for programmatic clients.
+ */
+function sendDownloadFailure(request: IncomingMessage | null, response: ServerResponse, statusCode: number, code: string, message: string): void {
+  if (!prefersHtmlResponse(request)) {
+    sendJson(response, statusCode, { error: { code, message } });
+    return;
+  }
+
+  const title = statusCode === 404 ? "That file is not available" : statusCode === 403 ? "This file is restricted" : "This download cannot be completed";
+  const hint = code === "FILE_NOT_FOUND"
+    ? "The record for this file exists, but its stored bytes could not be served. An admin can re-import the part or re-attach the file from the admin queue."
+    : code === "ASSET_DOWNLOAD_GATED"
+      ? "Ask an admin for access to this controlled document, or have them download it with an acknowledged override."
+      : "Go back to the part page and check the file's status there.";
+  response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
+  response.end(`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} — EE Library</title>
+<style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#222;line-height:1.55}h1{font-size:1.3rem}p{margin:.7rem 0}a{color:#1a4f8b}</style></head>
+<body>
+<h1>${title}</h1>
+<p>${escapeHtml(message)}</p>
+<p>${hint}</p>
+<p><a href="javascript:history.back()">Go back</a></p>
+</body>
+</html>
+`);
+}
+
+/** Escapes text for safe embedding in the download-failure HTML page. */
+function escapeHtml(value: string): string {
+  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
+}
+
+/**
+ * Streams a stored asset file from local storage after validating the key against path traversal.
+ * `request` carries the caller's Accept header so a person who clicked a link gets a readable
+ * failure page; pass null from programmatic serve paths (e.g. the 3D viewer artifact fetch).
+ */
+async function handleStorageFileServe(request: IncomingMessage | null, response: ServerResponse, rawEncodedKey: string): Promise<void> {
   const storageKey = decodeURIComponent(rawEncodedKey);
   const localBasePath = process.env["STORAGE_LOCAL_PATH"] ?? "./storage";
   const fullPath = resolveStorageKey(localBasePath, storageKey);
 
   if (!fullPath) {
-    sendJson(response, 400, {
-      error: {
-        code: "INVALID_STORAGE_KEY",
-        message: "The storage key is invalid."
-      }
-    });
+    sendDownloadFailure(request, response, 400, "INVALID_STORAGE_KEY", "The storage key is invalid.");
     return;
   }
 
   try {
     await access(fullPath);
   } catch {
-    sendJson(response, 404, {
-      error: {
-        code: "FILE_NOT_FOUND",
-        message: "The requested storage file was not found."
-      }
-    });
+    sendDownloadFailure(request, response, 404, "FILE_NOT_FOUND", "The requested storage file was not found.");
     return;
   }
 
@@ -4747,22 +4785,12 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
     }
 
     if (result.status === "not_found") {
-      sendJson(response, 404, {
-        error: {
-          code: "ASSET_NOT_FOUND",
-          message: "The requested asset does not exist for this part."
-        }
-      });
+      sendDownloadFailure(request, response, 404, "ASSET_NOT_FOUND", "The requested asset does not exist for this part.");
       return;
     }
 
     if (result.status === "not_accessible") {
-      sendJson(response, 404, {
-        error: {
-          code: "ASSET_NOT_ACCESSIBLE",
-          message: result.reason
-        }
-      });
+      sendDownloadFailure(request, response, 404, "ASSET_NOT_ACCESSIBLE", result.reason);
       return;
     }
 
@@ -4788,10 +4816,17 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
         const reason = session?.sub
           ? "No ACL grant authorizes this user, and admin override requires ?ack=1."
           : "No session attached and the gate cannot fall back to admin override.";
+        const gateMessage = `This asset is ${gate.accessLevel.replace("_", " ")}. The current controlled revision is "${gate.revisionLabel}" (${gate.documentType}). ${reason}`;
+
+        if (prefersHtmlResponse(request)) {
+          sendDownloadFailure(request, response, 403, "ASSET_DOWNLOAD_GATED", gateMessage);
+          return;
+        }
+
         sendJson(response, 403, {
           error: {
             code: "ASSET_DOWNLOAD_GATED",
-            message: `This asset is ${gate.accessLevel.replace("_", " ")}. The current controlled revision is "${gate.revisionLabel}" (${gate.documentType}). ${reason}`,
+            message: gateMessage,
             accessLevel: gate.accessLevel,
             revisionLabel: gate.revisionLabel,
             documentType: gate.documentType,
@@ -4823,7 +4858,7 @@ async function handleAssetDownload(request: IncomingMessage, response: ServerRes
       return;
     }
 
-    await handleStorageFileServe(response, encodeURIComponent(result.storageKey));
+    await handleStorageFileServe(request, response, encodeURIComponent(result.storageKey));
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -4891,7 +4926,8 @@ async function handleAssetPreviewArtifactDownload(
       return;
     }
 
-    await handleStorageFileServe(response, encodeURIComponent(result.storageKey));
+    // Programmatic viewer fetch: JSON failure bodies are the right shape here, so no request is passed.
+    await handleStorageFileServe(null, response, encodeURIComponent(result.storageKey));
   } catch (error) {
     sendCatalogStoreError(response, error);
   }

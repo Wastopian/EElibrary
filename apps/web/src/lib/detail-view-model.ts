@@ -374,7 +374,7 @@ export function getRecoveryWorkflowSummary(record: PartSearchRecord): WorkflowSi
 
   if (reviewCount > 0) {
     return {
-      detail: `${reviewCount} generated ${pluralize("output", reviewCount)} await review and remain outside export readiness.`,
+      detail: `${reviewCount} generated ${pluralize("output", reviewCount)} ${pluralize("awaits", reviewCount, "await")} review and ${pluralize("remains", reviewCount, "remain")} outside export readiness.`,
       label: "draft output in review",
       tone: "generated"
     };
