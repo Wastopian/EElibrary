@@ -22,6 +22,7 @@ type ProjectFromCsvSearchParams = {
   headers?: string;
   filename?: string;
   projectKey?: string;
+  created?: string;
 };
 
 const maxBomFileBytes = 4 * 1024 * 1024;
@@ -37,6 +38,16 @@ export default async function ProjectFromCsvPage({
   searchParams?: Promise<ProjectFromCsvSearchParams>;
 }): Promise<React.ReactElement> {
   const resolvedSearchParams = (await searchParams) ?? {};
+
+  // Second hop of the create redirect: the action lands back on this route with ?created=<id> and the
+  // page render forwards to the new project. The client router reliably applies SAME-route action
+  // redirects for this multipart form, but silently stalls on cross-route ones (observed on Next
+  // 15.5: the 303 + x-action-redirect arrives and target chunks load, yet no navigation happens), so
+  // redirecting cross-route during render — a plain, dependable navigation — does that step instead.
+  if (resolvedSearchParams.created) {
+    redirect(`/projects/${encodeURIComponent(resolvedSearchParams.created)}`);
+  }
+
   const errorBanner = renderErrorBanner(resolvedSearchParams);
 
   /**
@@ -92,7 +103,10 @@ export default async function ProjectFromCsvPage({
 
     try {
       const response = await createProjectFromCsv(input);
-      redirect(`/projects/${encodeURIComponent(response.project.id)}#project-bom-diagnostics-heading`);
+      // Same-route redirect on purpose: see the ?created= hop at the top of the page component. A
+      // direct cross-route redirect from this multipart action never navigates the browser, which
+      // stranded the user on the form after a SUCCESSFUL import.
+      redirect(`/projects/new?created=${encodeURIComponent(response.project.id)}`);
     } catch (error) {
       if (isApiClientError(error)) {
         redirect(buildErrorRedirect(toApiClientError(error), file.name));

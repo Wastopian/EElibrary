@@ -187,7 +187,7 @@ test("search and detail workflow summaries preserve asset and recovery truth", (
   assert.equal(getConnectorWorkflowSummary(connectorRecord)?.tone, "review");
   assert.match(getConnectorWorkflowSummary(connectorRecord)?.detail ?? "", /assumption/u);
   assert.equal(getRecoveryWorkflowSummary(regulatorRecord).label, "draft output in review");
-  assert.match(getRecoveryWorkflowSummary(regulatorRecord).detail, /remain outside export readiness/u);
+  assert.match(getRecoveryWorkflowSummary(regulatorRecord).detail, /remains? outside export readiness/u);
   assert.equal(getAssetTruthSummary(microcontrollerRecord).label, "no usable CAD files");
   assert.match(getAssetTruthSummary(microcontrollerRecord).detail, /No stored CAD files/u);
 });
