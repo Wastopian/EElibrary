@@ -64,11 +64,11 @@ export function PartSubstitutionPanel({ partId, partMpn }: PartSubstitutionPanel
 
   const submit = useCallback(async () => {
     if (!substitutePartId.trim()) {
-      setSubmitState({ kind: "failed", message: "Enter the substitute part id (catalog id)." });
+      setSubmitState({ kind: "failed", message: "Enter the substitute part's MPN (or catalog id)." });
       return;
     }
     if (scope === "project" && !projectId.trim()) {
-      setSubmitState({ kind: "failed", message: "Enter the project id for project-scoped substitutions." });
+      setSubmitState({ kind: "failed", message: "Enter the project key for project-scoped substitutions." });
       return;
     }
     setSubmitState({ kind: "submitting" });
@@ -121,15 +121,15 @@ export function PartSubstitutionPanel({ partId, partMpn }: PartSubstitutionPanel
         <p className="form-hint">Fill in why this alternate is acceptable so future reviewers can trust the decision quickly.</p>
 
         <div className="form-row">
-          <label className="form-label" htmlFor="substitution-substitute">Substitute part id</label>
+          <label className="form-label" htmlFor="substitution-substitute">Substitute part number (MPN)</label>
           <input
             className="form-input"
             id="substitution-substitute"
-            placeholder="e.g. part-stm32g031k8t6"
+            placeholder="e.g. STM32G031K8T6"
             value={substitutePartId}
             onChange={(e) => setSubstitutePartId(e.target.value)}
           />
-          <small className="form-hint">Use the internal catalog part id of the alternate. Both parts must already exist in the catalog.</small>
+          <small className="form-hint">Type the alternate&apos;s manufacturer part number (a catalog id also works). The alternate must already be in the catalog — import it first if it is not.</small>
         </div>
 
         <div className="form-row">
@@ -147,14 +147,15 @@ export function PartSubstitutionPanel({ partId, partMpn }: PartSubstitutionPanel
 
         {scope === "project" && (
           <div className="form-row">
-            <label className="form-label" htmlFor="substitution-project">Project id</label>
+            <label className="form-label" htmlFor="substitution-project">Project key</label>
             <input
               className="form-input"
               id="substitution-project"
-              placeholder="e.g. project-alpha"
+              placeholder="e.g. ALPHA"
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
             />
+            <small className="form-hint">The short project key shown in the Projects list (a project id also works).</small>
           </div>
         )}
 

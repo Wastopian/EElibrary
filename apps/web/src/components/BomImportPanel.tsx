@@ -300,7 +300,7 @@ function BomImportStatusMessage({ status }: { status: BomImportStatus }) {
   if (status.kind === "success") {
     return (
       <p className="bom-import-panel__status bom-import-panel__status--success">
-        Saved {status.response.lineCount} rows. Next step: scroll down to &ldquo;Match uploaded parts list&rdquo; and click Match rows to link them to known parts.
+        Saved {status.response.lineCount} {status.response.lineCount === 1 ? "row" : "rows"}. Next step: scroll down to &ldquo;Match uploaded parts list&rdquo; and click Match rows to link them to known parts.
       </p>
     );
   }

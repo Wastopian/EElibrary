@@ -9957,27 +9957,59 @@ export async function createPartSubstitutionInDatabase(
   }
 
   const scope: PartSubstitutionScope = input.scope;
-  const projectId = scope === "project" ? input.projectId ?? null : null;
   const signoffNotes = (input.signoffNotes ?? "").trim();
 
   try {
-    const partsCheck = await databasePool.query<{ id: string }>(
-      "SELECT id FROM parts WHERE id IN ($1, $2) AND org_id = $3",
-      [originalPartId, input.substitutePartId, getRequestOrgId()]
-    );
-    const foundIds = new Set(partsCheck.rows.map((row) => row.id));
-    if (!foundIds.has(originalPartId)) {
-      return { status: "not_found", code: "ORIGINAL_PART_NOT_FOUND", message: "The original part does not exist." };
-    }
-    if (!foundIds.has(input.substitutePartId)) {
-      return { status: "not_found", code: "SUBSTITUTE_PART_NOT_FOUND", message: "The substitute part does not exist." };
+    // Engineers know MPNs, not internal catalog ids, so the substitute reference accepts either and
+    // is resolved here. Same for the scoped project, which accepts a project key or id.
+    const substituteResolution = await resolveSubstitutePartReference(databasePool, input.substitutePartId);
+
+    if (substituteResolution.status === "ambiguous") {
+      return {
+        status: "invalid",
+        code: "SUBSTITUTE_MPN_AMBIGUOUS",
+        message: `More than one catalog part matches "${input.substitutePartId}" (${substituteResolution.manufacturers.join(", ")}). Open the alternate's part page and use its catalog id instead.`
+      };
     }
 
-    if (projectId !== null) {
-      const projectCheck = await databasePool.query<{ id: string }>("SELECT id FROM projects WHERE id = $1 AND org_id = $2", [projectId, getRequestOrgId()]);
-      if (projectCheck.rowCount === 0) {
-        return { status: "not_found", code: "PROJECT_NOT_FOUND", message: "Scoped project not found." };
+    if (substituteResolution.status === "not_found") {
+      return {
+        status: "not_found",
+        code: "SUBSTITUTE_PART_NOT_FOUND",
+        message: `No part in your catalog matches "${input.substitutePartId}" by manufacturer part number or catalog id. Import the alternate into the catalog first, then record the substitution.`
+      };
+    }
+
+    const substitutePartId = substituteResolution.partId;
+
+    // Re-check self-substitution AFTER resolution: typing the original part's own MPN must be
+    // rejected the same way as typing its id (the raw-input check in the validator cannot see this).
+    if (substitutePartId === originalPartId) {
+      return { status: "invalid", code: "SELF_SUBSTITUTION", message: "A part cannot be its own substitute." };
+    }
+
+    const originalCheck = await databasePool.query<{ id: string }>(
+      "SELECT id FROM parts WHERE id = $1 AND org_id = $2",
+      [originalPartId, getRequestOrgId()]
+    );
+    if (originalCheck.rowCount === 0) {
+      return { status: "not_found", code: "ORIGINAL_PART_NOT_FOUND", message: "The original part does not exist." };
+    }
+
+    let projectId: string | null = null;
+
+    if (scope === "project" && input.projectId) {
+      const projectResolution = await resolveProjectReference(databasePool, input.projectId);
+
+      if (!projectResolution) {
+        return {
+          status: "not_found",
+          code: "PROJECT_NOT_FOUND",
+          message: `No project matches "${input.projectId}" by key or id.`
+        };
       }
+
+      projectId = projectResolution;
     }
 
     const duplicateCheck = await databasePool.query<{ id: string }>(
@@ -9986,7 +10018,7 @@ export async function createPartSubstitutionInDatabase(
            AND original_part_id = $1
            AND substitute_part_id = $2
            AND COALESCE(project_id, '') = COALESCE($3, '')`,
-      [originalPartId, input.substitutePartId, projectId]
+      [originalPartId, substitutePartId, projectId]
     );
     if ((duplicateCheck.rowCount ?? 0) > 0) {
       return {
@@ -10001,7 +10033,7 @@ export async function createPartSubstitutionInDatabase(
       `INSERT INTO part_substitutions
          (id, original_part_id, substitute_part_id, scope, project_id, signoff_notes, approved_by, approval_status, org_id, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', $8, $9)`,
-      [id, originalPartId, input.substitutePartId, scope, projectId, signoffNotes, approvedBy, requireRequestOrgId(), now]
+      [id, originalPartId, substitutePartId, scope, projectId, signoffNotes, approvedBy, requireRequestOrgId(), now]
     );
 
     const summary = await readOnePartSubstitutionSummary(databasePool, id);
@@ -10128,6 +10160,63 @@ export async function revokePartSubstitutionInDatabase(
 /**
  * Validates incoming substitution input against the obvious self/scope/projectId rules.
  */
+/** SubstitutePartResolution reports how a typed substitute reference resolved against the catalog. */
+type SubstitutePartResolution =
+  | { status: "resolved"; partId: string }
+  | { status: "ambiguous"; manufacturers: string[] }
+  | { status: "not_found" };
+
+/**
+ * Resolves the substitute reference an engineer typed. Engineers know manufacturer part numbers, not
+ * internal catalog ids, so this accepts either: an exact catalog id first, then a case-insensitive MPN
+ * match within the acting org. An MPN held by more than one manufacturer reports the candidates so the
+ * caller can tell the engineer exactly how to disambiguate.
+ */
+async function resolveSubstitutePartReference(databasePool: Pool | PoolClient, rawReference: string): Promise<SubstitutePartResolution> {
+  const reference = rawReference.trim();
+
+  const byId = await databasePool.query<{ id: string }>(
+    "SELECT id FROM parts WHERE id = $1 AND org_id = $2",
+    [reference, getRequestOrgId()]
+  );
+
+  if (byId.rows[0]) {
+    return { status: "resolved", partId: byId.rows[0].id };
+  }
+
+  const byMpn = await databasePool.query<{ id: string; manufacturer_name: string }>(
+    `SELECT p.id, m.name AS manufacturer_name
+       FROM parts p
+       JOIN manufacturers m ON m.id = p.manufacturer_id
+      WHERE LOWER(p.mpn) = LOWER($1) AND p.org_id = $2
+      ORDER BY m.name ASC`,
+    [reference, getRequestOrgId()]
+  );
+
+  if (byMpn.rows.length === 1) {
+    return { status: "resolved", partId: byMpn.rows[0]!.id };
+  }
+
+  if (byMpn.rows.length > 1) {
+    return { status: "ambiguous", manufacturers: byMpn.rows.map((row) => row.manufacturer_name) };
+  }
+
+  return { status: "not_found" };
+}
+
+/**
+ * Resolves a typed project reference — a project key (what engineers see everywhere in the UI) or a
+ * project id — to the project id, org-scoped. Returns null when nothing matches.
+ */
+async function resolveProjectReference(databasePool: Pool | PoolClient, rawReference: string): Promise<string | null> {
+  const reference = rawReference.trim();
+  const result = await databasePool.query<{ id: string }>(
+    "SELECT id FROM projects WHERE (id = $1 OR LOWER(project_key) = LOWER($1)) AND org_id = $2 LIMIT 1",
+    [reference, getRequestOrgId()]
+  );
+  return result.rows[0]?.id ?? null;
+}
+
 function validatePartSubstitutionInput(
   originalPartId: string,
   input: PartSubstitutionCreateInput
@@ -10136,7 +10225,7 @@ function validatePartSubstitutionInput(
     return { status: "invalid", code: "ORIGINAL_PART_ID_REQUIRED", message: "Original part id is required." };
   }
   if (!input.substitutePartId || input.substitutePartId.trim() === "") {
-    return { status: "invalid", code: "SUBSTITUTE_PART_ID_REQUIRED", message: "Substitute part id is required." };
+    return { status: "invalid", code: "SUBSTITUTE_PART_ID_REQUIRED", message: "Enter the substitute part's MPN or catalog id." };
   }
   if (input.substitutePartId === originalPartId) {
     return { status: "invalid", code: "SELF_SUBSTITUTION", message: "A part cannot be its own substitute." };
