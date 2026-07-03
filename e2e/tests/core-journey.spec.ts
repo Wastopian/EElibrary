@@ -52,6 +52,13 @@ test("engineer signs in, searches a part, opens its detail, and sees project ove
   // The detail hero renders the MPN as the page heading.
   await expect(page.locator("h1.ui-mono")).toContainText(DEMO_MPN);
 
+  // --- Exercise one client-JS-only control so a hydration regression cannot ship silently ---
+  // Every other assertion in this journey passes on server-rendered HTML alone (native forms and
+  // links work without hydration). The mm/in unit toggle only works once React has hydrated the
+  // page, so converting the seeded 0.95 mm pitch to inches proves client interactivity end to end.
+  await page.getByRole("button", { name: "in", exact: true }).click();
+  await expect(page.locator("dd", { hasText: "0.0374 in" })).toBeVisible();
+
   // --- Open the demo project and confirm the prior-project overlap panel renders -----------
   await page.goto(`/projects/${DEMO_PROJECT_ID}`);
   await expect(page).toHaveURL(new RegExp(`/projects/${DEMO_PROJECT_ID}`, "u"));

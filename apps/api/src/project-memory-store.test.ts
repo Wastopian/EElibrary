@@ -2240,6 +2240,82 @@ test("createPartSubstitutionInDatabase persists global approval and rejects self
 });
 
 /**
+ * Verifies the substitute reference resolves what engineers actually type: an MPN (case-insensitive)
+ * or a catalog id, with a helpful rejection when an MPN is held by two manufacturers, and the
+ * project scope resolving by project key. Guards the audience contract: nobody should need to know
+ * internal part-... ids to record a substitution.
+ */
+test("createPartSubstitutionInDatabase resolves substitutes by MPN and projects by key", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    // MPN, case-insensitive, project scope by KEY (seeded project-alpha has key ALPHA).
+    const byMpn = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "project", projectId: "alpha", signoffNotes: "Resolved by MPN + key.", substitutePartId: "rc0603fr-0710kl" },
+      "test-admin"
+    );
+    assert.equal(byMpn.status, "created");
+    if (byMpn.status === "created") {
+      assert.equal(byMpn.response.substitution.substitutePartMpn, "RC0603FR-0710KL");
+      assert.equal(byMpn.response.substitution.substitution.projectId, "project-alpha", "project key resolves to the project id");
+    }
+
+    // Typing the original part's OWN MPN must be rejected as self-substitution after resolution.
+    const ldoMpn = await pool.query<{ mpn: string }>("SELECT mpn FROM parts WHERE id = 'part-memory-ldo'");
+    const selfByMpn = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "global", substitutePartId: ldoMpn.rows[0]!.mpn },
+      "test-admin"
+    );
+    assert.equal(selfByMpn.status, "invalid");
+    if (selfByMpn.status === "invalid") assert.equal(selfByMpn.code, "SELF_SUBSTITUTION");
+
+    // An MPN held by two manufacturers is ambiguous and says so with the candidates named.
+    await pool.query(
+      `INSERT INTO manufacturers (id, name) VALUES ('mfg-amb-a', 'Ambiguity A'), ('mfg-amb-b', 'Ambiguity B')`
+    );
+    await pool.query(
+      `INSERT INTO parts (id, mpn, manufacturer_id, org_id, last_updated_at)
+       VALUES ('part-amb-a', 'SHARED-MPN-1', 'mfg-amb-a', 'org-default', '2026-03-01T00:00:00.000Z'),
+              ('part-amb-b', 'SHARED-MPN-1', 'mfg-amb-b', 'org-default', '2026-03-01T00:00:00.000Z')`
+    );
+    const ambiguous = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "global", substitutePartId: "SHARED-MPN-1" },
+      "test-admin"
+    );
+    assert.equal(ambiguous.status, "invalid");
+    if (ambiguous.status === "invalid") {
+      assert.equal(ambiguous.code, "SUBSTITUTE_MPN_AMBIGUOUS");
+      assert.match(ambiguous.message, /Ambiguity A, Ambiguity B/u, "the candidates are named for disambiguation");
+    }
+
+    // A reference matching nothing explains both lookups that were tried.
+    const unknown = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "global", substitutePartId: "NOT-A-REAL-MPN" },
+      "test-admin"
+    );
+    assert.equal(unknown.status, "not_found");
+    if (unknown.status === "not_found") assert.match(unknown.message, /manufacturer part number or catalog id/u);
+
+    // A bad project key is a clear not-found, not a silent failure.
+    const badProject = await createPartSubstitutionInDatabase(
+      "part-memory-ldo",
+      { scope: "project", projectId: "NO-SUCH-KEY", substitutePartId: "part-memory-resistor" },
+      "test-admin"
+    );
+    assert.equal(badProject.status, "not_found");
+    if (badProject.status === "not_found") assert.equal(badProject.code, "PROJECT_NOT_FOUND");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies substitution read returns active and revoked rows from both directions, and revoke preserves history.
  */
 test("readPartSubstitutionsForPartFromDatabase lists both sides, and revoke moves a row to history", async () => {
