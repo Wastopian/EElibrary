@@ -30,19 +30,24 @@ export interface RootLayoutShellProps {
    * viewer has no session (sign-in, sign-up) to render the minimal variant.
    */
   isAuthenticated?: boolean;
+  /**
+   * Optional account block rendered at the bottom of the authenticated sidebar (signed-in identity
+   * plus sign-out). Supplied by the real layout, which knows the session; omitted in tests.
+   */
+  accountSlot?: ReactNode;
 }
 
 /**
  * Renders the desktop-first application shell around every route.
  */
-export function RootLayoutShell({ children, fontClassName = "", isAuthenticated = true }: RootLayoutShellProps) {
+export function RootLayoutShell({ children, fontClassName = "", isAuthenticated = true, accountSlot }: RootLayoutShellProps) {
   return (
     <html className={fontClassName} lang="en">
       <body>
         <a className="skip-link" href="#page-content">
           Skip to main content
         </a>
-        {isAuthenticated ? renderAuthenticatedShell(children) : renderUnauthenticatedShell(children)}
+        {isAuthenticated ? renderAuthenticatedShell(children, accountSlot) : renderUnauthenticatedShell(children)}
       </body>
     </html>
   );
@@ -51,7 +56,7 @@ export function RootLayoutShell({ children, fontClassName = "", isAuthenticated 
 /**
  * Renders the full workstation shell — brand, search, workspace nav, release reminder.
  */
-function renderAuthenticatedShell(children: ReactNode) {
+function renderAuthenticatedShell(children: ReactNode, accountSlot?: ReactNode) {
   return (
     <div className="app-shell">
       <aside aria-label="Primary workspace shell" className="app-sidebar">
@@ -87,6 +92,7 @@ function renderAuthenticatedShell(children: ReactNode) {
           <strong>Only use verified files.</strong>
           <p>Open any part and expand &quot;How verification works&quot; for the full explanation.</p>
         </section>
+        {accountSlot}
       </aside>
       <div className="app-main">
         <div className="app-main__content" id="page-content">
