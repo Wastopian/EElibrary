@@ -1626,7 +1626,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   const isServer = typeof globalThis.window === "undefined";
 
   try {
-    const base = isServer ? await resolveServerSelfBaseUrl() : "";
+    const base = isServer ? resolveServerSelfBaseUrl() : "";
     const cookieHeader = isServer ? await readServerCookieHeader() : null;
     const tokenRequestInit: RequestInit = { cache: "no-store" };
     if (cookieHeader) {
@@ -1647,27 +1647,16 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 /**
- * Resolves the base URL a server component can use to reach its OWN /api/token route. The incoming
- * request's host header is preferred — the server is, by definition, reachable at the host that is
- * serving the request — with NEXTAUTH_URL as the fallback when no request scope is available. Before
- * this, a NEXTAUTH_URL that pointed at the wrong host made every SSR read silently anonymous, which
- * tenant isolation then renders as a completely empty (but error-free) workspace.
+ * Resolves the base URL a server component can use to reach its OWN /api/token route. Explicit
+ * configuration (NEXTAUTH_URL) wins; otherwise the process's own listener (localhost + the port this
+ * server is bound to) — which is always dialable from inside the same process/container. The incoming
+ * request's Host header is deliberately NOT used: behind a port mapping or reverse proxy it names an
+ * EXTERNAL address (e.g. localhost:8080 for the team Docker stack) that the container cannot reach,
+ * which would silently turn every SSR read anonymous. When this resolution is wrong anyway, the
+ * warnTokenMintFailure log below says so instead of letting the workspace render empty without a trace.
  */
-async function resolveServerSelfBaseUrl(): Promise<string> {
-  try {
-    const { headers } = await import("next/headers");
-    const requestHeaders = await headers();
-    const host = requestHeaders.get("host");
-
-    if (host) {
-      const proto = requestHeaders.get("x-forwarded-proto") ?? "http";
-      return `${proto}://${host}`;
-    }
-  } catch {
-    // No request scope (e.g. build-time or background work) — fall through to the configured URL.
-  }
-
-  return process.env["NEXTAUTH_URL"] ?? "http://localhost:3000";
+function resolveServerSelfBaseUrl(): string {
+  return process.env["NEXTAUTH_URL"] ?? `http://localhost:${process.env["PORT"] ?? "3000"}`;
 }
 
 /**
