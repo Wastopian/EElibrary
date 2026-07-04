@@ -3497,13 +3497,26 @@ export async function createCircuitBlockPartInDatabase(circuitBlockId: string, i
       };
     }
 
-    if (!(await partExists(databasePool, normalized.input.partId))) {
+    // Engineers type MPNs, not internal catalog ids, so the part reference accepts either.
+    const partResolution = await resolveCatalogPartReference(databasePool, normalized.input.partId);
+
+    if (partResolution.status === "ambiguous") {
+      return {
+        code: "PART_MPN_AMBIGUOUS",
+        message: `More than one catalog part matches "${normalized.input.partId}" (${partResolution.manufacturers.join(", ")}). Open the part's catalog page and use its catalog id instead.`,
+        status: "invalid"
+      };
+    }
+
+    if (partResolution.status === "not_found") {
       return {
         code: "PART_NOT_FOUND",
-        message: "Part not found.",
+        message: `No part in your catalog matches "${normalized.input.partId}" by manufacturer part number or catalog id. Import it into the catalog first.`,
         status: "not_found"
       };
     }
+
+    const resolvedPartId = partResolution.partId;
 
     const now = new Date();
     const result = await databasePool.query<DatabaseCircuitBlockPartRow>(
@@ -3519,9 +3532,9 @@ export async function createCircuitBlockPartInDatabase(circuitBlockId: string, i
         RETURNING id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at
       `,
       [
-        buildCircuitBlockPartId(circuitBlockId, normalized.input.partId, normalized.input.role),
+        buildCircuitBlockPartId(circuitBlockId, resolvedPartId, normalized.input.role),
         circuitBlockId,
-        normalized.input.partId,
+        resolvedPartId,
         normalized.input.role,
         normalized.input.quantity,
         normalized.input.isRequired,
@@ -9962,7 +9975,7 @@ export async function createPartSubstitutionInDatabase(
   try {
     // Engineers know MPNs, not internal catalog ids, so the substitute reference accepts either and
     // is resolved here. Same for the scoped project, which accepts a project key or id.
-    const substituteResolution = await resolveSubstitutePartReference(databasePool, input.substitutePartId);
+    const substituteResolution = await resolveCatalogPartReference(databasePool, input.substitutePartId);
 
     if (substituteResolution.status === "ambiguous") {
       return {
@@ -10160,19 +10173,19 @@ export async function revokePartSubstitutionInDatabase(
 /**
  * Validates incoming substitution input against the obvious self/scope/projectId rules.
  */
-/** SubstitutePartResolution reports how a typed substitute reference resolved against the catalog. */
-type SubstitutePartResolution =
+/** CatalogPartResolution reports how a typed part reference resolved against the catalog. */
+type CatalogPartResolution =
   | { status: "resolved"; partId: string }
   | { status: "ambiguous"; manufacturers: string[] }
   | { status: "not_found" };
 
 /**
- * Resolves the substitute reference an engineer typed. Engineers know manufacturer part numbers, not
- * internal catalog ids, so this accepts either: an exact catalog id first, then a case-insensitive MPN
- * match within the acting org. An MPN held by more than one manufacturer reports the candidates so the
- * caller can tell the engineer exactly how to disambiguate.
+ * Resolves a part reference an engineer typed (substitutions, circuit-block roles). Engineers know
+ * manufacturer part numbers, not internal catalog ids, so this accepts either: an exact catalog id
+ * first, then a case-insensitive MPN match within the acting org. An MPN held by more than one
+ * manufacturer reports the candidates so the caller can tell the engineer exactly how to disambiguate.
  */
-async function resolveSubstitutePartReference(databasePool: Pool | PoolClient, rawReference: string): Promise<SubstitutePartResolution> {
+async function resolveCatalogPartReference(databasePool: Pool | PoolClient, rawReference: string): Promise<CatalogPartResolution> {
   const reference = rawReference.trim();
 
   const byId = await databasePool.query<{ id: string }>(

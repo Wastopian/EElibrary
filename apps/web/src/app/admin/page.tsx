@@ -16,7 +16,7 @@ import { getAssetPromotionSummary, getAssetReviewStatus, getAssetValidationSumma
 import { createAssetPromotion, createReviewAction, fetchApiHealth, fetchAuditEvents, fetchPartSearchEnvelope, isApiClientError, updatePartIssueWorkflow, updateSourceReconciliation } from "../../lib/api-client";
 import type { AuditEventQueryFilters } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
-import { getTrustLineageSummary } from "../../lib/trust-lineage";
+import { getTrustLineageSummaryForSearchRecord } from "../../lib/trust-lineage";
 import { formatReviewStateLabel, reviewStateTone } from "../../lib/detail-view-model";
 import type { ApiHealth } from "../../lib/api-client";
 import type { BadgeTone } from "@ee-library/ui";
@@ -2291,19 +2291,10 @@ function formatAssetProvenance(provenance: Asset["provenance"]): string {
  * Formats a compact four-stage trust chain for queue rows.
  */
 function formatCompactTrustLineage(record: PartSearchRecord): string {
-  if (!record.bundleReadiness) {
-    return "Imported: pending | Reviewed: pending | Approved: pending | Verified for export: pending";
-  }
-  const assetReviewStatuses = record.assets.map((asset) => getAssetReviewStatus(asset, record.reviewRecords));
-  const workflowReviewStatuses = record.generationWorkflows.map((workflow) => getWorkflowReviewStatus(workflow, record.reviewRecords));
-  const promotionSummaries = record.assets.map((asset) => getAssetPromotionSummary(asset, record.validationRecords, record.promotionAudits));
-  const trust = getTrustLineageSummary(
-    record,
-    record.bundleReadiness,
-    assetReviewStatuses,
-    workflowReviewStatuses,
-    promotionSummaries
-  );
+  // Sparse-projection-aware on purpose: a record without bundle readiness must still report its REAL
+  // imported/reviewed/approved states. The previous hardcoded all-pending fallback told admins a part
+  // with confirmed imports and approved reviews was completely unprocessed.
+  const trust = getTrustLineageSummaryForSearchRecord(record);
   const markers = trust.stages.map((stage) => `${stage.label}: ${formatCompactStageState(stage.state)}`);
   return markers.join(" | ");
 }
