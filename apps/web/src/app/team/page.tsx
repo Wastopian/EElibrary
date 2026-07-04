@@ -8,13 +8,14 @@
 
 import { auth } from "@/auth";
 import { generateInviteCode, resolveTeamInviteView } from "@/lib/team-invite";
-import { createDbPool, organizations } from "@ee-library/db";
+import { createDbPool, organizations, users } from "@ee-library/db";
 import { EmptyState, SectionHeading, SectionPanel } from "@ee-library/ui";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import React from "react";
 import { CopyInviteCode } from "./CopyInviteCode";
+import { MembersPanel } from "./MembersPanel";
 
 /** DEFAULT_DATABASE_URL keeps the page usable in local dev when the env var is omitted. */
 const DEFAULT_DATABASE_URL = "postgres://ee_library:ee_library@localhost:5432/ee_library";
@@ -71,6 +72,11 @@ export default async function TeamPage() {
   }
 
   const view = resolveTeamInviteView(organization);
+  const members = await db
+    .select({ id: users.id, email: users.email, role: users.role })
+    .from(users)
+    .where(eq(users.orgId, orgId))
+    .orderBy(users.email);
 
   return (
     <main className="workspace-page team-page">
@@ -110,6 +116,13 @@ export default async function TeamPage() {
             </form>
           </div>
         )}
+      </SectionPanel>
+
+      <SectionPanel
+        description="Who belongs to this team. If a teammate forgets their password, reset it here and hand them the temporary one directly."
+        title="Members"
+      >
+        <MembersPanel actingUserId={session?.user?.id ?? ""} members={members} />
       </SectionPanel>
     </main>
   );

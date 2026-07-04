@@ -5,8 +5,37 @@
  * factoring: everything worth unit-testing lives here without a database harness.
  */
 
+import { randomInt } from "node:crypto";
+
 /** MIN_PASSWORD_LENGTH matches the sign-up form and the local credential store's expectation. */
 export const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Crockford base32 without the ambiguous letters (I, L, O, U): a temporary password gets read aloud
+ * or copied by hand between teammates, so it must survive that without a mistyped character.
+ */
+const TEMP_PASSWORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * Generates the readable one-time temporary password an admin hands to a locked-out teammate,
+ * e.g. `temp-9DZC-V3VH-K2M4`. ~32^12 of entropy; the teammate should change it from their Account
+ * page after signing in.
+ */
+export function generateTemporaryPassword(): string {
+  const groups: string[] = [];
+
+  for (let group = 0; group < 3; group += 1) {
+    let chars = "";
+
+    for (let position = 0; position < 4; position += 1) {
+      chars += TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)];
+    }
+
+    groups.push(chars);
+  }
+
+  return `temp-${groups.join("-")}`;
+}
 
 /** PasswordChangeErrorCode names each rejection so the page can render targeted recovery copy. */
 export type PasswordChangeErrorCode =
