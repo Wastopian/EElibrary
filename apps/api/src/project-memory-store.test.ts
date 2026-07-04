@@ -2316,6 +2316,59 @@ test("createPartSubstitutionInDatabase resolves substitutes by MPN and projects 
 });
 
 /**
+ * Verifies circuit-block part roles resolve the typed part reference the same way substitutions do:
+ * a case-insensitive MPN or a catalog id, with a helpful rejection for unknown references. Guards the
+ * audience contract for the block editor — nobody should need internal part-... ids to link a part.
+ */
+test("createCircuitBlockPartInDatabase resolves the part reference by MPN", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    const block = await createCircuitBlockInDatabase({
+      blockKey: "MPN-ROLE-BLOCK",
+      blockType: "power",
+      constraints: {},
+      name: "MPN role resolution block",
+      owner: "hardware",
+      reuseScope: "Test",
+      status: "in_review"
+    });
+    assert.equal(block.status, "created");
+    if (block.status !== "created") throw new Error("block create failed");
+
+    // Case-insensitive MPN resolves to the seeded resistor part.
+    const byMpn = await createCircuitBlockPartInDatabase(block.response.circuitBlock.id, {
+      isRequired: true,
+      notes: null,
+      partId: "rc0603fr-0710kl",
+      quantity: 2,
+      role: "Damping",
+      substitutionPolicy: "approved_alternate_allowed"
+    });
+    assert.equal(byMpn.status, "created");
+    if (byMpn.status === "created") {
+      assert.equal(byMpn.response.circuitBlockPart.partId, "part-memory-resistor", "the MPN resolved to the catalog part id");
+    }
+
+    // An unknown reference explains both lookups tried.
+    const unknown = await createCircuitBlockPartInDatabase(block.response.circuitBlock.id, {
+      isRequired: false,
+      notes: null,
+      partId: "NOT-A-REAL-MPN",
+      quantity: 1,
+      role: "Ghost",
+      substitutionPolicy: "approved_alternate_allowed"
+    });
+    assert.equal(unknown.status, "not_found");
+    if (unknown.status === "not_found") assert.match(unknown.message, /manufacturer part number or catalog id/u);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies substitution read returns active and revoked rows from both directions, and revoke preserves history.
  */
 test("readPartSubstitutionsForPartFromDatabase lists both sides, and revoke moves a row to history", async () => {

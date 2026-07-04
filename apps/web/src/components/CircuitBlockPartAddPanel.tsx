@@ -40,7 +40,7 @@ export function CircuitBlockPartAddPanel({ circuitBlockId }: CircuitBlockPartAdd
       event.preventDefault();
 
       if (!partId.trim() || !role.trim()) {
-        setStatus({ kind: "failed", message: "Part id and role are required." });
+        setStatus({ kind: "failed", message: "Part number (MPN) and role are required." });
         return;
       }
 
@@ -76,8 +76,8 @@ export function CircuitBlockPartAddPanel({ circuitBlockId }: CircuitBlockPartAdd
     <div className="circuit-block-part-panel">
       <form className="circuit-block-part-panel__form" onSubmit={onSubmit}>
         <label>
-          <span>Part id</span>
-          <input autoComplete="off" onChange={(event) => setPartId(event.target.value)} placeholder="part-tps7a02dbvr" value={partId} />
+          <span>Part number (MPN)</span>
+          <input autoComplete="off" onChange={(event) => setPartId(event.target.value)} placeholder="e.g. TPS7A02DBVR" value={partId} />
         </label>
         <label>
           <span>Role</span>
