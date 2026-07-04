@@ -481,6 +481,33 @@ select {
   padding: 10px 11px;
 }
 
+/* Forgot-password guidance on the sign-in card + team member reset display. */
+.auth-forgot {
+  color: var(--color-text-muted, #555);
+  font-size: 0.85rem;
+  margin-top: 12px;
+}
+
+.auth-forgot summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.auth-forgot p {
+  margin: 8px 0 0;
+}
+
+.team-members__temp-password {
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.team-members__confirm {
+  display: inline-flex;
+  gap: 12px;
+}
+
 /* Signed-in identity + sign-out at the bottom of the workspace sidebar. */
 .app-sidebar__account {
   align-content: start;

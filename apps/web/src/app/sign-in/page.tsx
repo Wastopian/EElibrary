@@ -53,6 +53,18 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
           </div>
         ) : null}
         <SignInForm callbackUrl={callbackUrl} />
+        <details className="auth-forgot">
+          <summary>Forgot your password?</summary>
+          <p>
+            Ask a teammate with access to open <strong>Team &rarr; Members</strong> and click{" "}
+            <em>Reset password</em> next to your name. They will hand you a temporary password — sign in with
+            it, then pick a new one on your Account page.
+          </p>
+          <p>
+            Running EE Library on your own? On the server, run{" "}
+            <code className="ui-mono">npm run seed:admin -- --reset-password</code> to reset the admin account.
+          </p>
+        </details>
         <div className="auth-switch">
           <span>Need a new account?</span>
           <Link className="button-link button-link--quiet" href={buildAuthRoutePath("/sign-up", callbackUrl)}>
