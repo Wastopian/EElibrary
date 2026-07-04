@@ -10,6 +10,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { DM_Mono, DM_Sans, Syne } from "next/font/google";
 import { auth } from "@/auth";
+import { AccountRail } from "./AccountRail";
 import { RootLayoutShell } from "./RootLayoutShell";
 import "./globals.css";
 
@@ -31,12 +32,13 @@ export const metadata: Metadata = {
  * stripped of their workspace nav when auth probing fails.
  */
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const isAuthenticated = await detectSession();
+  const shellSession = await detectSession();
 
   return (
     <RootLayoutShell
+      accountSlot={shellSession.email ? <AccountRail email={shellSession.email} /> : undefined}
       fontClassName={`${syne.variable} ${dmSans.variable} ${dmMono.variable}`}
-      isAuthenticated={isAuthenticated}
+      isAuthenticated={shellSession.isAuthenticated}
     >
       {children}
     </RootLayoutShell>
@@ -46,16 +48,15 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
 /**
  * Reads the session without crashing the layout if auth dependencies are degraded.
  *
- * Returns `true` when a session is present, `false` when not. Any thrown error is
- * treated as authenticated so the full shell renders — losing the workspace nav
- * silently would be worse than briefly showing it to an unauthenticated user
- * (middleware still gates the actual routes).
+ * Any thrown error is treated as authenticated (with no identity to show) so the full shell
+ * renders — losing the workspace nav silently would be worse than briefly showing it to an
+ * unauthenticated user (middleware still gates the actual routes).
  */
-async function detectSession(): Promise<boolean> {
+async function detectSession(): Promise<{ isAuthenticated: boolean; email: string | null }> {
   try {
     const session = await auth();
-    return Boolean(session);
+    return { email: session?.user?.email ?? null, isAuthenticated: Boolean(session) };
   } catch {
-    return true;
+    return { email: null, isAuthenticated: true };
   }
 }

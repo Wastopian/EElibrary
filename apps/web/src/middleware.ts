@@ -152,6 +152,7 @@ function readApiAuthSecret(): Uint8Array | null {
 export const config = {
   matcher: [
     "/",
+    "/account/:path*",
     "/admin/:path*",
     "/api-proxy/:path*",
     "/catalog/:path*",

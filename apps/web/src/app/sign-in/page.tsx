@@ -1,19 +1,20 @@
 /**
- * File header: Renders the credentials sign-in form and returns users to their requested workspace.
+ * File header: Renders the credentials sign-in page and returns users to their requested workspace.
+ *
+ * The form itself is a client component (SignInForm) so a failed attempt shows its error inline and
+ * keeps everything the person typed. This page still handles the session redirect and the notices
+ * that arrive by query flag (account created, Auth.js-initiated errors from middleware bounces).
  */
 
-import { auth, signIn } from "@/auth";
+import { auth } from "@/auth";
 import {
   buildAuthRoutePath,
-  readPasswordFormString,
-  readSignInRedirectError,
-  readTrimmedFormString,
   resolveSafeCallbackUrl,
   resolveSignInNotice
 } from "@/lib/auth-form-state";
-import { AuthError } from "next-auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { SignInForm } from "./SignInForm";
 
 /** SignInSearchParams carries the middleware-provided return target after authentication. */
 type SignInSearchParams = {
@@ -51,32 +52,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
             <p>{notice.body}</p>
           </div>
         ) : null}
-        <form
-          className="auth-form"
-          action={async (formData: FormData) => {
-            "use server";
-            await submitSignInForm(formData, callbackUrl);
-          }}
-        >
-          <label htmlFor="email">Email</label>
-          <input
-            autoComplete="email"
-            id="email"
-            name="email"
-            placeholder="you@example.com"
-            required
-            type="email"
-          />
-          <label htmlFor="password">Password</label>
-          <input
-            autoComplete="current-password"
-            id="password"
-            name="password"
-            required
-            type="password"
-          />
-          <button className="auth-form__primary-action" type="submit">Sign in</button>
-        </form>
+        <SignInForm callbackUrl={callbackUrl} />
         <div className="auth-switch">
           <span>Need a new account?</span>
           <Link className="button-link button-link--quiet" href={buildAuthRoutePath("/sign-up", callbackUrl)}>
@@ -86,40 +62,4 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
       </div>
     </main>
   );
-}
-
-/**
- * Submits credentials through Auth.js and converts provider failures into page-local feedback.
- */
-async function submitSignInForm(formData: FormData, callbackUrl: string): Promise<void> {
-  const email = readTrimmedFormString(formData.get("email"));
-  const password = readPasswordFormString(formData.get("password"));
-
-  if (!email || !password) {
-    redirect(buildAuthRoutePath("/sign-in", callbackUrl, { error: "invalid_credentials" }));
-  }
-
-  try {
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-      redirectTo: callbackUrl
-    });
-    const redirectError = readSignInRedirectError(result);
-
-    if (redirectError) {
-      redirect(buildAuthRoutePath("/sign-in", callbackUrl, { error: redirectError }));
-    }
-  } catch (error) {
-    if (error instanceof AuthError) {
-      const errorKey = error.type === "CredentialsSignin" ? "invalid_credentials" : "service_unavailable";
-
-      redirect(buildAuthRoutePath("/sign-in", callbackUrl, { error: errorKey }));
-    }
-
-    throw error;
-  }
-
-  redirect(callbackUrl);
 }

@@ -481,6 +481,52 @@ select {
   padding: 10px 11px;
 }
 
+/* Signed-in identity + sign-out at the bottom of the workspace sidebar. */
+.app-sidebar__account {
+  align-content: start;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 11px;
+}
+
+.app-sidebar__account-label {
+  color: var(--color-sidebar-active);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.app-sidebar__account-email {
+  color: #fff;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.app-sidebar__account-email:hover {
+  text-decoration: underline;
+}
+
+.app-sidebar__account-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.app-sidebar__account-actions .button-link {
+  color: var(--color-technical-muted);
+  font-size: 0.78rem;
+}
+
+.app-sidebar__account-actions .button-link:hover {
+  color: #fff;
+}
+
 .app-sidebar__note span {
   color: var(--color-sidebar-active);
   font-size: 0.82rem;
