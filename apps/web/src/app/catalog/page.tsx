@@ -416,7 +416,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           <div className="results-panel__header">
             <div>
               <p className="app-kicker">Results</p>
-              <h2>{pagination.totalRecords} matches</h2>
+              <h2>{pagination.totalRecords} {pagination.totalRecords === 1 ? "match" : "matches"}</h2>
               <p className="results-panel__range">
                 Rows {resultRange.start}-{resultRange.end} / page {pagination.page} of {pagination.totalPages}
               </p>
@@ -487,7 +487,7 @@ function HomepageWorkspaceRail({
         <summary>
           <span className="quick-check-rail__details-summary">
             <StatusBadge label={catalogModeLabel(source)} tone={catalogModeTone(source)} />
-            <span className="quick-check-rail__details-meta">{catalogStats.totalMatches} matches</span>
+            <span className="quick-check-rail__details-meta">{catalogStats.totalMatches} {catalogStats.totalMatches === 1 ? "match" : "matches"}</span>
           </span>
         </summary>
         <div className="quick-check-rail__details-body">

@@ -94,6 +94,22 @@ Public provider/catalog data is input. Internal engineering truth is the product
 
 ---
 
+## Known Limitations (alpha)
+
+Documented after the 2026-07 full-site functionality audit (rounds 1–4, PRs #69–#74). Every workspace
+and control was driven end to end in a real browser against production builds; these are the honest
+boundaries that remain. None block an alpha.
+
+| Limitation | Impact | Workaround / path forward |
+| --- | --- | --- |
+| **3D validation evidence requires the STEP→glTF converter** on the worker host. Without it, 3D-model assets cannot earn durable validation evidence, so "Mark verified" stays blocked for them (the blocker reason is shown honestly). | Parts with only 3D CAD cannot reach "Verified for export" on hosts without the converter. | Install the converter on the worker host (the honesty gate needs no code change either way). |
+| **No self-service email password reset** — team servers run without SMTP. | A locked-out user cannot reset their own password. | Shipped alternatives: any team admin resets from **Team → Members** (temporary password shown once); solo operators run `npm run seed:admin -- --reset-password`. Sign-in explains both. Email reset becomes possible if a deployment gains SMTP. |
+| **Multi-tenancy hardening backlog** (`docs/MULTITENANCY.md` "Later"): the app connects as the table owner with a trusted-path bypass GUC instead of a dedicated non-owner DB role; the API still accepts tokens without an `orgId` claim (defaults to `org-default`); org management lacks depth (single-use/expiring invite tokens, member removal/transfer, restricted roles / RBAC v1). | Defense-in-depth is one layer thinner than ideal; invite codes are reusable until regenerated; every member is full-power admin. | Each is a scoped follow-up; RLS + app-layer scoping already enforce isolation end to end (proven live and in CI cross-org probes). |
+| **Review history has no aggregate view** — the part page shows per-asset review status; there is no single "all reviews for this part" timeline (audit events capture them administratively). | Reviewing history means checking each asset card or the admin audit table. | Candidate follow-up: a review-history panel on the part page. |
+| **Reusable-code invites only** — teammates join with the one shared team code. | Anyone holding the current code can join until it is rotated. | Regenerate after onboarding waves; single-use/expiring tokens are the planned upgrade (see hardening backlog). |
+
+---
+
 ## Coordination Rules
 
 - The source docs describe product intent and architectural direction.

@@ -67,6 +67,9 @@ function renderAuthenticatedShell(children: ReactNode, accountSlot?: ReactNode) 
             <p className="app-sidebar__subtitle">Find parts. Open projects. Ship verified files.</p>
           </div>
         </Link>
+        {/* Identity and sign-out sit above the nav on purpose: with 13 workspaces the sidebar
+            scrolls, and "who am I / how do I sign out" must never be below the fold. */}
+        {accountSlot}
         <form action="/catalog" className="app-sidebar__search" method="get" role="search">
           <label className="app-sidebar__search-label" htmlFor="sidebar-search">
             Search a part number
@@ -92,7 +95,6 @@ function renderAuthenticatedShell(children: ReactNode, accountSlot?: ReactNode) 
           <strong>Only use verified files.</strong>
           <p>Open any part and expand &quot;How verification works&quot; for the full explanation.</p>
         </section>
-        {accountSlot}
       </aside>
       <div className="app-main">
         <div className="app-main__content" id="page-content">

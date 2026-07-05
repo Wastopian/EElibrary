@@ -48,7 +48,7 @@ test("catalog page renders compact filter bar and explanation-first list results
 
     assert.match(html, /Refine results/u);
     assert.match(html, /Search results/u);
-    assert.match(html, /1 matches/u);
+    assert.match(html, /1 match\b/u);
     assert.match(html, /Live catalog/u);
     assert.match(html, /Catalog search/u);
     assert.match(html, /File status/u);
