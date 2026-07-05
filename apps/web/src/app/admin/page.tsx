@@ -217,6 +217,16 @@ export default async function AdminPage(props: AdminPageProps) {
   const issueWorkflowRows = buildIssueWorkflowRows(records);
   const assistantTriageRows = buildAssistantTriageRows(records);
   const recentAssistantTriageRows = assistantTriageRows.slice(0, 12);
+
+  /**
+   * Dense queues render at most this many rows. Without a cap the page ran to ~85,000px with the
+   * demo catalog alone (247 issue rows) — unusable to scroll and slow to render. Counts stay honest
+   * in each panel title; a per-table note says how many more exist and how to narrow.
+   */
+  const QUEUE_ROW_DISPLAY_LIMIT = 20;
+  const displayedIssueWorkflowRows = issueWorkflowRows.slice(0, QUEUE_ROW_DISPLAY_LIMIT);
+  const displayedReviewQueue = reviewQueue.slice(0, QUEUE_ROW_DISPLAY_LIMIT);
+  const displayedPromotionQueue = promotionQueue.slice(0, QUEUE_ROW_DISPLAY_LIMIT);
   const overviewStats = buildAdminOverviewStats(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows, assistantTriageRows.length);
   const overviewGroups = buildAdminOverviewGroups(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows, assistantTriageRows.length);
   const overviewTableRows = buildAdminOverviewTableRows(reviewQueue, promotionQueue, failedImportRows, validationAttentionRows, issueQueueRows, assistantTriageRows);
@@ -416,7 +426,7 @@ export default async function AdminPage(props: AdminPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {issueWorkflowRows.map((row) => (
+                  {displayedIssueWorkflowRows.map((row) => (
                     <tr key={`${row.partId}-${row.issue.code}`}>
                       <td>
                         <Link href={`/parts/${row.partId}`}>
@@ -497,6 +507,11 @@ export default async function AdminPage(props: AdminPageProps) {
                   ))}
                 </tbody>
               </table>
+              {issueWorkflowRows.length > displayedIssueWorkflowRows.length ? (
+                <p className="muted-copy">
+                  Showing the first {displayedIssueWorkflowRows.length} of {issueWorkflowRows.length}. Use the issue queue links above to open a narrower filtered view.
+                </p>
+              ) : null}
             </div>
           ) : (
             <EmptyState title="No issue workflow items" body="No issues are open or recently resolved right now." />
@@ -536,7 +551,7 @@ export default async function AdminPage(props: AdminPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {reviewQueue.map((item) => (
+                  {displayedReviewQueue.map((item) => (
                     <tr key={`${item.targetType}-${item.targetId}`}>
                       <td>
                         <Link href={`/parts/${item.partId}`}>
@@ -576,6 +591,11 @@ export default async function AdminPage(props: AdminPageProps) {
                   ))}
                 </tbody>
               </table>
+              {reviewQueue.length > displayedReviewQueue.length ? (
+                <p className="muted-copy">
+                  Showing the first {displayedReviewQueue.length} of {reviewQueue.length}. Handle these and reload to pull the next batch forward.
+                </p>
+              ) : null}
             </div>
           ) : (
             <EmptyState title="No review queue items" body="No drafts or review-required items are waiting right now." />
@@ -600,7 +620,7 @@ export default async function AdminPage(props: AdminPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {promotionQueue.map((item) => (
+                  {displayedPromotionQueue.map((item) => (
                     <tr key={`promotion-${item.assetId}`}>
                       <td>
                         <Link href={`/parts/${item.partId}`}>
@@ -642,6 +662,11 @@ export default async function AdminPage(props: AdminPageProps) {
                   ))}
                 </tbody>
               </table>
+              {promotionQueue.length > displayedPromotionQueue.length ? (
+                <p className="muted-copy">
+                  Showing the first {displayedPromotionQueue.length} of {promotionQueue.length}. Verify these and reload to pull the next batch forward.
+                </p>
+              ) : null}
             </div>
           ) : (
             <EmptyState title="Nothing to verify right now" body="No approved files are waiting to be marked verified for export." />

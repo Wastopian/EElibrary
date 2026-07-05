@@ -190,7 +190,10 @@ select {
    Renders the brand strip + the auth form content only — no workspace sidebar,
    no nav, no release reminder. A first visit shouldn't face a wall of links it
    cannot click. */
-.app-shell--auth {
+/* Compound selector on purpose: the base .app-shell rule is declared later in this file, and at
+   equal specificity it was overriding this variant — the sign-in page rendered in the two-column
+   workstation grid with the brand stranded in the sidebar column. */
+.app-shell.app-shell--auth {
   display: grid;
   gap: 24px;
   grid-template-columns: minmax(0, 1fr);
@@ -223,7 +226,7 @@ select {
 .app-main--auth {
   align-items: start;
   display: grid;
-  justify-items: start;
+  justify-items: center;
 }
 
 /* Auth pages: compact workstation access panels with clear form rhythm and recovery messages. */
@@ -481,6 +484,19 @@ select {
   padding: 10px 11px;
 }
 
+/* The team invite code is read aloud / copied by hand — render it big and boxed. */
+.team-invite__code code {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 10px 16px;
+}
+
 /* Forgot-password guidance on the sign-in card + team member reset display. */
 .auth-forgot {
   color: var(--color-text-muted, #555);
@@ -516,8 +532,8 @@ select {
   border-radius: var(--radius-sm);
   display: grid;
   gap: 4px;
-  margin-top: 10px;
-  padding: 10px 11px;
+  margin-bottom: 2px;
+  padding: 8px 11px;
 }
 
 .app-sidebar__account-label {
@@ -761,11 +777,17 @@ select {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
+  box-shadow: 0 4px 14px rgba(20, 30, 25, 0.06);
   display: flex;
   flex-wrap: wrap;
   gap: 10px 14px;
   margin-top: 16px;
   padding: 12px 14px;
+  /* Detail pages run 10+ screens long; the section nav stays pinned so "where am I / jump to X"
+     never requires scrolling back to the top. */
+  position: sticky;
+  top: 12px;
+  z-index: 30;
 }
 
 main > .workspace-jump-nav {
