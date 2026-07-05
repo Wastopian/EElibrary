@@ -9608,7 +9608,8 @@ async function collectRevisionApprovalBlockers(
   );
 
   for (const row of unresolved.rows) {
-    blockers.push(`${toNumber(row.line_count)} ${row.match_status.replace(/_/gu, " ")} row(s) remain on the target revision.`);
+    const lineCount = toNumber(row.line_count);
+    blockers.push(`${lineCount} ${row.match_status.replace(/_/gu, " ")} ${lineCount === 1 ? "row remains" : "rows remain"} on the target revision.`);
   }
 
   return blockers;
