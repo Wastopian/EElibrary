@@ -150,6 +150,23 @@ export function formatSupplySourceLabel(source: { providerId: string; supplierNa
   return source.supplierName ?? source.providerId;
 }
 
+/** PROVIDER_DISPLAY_LABELS maps known provider ids to the names engineers recognize. */
+const PROVIDER_DISPLAY_LABELS: Record<string, string> = {
+  digikey: "DigiKey",
+  jlcparts: "JLCPCB / LCSC",
+  kicad: "KiCad library",
+  local: "Local catalog",
+  mouser: "Mouser",
+  octopart: "Octopart"
+};
+
+/**
+ * Formats a provider id into a distributor name engineers recognize, leaving unknown ids untouched.
+ */
+export function formatProviderLabel(providerId: string): string {
+  return PROVIDER_DISPLAY_LABELS[providerId] ?? providerId;
+}
+
 /**
  * Formats MOQ and lead-time terms while preserving missing values as unknown.
  */

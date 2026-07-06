@@ -18,6 +18,7 @@ import type {
   Package,
   Part,
   PartMetric,
+  PartSpecification,
   ProviderLookupCandidateBase,
   ReviewRecord,
   SimilarPartRelation,
@@ -136,6 +137,8 @@ export interface NormalizedProviderPart {
   datasheetRevisions: DatasheetRevision[];
   /** Normalized metrics parsed from the provider payload. */
   metrics: PartMetric[];
+  /** Verbatim distributor specification rows kept for display; optional so CAD/fixture adapters can omit them. */
+  specifications?: PartSpecification[];
   /** Supply offerings parsed from provider commercial snapshots. */
   supplyOfferings: NormalizedSupplyOffering[];
   /** Asset registry records parsed from the provider payload. */

@@ -74,6 +74,66 @@ test("part detail renders readiness record summary from detail response", async 
 });
 
 /**
+ * Verifies the Distributor details panel renders verbatim provider rows with a source label, and
+ * falls back to guidance that re-importing fills the section when no rows are stored.
+ */
+test("part detail renders distributor specification rows and an empty state when none exist", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed part detail record");
+
+  const specifications = [
+    {
+      id: "spec-mouser-x-tolerance",
+      lastUpdatedAt: "2026-05-16T00:00:00.000Z",
+      partId: record.part.id,
+      providerId: "mouser",
+      sourceRecordId: "source-x",
+      specGroup: "parametric" as const,
+      specKey: "Tolerance",
+      specValue: "1%"
+    }
+  ];
+
+  const restoreWithSpecs = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, undefined, undefined, specifications),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Distributor details");
+
+    assert.match(panel, /Exactly what each distributor reports/u);
+    assert.match(panel, /Tolerance/u);
+    assert.match(panel, /1%/u);
+    assert.match(panel, /Mouser/u);
+    assert.doesNotMatch(panel, /No distributor details are stored/u);
+  } finally {
+    restoreWithSpecs();
+  }
+
+  const restoreEmpty = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Distributor details");
+
+    assert.match(panel, /No distributor details are stored for this part yet/u);
+  } finally {
+    restoreEmpty();
+  }
+});
+
+/**
  * Verifies the decision-point push: confirmed "this bit us" memory interrupts at the top of the
  * part-detail hero as a warning (not a gate) before the use decision.
  */

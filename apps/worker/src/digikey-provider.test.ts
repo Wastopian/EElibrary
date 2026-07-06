@@ -54,6 +54,23 @@ test("digikey provider rejects a foreign raw payload", () => {
 });
 
 /**
+ * Verifies the full DigiKey parameter table is preserved as verbatim spec rows, even the parameters
+ * the six-metric allowlist drops.
+ */
+test("digikey provider keeps the full parameter table as verbatim spec rows", () => {
+  const normalized = digikeyProviderAdapter.normalizeRawPart(buildRawPayload());
+  const specifications = normalized.specifications ?? [];
+
+  assert.deepEqual(
+    specifications.map((row) => [row.specKey, row.specValue, row.specGroup]),
+    [
+      ["Output Type", "Fixed", "parametric"],
+      ["Voltage - Output (Min/Fixed)", "2.28V", "parametric"]
+    ]
+  );
+});
+
+/**
  * Builds a deterministic raw payload mirroring the DigiKey keyword response subset.
  */
 function buildRawPayload(): RawProviderPayload {

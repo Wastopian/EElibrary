@@ -52,6 +52,8 @@ import type {
   PartSearchFilters,
   PartSearchRecord,
   PartSearchSort,
+  PartSpecification,
+  PartSpecificationGroup,
   ProviderAcquisitionJob,
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
@@ -219,6 +221,18 @@ interface DatabaseMetricRow {
   confidence_score: string;
   source_revision_id: string;
   source_record_id: string | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabasePartSpecificationRow is the verbatim specification row shape read from Postgres. */
+interface DatabasePartSpecificationRow {
+  id: string;
+  part_id: string;
+  provider_id: string;
+  source_record_id: string | null;
+  spec_key: string;
+  spec_value: string;
+  spec_group: PartSpecificationGroup | null;
   last_updated_at: Date | string;
 }
 
@@ -889,6 +903,34 @@ export async function readPartAcquisitionSummaryFromDatabase(partId: string, opt
     }
 
     return buildNotRecordedPartAcquisitionSummary();
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads verbatim distributor specification rows for one part. Keyed on part_id only, exactly like the
+ * acquisition/metric side reads: the part id is already org-scoped for non-default orgs and the RLS
+ * backstop filters by the acting org, so no explicit org predicate is needed. Returns [] when the
+ * database is not configured (seed fallback supplies its own empty list).
+ */
+export async function readPartSpecificationsFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<PartSpecification[]> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return [];
+  }
+
+  try {
+    const result = await timedCatalogQuery<DatabasePartSpecificationRow>(
+      databasePool,
+      "part_specifications",
+      PART_SPECIFICATION_ROWS_SQL,
+      [partId],
+      options
+    );
+
+    return result.rows.map(mapPartSpecificationRow);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -3243,6 +3285,22 @@ function mapMetricRow(row: DatabaseMetricRow): PartMetric {
 }
 
 /**
+ * Maps a database row into the shared PartSpecification type.
+ */
+function mapPartSpecificationRow(row: DatabasePartSpecificationRow): PartSpecification {
+  return {
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    partId: row.part_id,
+    providerId: row.provider_id,
+    sourceRecordId: row.source_record_id,
+    specGroup: row.spec_group,
+    specKey: row.spec_key,
+    specValue: row.spec_value
+  };
+}
+
+/**
  * Maps a database row into the shared Asset type.
  */
 function mapAssetRow(row: DatabaseAssetRow): Asset {
@@ -4360,6 +4418,34 @@ const METRIC_ROWS_SQL = `
   FROM part_metrics
   WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY metric_key ASC
+`;
+
+/**
+ * PART_SPECIFICATION_ROWS_SQL reads verbatim distributor specification rows for the detail page.
+ * Ordered so grouped display is stable: parametric first, then physical, compliance, commercial.
+ */
+const PART_SPECIFICATION_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    provider_id,
+    source_record_id,
+    spec_key,
+    spec_value,
+    spec_group,
+    last_updated_at
+  FROM part_specifications
+  WHERE part_id = $1
+  ORDER BY
+    provider_id ASC,
+    CASE spec_group
+      WHEN 'parametric' THEN 0
+      WHEN 'physical' THEN 1
+      WHEN 'compliance' THEN 2
+      WHEN 'commercial' THEN 3
+      ELSE 4
+    END,
+    spec_key ASC
 `;
 
 /** ASSET_ROWS_SQL reads asset registry records. */

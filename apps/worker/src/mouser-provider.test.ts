@@ -51,6 +51,97 @@ test("mouser provider rejects a foreign raw payload", () => {
 });
 
 /**
+ * Verifies product attributes become verbatim spec rows and that a non-passive part triggers no
+ * description parsing (no tolerance/power rows, no invented metrics).
+ */
+test("mouser provider keeps product attributes as spec rows and skips description parsing for non-passives", () => {
+  const normalized = mouserProviderAdapter.normalizeRawPart(buildRawPayload());
+  const specifications = normalized.specifications ?? [];
+
+  assert.deepEqual(
+    specifications.filter((row) => row.specGroup === "parametric").map((row) => [row.specKey, row.specValue]),
+    [
+      ["Package / Case", "LQFP-32"],
+      ["Supply Voltage", "3.3 V"]
+    ]
+  );
+  assert.ok(!specifications.some((row) => row.specKey === "Tolerance"), "no tolerance row for a microcontroller");
+  assert.ok(!specifications.some((row) => row.specKey === "Power Rating"), "no power row for a microcontroller");
+  assert.ok(!normalized.metrics.some((metric) => metric.metricKey === "resistance"), "no invented resistance metric");
+});
+
+/**
+ * Verifies the full passive path: description-parsed electrical value feeds Key metrics, tolerance and
+ * power become spec rows, repeated Packaging attributes collapse to one row, and RoHS, lifecycle,
+ * weight, and compliance fields are captured under honest groups.
+ */
+test("mouser provider parses passive description specs and captures commercial and compliance rows", () => {
+  const normalized = mouserProviderAdapter.normalizeRawPart(buildResistorRawPayload());
+  const specifications = normalized.specifications ?? [];
+  const byKey = (specKey: string) => specifications.find((row) => row.specKey === specKey);
+
+  const resistance = normalized.metrics.find((metric) => metric.metricKey === "resistance");
+
+  assert.ok(resistance, "expected a resistance metric parsed from the description");
+  assert.equal(resistance.metricValue, 10_000, "10kOhms must normalize to 10000 ohms");
+
+  assert.equal(byKey("Tolerance")?.specValue, "1%");
+  assert.equal(byKey("Tolerance")?.specGroup, "parametric");
+  assert.equal(byKey("Power Rating")?.specValue, "1/10W");
+
+  const packaging = specifications.filter((row) => row.specKey === "Packaging");
+
+  assert.equal(packaging.length, 1, "three Packaging attributes must collapse into one row");
+  assert.equal(packaging[0]?.specValue, "Cut Tape (CT) / Reel / Digi-Reel®");
+
+  assert.equal(byKey("RoHS Status")?.specGroup, "compliance");
+  assert.equal(byKey("ECCN")?.specGroup, "compliance");
+  assert.equal(byKey("Lifecycle Status")?.specGroup, "commercial");
+  assert.equal(byKey("Factory Stock")?.specValue, "0");
+  assert.equal(byKey("Unit Weight (kg)")?.specGroup, "physical");
+});
+
+/**
+ * Builds a deterministic raw payload mirroring a Mouser chip-resistor response, where electrical
+ * specs live in the description and attributes carry only packaging variants.
+ */
+function buildResistorRawPayload(): RawProviderPayload {
+  return {
+    fetchedAt: "2026-05-16T00:00:00.000Z",
+    payload: {
+      part: {
+        AvailabilityInStock: "0",
+        Category: "Resistors / Chip Resistor - Surface Mount",
+        DataSheetUrl: "https://www.yageo.com/upload/media/product/RC0603.pdf",
+        Description: "Thick Film Resistors - SMD General Purpose Chip Resistor 0603, 10kOhms, 1%, 1/10W",
+        FactoryStock: "0",
+        LeadTime: "63 Days",
+        LifecycleStatus: "Active",
+        Manufacturer: "YAGEO",
+        ManufacturerPartNumber: "RC0603FR-0710KL",
+        Min: "1",
+        MouserPartNumber: "603-RC0603FR-0710KL",
+        ProductAttributes: [
+          { AttributeName: "Packaging", AttributeValue: "Cut Tape (CT)" },
+          { AttributeName: "Packaging", AttributeValue: "Reel" },
+          { AttributeName: "Packaging", AttributeValue: "Digi-Reel®" },
+          { AttributeName: "Standard Pack Qty", AttributeValue: "10000" }
+        ],
+        ProductCompliance: [
+          { ComplianceName: "ECCN", ComplianceValue: "EAR99" },
+          { ComplianceName: "HTSUS", ComplianceValue: "8533.21.0060" }
+        ],
+        ProductDetailUrl: "https://www.mouser.com/ProductDetail/YAGEO/RC0603FR-0710KL",
+        ROHSStatus: "RoHS Compliant",
+        UnitWeightKg: "0.00002"
+      },
+      request: { manufacturerName: null, mpn: "RC0603FR-0710KL" }
+    },
+    providerId: "mouser"
+  };
+}
+
+/**
  * Builds a deterministic raw payload mirroring the Mouser part-number response subset.
  */
 function buildRawPayload(): RawProviderPayload {

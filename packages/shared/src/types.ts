@@ -2722,6 +2722,23 @@ export interface CircuitBlockPartUpdateResponse {
   boundary: string;
 }
 
+/** PartSpecificationGroup buckets verbatim provider rows for stable display ordering. */
+export type PartSpecificationGroup = "parametric" | "compliance" | "commercial" | "physical";
+
+/** PartSpecification stores one verbatim distributor label/value pair with provenance. */
+export interface PartSpecification {
+  id: string;
+  partId: string;
+  providerId: string;
+  sourceRecordId: string | null;
+  /** Provider label kept word for word, such as "Voltage Rating" or "ROHS Status". */
+  specKey: string;
+  /** Provider value kept word for word, never unit-converted. */
+  specValue: string;
+  specGroup: PartSpecificationGroup | null;
+  lastUpdatedAt: string;
+}
+
 /** PartMetric stores one normalized datasheet metric with confidence and provenance. */
 export interface PartMetric {
   id: string;
@@ -3541,6 +3558,8 @@ export interface PartDetailResponse {
   assetPromotionSummaries: AssetPromotionSummary[];
   acquisitionSummary: PartAcquisitionSummary;
   enrichmentSummary: PartEnrichmentSummary;
+  /** Verbatim distributor specification rows for this part, empty when none are stored. */
+  specifications: PartSpecification[];
 }
 
 /** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */

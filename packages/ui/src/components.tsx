@@ -48,12 +48,26 @@ export interface MetricTableRow {
   meta: string;
   /** Visual tone selected by the consuming domain layer. */
   tone: BadgeTone;
+  /** Stable React key; defaults to the label when omitted (labels can repeat across sources). */
+  key?: string;
+}
+
+/** MetricTableHeaders overrides the three default column headings. */
+export interface MetricTableHeaders {
+  /** Heading over the label column. */
+  label: string;
+  /** Heading over the value column. */
+  value: string;
+  /** Heading over the meta column. */
+  meta: string;
 }
 
 /** MetricTableProps renders normalized metrics with confidence metadata. */
 export interface MetricTableProps {
   /** Rows prepared by the domain layer. */
   rows: MetricTableRow[];
+  /** Optional column headings; defaults preserve the normalized-metric wording. */
+  headers?: MetricTableHeaders;
 }
 
 /** AssetCardProps renders an asset summary without knowing provider internals. */
@@ -168,20 +182,20 @@ export function EmptyState({ body, title }: EmptyStateProps) {
 /**
  * Renders normalized metric rows with confidence labels.
  */
-export function MetricTable({ rows }: MetricTableProps) {
+export function MetricTable({ rows, headers }: MetricTableProps) {
   return (
     <div className="ui-table-wrap">
       <table className="ui-table">
         <thead>
           <tr>
-            <th>Metric</th>
-            <th>Value</th>
-            <th>Source confidence</th>
+            <th>{headers?.label ?? "Metric"}</th>
+            <th>{headers?.value ?? "Value"}</th>
+            <th>{headers?.meta ?? "Source confidence"}</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.label}>
+            <tr key={row.key ?? row.label}>
               <td>{row.label}</td>
               <td className="ui-mono">{row.value}</td>
               <td>

@@ -40,6 +40,7 @@ import {
   formatInteger,
   formatInventoryStatus,
   formatPriceBreak,
+  formatProviderLabel,
   formatQuantity,
   formatRedlineStatus,
   formatRevisionLabel,
@@ -213,6 +214,13 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     meta: `${Math.round(metric.confidenceScore * 100)}% confidence`,
     tone: scoreTone(metric.confidenceScore),
     value: formatMetricValue(metric)
+  }));
+  const specificationRows = detail.specifications.map<MetricTableRow>((specification) => ({
+    key: specification.id,
+    label: specification.specKey,
+    meta: formatProviderLabel(specification.providerId),
+    tone: "info",
+    value: specification.specValue
   }));
   const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState, supplyOffersState);
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
@@ -525,6 +533,20 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             />
           </SectionPanel>
         </div>
+
+        <SectionPanel
+          description="Exactly what each distributor reports for this part, word for word. Useful for double-checking — always confirm against the official datasheet."
+          title="Distributor details"
+        >
+          {specificationRows.length > 0 ? (
+            <MetricTable headers={{ label: "Specification", meta: "Source", value: "Value" }} rows={specificationRows} />
+          ) : (
+            <EmptyState
+              body="No distributor details are stored for this part yet. Importing or re-importing this part from a distributor fills this section in."
+              title="No distributor details"
+            />
+          )}
+        </SectionPanel>
 
         <SectionPanel description="Which datasheet revision this part record references. Downloads live in the Files and downloads panel above." title="Datasheet revision">
           <div className="datasheet-panel">

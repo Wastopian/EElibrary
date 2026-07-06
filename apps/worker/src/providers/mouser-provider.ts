@@ -15,6 +15,7 @@ import {
   readPositiveNumber,
   readRequiredText,
   type NeutralSpec,
+  type NeutralSpecification,
   type NeutralSupplyOffering
 } from "./distributor-normalize";
 
@@ -59,6 +60,10 @@ interface MouserPart {
   ProductDetailUrl?: string | null;
   Category?: string | null;
   LifecycleStatus?: string | null;
+  ROHSStatus?: string | null;
+  UnitWeightKg?: string | number | null;
+  SuggestedReplacement?: string | null;
+  FactoryStock?: string | number | null;
   AvailabilityInStock?: string | number | null;
   Min?: string | number | null;
   Mult?: string | number | null;
@@ -66,6 +71,7 @@ interface MouserPart {
   MouserPartNumber?: string | null;
   PriceBreaks?: Array<{ Quantity?: number | string | null; Price?: string | number | null; Currency?: string | null }> | null;
   ProductAttributes?: Array<{ AttributeName?: string | null; AttributeValue?: string | null }> | null;
+  ProductCompliance?: Array<{ ComplianceName?: string | null; ComplianceValue?: string | null }> | null;
 }
 
 /** mouserProviderAdapter fetches and normalizes Mouser part metadata. */
@@ -197,6 +203,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
   const mpn = readRequiredText(part.ManufacturerPartNumber, "part.ManufacturerPartNumber");
   const manufacturerName = readRequiredText(part.Manufacturer, "part.Manufacturer");
   const packageName = readPackageName(part);
+  const descriptionSpecs = readDescriptionSpecs(part);
 
   return assembleNormalizedPart({
     category: normalizeOptionalText(part.Category) ?? "Unknown",
@@ -206,7 +213,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     lifecycleStatus: normalizeLifecycleStatus(normalizeOptionalText(part.LifecycleStatus)),
     manufacturerName,
     manufacturerWebsite: null,
-    metrics: readMetricCandidates(part),
+    metrics: mergeMetricCandidates(readMetricCandidates(part), descriptionSpecs.metrics),
     mpn,
     packageName,
     pinCount: null,
@@ -214,9 +221,63 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     providerPartKey: normalizeOptionalText(part.MouserPartNumber) ?? `${manufacturerName}:${mpn}`,
     rawPayload: payload,
     sourceUrl: normalizeOptionalText(part.ProductDetailUrl) ?? `https://www.mouser.com/c/?q=${encodeURIComponent(mpn)}`,
+    specifications: buildSpecifications(part, descriptionSpecs.specifications),
     supplyOfferings: buildSupplyOfferings(part),
     trustScore: 0.66
   });
+}
+
+/**
+ * Merges attribute-derived metrics with description-parsed metrics, keeping attribute values when
+ * both sources report the same metric key (structured attributes are more reliable than free text).
+ */
+function mergeMetricCandidates(attributeMetrics: NeutralSpec[], descriptionMetrics: NeutralSpec[]): NeutralSpec[] {
+  const seenKeys = new Set(attributeMetrics.map((metric) => metric.metricKey));
+
+  return [...attributeMetrics, ...descriptionMetrics.filter((metric) => !seenKeys.has(metric.metricKey))];
+}
+
+/**
+ * Builds verbatim specification rows from Mouser attributes and commercial/compliance fields.
+ *
+ * Mouser's Search API returns only packaging attributes for many passives; the electrical specs
+ * live in the description string and are added by the caller via descriptionSpecs.
+ */
+function buildSpecifications(part: MouserPart, descriptionSpecs: NeutralSpecification[]): NeutralSpecification[] {
+  const attributes = Array.isArray(part.ProductAttributes) ? part.ProductAttributes : [];
+  const parametric = attributes.flatMap<NeutralSpecification>((attribute) => {
+    const specKey = normalizeOptionalText(attribute.AttributeName);
+    const specValue = normalizeOptionalText(attribute.AttributeValue);
+
+    return specKey && specValue ? [{ specGroup: "parametric", specKey, specValue }] : [];
+  });
+
+  const compliance = Array.isArray(part.ProductCompliance) ? part.ProductCompliance : [];
+  const complianceRows = compliance.flatMap<NeutralSpecification>((entry) => {
+    const specKey = normalizeOptionalText(entry.ComplianceName);
+    const specValue = normalizeOptionalText(entry.ComplianceValue);
+
+    return specKey && specValue ? [{ specGroup: "compliance", specKey, specValue }] : [];
+  });
+
+  const extras: NeutralSpecification[] = [
+    buildSpecRow("RoHS Status", part.ROHSStatus, "compliance"),
+    buildSpecRow("Lifecycle Status", part.LifecycleStatus, "commercial"),
+    buildSpecRow("Suggested Replacement", part.SuggestedReplacement, "commercial"),
+    buildSpecRow("Factory Stock", part.FactoryStock, "commercial"),
+    buildSpecRow("Unit Weight (kg)", part.UnitWeightKg, "physical")
+  ].flatMap((row) => (row ? [row] : []));
+
+  return [...parametric, ...descriptionSpecs, ...extras, ...complianceRows];
+}
+
+/**
+ * Builds one verbatim spec row when the provider value is present.
+ */
+function buildSpecRow(specKey: string, value: string | number | null | undefined, specGroup: NeutralSpecification["specGroup"]): NeutralSpecification | null {
+  const specValue = normalizeOptionalText(typeof value === "number" ? String(value) : value);
+
+  return specValue ? { specGroup, specKey, specValue } : null;
 }
 
 /**
@@ -249,6 +310,59 @@ function readMetricCandidates(part: MouserPart): NeutralSpec[] {
 
     return rawValue ? [{ metricKey: spec.metricKey, rawValue, unit: spec.unit }] : [];
   });
+}
+
+/** PASSIVE_VALUE_METRICS maps a passive category keyword to its primary electrical metric. */
+const PASSIVE_VALUE_METRICS: ReadonlyArray<{ categoryHint: RegExp; metricKey: string; unit: MetricUnit; valuePattern: RegExp }> = [
+  { categoryHint: /resistor/iu, metricKey: "resistance", unit: "ohm", valuePattern: /(\d+(?:\.\d+)?\s?[kKmM]?\s?[oO]hms?)/u },
+  { categoryHint: /capacitor/iu, metricKey: "capacitance", unit: "F", valuePattern: /(\d+(?:\.\d+)?\s?[pnuµmμ]?F)\b/u },
+  { categoryHint: /inductor/iu, metricKey: "inductance", unit: "H", valuePattern: /(\d+(?:\.\d+)?\s?[pnuµmμ]?H)\b/u }
+];
+
+/**
+ * Parses passive electrical specs out of Mouser's description string.
+ *
+ * Mouser's Search API often reports only packaging attributes for passives, leaving the electrical
+ * value, tolerance, and power rating buried in the free-text description (for example
+ * "...Chip Resistor 0603, 10kOhms, 1%, 1/10W"). This runs only for resistor/capacitor/inductor
+ * categories and stays conservative: one value metric matched to the category, plus tolerance and
+ * power-rating spec rows. It never guesses temperature coefficients, voltages, or other fields.
+ */
+function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; specifications: NeutralSpecification[] } {
+  const category = normalizeOptionalText(part.Category);
+  const description = normalizeOptionalText(part.Description);
+
+  if (!category || !description) {
+    return { metrics: [], specifications: [] };
+  }
+
+  const valueMetric = PASSIVE_VALUE_METRICS.find((entry) => entry.categoryHint.test(category));
+
+  if (!valueMetric) {
+    return { metrics: [], specifications: [] };
+  }
+
+  const metrics: NeutralSpec[] = [];
+  const valueMatch = description.match(valueMetric.valuePattern);
+
+  if (valueMatch?.[1]) {
+    metrics.push({ metricKey: valueMetric.metricKey, rawValue: valueMatch[1], unit: valueMetric.unit });
+  }
+
+  const specifications: NeutralSpecification[] = [];
+  const toleranceMatch = description.match(/±\s?\d+(?:\.\d+)?\s?%|\b\d+(?:\.\d+)?\s?%/u);
+
+  if (toleranceMatch?.[0]) {
+    specifications.push({ specGroup: "parametric", specKey: "Tolerance", specValue: normalizeOptionalText(toleranceMatch[0]) ?? toleranceMatch[0] });
+  }
+
+  const powerMatch = description.match(/\b\d+\/\d+\s?W\b|\b\d+(?:\.\d+)?\s?W\b/u);
+
+  if (powerMatch?.[0]) {
+    specifications.push({ specGroup: "parametric", specKey: "Power Rating", specValue: normalizeOptionalText(powerMatch[0]) ?? powerMatch[0] });
+  }
+
+  return { metrics, specifications };
 }
 
 /**
