@@ -14,6 +14,7 @@ import type {
   ExportAvailability,
   LifecycleStatus,
   PartMetric,
+  PartParameter,
   PartApprovalStatus,
   PartSearchFilters,
   PartReadinessStatus,
@@ -263,6 +264,54 @@ export function formatMetricValue(metric: PartMetric): string {
   }
 
   return `Unknown ${metric.unit}`;
+}
+
+/**
+ * Formats a canonical parameter key into a readable label.
+ */
+export function formatParameterLabel(paramKey: string): string {
+  return formatMetricLabel(paramKey);
+}
+
+/**
+ * Formats a canonical unit string for display, expanding non-obvious codes.
+ */
+export function formatParameterUnit(unit: string | null): string {
+  if (unit === null) {
+    return "";
+  }
+
+  if (unit === "ppm_per_c") {
+    return "ppm/°C";
+  }
+
+  if (unit === "deg C") {
+    return "°C";
+  }
+
+  return unit;
+}
+
+/**
+ * Formats a normalized parameter value in its canonical unit for dense engineering tables.
+ */
+export function formatParameterValue(parameter: PartParameter): string {
+  const unit = formatParameterUnit(parameter.unit);
+  const suffix = unit.length > 0 ? ` ${unit}` : "";
+
+  if (parameter.valueKind === "numeric" && parameter.valueNumeric !== null) {
+    return `${formatMetricNumber(parameter.valueNumeric)}${suffix}`;
+  }
+
+  if (parameter.valueKind === "range" && parameter.valueMin !== null && parameter.valueMax !== null) {
+    return `${formatMetricNumber(parameter.valueMin)} to ${formatMetricNumber(parameter.valueMax)}${suffix}`;
+  }
+
+  if (parameter.valueText !== null && parameter.valueText.length > 0) {
+    return parameter.valueText;
+  }
+
+  return "Unknown";
 }
 
 /**

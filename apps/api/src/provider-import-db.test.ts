@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { buildPartDetailResponse } from "./detail-response";
-import { readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readPartSpecificationsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
+import { readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartParametersFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readPartSpecificationsFromDatabase, setCatalogStorePoolForTests } from "./catalog-store";
 import { enterRequestContextForTests, runWithRequestContext } from "./request-context";
 import type { CatalogQueryTiming } from "./catalog-store";
 import type { Pool, PoolClient } from "pg";
@@ -114,6 +114,43 @@ test("DB-backed detail carries distributor specification rows in grouped order",
     assert.equal(detailResponse.specifications[0]?.specKey, "Power");
 
     assert.deepEqual(await readPartSpecificationsFromDatabase("part-does-not-exist"), []);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies reconciled parameters read back typed and flow into the detail response, while an unknown
+ * part id resolves to an empty list.
+ */
+test("DB-backed detail carries reconciled typed parameters", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+
+    const parameters = await readPartParametersFromDatabase("part-jlcparts-c1091");
+    const byKey = new Map(parameters.map((parameter) => [parameter.paramKey, parameter]));
+
+    assert.equal(parameters.length, 2);
+    assert.equal(byKey.get("resistance")?.valueNumeric, 30);
+    assert.equal(byKey.get("resistance")?.unit, "ohm");
+    assert.equal(byKey.get("resistance")?.partType, "resistor");
+    assert.equal(byKey.get("resistance")?.sources[0]?.providerId, "jlcparts");
+    assert.equal(byKey.get("package")?.valueText, "0402");
+
+    const detailResult = await readPartDetailRecordsFromDatabase("part-jlcparts-c1091");
+    assert.equal(detailResult.status, "available");
+    if (detailResult.status !== "available") throw new Error("expected DB-backed records");
+
+    const detailRecord = detailResult.records.find((record) => record.part.id === "part-jlcparts-c1091");
+    assert.ok(detailRecord, "expected imported record in DB-backed detail");
+
+    const detailResponse = buildPartDetailResponse(detailRecord, detailResult.records, undefined, undefined, [], parameters);
+    assert.equal(detailResponse.parameters.length, 2);
+
+    assert.deepEqual(await readPartParametersFromDatabase("part-does-not-exist"), []);
   } finally {
     setCatalogStorePoolForTests(null);
     await pool.end();
@@ -808,6 +845,7 @@ function buildMinimalCatalogSchemaSql(): string {
     CREATE TABLE datasheet_revisions (id TEXT, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_specifications (id TEXT, part_id TEXT, provider_id TEXT, source_record_id TEXT, spec_key TEXT, spec_value TEXT, spec_group TEXT, last_updated_at TIMESTAMPTZ, org_id TEXT DEFAULT 'org-default');
+    CREATE TABLE part_parameters (id TEXT, part_id TEXT, part_type TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, is_conflicted BOOLEAN, confidence_score NUMERIC, winning_provider_id TEXT, winning_source_record_id TEXT, sources JSONB, last_updated_at TIMESTAMPTZ, org_id TEXT DEFAULT 'org-default');
     CREATE TABLE mate_relations (id TEXT, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE accessory_requirements (id TEXT, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE cable_compatibilities (id TEXT, part_id TEXT, cable_part_id TEXT, relationship_type TEXT, wire_gauge_min INTEGER, wire_gauge_max INTEGER, shielding_requirement TEXT, termination_style TEXT, compatibility_status TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
@@ -851,6 +889,8 @@ function buildProviderImportRowsSql(
     INSERT INTO part_specifications VALUES ('spec-jlcparts-c1091-tolerance', 'part-jlcparts-c1091', 'jlcparts', 'source-jlcparts-c1091', 'Tolerance', '±5%', 'parametric', '2026-04-12T06:57:40.000Z', 'org-default');
     INSERT INTO part_specifications VALUES ('spec-jlcparts-c1091-power', 'part-jlcparts-c1091', 'jlcparts', 'source-jlcparts-c1091', 'Power', '1/16W', 'parametric', '2026-04-12T06:57:40.000Z', 'org-default');
     INSERT INTO part_specifications VALUES ('spec-jlcparts-c1091-rohs', 'part-jlcparts-c1091', 'jlcparts', 'source-jlcparts-c1091', 'RoHS Status', 'RoHS Compliant', 'compliance', '2026-04-12T06:57:40.000Z', 'org-default');
+    INSERT INTO part_parameters VALUES ('param-part-jlcparts-c1091-resistance', 'part-jlcparts-c1091', 'resistor', 'resistance', 'numeric', 30, NULL, NULL, NULL, 'ohm', FALSE, 0.6, 'jlcparts', 'source-jlcparts-c1091', '[{"providerId":"jlcparts","sourceRecordId":"source-jlcparts-c1091","rawSpecKey":"Resistance","rawValue":"30Ohms","valueNumeric":30,"valueMin":null,"valueMax":null,"valueText":null,"confidence":0.6,"agreesWithWinner":true}]'::jsonb, '2026-04-12T06:57:40.000Z', 'org-default');
+    INSERT INTO part_parameters VALUES ('param-part-jlcparts-c1091-package', 'part-jlcparts-c1091', 'resistor', 'package', 'text', NULL, NULL, NULL, '0402', NULL, FALSE, 0.6, 'jlcparts', 'source-jlcparts-c1091', '[]'::jsonb, '2026-04-12T06:57:40.000Z', 'org-default');
     INSERT INTO part_readiness_summaries VALUES ('part-jlcparts-c1091', 'blocked', 'confirmed', 'non_connector', 1, ARRAY['No file-backed CAD evidence is attached for export or downstream design handoff.'], ARRAY['Verify or generate file-backed CAD before export.'], '1 issue remains: No file-backed CAD evidence is attached for export or downstream design handoff.', '2026-04-12T06:57:40.000Z');
     INSERT INTO part_approvals VALUES ('part-jlcparts-c1091', 'not_requested', 'Approval not requested', 'Approval has not been requested yet, so the part should not be treated as engineer-ready.', ARRAY['No approval decision recorded.'], NULL, NULL, '2026-04-12T06:57:40.000Z');
     INSERT INTO part_issues VALUES ('issue-jlcparts-c1091-missing-cad', 'part-jlcparts-c1091', 'missing_verified_cad', 'error', 'open', NULL, NULL, NULL, 'No file-backed CAD evidence is attached for export or downstream design handoff.', 'No file-backed CAD evidence is attached for export or downstream design handoff.', 'asset_truth', '2026-04-12T06:57:40.000Z');

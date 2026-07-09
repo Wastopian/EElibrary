@@ -96,6 +96,7 @@ test("buildPartDetailResponse defaults specifications to empty and passes provid
   assert.ok(record, "expected seeded regulator part");
 
   assert.deepEqual(buildPartDetailResponse(record, records).specifications, []);
+  assert.deepEqual(buildPartDetailResponse(record, records).parameters, []);
 
   const specifications = [
     {

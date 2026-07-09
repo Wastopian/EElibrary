@@ -12,7 +12,7 @@ import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
-import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
+import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue, formatParameterLabel, formatParameterValue } from "@ee-library/shared/catalog-runtime";
 import { DetailSectionNav } from "./DetailSectionNav";
 import { loadPartDetailPage, loadRecentActivityForPart } from "./loaders";
 import type {
@@ -221,6 +221,17 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     meta: formatProviderLabel(specification.providerId),
     tone: "info",
     value: specification.specValue
+  }));
+  const parameterRows = detail.parameters.map<MetricTableRow>((parameter) => ({
+    key: parameter.id,
+    label: formatParameterLabel(parameter.paramKey),
+    meta: parameter.winningProviderId
+      ? `${formatProviderLabel(parameter.winningProviderId)}${parameter.isConflicted ? " · sources disagree" : ""}`
+      : parameter.isConflicted
+        ? "sources disagree"
+        : "—",
+    tone: parameter.isConflicted ? "review" : "info",
+    value: formatParameterValue(parameter)
   }));
   const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState, supplyOffersState);
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
@@ -533,6 +544,20 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
             />
           </SectionPanel>
         </div>
+
+        <SectionPanel
+          description="Key specs combined across distributors and shown in standard units. A “sources disagree” mark means the distributors report different values — always confirm against the datasheet."
+          title="Specifications"
+        >
+          {parameterRows.length > 0 ? (
+            <MetricTable headers={{ label: "Specification", meta: "Source", value: "Value" }} rows={parameterRows} />
+          ) : (
+            <EmptyState
+              body="No standardized specifications are derived for this part yet. Importing it from a distributor fills this section in."
+              title="No specifications"
+            />
+          )}
+        </SectionPanel>
 
         <SectionPanel
           description="Exactly what each distributor reports for this part, word for word. Useful for double-checking — always confirm against the official datasheet."

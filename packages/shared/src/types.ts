@@ -2739,6 +2739,55 @@ export interface PartSpecification {
   lastUpdatedAt: string;
 }
 
+/** PartParameterValueKind describes how a normalized parameter's value is stored and rendered. */
+export type PartParameterValueKind = "numeric" | "range" | "enum" | "boolean" | "text";
+
+/** PartParameterSource records one source's parsed contribution to a reconciled parameter. */
+export interface PartParameterSource {
+  providerId: string;
+  sourceRecordId: string | null;
+  /** The raw provider spec label this contribution came from. */
+  rawSpecKey: string;
+  /** The verbatim provider value before normalization. */
+  rawValue: string;
+  valueNumeric: number | null;
+  valueMin: number | null;
+  valueMax: number | null;
+  valueText: string | null;
+  confidence: number;
+  /** Whether this source's normalized value agrees with the winning value. */
+  agreesWithWinner: boolean;
+}
+
+/**
+ * PartParameter is one typed, category-aware, cross-source-reconciled parameter for a part. Distributor
+ * specs (and later datasheet extraction) are parsed into canonical units and reconciled into a single
+ * value per parameter; disagreeing sources are kept in `sources` and flagged with `isConflicted`.
+ */
+export interface PartParameter {
+  id: string;
+  partId: string;
+  /** Resolved part type (resolvePartType) the canonical parameter set was chosen from. */
+  partType: string;
+  /** Canonical parameter key from the registry, such as "resistance". */
+  paramKey: string;
+  valueKind: PartParameterValueKind;
+  /** Value in the canonical base unit for numeric kinds; null otherwise. */
+  valueNumeric: number | null;
+  valueMin: number | null;
+  valueMax: number | null;
+  /** Canonical string for enum/text/boolean kinds, or a display fallback. */
+  valueText: string | null;
+  /** Canonical unit string (not restricted to MetricUnit), or null for unitless parameters. */
+  unit: string | null;
+  isConflicted: boolean;
+  confidenceScore: number;
+  winningProviderId: string | null;
+  winningSourceRecordId: string | null;
+  sources: PartParameterSource[];
+  lastUpdatedAt: string;
+}
+
 /** PartMetric stores one normalized datasheet metric with confidence and provenance. */
 export interface PartMetric {
   id: string;
@@ -3560,6 +3609,8 @@ export interface PartDetailResponse {
   enrichmentSummary: PartEnrichmentSummary;
   /** Verbatim distributor specification rows for this part, empty when none are stored. */
   specifications: PartSpecification[];
+  /** Typed, category-aware, reconciled parameters for this part, empty when none are derived. */
+  parameters: PartParameter[];
 }
 
 /** GenerationRequestCreateInput is the minimal API body for requesting missing CAD generation. */

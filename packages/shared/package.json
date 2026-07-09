@@ -77,6 +77,18 @@
     "./tenant": {
       "types": "./src/tenant.ts",
       "default": "./src/tenant.ts"
+    },
+    "./part-type": {
+      "types": "./src/part-type.ts",
+      "default": "./src/part-type.ts"
+    },
+    "./parameter-registry": {
+      "types": "./src/parameter-registry.ts",
+      "default": "./src/parameter-registry.ts"
+    },
+    "./parameter-normalize": {
+      "types": "./src/parameter-normalize.ts",
+      "default": "./src/parameter-normalize.ts"
     }
   },
   "scripts": {

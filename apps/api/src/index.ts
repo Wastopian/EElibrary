@@ -12,7 +12,7 @@ import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSpecificationsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartParametersFromDatabase, readPartSearchFacetsFromDatabase, readPartSpecificationsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
@@ -1129,10 +1129,18 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
           (result) => `${result.length} specifications`
         )
       : [];
+    const parameters = catalog.source === "database"
+      ? await timeRouteOperation(
+          response,
+          "detail-parameters-read",
+          () => readPartParametersFromDatabase(partId, { onQueryTiming: buildQueryTimingSink(response) }),
+          (result) => `${result.length} parameters`
+        )
+      : [];
     const detailResponse = timeSyncRouteOperation(
       response,
       "detail-build",
-      () => buildPartDetailResponse(record, records, acquisitionSummary, enrichmentSummary, specifications),
+      () => buildPartDetailResponse(record, records, acquisitionSummary, enrichmentSummary, specifications, parameters),
       (result) => `${result.relatedPartSummaries.length} related summaries`
     );
 

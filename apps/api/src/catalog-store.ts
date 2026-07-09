@@ -49,6 +49,9 @@ import type {
   PartEngineeringRecordOutcome,
   PartEngineeringRecordSeverity,
   PartMetric,
+  PartParameter,
+  PartParameterSource,
+  PartParameterValueKind,
   PartSearchFilters,
   PartSearchRecord,
   PartSearchSort,
@@ -233,6 +236,26 @@ interface DatabasePartSpecificationRow {
   spec_key: string;
   spec_value: string;
   spec_group: PartSpecificationGroup | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabasePartParameterRow is the reconciled parameter row shape read from Postgres. */
+interface DatabasePartParameterRow {
+  id: string;
+  part_id: string;
+  part_type: string;
+  param_key: string;
+  value_kind: PartParameterValueKind;
+  value_numeric: string | null;
+  value_min: string | null;
+  value_max: string | null;
+  value_text: string | null;
+  unit: string | null;
+  is_conflicted: boolean;
+  confidence_score: string;
+  winning_provider_id: string | null;
+  winning_source_record_id: string | null;
+  sources: PartParameterSource[] | string | null;
   last_updated_at: Date | string;
 }
 
@@ -931,6 +954,33 @@ export async function readPartSpecificationsFromDatabase(partId: string, options
     );
 
     return result.rows.map(mapPartSpecificationRow);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads reconciled, typed parameters for one part. Keyed on part_id only, exactly like the specification
+ * and acquisition side reads: the part id is already org-scoped for non-default orgs and the RLS backstop
+ * filters by the acting org. Returns [] when the database is not configured.
+ */
+export async function readPartParametersFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<PartParameter[]> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return [];
+  }
+
+  try {
+    const result = await timedCatalogQuery<DatabasePartParameterRow>(
+      databasePool,
+      "part_parameters",
+      PART_PARAMETER_ROWS_SQL,
+      [partId],
+      options
+    );
+
+    return result.rows.map(mapPartParameterRow);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -3285,6 +3335,51 @@ function mapMetricRow(row: DatabaseMetricRow): PartMetric {
 }
 
 /**
+ * Maps a database row into the shared PartParameter type.
+ */
+function mapPartParameterRow(row: DatabasePartParameterRow): PartParameter {
+  return {
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    isConflicted: row.is_conflicted,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    paramKey: row.param_key,
+    partId: row.part_id,
+    partType: row.part_type,
+    sources: parsePartParameterSources(row.sources),
+    unit: row.unit,
+    valueKind: row.value_kind,
+    valueMax: toNullableNumber(row.value_max),
+    valueMin: toNullableNumber(row.value_min),
+    valueNumeric: toNullableNumber(row.value_numeric),
+    valueText: row.value_text,
+    winningProviderId: row.winning_provider_id,
+    winningSourceRecordId: row.winning_source_record_id
+  };
+}
+
+/**
+ * Reads the per-source contributions JSONB, tolerating both parsed arrays and string payloads.
+ */
+function parsePartParameterSources(value: PartParameterSource[] | string | null): PartParameterSource[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    return Array.isArray(parsed) ? (parsed as PartParameterSource[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Maps a database row into the shared PartSpecification type.
  */
 function mapPartSpecificationRow(row: DatabasePartSpecificationRow): PartSpecification {
@@ -4446,6 +4541,32 @@ const PART_SPECIFICATION_ROWS_SQL = `
       ELSE 4
     END,
     spec_key ASC
+`;
+
+/**
+ * PART_PARAMETER_ROWS_SQL reads reconciled, typed parameters for the detail page, ordered by key.
+ */
+const PART_PARAMETER_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    part_type,
+    param_key,
+    value_kind,
+    value_numeric,
+    value_min,
+    value_max,
+    value_text,
+    unit,
+    is_conflicted,
+    confidence_score,
+    winning_provider_id,
+    winning_source_record_id,
+    sources,
+    last_updated_at
+  FROM part_parameters
+  WHERE part_id = $1
+  ORDER BY param_key ASC
 `;
 
 /** ASSET_ROWS_SQL reads asset registry records. */
