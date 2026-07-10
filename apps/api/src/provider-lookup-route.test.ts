@@ -11,37 +11,25 @@ import { setProviderPartLookupRunnerForTests } from "./provider-lookup-runner";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 
-test("POST /provider-lookups returns exact candidates with importAllowed false for anonymous requests", async () => {
+test("POST /provider-lookups rejects anonymous requests before running provider adapters", async () => {
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousNodeEnv = process.env.NODE_ENV;
   process.env.AUTH_SECRET = "lookup-test-secret-padded-to-thirty-two-bytes-min";
   process.env.NODE_ENV = "test";
-  setCatalogStorePoolForTests(createConnectedPoolStub());
-  setProviderPartLookupRunnerForTests(async () => [
-    {
-      manufacturerName: "Guangdong Fenghua Advanced Tech",
-      matchConfidence: 1,
-      matchType: "exact_provider_part_id",
-      mpn: "RC-02W300JT",
-      package: "0402",
-      providerId: "jlcparts",
-      providerPartKey: "C1091",
-      sourceUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
-    }
-  ]);
+  let lookupCalled = false;
+  setProviderPartLookupRunnerForTests(async () => {
+    lookupCalled = true;
+    return [];
+  });
 
   try {
     const { handleRequest } = await import("./index");
     const result = await invokeApiPost("/provider-lookups", { query: "C1091" }, handleRequest);
 
-    assert.equal(result.statusCode, 200);
+    assert.equal(result.statusCode, 401);
     assert.equal(result.headers["X-EE-Operation"], "api-provider-lookup");
-    assert.equal(Array.isArray(result.body.data), true);
-    assert.equal(result.body.data[0]?.providerPartKey, "C1091");
-    assert.equal(result.body.data[0]?.matchType, "exact_provider_part_id");
-    assert.equal(result.body.data[0]?.matchConfidence, 1);
-    assert.equal(result.body.data[0]?.importAllowed, false);
-    assert.equal("source" in result.body, false);
+    assert.equal(result.body.error?.code, "UNAUTHORIZED");
+    assert.equal(lookupCalled, false);
   } finally {
     setCatalogStorePoolForTests(null);
     setProviderPartLookupRunnerForTests(null);

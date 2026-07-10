@@ -2772,7 +2772,8 @@ export async function readWhereUsedSearchFromDatabase(targetType: WhereUsedTarge
       const documentHits = await searchProjectDocumentsForWhereUsed(
         projectSummaries.map((summary) => summary.project),
         normalizedQuery,
-        searchProjectDocumentExtractions
+        searchProjectDocumentExtractions,
+        getRequestOrgId() ?? undefined
       );
 
       return {
