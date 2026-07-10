@@ -10,9 +10,9 @@
  *   2. The default `<user-home>/EE-Library/projects` location (per the operator's
  *      preference for keeping shared assets outside the source tree).
  *
- * Path safety: project keys are sanitized before they are joined to the root and the
- * resolved per-project path is asserted to live inside the root. This refuses path
- * traversal regardless of how a project key was persisted upstream.
+ * Path safety: tenant ids and project keys are sanitized before they are joined to the
+ * root and the resolved per-project path is asserted to live inside the root. This refuses
+ * path traversal regardless of how identifiers were persisted upstream.
  */
 
 import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -103,9 +103,17 @@ export const MAX_PROJECT_FILE_BYTES = 25 * 1024 * 1024;
 export interface ProjectFilesProjectInput {
   /** Database id used for the response payload. */
   id: string;
+  /** Tenant id used to namespace project keys that are only unique within an organization. */
+  orgId: string;
   /** Project key used as the on-disk folder name (after sanitization). */
   projectKey: string;
 }
+
+/** DEFAULT_ORG_ID keeps existing single-tenant mirrors at their historic root/<projectKey> path. */
+const DEFAULT_ORG_ID = "org-default";
+
+/** TENANT_PROJECT_FILES_FOLDER avoids collisions with sanitized legacy project keys. */
+const TENANT_PROJECT_FILES_FOLDER = ".ee-library-tenants";
 
 /**
  * Returns the absolute project file mirror root, or null when explicitly disabled.
@@ -155,7 +163,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
     };
   }
 
-  const projectRoot = resolveProjectRoot(root, safeKey);
+  const projectRoot = resolveProjectRoot(root, project);
 
   try {
     await ensureProjectFolderTree(projectRoot);
@@ -201,11 +209,12 @@ export async function searchProjectDocumentsForWhereUsed(
   readExtractions?: (
     projectId: string,
     searchValues: string[]
-  ) => Promise<ProjectDocumentExtractionRecordInput[]>
+  ) => Promise<ProjectDocumentExtractionRecordInput[]>,
+  orgId?: string
 ): Promise<WhereUsedDocumentHitRecord[]> {
   const root = getProjectFilesRoot();
   const needle = buildProjectDocumentSearchNeedle(query);
-  if (!root || !needle) {
+  if (!root || !needle || !orgId) {
     return [];
   }
 
@@ -217,8 +226,11 @@ export async function searchProjectDocumentsForWhereUsed(
     }
 
     try {
-      const safeKey = sanitizeProjectKey(project.projectKey);
-      const projectRoot = resolveProjectRoot(root, safeKey);
+      const projectRoot = resolveProjectRoot(root, {
+        id: project.id,
+        orgId,
+        projectKey: project.projectKey
+      });
       await ensureProjectFolderTree(projectRoot);
       const rawDocumentMap = await buildProjectDocumentMap(projectRoot);
       const extractionRecords = readExtractions
@@ -292,11 +304,25 @@ export function sanitizeProjectKey(rawKey: string): string {
 }
 
 /**
- * Resolves and asserts that `<root>/<key>` stays inside `<root>`. Throws if a malformed
- * key would escape the root, even after sanitization.
+ * Sanitizes an organization id into a safe directory segment.
  */
-function resolveProjectRoot(root: string, sanitizedKey: string): string {
-  const candidate = path.resolve(root, sanitizedKey);
+function sanitizeProjectOrgId(rawOrgId: string): string {
+  return sanitizeProjectKey(rawOrgId);
+}
+
+/**
+ * Resolves and asserts that the per-project mirror stays inside `<root>`.
+ *
+ * The default org keeps the legacy `<root>/<projectKey>` path so existing single-tenant
+ * folders do not disappear. Every other org lives under a hidden namespace that sanitized
+ * project keys cannot produce, preventing collisions with legacy project folders.
+ */
+function resolveProjectRoot(root: string, project: ProjectFilesProjectInput): string {
+  const safeKey = sanitizeProjectKey(project.projectKey);
+  const candidate =
+    project.orgId === DEFAULT_ORG_ID
+      ? path.resolve(root, safeKey)
+      : path.resolve(root, TENANT_PROJECT_FILES_FOLDER, sanitizeProjectOrgId(project.orgId), safeKey);
   const normalizedRoot = path.resolve(root);
   const relative = path.relative(normalizedRoot, candidate);
 
@@ -2189,8 +2215,7 @@ export async function copyProjectDocumentToSuggestedFolder(
   }
 
   try {
-    const safeKey = sanitizeProjectKey(project.projectKey);
-    const projectRoot = resolveProjectRoot(root, safeKey);
+    const projectRoot = resolveProjectRoot(root, project);
     await ensureProjectFolderTree(projectRoot);
 
     const documentMap = await buildProjectDocumentMap(projectRoot);
@@ -2326,8 +2351,7 @@ export async function saveProjectFile(
   }
 
   try {
-    const safeKey = sanitizeProjectKey(project.projectKey);
-    const projectRoot = resolveProjectRoot(root, safeKey);
+    const projectRoot = resolveProjectRoot(root, project);
     const categoryRoot = path.join(projectRoot, folder.folderName);
     await mkdir(categoryRoot, { recursive: true });
 

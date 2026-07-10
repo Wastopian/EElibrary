@@ -26,6 +26,13 @@ import {
   PROJECT_FOLDER_DEFINITIONS
 } from "./project-files";
 
+const DEFAULT_TEST_ORG_ID = "org-default";
+
+/** Builds the file-mirror project input used by API call sites after tenant scoping. */
+function testProject(projectKey = "ALPHA", id = "project-alpha", orgId = DEFAULT_TEST_ORG_ID) {
+  return { id, orgId, projectKey };
+}
+
 /**
  * Creates a unique sandbox root for one test and points the env var at it.
  * Returns a teardown function that restores the env var and removes the directory.
@@ -101,7 +108,7 @@ test("buildProjectFilesResponse returns not_configured when env var is off", asy
   process.env.EE_LIBRARY_PROJECT_FILES_ROOT = "off";
 
   try {
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    const response = await buildProjectFilesResponse(testProject());
     assert.equal(response.availability, "not_configured");
     assert.equal(response.rootPath, null);
     assert.deepEqual(response.folders, []);
@@ -121,7 +128,7 @@ test("buildProjectFilesResponse creates the canonical subfolders on first read",
   const sandbox = await withSandboxRoot();
 
   try {
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    const response = await buildProjectFilesResponse(testProject());
 
     assert.equal(response.availability, "configured");
     assert.equal(response.projectKey, "ALPHA");
@@ -152,7 +159,7 @@ test("buildProjectFilesResponse surfaces files dropped directly into the on-disk
     await mkdir(datasheetsPath, { recursive: true });
     await writeFile(path.join(datasheetsPath, "GRM21.pdf"), "%PDF-1.4");
 
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    const response = await buildProjectFilesResponse(testProject());
     assert.equal(response.availability, "configured");
 
     const partsList = response.folders.find((folder) => folder.category === "parts_list");
@@ -173,6 +180,49 @@ test("buildProjectFilesResponse surfaces files dropped directly into the on-disk
     const models = response.folders.find((folder) => folder.category === "models");
     assert.ok(models);
     assert.deepEqual(models.entries, []);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("project file mirrors are separated when two orgs use the same project key", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const orgAProject = testProject("SHARED", "project-org-a", "org-a");
+    const orgBProject = testProject("SHARED", "project-org-b", "org-b");
+
+    const orgASave = await saveProjectFile(orgAProject, "notes", {
+      filename: "decision.md",
+      content: "Org A private decision."
+    });
+    assert.equal(orgASave.status, "ok");
+
+    const orgBBeforeSave = await buildProjectFilesResponse(orgBProject);
+    const orgBNotesBeforeSave = orgBBeforeSave.folders.find((folder) => folder.category === "notes");
+    assert.deepEqual(orgBNotesBeforeSave?.entries, []);
+
+    const orgBSave = await saveProjectFile(orgBProject, "notes", {
+      filename: "decision.md",
+      content: "Org B private decision."
+    });
+    assert.equal(orgBSave.status, "ok");
+
+    const [orgAResponse, orgBResponse] = await Promise.all([
+      buildProjectFilesResponse(orgAProject),
+      buildProjectFilesResponse(orgBProject)
+    ]);
+
+    assert.equal(orgAResponse.availability, "configured");
+    assert.equal(orgBResponse.availability, "configured");
+    assert.ok(orgAResponse.rootPath);
+    assert.ok(orgBResponse.rootPath);
+    assert.notEqual(orgAResponse.rootPath, orgBResponse.rootPath);
+    assert.ok(orgAResponse.rootPath.startsWith(path.join(sandbox.root, ".ee-library-tenants", "org-a")));
+    assert.ok(orgBResponse.rootPath.startsWith(path.join(sandbox.root, ".ee-library-tenants", "org-b")));
+
+    assert.equal(await readFile(path.join(orgAResponse.rootPath, "notes", "decision.md"), "utf8"), "Org A private decision.");
+    assert.equal(await readFile(path.join(orgBResponse.rootPath, "notes", "decision.md"), "utf8"), "Org B private decision.");
   } finally {
     await sandbox.restore();
   }
@@ -232,7 +282,7 @@ test("buildProjectFilesResponse maps messy project folders into document sorting
       "utf8"
     );
 
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    const response = await buildProjectFilesResponse(testProject());
 
     assert.equal(response.availability, "configured");
     assert.ok(response.documentMap);
@@ -308,7 +358,7 @@ test("copyProjectDocumentToSuggestedFolder copies a current sort suggestion with
       "utf8"
     );
 
-    const project = { id: "project-alpha", projectKey: "ALPHA" };
+    const project = testProject();
     const firstCopy = await copyProjectDocumentToSuggestedFolder(project, {
       sourceRelativePath: "Bob-drop/old-tests/J202-test-procedure-rev-d.md"
     });
@@ -347,13 +397,13 @@ test("copyProjectDocumentToSuggestedFolder refuses rows without a standard-folde
     );
 
     const sortedResult = await copyProjectDocumentToSuggestedFolder(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       { sourceRelativePath: "hardware/CAB-DEMO-PMC-JST-PWR/CAB-DEMO-PMC-JST-PWR-pinout.csv" }
     );
     assert.equal(sortedResult.status, "not_suggested");
 
     const missingResult = await copyProjectDocumentToSuggestedFolder(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       { sourceRelativePath: "../outside.txt" }
     );
     assert.equal(missingResult.status, "not_found");
@@ -387,13 +437,18 @@ test("searchProjectDocumentsForWhereUsed finds natural connector and pin questio
       }
     ];
 
-    const connectorHits = await searchProjectDocumentsForWhereUsed(projects, "Which test procedure uses connector J202?");
+    const connectorHits = await searchProjectDocumentsForWhereUsed(
+      projects,
+      "Which test procedure uses connector J202?",
+      undefined,
+      DEFAULT_TEST_ORG_ID
+    );
     assert.equal(connectorHits.length, 1);
     assert.equal(connectorHits[0]?.project.projectKey, "ALPHA");
     assert.equal(connectorHits[0]?.document.relativePath, "Bob-drop/old-tests/J202-test-procedure-rev-d.md");
     assert.deepEqual(connectorHits[0]?.matchedLabels, ["Connector: J202", "Type: Test procedure"]);
 
-    const pinHits = await searchProjectDocumentsForWhereUsed(projects, "pin 47");
+    const pinHits = await searchProjectDocumentsForWhereUsed(projects, "pin 47", undefined, DEFAULT_TEST_ORG_ID);
     assert.equal(pinHits.length, 1);
     assert.deepEqual(pinHits[0]?.matchedLabels, ["Pin: 47"]);
   } finally {
@@ -410,8 +465,7 @@ test("extracted PDF text improves document classification and where-used source 
     await writeFile(path.join(projectFolder, "scan-001.pdf"), "%PDF mock bytes", "utf8");
 
     const rawResponse = await buildProjectFilesResponse({
-      id: "project-alpha",
-      projectKey: "ALPHA"
+      ...testProject()
     });
     const rawDocument = rawResponse.documentMap?.documents.find(
       (entry) => entry.filename === "scan-001.pdf"
@@ -486,7 +540,8 @@ test("extracted PDF text improves document classification and where-used source 
     const hits = await searchProjectDocumentsForWhereUsed(
       projects,
       "Which test procedure uses connector J202?",
-      async () => [extractionRecord]
+      async () => [extractionRecord],
+      DEFAULT_TEST_ORG_ID
     );
 
     assert.equal(hits.length, 1);
@@ -556,7 +611,7 @@ test("buildProjectFilesResponse lists custom design folders and parts-list refer
     await mkdir(path.join(sandbox.root, "ALPHA", "hardware", "PTA-ABC"), { recursive: true });
     await mkdir(path.join(sandbox.root, "ALPHA", "hardware", "XYZ-board"), { recursive: true });
 
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    const response = await buildProjectFilesResponse(testProject());
     assert.equal(response.availability, "configured");
     assert.ok(response.customHardware);
     assert.ok(response.customHardware.hardwareFolderPath.endsWith(path.join("ALPHA", "hardware")));
@@ -617,7 +672,7 @@ test("buildProjectFilesResponse combines configured prefixes with discovered des
     await writeFile(path.join(jigFolderPath, "hardware.json"), JSON.stringify({ tests: "Configured prefix scan" }), "utf8");
     await mkdir(path.join(sandbox.root, "ALPHA", "hardware", "PTA-1001"), { recursive: true });
 
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "ALPHA" });
+    const response = await buildProjectFilesResponse(testProject());
     assert.ok(response.customHardware);
     assert.deepEqual(response.customHardware.recognizedPrefixes, ["JIG", "PTA"]);
     assert.deepEqual(
@@ -640,7 +695,7 @@ test("buildProjectFilesResponse refuses to escape the configured root", async ()
   const sandbox = await withSandboxRoot();
 
   try {
-    const response = await buildProjectFilesResponse({ id: "project-alpha", projectKey: "../../escape" });
+    const response = await buildProjectFilesResponse(testProject("../../escape"));
     assert.equal(response.availability, "configured", "sanitizer keeps the request inside the sandbox");
     assert.equal(response.projectKey, "escape");
     for (const folder of response.folders) {
@@ -655,7 +710,7 @@ test("buildProjectFilesResponse falls back to project when projectKey is whitesp
   const sandbox = await withSandboxRoot();
 
   try {
-    const response = await buildProjectFilesResponse({ id: "project-blank", projectKey: "   " });
+    const response = await buildProjectFilesResponse(testProject("   ", "project-blank"));
     assert.equal(response.projectKey, "project");
     assert.ok(response.rootPath?.endsWith(`${path.sep}project`));
   } finally {
@@ -693,7 +748,7 @@ test("saveProjectFile writes base64 binary content to the requested category", a
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "datasheets",
       {
         filename: "GRM21.pdf",
@@ -721,7 +776,7 @@ test("saveProjectFile writes UTF-8 text directly when content is provided", asyn
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "notes",
       {
         filename: "Considered alternates.md",
@@ -747,7 +802,7 @@ test("saveProjectFile appends a numeric suffix on filename collisions", async ()
   const sandbox = await withSandboxRoot();
 
   try {
-    const project = { id: "project-alpha", projectKey: "ALPHA" };
+    const project = testProject();
     const first = await saveProjectFile(project, "notes", { filename: "decision.md", content: "first" });
     const second = await saveProjectFile(project, "notes", { filename: "decision.md", content: "second" });
     const third = await saveProjectFile(project, "notes", { filename: "decision.md", content: "third" });
@@ -771,7 +826,7 @@ test("saveProjectFile rejects empty filenames after sanitization", async () => {
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "datasheets",
       { filename: "...", content: "x" }
     );
@@ -786,7 +841,7 @@ test("saveProjectFile rejects requests missing both content and contentBase64", 
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "notes",
       { filename: "blank.md" }
     );
@@ -801,7 +856,7 @@ test("saveProjectFile rejects malformed base64", async () => {
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "datasheets",
       { filename: "bad.pdf", contentBase64: "not-base64-***" }
     );
@@ -817,7 +872,7 @@ test("saveProjectFile returns not_configured when the env var is off", async () 
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "notes",
       { filename: "x.md", content: "x" }
     );
@@ -836,7 +891,7 @@ test("saveProjectFile keeps writes inside the sandboxed project root", async () 
 
   try {
     const result = await saveProjectFile(
-      { id: "project-alpha", projectKey: "ALPHA" },
+      testProject(),
       "datasheets",
       { filename: "../../escape.pdf", content: "x" }
     );

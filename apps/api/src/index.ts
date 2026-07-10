@@ -28,8 +28,8 @@ import {
   syncProjectDocumentExtractions
 } from "./project-document-extraction-store";
 import { buildVendorDetailResponse, buildVendorListResponse, createVendor, resolveVendorFolderSection, saveVendorFile } from "./vendors";
-import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionForContext, readSessionFromRequest, requireAdmin } from "./auth";
-import { runWithRequestContext } from "./request-context";
+import { assertAuthSecretConfigured, isAuthError, readOptionalSession, readSessionForContext, readSessionFromRequest, requireAdmin, requireAuth } from "./auth";
+import { requireRequestOrgId, runWithRequestContext } from "./request-context";
 import { releaseRequestDbEarly, runWithRequestDb } from "./request-db";
 import { buildSystemHealth } from "./system-health";
 import { createAuditEventInDatabase, readAuditEventsFromDatabase } from "./audit-log";
@@ -1221,12 +1221,22 @@ async function handleProviderLookupCreate(request: IncomingMessage, response: Se
   }
 
   try {
+    const session = await requireAuth(request);
+    if (isAuthError(session)) {
+      sendJson(response, session.statusCode, {
+        error: {
+          code: session.code,
+          message: session.message
+        }
+      });
+      return;
+    }
+
     const workerLookupRequest = {
       ...(parsed.lookupRequest.manufacturerName ? { manufacturerName: parsed.lookupRequest.manufacturerName } : {}),
       query: parsed.lookupRequest.query
     };
-    const [session, databaseStatus, lookupCandidates] = await Promise.all([
-      readOptionalSession(request),
+    const [databaseStatus, lookupCandidates] = await Promise.all([
       timeRouteOperation(response, "catalog-status", () => getCatalogStoreStatus(), (status) => status.label),
       timeRouteOperation(
         response,
@@ -2470,10 +2480,15 @@ async function handleProjectFileUpload(
     }
 
     const project = detail.response.project;
+    const projectFilesProject = {
+      id: project.id,
+      orgId: requireRequestOrgId(),
+      projectKey: project.projectKey
+    };
     const result = await timeRouteOperation(
       response,
       "project-file-upload-write",
-      () => saveProjectFile({ id: project.id, projectKey: project.projectKey }, category, body),
+      () => saveProjectFile(projectFilesProject, category, body),
       (value) => value.status
     );
 
@@ -2802,10 +2817,15 @@ async function handleProjectDocumentCopySuggestion(
     }
 
     const project = detail.response.project;
+    const projectFilesProject = {
+      id: project.id,
+      orgId: requireRequestOrgId(),
+      projectKey: project.projectKey
+    };
     const result = await timeRouteOperation(
       response,
       "project-document-copy-write",
-      () => copyProjectDocumentToSuggestedFolder({ id: project.id, projectKey: project.projectKey }, body),
+      () => copyProjectDocumentToSuggestedFolder(projectFilesProject, body),
       (value) => value.status
     );
 
@@ -2897,7 +2917,12 @@ async function handleProjectDocumentExtractionRetry(
     }
 
     const project = detail.response.project;
-    const files = await buildProjectFilesResponse({ id: project.id, projectKey: project.projectKey });
+    const projectFilesProject = {
+      id: project.id,
+      orgId: requireRequestOrgId(),
+      projectKey: project.projectKey
+    };
+    const files = await buildProjectFilesResponse(projectFilesProject);
     const normalizedSourcePath = body.sourceRelativePath.replace(/\\/gu, "/");
     const currentDocument = files.documentMap?.documents.find(
       (document) => document.relativePath === normalizedSourcePath
@@ -3029,10 +3054,15 @@ async function handleProjectFilesRead(response: ServerResponse, projectId: strin
     }
 
     const project = result.response.project;
+    const projectFilesProject = {
+      id: project.id,
+      orgId: requireRequestOrgId(),
+      projectKey: project.projectKey
+    };
     const rawFilesResponse = await timeRouteOperation(
       response,
       "project-files-listing",
-      () => buildProjectFilesResponse({ id: project.id, projectKey: project.projectKey }),
+      () => buildProjectFilesResponse(projectFilesProject),
       (value) => `${value.availability}:${value.folders.length}`
     );
     const extractionSync =
