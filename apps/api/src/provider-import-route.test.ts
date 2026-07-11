@@ -160,7 +160,7 @@ async function invokeApiPost(
   url: string,
   body: unknown,
   handleRequest: (request: IncomingMessage, response: ServerResponse) => Promise<void>,
-  headers: Record<string, string> = {}
+  requestHeaders: Record<string, string> = {}
 ): Promise<{ statusCode: number; body: Record<string, any>; headers: Record<string, string> }> {
   const payload = JSON.stringify(body);
   const request = Readable.from([payload]) as IncomingMessage;
@@ -178,7 +178,7 @@ async function invokeApiPost(
     }
   } as unknown as ServerResponse;
 
-  request.headers = { "content-type": "application/json", host: "localhost", ...headers };
+  request.headers = { "content-type": "application/json", host: "localhost", ...requestHeaders };
   request.method = "POST";
   request.url = url;
 
