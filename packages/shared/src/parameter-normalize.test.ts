@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseEngineeringValue, reconcileParameterSources, type ParameterContribution } from "./parameter-normalize";
+import { parseBareEngineeringNumber, parseEngineeringValue, reconcileParameterSources, type ParameterContribution } from "./parameter-normalize";
 import type { CanonicalParameterDef } from "./parameter-registry";
 
 const RESISTANCE: CanonicalParameterDef = { label: "Resistance", metricKeys: [], paramKey: "resistance", specKeyPatterns: ["resistance"], unit: "ohm", valueKind: "numeric" };
@@ -38,6 +38,21 @@ test("parseEngineeringValue normalizes numeric values into canonical base units"
   const cap = parseEngineeringValue("100 nF", CAPACITANCE);
 
   assert.ok(cap?.kind === "numeric" && Math.abs(cap.value - 100e-9) <= 1e-18);
+});
+
+/**
+ * Verifies unit-less filter inputs parse SI prefixes, case-sensitively for milli vs mega.
+ */
+test("parseBareEngineeringNumber resolves unit-less SI prefixes for filter inputs", () => {
+  assert.equal(parseBareEngineeringNumber("1k"), 1_000);
+  assert.equal(parseBareEngineeringNumber("4.7k"), 4_700);
+  assert.equal(parseBareEngineeringNumber("10M"), 10_000_000);
+  assert.equal(parseBareEngineeringNumber("10m"), 0.01);
+  assert.equal(parseBareEngineeringNumber("220"), 220);
+  assert.equal(parseBareEngineeringNumber("4.7u"), 4.7e-6);
+  assert.equal(parseBareEngineeringNumber("1000"), 1_000);
+  assert.equal(parseBareEngineeringNumber("abc"), null);
+  assert.equal(parseBareEngineeringNumber("10kOhm"), null, "a trailing unit is rejected; this parser is unit-less");
 });
 
 /**

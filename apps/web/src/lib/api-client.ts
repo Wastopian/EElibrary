@@ -226,6 +226,7 @@ export async function fetchSearchFacetsEnvelope(filters: PartSearchFilters = {})
   appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
   appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
   appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
+  appendParameterSearchParams(searchParams, filters.parameters);
   const query = searchParams.toString();
 
   return fetchApi<ApiEnvelope<SearchFacets>>(`/parts/facets${query ? `?${query}` : ""}`);
@@ -258,6 +259,7 @@ export async function fetchPartSearchEnvelope(filters: PartSearchFilters): Promi
   appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
   appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
   appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
+  appendParameterSearchParams(searchParams, filters.parameters);
   appendSearchParam(searchParams, "page", filters.page && filters.page > 1 ? filters.page.toString() : undefined);
   appendSearchParam(searchParams, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
   appendSearchParam(searchParams, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
@@ -2357,5 +2359,25 @@ export function getApiBaseUrl(): string {
 function appendSearchParam(searchParams: URLSearchParams, key: string, value: string | undefined): void {
   if (value && value.trim()) {
     searchParams.set(key, value);
+  }
+}
+
+/**
+ * Appends typed parameter filters as stable `pmin_<key>` / `pmax_<key>` / `pval_<key>` query params so
+ * the API's readSearchFilters can reconstruct them.
+ */
+function appendParameterSearchParams(searchParams: URLSearchParams, parameters: PartSearchFilters["parameters"]): void {
+  for (const parameter of parameters ?? []) {
+    if (typeof parameter.min === "number" && Number.isFinite(parameter.min)) {
+      searchParams.set(`pmin_${parameter.paramKey}`, String(parameter.min));
+    }
+
+    if (typeof parameter.max === "number" && Number.isFinite(parameter.max)) {
+      searchParams.set(`pmax_${parameter.paramKey}`, String(parameter.max));
+    }
+
+    if (parameter.value && parameter.value.trim()) {
+      searchParams.set(`pval_${parameter.paramKey}`, parameter.value);
+    }
   }
 }

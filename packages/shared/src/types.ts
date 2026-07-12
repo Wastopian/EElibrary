@@ -3356,6 +3356,18 @@ export type CadAvailabilityFilter = "any" | "available" | "unavailable";
 /** PartSearchSort names stable SQL-backed search sort modes. */
 export type PartSearchSort = "mpn_asc" | "mpn_desc" | "updated_desc" | "trust_desc";
 
+/** PartParameterFilter is one typed parameter constraint applied to catalog search. */
+export interface PartParameterFilter {
+  /** Canonical registry parameter key, e.g. "resistance". */
+  paramKey: string;
+  /** Inclusive lower bound in the parameter's canonical base unit (numeric params). */
+  min?: number | undefined;
+  /** Inclusive upper bound in the parameter's canonical base unit (numeric params). */
+  max?: number | undefined;
+  /** Exact case-insensitive value match (enum/text params such as package or dielectric). */
+  value?: string | undefined;
+}
+
 /** PartSearchFilters are provider-neutral search filters accepted by API and UI. */
 export interface PartSearchFilters {
   query?: string | undefined;
@@ -3370,6 +3382,11 @@ export interface PartSearchFilters {
   readinessStatus?: PartReadinessStatus | undefined;
   approvalStatus?: PartApprovalStatus | undefined;
   connectorClass?: ConnectorClass | undefined;
+  /**
+   * Typed parameter filters keyed on the reconciled part_parameters store. Numeric params use
+   * min/max bounds; enum/text params use an exact (case-insensitive) value. DB-backed only.
+   */
+  parameters?: PartParameterFilter[] | undefined;
   /** One-based result page used by SQL-backed search. */
   page?: number | undefined;
   /** Bounded page size used by SQL-backed search. */
@@ -3788,6 +3805,31 @@ export interface ProviderImportCreateResponse {
   previousImportStatus: SourceImportStatus | null;
 }
 
+/** ParameterFacetValue is one categorical value bucket for a parameter facet. */
+export interface ParameterFacetValue {
+  value: string;
+  count: number;
+}
+
+/**
+ * ParameterFacet describes one filterable parameter present in the current result set. Numeric params
+ * carry min/max bounds; categorical (enum/text) params carry their distinct value buckets with counts.
+ */
+export interface ParameterFacet {
+  paramKey: string;
+  label: string;
+  unit: string | null;
+  kind: "numeric" | "categorical";
+  /** Number of parts in the current result set that have this parameter. */
+  partCount: number;
+  /** Lowest value present for a numeric parameter, in its canonical base unit. */
+  min?: number;
+  /** Highest value present for a numeric parameter, in its canonical base unit. */
+  max?: number;
+  /** Distinct values with counts for a categorical parameter. */
+  values?: ParameterFacetValue[];
+}
+
 /** SearchFacets contains the provider-neutral filter data for the search surface. */
 export interface SearchFacets {
   manufacturers: Manufacturer[];
@@ -3797,6 +3839,8 @@ export interface SearchFacets {
   readinessStatuses: PartReadinessStatus[];
   approvalStatuses: PartApprovalStatus[];
   connectorClasses: ConnectorClass[];
+  /** Filterable parameters present in the current result set. DB-backed only; empty in seed mode. */
+  parameterFacets?: ParameterFacet[];
   /** Optional per-facet counts for DB-backed and seed-fallback consistency checks. */
   counts?: {
     manufacturers: Record<string, number>;

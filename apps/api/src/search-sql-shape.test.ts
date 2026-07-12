@@ -117,6 +117,36 @@ test("provider-part, provider-url, and datasheet-url filters all use non-correla
   assert.match(filter.whereSql, /lower\(COALESCE\(datasheet_asset\.source_url, ''\)\) LIKE \$/u);
 });
 
+test("parametric filters use non-correlated IN-subqueries on part_parameters, not correlated EXISTS", () => {
+  const filter = buildSearchSqlFilterForTests(
+    { parameters: [{ paramKey: "resistance", min: 1000, max: 20000 }, { paramKey: "package", value: "0603" }] },
+    "any"
+  );
+
+  assert.match(
+    filter.whereSql,
+    /p\.id IN \(SELECT pp\.part_id FROM part_parameters pp WHERE pp\.param_key = \$\d+ AND pp\.value_numeric >= \$\d+ AND pp\.value_numeric <= \$\d+\)/u,
+    "numeric parameter filter must be a bounded non-correlated IN-subquery"
+  );
+  assert.match(
+    filter.whereSql,
+    /p\.id IN \(SELECT pp\.part_id FROM part_parameters pp WHERE pp\.param_key = \$\d+ AND lower\(pp\.value_text\) = \$\d+\)/u,
+    "categorical parameter filter must match lower(value_text)"
+  );
+  assert.doesNotMatch(filter.whereSql, /EXISTS \(\s*SELECT 1\s+FROM part_parameters/u);
+  // The bound values are the parsed numbers and the lowercased value, in clause order.
+  assert.deepEqual(filter.params, ["resistance", 1000, 20000, "package", "0603"]);
+});
+
+test("parametric filter with an unknown param key or no usable bound is dropped", () => {
+  const unknown = buildSearchSqlFilterForTests({ parameters: [{ paramKey: "not_real", min: 1 }] }, "any");
+  assert.equal(unknown.whereSql, "", "unknown parameter keys produce no clause");
+
+  const boundless = buildSearchSqlFilterForTests({ parameters: [{ paramKey: "resistance" }] }, "any");
+  assert.equal(boundless.whereSql, "", "a numeric filter with neither bound produces no clause");
+  assert.deepEqual(boundless.params, [], "no orphan params are left behind");
+});
+
 test("non-free-text filter clauses use exact equality so b-tree indexes apply", () => {
   const filter = buildSearchSqlFilterForTests(
     {

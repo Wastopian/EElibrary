@@ -5,6 +5,9 @@
 import Link from "next/link";
 import React from "react";
 import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
+import { formatParameterLabel, formatParameterUnit } from "@ee-library/shared/catalog-runtime";
+import { parseBareEngineeringNumber } from "@ee-library/shared/parameter-normalize";
+import { getCanonicalParamDefByKey, listCanonicalParameterKeys } from "@ee-library/shared/parameter-registry";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
 import { ImportByMpnPanel } from "../../components/ImportByMpnPanel";
@@ -16,11 +19,15 @@ import { getAssetTruthSummary, getConnectorWorkflowSummary, getPartNextActions, 
 import { buildCatalogTrustLineageBadges } from "../../lib/trust-lineage";
 import { importUiCopy } from "../../lib/import-ui-copy";
 import type { BadgeTone } from "@ee-library/ui";
-import type { CadAvailabilityFilter, CatalogDataSource, ConnectorClass, LifecycleStatus, PartApprovalStatus, PartReadinessStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
+import type { CadAvailabilityFilter, CatalogDataSource, ConnectorClass, LifecycleStatus, ParameterFacet, PartApprovalStatus, PartParameterFilter, PartReadinessStatus, PartSearchFilters, PartSearchRecord, PartSearchSort, SearchFacets, SearchPagination } from "@ee-library/shared/types";
 import type { ApiHealth } from "../../lib/api-client";
 
-/** PageSearchParams mirrors the GET filters used by the search form. */
+/**
+ * PageSearchParams mirrors the GET filters used by the search form. The index signature admits the
+ * dynamic parameter filter keys (`pmin_<key>` / `pmax_<key>` / `pval_<key>`) alongside the named ones.
+ */
 type PageSearchParams = {
+  [key: string]: string | string[] | undefined;
   approvalStatus?: string | string[];
   cad?: string | string[];
   category?: string | string[];
@@ -96,6 +103,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const pageSize = readPositiveInteger(readSingleParam(resolvedSearchParams?.pageSize));
   const sort = readSearchSort(readSingleParam(resolvedSearchParams?.sort));
   const compareParts = parseComparePartIds(readSingleParam(resolvedSearchParams?.parts));
+  const parameterRawValues = readRawParameterValues(resolvedSearchParams);
+  const parameters = readParameterFilters(parameterRawValues);
   const filters: PartSearchFilters = {
     approvalStatus,
     cadAvailability,
@@ -107,6 +116,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     packageId,
     page,
     pageSize,
+    parameters,
     providerPartId,
     providerUrl,
     query,
@@ -137,6 +147,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     lifecycleStatus,
     manufacturerId,
     packageId,
+    parameters,
     providerPartId,
     providerUrl,
     query,
@@ -325,7 +336,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 ))}
               </select>
             </label>
-            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, readinessStatus, sort })}>
+            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, parameters, readinessStatus, sort })}>
               <summary>More filters</summary>
               <div className="filter-rail__more-fields">
                 <label>
@@ -381,6 +392,14 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                       ))}
                     </select>
                   </label>
+                ) : null}
+                {facets.parameterFacets && facets.parameterFacets.length > 0 ? (
+                  <div className="filter-rail__parameters">
+                    <p className="filter-rail__parameters-heading">Parameters</p>
+                    {facets.parameterFacets.map((facet) => (
+                      <ParameterFilterControl facet={facet} key={facet.paramKey} rawValues={parameterRawValues} />
+                    ))}
+                  </div>
                 ) : null}
                 <label>
                   Sort
@@ -1247,6 +1266,76 @@ function readSingleParam(value: string | string[] | undefined): string | undefin
   return value;
 }
 
+/**
+ * Reads the raw `pmin_<key>` / `pmax_<key>` / `pval_<key>` strings the user typed, keyed by their param
+ * name, so filter inputs can echo exactly what was entered (e.g. "10k") while filters store parsed numbers.
+ */
+function readRawParameterValues(params: PageSearchParams): Record<string, string> {
+  const raw = params as Record<string, string | string[] | undefined>;
+  const values: Record<string, string> = {};
+
+  for (const paramKey of listCanonicalParameterKeys()) {
+    for (const prefix of ["pmin_", "pmax_", "pval_"] as const) {
+      const name = `${prefix}${paramKey}`;
+      const value = readSingleParam(raw[name]);
+
+      if (value && value.trim()) {
+        values[name] = value.trim();
+      }
+    }
+  }
+
+  return values;
+}
+
+/**
+ * Builds typed parameter filters from the raw input strings, parsing numeric bounds with the shared
+ * engineering-value parser so "10k" becomes 10000 in the parameter's canonical base unit.
+ */
+function readParameterFilters(rawValues: Record<string, string>): PartParameterFilter[] | undefined {
+  const filters: PartParameterFilter[] = [];
+
+  for (const paramKey of listCanonicalParameterKeys()) {
+    const def = getCanonicalParamDefByKey(paramKey);
+
+    if (!def) {
+      continue;
+    }
+
+    if (def.valueKind === "numeric") {
+      const min = parseNumericInput(rawValues[`pmin_${paramKey}`]);
+      const max = parseNumericInput(rawValues[`pmax_${paramKey}`]);
+
+      if (min !== undefined || max !== undefined) {
+        filters.push({ paramKey, ...(min === undefined ? {} : { min }), ...(max === undefined ? {} : { max }) });
+      }
+
+      continue;
+    }
+
+    const value = rawValues[`pval_${paramKey}`]?.trim();
+
+    if (value) {
+      filters.push({ paramKey, value });
+    }
+  }
+
+  return filters.length > 0 ? filters : undefined;
+}
+
+/**
+ * Parses one unit-less engineering input ("1k") into a base-unit number for a numeric parameter.
+ */
+function parseNumericInput(rawValue: string | undefined): number | undefined {
+  if (!rawValue || !rawValue.trim()) {
+    return undefined;
+  }
+
+  const parsed = parseBareEngineeringNumber(rawValue);
+
+  return parsed === null ? undefined : parsed;
+}
+
 function readCadAvailability(value: string | undefined): CadAvailabilityFilter {
   if (value === "available" || value === "unavailable") {
     return value;
@@ -1351,6 +1440,49 @@ function formatFacetOptionLabel(label: string, count: number | undefined): strin
   return typeof count === "number" ? `${label} (${count})` : label;
 }
 
+/**
+ * Renders one parameter filter control: min/max range inputs for numeric parameters (accepting
+ * engineering notation like "10k"), or a value select for categorical parameters. Only parameters
+ * present in the current result set reach here, so the control set self-scopes to the visible parts.
+ */
+function ParameterFilterControl({ facet, rawValues }: { facet: ParameterFacet; rawValues: Record<string, string> }) {
+  const unit = formatParameterUnit(facet.unit);
+  const unitSuffix = unit ? ` (${unit})` : "";
+  const countLabel = `${facet.partCount} part${facet.partCount === 1 ? "" : "s"}`;
+
+  if (facet.kind === "numeric") {
+    return (
+      <fieldset className="filter-rail__parameter">
+        <legend>{`${facet.label}${unitSuffix} · ${countLabel}`}</legend>
+        <div className="filter-rail__parameter-range">
+          <label>
+            Min
+            <input defaultValue={rawValues[`pmin_${facet.paramKey}`] ?? ""} name={`pmin_${facet.paramKey}`} placeholder="e.g. 1k" type="text" />
+          </label>
+          <label>
+            Max
+            <input defaultValue={rawValues[`pmax_${facet.paramKey}`] ?? ""} name={`pmax_${facet.paramKey}`} placeholder="e.g. 10k" type="text" />
+          </label>
+        </div>
+      </fieldset>
+    );
+  }
+
+  return (
+    <label className="filter-rail__parameter">
+      {`${facet.label} · ${countLabel}`}
+      <select defaultValue={rawValues[`pval_${facet.paramKey}`] ?? ""} name={`pval_${facet.paramKey}`}>
+        <option value="">All values</option>
+        {(facet.values ?? []).map((entry) => (
+          <option key={entry.value} value={entry.value}>
+            {formatFacetOptionLabel(entry.value, entry.count)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function scoreTone(score: number): BadgeTone {
   if (score >= 0.8) {
     return "verified";
@@ -1414,6 +1546,19 @@ function buildSearchHref(filters: PartSearchFilters, page: number): string {
   appendHrefParam(params, "cad", filters.cadAvailability === "any" ? undefined : filters.cadAvailability);
   appendHrefParam(params, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
   appendHrefParam(params, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
+  for (const parameter of filters.parameters ?? []) {
+    if (typeof parameter.min === "number") {
+      appendHrefParam(params, `pmin_${parameter.paramKey}`, String(parameter.min));
+    }
+
+    if (typeof parameter.max === "number") {
+      appendHrefParam(params, `pmax_${parameter.paramKey}`, String(parameter.max));
+    }
+
+    if (parameter.value) {
+      appendHrefParam(params, `pval_${parameter.paramKey}`, parameter.value);
+    }
+  }
   appendHrefParam(params, "page", page > 1 ? page.toString() : undefined);
 
   const queryString = params.toString();
@@ -1556,6 +1701,7 @@ function hasAdvancedFilters(input: {
   connectorClass: ConnectorClass | undefined;
   lifecycleStatus: LifecycleStatus | undefined;
   pageSize: number | undefined;
+  parameters: PartParameterFilter[] | undefined;
   readinessStatus: PartReadinessStatus | undefined;
   sort: PartSearchSort;
 }): boolean {
@@ -1566,6 +1712,7 @@ function hasAdvancedFilters(input: {
   if (input.readinessStatus !== undefined) return true;
   if (input.sort !== "mpn_asc") return true;
   if (input.pageSize !== undefined && input.pageSize !== 20) return true;
+  if (input.parameters !== undefined && input.parameters.length > 0) return true;
   return false;
 }
 
@@ -1582,6 +1729,7 @@ function buildActiveFilterPills({
   lifecycleStatus,
   manufacturerId,
   packageId,
+  parameters,
   providerPartId,
   providerUrl,
   query,
@@ -1598,6 +1746,7 @@ function buildActiveFilterPills({
   lifecycleStatus: LifecycleStatus | undefined;
   manufacturerId: string | undefined;
   packageId: string | undefined;
+  parameters: PartParameterFilter[] | undefined;
   providerPartId: string | undefined;
   providerUrl: string | undefined;
   query: string | undefined;
@@ -1669,7 +1818,47 @@ function buildActiveFilterPills({
     pills.push(`Rows/page: ${pageSize}`);
   }
 
+  for (const parameter of parameters ?? []) {
+    const pill = formatParameterFilterPill(parameter);
+
+    if (pill) {
+      pills.push(pill);
+    }
+  }
+
   return pills;
+}
+
+/**
+ * Formats one parameter filter as a short active-filter pill, or null when it carries no constraint.
+ */
+function formatParameterFilterPill(filter: PartParameterFilter): string | null {
+  const def = getCanonicalParamDefByKey(filter.paramKey);
+
+  if (!def) {
+    return null;
+  }
+
+  const unit = formatParameterUnit(def.unit);
+  const suffix = unit ? ` ${unit}` : "";
+
+  if (def.valueKind === "numeric") {
+    if (typeof filter.min === "number" && typeof filter.max === "number") {
+      return `${def.label}: ${filter.min}–${filter.max}${suffix}`;
+    }
+
+    if (typeof filter.min === "number") {
+      return `${def.label}: ≥ ${filter.min}${suffix}`;
+    }
+
+    if (typeof filter.max === "number") {
+      return `${def.label}: ≤ ${filter.max}${suffix}`;
+    }
+
+    return null;
+  }
+
+  return filter.value ? `${def.label}: ${filter.value}` : null;
 }
 
 /**

@@ -86,6 +86,9 @@ export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchF
     categories: Array.from(new Set(records.map((record) => record.part.category))).sort(),
     connectorClasses: (["connector", "accessory", "tooling", "cable", "non_connector"] as const).filter((status) => connectorClassCounts[status] > 0),
     lifecycleStatuses: (["active", "not_recommended", "obsolete", "unknown"] as const).filter((status) => lifecycleCounts[status] > 0),
+    // Seed records carry no reconciled parameters (those are DB-derived), so parametric filtering is a
+    // DB-only capability; the empty list means the UI never renders parametric controls in seed mode.
+    parameterFacets: [],
     manufacturers: uniqueBy(records.map((record) => record.manufacturer), (manufacturer) => manufacturer.id).sort((left, right) => left.name.localeCompare(right.name)),
     packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id).sort((left, right) => left.packageName.localeCompare(right.packageName)),
     readinessStatuses: (["ready_for_export_review", "needs_attention", "blocked", "unknown"] as const).filter((status) => readinessCounts[status] > 0),
@@ -128,6 +131,8 @@ export function filterPartRecords(records: PartSearchRecord[], filters: PartSear
     const hasReadinessStatusMatch = filters.readinessStatus ? record.readinessSummary.status === filters.readinessStatus : true;
     const hasApprovalStatusMatch = filters.approvalStatus ? record.approval.status === filters.approvalStatus : true;
     const hasConnectorClassMatch = filters.connectorClass ? record.readinessSummary.connectorClass === filters.connectorClass : true;
+    // filters.parameters is intentionally not evaluated here: seed records carry no reconciled
+    // parameters, so parametric filtering is DB-only (the UI hides the controls in seed mode).
 
     return (
       hasQueryMatch &&

@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PARAMETER_REGISTRY, findParamDefForSpecKey, getParameterDefs } from "./parameter-registry";
+import { PARAMETER_REGISTRY, findParamDefForSpecKey, getCanonicalParamDefByKey, getParameterDefs, listCanonicalParameterKeys } from "./parameter-registry";
 import type { PartType } from "./part-type";
 
 const ALL_PART_TYPES: PartType[] = ["resistor", "capacitor", "inductor", "diode", "mcu", "regulator", "connector", "other"];
@@ -47,4 +47,19 @@ test("findParamDefForSpecKey maps provider labels to canonical params, most-spec
   assert.equal(findParamDefForSpecKey("capacitor", "Dielectric")?.paramKey, "dielectric");
   assert.equal(findParamDefForSpecKey("inductor", "DCR")?.paramKey, "dc_resistance");
   assert.equal(findParamDefForSpecKey("resistor", "Unrelated Attribute"), null);
+});
+
+/**
+ * Verifies the flat key lookup and key enumeration used by search filtering.
+ */
+test("getCanonicalParamDefByKey and listCanonicalParameterKeys expose a flat, deduped key space", () => {
+  assert.equal(getCanonicalParamDefByKey("resistance")?.unit, "ohm");
+  assert.equal(getCanonicalParamDefByKey("package")?.valueKind, "text");
+  assert.equal(getCanonicalParamDefByKey("dielectric")?.valueKind, "enum");
+  assert.equal(getCanonicalParamDefByKey("not_a_real_param"), null);
+
+  const keys = listCanonicalParameterKeys();
+
+  assert.equal(keys.length, new Set(keys).size, "keys are deduped across part types");
+  assert.ok(keys.includes("resistance") && keys.includes("capacitance") && keys.includes("package"));
 });

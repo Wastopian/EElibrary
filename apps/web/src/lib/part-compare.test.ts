@@ -12,10 +12,13 @@ import {
   buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
+  buildCompareParameterRows,
+  collectCompareParameterKeys,
   collectCompareMetricKeys,
   formatCompareMetricCell,
   shouldRenderConnectorCompareRows
 } from "./part-compare";
+import type { PartDetailResponse, PartParameter } from "@ee-library/shared/types";
 
 function stubMetric(key: string): PartMetric {
   return {
@@ -51,6 +54,70 @@ test("collectCompareMetricKeys unions keys across records", () => {
 test("formatCompareMetricCell returns dash when metric missing", () => {
   const record = stubRecord([stubMetric("supply_voltage_max")]);
   assert.equal(formatCompareMetricCell(record, "missing_key"), "—");
+});
+
+function stubParameter(partId: string, paramKey: string, overrides: Partial<PartParameter> = {}): PartParameter {
+  return {
+    confidenceScore: 0.6,
+    id: `pp-${partId}-${paramKey}`,
+    isConflicted: false,
+    lastUpdatedAt: "2026-07-09T00:00:00.000Z",
+    paramKey,
+    partId,
+    partType: "resistor",
+    sources: [],
+    unit: "ohm",
+    valueKind: "numeric",
+    valueMax: null,
+    valueMin: null,
+    valueNumeric: 10_000,
+    valueText: null,
+    winningProviderId: "mouser",
+    winningSourceRecordId: null,
+    ...overrides
+  };
+}
+
+function stubDetail(partId: string, parameters: PartParameter[]): PartDetailResponse {
+  return { parameters, record: { part: { id: partId } } } as PartDetailResponse;
+}
+
+test("collectCompareParameterKeys unions parameter keys across details", () => {
+  const keys = collectCompareParameterKeys([
+    stubDetail("p1", [stubParameter("p1", "resistance"), stubParameter("p1", "tolerance", { unit: "%" })]),
+    stubDetail("p2", [stubParameter("p2", "resistance")])
+  ]);
+
+  assert.ok(keys.includes("resistance") && keys.includes("tolerance"));
+  assert.equal(keys.length, 2);
+});
+
+test("buildCompareParameterRows renders typed values, an em dash when absent, and a conflict marker", () => {
+  const rows = buildCompareParameterRows([
+    stubDetail("p1", [stubParameter("p1", "resistance", { valueNumeric: 10_000 })]),
+    stubDetail("p2", [stubParameter("p2", "resistance", { valueNumeric: 4_700, isConflicted: true })])
+  ]);
+
+  const resistanceRow = rows.find((row) => row.rowKey === "parameter:resistance");
+
+  assert.ok(resistanceRow, "expected a resistance row");
+  assert.equal(resistanceRow.label, "Resistance");
+  assert.equal(resistanceRow.values[0]?.text, "10000 ohm");
+  assert.equal(resistanceRow.values[0]?.tone, "info");
+  assert.equal(resistanceRow.values[1]?.text, "4700 ohm · sources disagree");
+  assert.equal(resistanceRow.values[1]?.tone, "review");
+});
+
+test("buildCompareParameterRows shows an em dash when a part lacks the parameter", () => {
+  const rows = buildCompareParameterRows([
+    stubDetail("p1", [stubParameter("p1", "resistance")]),
+    stubDetail("p2", [])
+  ]);
+
+  const resistanceRow = rows.find((row) => row.rowKey === "parameter:resistance");
+
+  assert.equal(resistanceRow?.values[1]?.text, "—");
+  assert.equal(resistanceRow?.values[1]?.tone, "neutral");
 });
 
 /**

@@ -55,6 +55,45 @@ const RELATIVE_NUMERIC_TOLERANCE = 0.01;
 /** ABSOLUTE_NUMERIC_EPSILON guards near-zero comparisons where a relative tolerance is meaningless. */
 const ABSOLUTE_NUMERIC_EPSILON = 1e-9;
 
+/** BARE_SI_PREFIX_MULTIPLIERS maps a unit-less SI prefix to its multiplier (case-sensitive m vs M). */
+const BARE_SI_PREFIX_MULTIPLIERS: Record<string, number> = {
+  "": 1,
+  G: 1e9,
+  K: 1_000,
+  M: 1e6,
+  T: 1e12,
+  k: 1_000,
+  m: 1e-3,
+  n: 1e-9,
+  p: 1e-12,
+  u: 1e-6,
+  µ: 1e-6,
+  μ: 1e-6
+};
+
+/**
+ * Parses a unit-less engineering number such as "1k", "4.7u", "10M", or "220" into its base value.
+ *
+ * Used for parameter search inputs, where the unit is implied by the field (a resistance box already
+ * means ohms) so the user types only the magnitude and an optional SI prefix. Case matters for the
+ * ambiguous single letter: "m" is milli, "M" is mega -- the same rule the provider parser uses.
+ */
+export function parseBareEngineeringNumber(rawValue: string): number | null {
+  const match = rawValue.trim().match(/^([+-]?\d*\.?\d+)\s*([pnuµμmkKMGT]?)$/u);
+
+  if (!match?.[1]) {
+    return null;
+  }
+
+  const base = Number(match[1]);
+
+  if (!Number.isFinite(base)) {
+    return null;
+  }
+
+  return base * (BARE_SI_PREFIX_MULTIPLIERS[match[2] ?? ""] ?? 1);
+}
+
 /**
  * Parses a raw provider value into the canonical typed value for a parameter, or null when unparseable.
  */

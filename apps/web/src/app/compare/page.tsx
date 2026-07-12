@@ -17,6 +17,7 @@ import {
   buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
+  buildCompareParameterRows,
   collectCompareMetricKeys,
   detailsToRecords,
   formatCompareMetricCell,
@@ -54,6 +55,7 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
   const details = compareState.status === "ready" ? compareState.details : [];
 
   const records = detailsToRecords(details);
+  const parameterRows = buildCompareParameterRows(details);
   const metricKeys = collectCompareMetricKeys(records);
   const assetClassRows = buildCompareAssetClassRows(records);
   const assetTrustRows = buildCompareAssetTrustRows(records);
@@ -164,6 +166,14 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                 </tbody>
               </table>
             </div>
+          </SectionPanel>
+
+          <SectionPanel description="Standardized specs combined across distributors and shown in the same units for every part. A “sources disagree” mark means the distributors reported different values — confirm against the datasheet." title="Specifications">
+            {parameterRows.length === 0 ? (
+              <EmptyState body="None of these parts have standardized specifications yet. Importing them from a distributor fills this in." title="No shared specifications" />
+            ) : (
+              <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={parameterRows} />
+            )}
           </SectionPanel>
 
           <SectionPanel description="Specs use the same units as the part page. Confidence is shown per metric — high confidence on one number does not mean the whole part is verified." title="Specs">

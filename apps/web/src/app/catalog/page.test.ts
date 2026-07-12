@@ -164,6 +164,51 @@ test("catalog page renders category facet options with counts and reflects an ac
   }
 });
 
+test("catalog page renders parameter filter controls and an active parameter pill", async () => {
+  const records = getAllPartRecords();
+  const record = records[0];
+
+  assert.ok(record, "expected at least one seed record");
+
+  const facets: SearchFacets = {
+    ...buildEmptyFacets(),
+    parameterFacets: [
+      { kind: "numeric", label: "Resistance", max: 1_000_000, min: 10, paramKey: "resistance", partCount: 12, unit: "ohm" },
+      { kind: "categorical", label: "Package", paramKey: "package", partCount: 12, unit: null, values: [{ count: 7, value: "0603" }, { count: 5, value: "0402" }] }
+    ]
+  };
+
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse(buildHealthResponse("connected"));
+    }
+
+    if (url.pathname.startsWith("/parts/facets")) {
+      return jsonResponse({ data: facets, source: "database" });
+    }
+
+    return jsonResponse({ data: [record], source: "database", pagination: buildPagination(1) });
+  });
+
+  try {
+    const html = renderToStaticMarkup(
+      await SearchPage({ searchParams: Promise.resolve({ pmin_resistance: "1k", pval_package: "0603" }) })
+    );
+
+    // Numeric range inputs and categorical select render from the facet, echoing the raw typed value.
+    assert.match(html, /name="pmin_resistance"/u);
+    assert.match(html, /name="pmax_resistance"/u);
+    assert.match(html, /value="1k"/u);
+    assert.match(html, /name="pval_package"/u);
+    assert.match(html, /0603 \(7\)/u);
+    // The active-filter pill shows the parsed base-unit bound and the categorical value.
+    assert.match(html, /Resistance: ≥ 1000 ohm/u);
+    assert.match(html, /Package: 0603/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
 test("catalog page shows idle quick-check panel when no query is provided", async () => {
   const records = getAllPartRecords();
   const record = records[0];
