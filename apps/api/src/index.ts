@@ -11,6 +11,8 @@ import { performance } from "node:perf_hooks";
 import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
+import { parseBareEngineeringNumber } from "@ee-library/shared/parameter-normalize";
+import { getCanonicalParamDefByKey, listCanonicalParameterKeys } from "@ee-library/shared/parameter-registry";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
 import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartParametersFromDatabase, readPartSearchFacetsFromDatabase, readPartSpecificationsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
@@ -131,6 +133,7 @@ import type {
   PartIssueWorkflowStatus,
   ProviderAcquisitionJobDetailResponse,
   ProviderLookupCandidate,
+  PartParameterFilter,
   PartSearchFilters,
   PartSearchRecord,
   PartEngineeringRecordCreateInput,
@@ -5172,12 +5175,63 @@ function readSearchFilters(url: URL): PartSearchFilters {
     packageId: url.searchParams.get("packageId") ?? undefined,
     page: readPositiveInteger(url.searchParams.get("page")),
     pageSize: readPositiveInteger(url.searchParams.get("pageSize")),
+    parameters: readParameterFilters(url),
     providerPartId: url.searchParams.get("providerPartId") ?? undefined,
     providerUrl: url.searchParams.get("providerUrl") ?? undefined,
     query: url.searchParams.get("q") ?? undefined,
     readinessStatus: readReadinessStatus(url.searchParams.get("readinessStatus")),
     sort: readPartSearchSort(url.searchParams.get("sort"))
   };
+}
+
+/**
+ * Reads typed parameter filters from `pmin_<key>` / `pmax_<key>` (numeric) and `pval_<key>`
+ * (categorical) query params, validating each key against the canonical registry so unknown keys are
+ * dropped exactly like unknown enum strings. Only parameters with a usable constraint are returned.
+ */
+function readParameterFilters(url: URL): PartParameterFilter[] | undefined {
+  const filters: PartParameterFilter[] = [];
+
+  for (const paramKey of listCanonicalParameterKeys()) {
+    const def = getCanonicalParamDefByKey(paramKey);
+
+    if (!def) {
+      continue;
+    }
+
+    if (def.valueKind === "numeric") {
+      const min = readParameterBound(url.searchParams.get(`pmin_${paramKey}`));
+      const max = readParameterBound(url.searchParams.get(`pmax_${paramKey}`));
+
+      if (min !== undefined || max !== undefined) {
+        filters.push({ paramKey, ...(min === undefined ? {} : { min }), ...(max === undefined ? {} : { max }) });
+      }
+
+      continue;
+    }
+
+    const value = url.searchParams.get(`pval_${paramKey}`)?.trim();
+
+    if (value) {
+      filters.push({ paramKey, value });
+    }
+  }
+
+  return filters.length > 0 ? filters : undefined;
+}
+
+/**
+ * Reads one numeric parameter bound, tolerating both base-unit numbers ("1000") and engineering
+ * notation ("1k") so the filter works whether the web pre-parsed it or a client sent it raw.
+ */
+function readParameterBound(value: string | null): number | undefined {
+  if (value === null || value.trim().length === 0) {
+    return undefined;
+  }
+
+  const parsed = parseBareEngineeringNumber(value);
+
+  return parsed === null ? undefined : parsed;
 }
 
 /**

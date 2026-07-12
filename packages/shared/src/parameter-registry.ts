@@ -87,6 +87,43 @@ export function getParameterDefs(partType: PartType): CanonicalParameterDef[] {
 }
 
 /**
+ * Lists every distinct canonical parameter key across all part types, in first-seen registry order.
+ */
+export function listCanonicalParameterKeys(): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+
+  for (const defs of Object.values(PARAMETER_REGISTRY)) {
+    for (const def of defs) {
+      if (!seen.has(def.paramKey)) {
+        seen.add(def.paramKey);
+        keys.push(def.paramKey);
+      }
+    }
+  }
+
+  return keys;
+}
+
+/**
+ * Finds a canonical parameter definition by its key across every part type.
+ *
+ * A parameter key like "resistance" or "package" appears under multiple part types with the same unit
+ * and value kind; the first match is authoritative for labelling and validating a key from search input.
+ */
+export function getCanonicalParamDefByKey(paramKey: string): CanonicalParameterDef | null {
+  for (const defs of Object.values(PARAMETER_REGISTRY)) {
+    const match = defs.find((def) => def.paramKey === paramKey);
+
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Finds the canonical parameter a raw provider spec key maps to, preferring the most specific pattern.
  *
  * Longer patterns win so "case code" is not shadowed by "case" and "voltage rating" is not shadowed by a

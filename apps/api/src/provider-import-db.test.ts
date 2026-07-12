@@ -614,6 +614,61 @@ test("DB-backed search facets are correct, filter-consistent, and timed", async 
   }
 });
 
+test("DB-backed search filters by parameter and reports parameter facets", async () => {
+  const pool = createProviderImportPool();
+
+  try {
+    setCatalogStorePoolForTests(pool);
+    await seedSearchRows(pool);
+
+    // Attach reconciled parameters to two of the seeded parts: a 1k 0402 and a 10k 0603.
+    await pool.query(`
+      INSERT INTO part_parameters VALUES ('pp-a-res', 'part-search-a', 'resistor', 'resistance', 'numeric', 1000, NULL, NULL, NULL, 'ohm', FALSE, 0.6, 'digikey', NULL, '[]'::jsonb, '2026-04-10T00:00:00.000Z', 'org-default');
+      INSERT INTO part_parameters VALUES ('pp-a-pkg', 'part-search-a', 'resistor', 'package', 'text', NULL, NULL, NULL, '0402', NULL, FALSE, 0.6, 'digikey', NULL, '[]'::jsonb, '2026-04-10T00:00:00.000Z', 'org-default');
+      INSERT INTO part_parameters VALUES ('pp-c-res', 'part-search-c', 'resistor', 'resistance', 'numeric', 10000, NULL, NULL, NULL, 'ohm', FALSE, 0.6, 'digikey', NULL, '[]'::jsonb, '2026-04-12T00:00:00.000Z', 'org-default');
+      INSERT INTO part_parameters VALUES ('pp-c-pkg', 'part-search-c', 'resistor', 'package', 'text', NULL, NULL, NULL, '0603', NULL, FALSE, 0.6, 'digikey', NULL, '[]'::jsonb, '2026-04-12T00:00:00.000Z', 'org-default');
+    `);
+
+    const highResistance = await readPartSearchRecordsFromDatabase({ parameters: [{ paramKey: "resistance", min: 5000 }], sort: "mpn_asc" });
+    const boundedResistance = await readPartSearchRecordsFromDatabase({ parameters: [{ paramKey: "resistance", min: 500, max: 2000 }], sort: "mpn_asc" });
+    const byPackage = await readPartSearchRecordsFromDatabase({ parameters: [{ paramKey: "package", value: "0603" }], sort: "mpn_asc" });
+    const facets = await readPartSearchFacetsFromDatabase({});
+
+    assert.equal(highResistance.status, "available");
+    assert.equal(boundedResistance.status, "available");
+    assert.equal(byPackage.status, "available");
+    assert.equal(facets.status, "available");
+
+    if (highResistance.status !== "available" || boundedResistance.status !== "available" || byPackage.status !== "available" || facets.status !== "available") {
+      throw new Error("expected DB-backed reads");
+    }
+
+    assert.deepEqual(highResistance.records.map((record) => record.part.mpn), ["CCC-300"], "resistance >= 5000 keeps only the 10k part");
+    assert.deepEqual(boundedResistance.records.map((record) => record.part.mpn), ["AAA-100"], "1k falls in [500,2000], 10k does not");
+    assert.deepEqual(byPackage.records.map((record) => record.part.mpn), ["CCC-300"], "package=0603 keeps only the 0603 part");
+
+    const resistanceFacet = facets.facets.parameterFacets?.find((facet) => facet.paramKey === "resistance");
+    const packageFacet = facets.facets.parameterFacets?.find((facet) => facet.paramKey === "package");
+
+    // The seeded jlcparts C1091 part also carries resistance 30 / package 0402, so the facet
+    // aggregates all three parametric parts in the unfiltered result set.
+    assert.ok(resistanceFacet, "resistance facet is present");
+    assert.equal(resistanceFacet.kind, "numeric");
+    assert.equal(resistanceFacet.min, 30);
+    assert.equal(resistanceFacet.max, 10000);
+    assert.equal(resistanceFacet.partCount, 3);
+    assert.equal(resistanceFacet.unit, "ohm");
+
+    assert.ok(packageFacet, "package facet is present");
+    assert.equal(packageFacet.kind, "categorical");
+    assert.deepEqual(packageFacet.values?.map((entry) => entry.value).sort(), ["0402", "0603"]);
+    assert.equal(packageFacet.values?.find((entry) => entry.value === "0402")?.count, 2, "0402 covers both the search and jlcparts parts");
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
 /**
  * Verifies generated draft assets appear in DB-backed detail without enabling export.
  */

@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
 import { buildSearchPagination, buildSearchQueryTokens, buildSearchTokenAlternates } from "@ee-library/shared/catalog-runtime";
+import { getCanonicalParamDefByKey } from "@ee-library/shared/parameter-registry";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
@@ -48,6 +49,7 @@ import type {
   PartEngineeringRecordKind,
   PartEngineeringRecordOutcome,
   PartEngineeringRecordSeverity,
+  ParameterFacet,
   PartMetric,
   PartParameter,
   PartParameterSource,
@@ -701,6 +703,21 @@ interface DatabaseSearchFacetApprovalRow {
 /** DatabaseSearchFacetConnectorClassRow is one grouped connector-class facet row. */
 interface DatabaseSearchFacetConnectorClassRow {
   connector_class: ConnectorClass;
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetNumericParameterRow is one numeric parameter's bounds and part count. */
+interface DatabaseSearchFacetNumericParameterRow {
+  param_key: string;
+  min_v: string | null;
+  max_v: string | null;
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetCategoricalParameterRow is one distinct value bucket for a categorical parameter. */
+interface DatabaseSearchFacetCategoricalParameterRow {
+  param_key: string;
+  value_text: string;
   facet_count: string;
 }
 
@@ -2238,7 +2255,7 @@ async function readSearchPartIds(databasePool: Pool, searchFilter: SearchSqlFilt
  */
 async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilter, options: CatalogReadOptions): Promise<SearchFacets> {
   try {
-    const [manufacturerRows, categoryRows, packageRows, lifecycleRows, readinessRows, approvalRows, connectorClassRows, totalRowResult, cadAvailableResult] = await Promise.all([
+    const [manufacturerRows, categoryRows, packageRows, lifecycleRows, readinessRows, approvalRows, connectorClassRows, numericParameterRows, categoricalParameterRows, totalRowResult, cadAvailableResult] = await Promise.all([
       timedCatalogQuery<DatabaseSearchFacetManufacturerRow>(databasePool, "search_facet_manufacturers", buildSearchManufacturerFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetCategoryRow>(databasePool, "search_facet_categories", buildSearchCategoryFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetPackageRow>(databasePool, "search_facet_packages", buildSearchPackageFacetSql(searchFilter.whereSql), searchFilter.params, options),
@@ -2246,6 +2263,8 @@ async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilte
       timedCatalogQuery<DatabaseSearchFacetReadinessRow>(databasePool, "search_facet_readiness", buildSearchReadinessFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetApprovalRow>(databasePool, "search_facet_approval", buildSearchApprovalFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetConnectorClassRow>(databasePool, "search_facet_connector_class", buildSearchConnectorClassFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetNumericParameterRow>(databasePool, "search_facet_parameters_numeric", buildSearchNumericParameterFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetCategoricalParameterRow>(databasePool, "search_facet_parameters_categorical", buildSearchCategoricalParameterFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetCountRow>(databasePool, "search_facet_total", buildSearchCountSql(searchFilter), searchFilter.params, options),
       timedCatalogQuery<DatabaseCadAvailableFacetRow>(databasePool, "search_facet_cad_available", buildSearchCadAvailableCountSql(searchFilter.whereSql), searchFilter.params, options)
     ]);
@@ -2294,6 +2313,7 @@ async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilte
     return {
       approvalStatuses: (["approved", "pending_review", "not_requested", "not_applicable"] as const).filter((status) => approvalCounts[status] > 0),
       categories: categoryRows.rows.map((row) => row.category),
+      parameterFacets: buildParameterFacets(numericParameterRows.rows, categoricalParameterRows.rows),
       connectorClasses: (["connector", "accessory", "tooling", "cable", "non_connector"] as const).filter((status) => connectorClassCounts[status] > 0),
       counts: {
         approvalStatuses: approvalCounts,
@@ -4188,6 +4208,111 @@ function buildSearchConnectorClassFacetSql(whereSql: string): string {
 }
 
 /**
+ * Builds the numeric-parameter facet query: min/max bounds + part count per parameter present in the
+ * current result set. Reuses the active whereSql (and thus searchFilter.params) via the inner subquery,
+ * so it adds no bind parameter of its own. One row per (part, param) via the unique constraint means
+ * count(*) equals the number of parts carrying the parameter.
+ */
+function buildSearchNumericParameterFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      pp.param_key,
+      min(pp.value_numeric)::text AS min_v,
+      max(pp.value_numeric)::text AS max_v,
+      count(*)::text AS facet_count
+    FROM part_parameters pp
+    WHERE pp.value_kind = 'numeric'
+      AND pp.value_numeric IS NOT NULL
+      AND pp.part_id IN (SELECT p.id ${SEARCH_PART_FULL_FROM_SQL} ${whereSql})
+    GROUP BY pp.param_key
+    ORDER BY pp.param_key ASC
+  `;
+}
+
+/**
+ * Builds the categorical-parameter facet query: distinct value buckets with part counts for enum/text
+ * parameters present in the current result set. Same shared-params discipline as the numeric facet.
+ */
+function buildSearchCategoricalParameterFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      pp.param_key,
+      pp.value_text,
+      count(*)::text AS facet_count
+    FROM part_parameters pp
+    WHERE pp.value_kind IN ('enum', 'text')
+      AND pp.value_text IS NOT NULL
+      AND pp.part_id IN (SELECT p.id ${SEARCH_PART_FULL_FROM_SQL} ${whereSql})
+    GROUP BY pp.param_key, pp.value_text
+    ORDER BY pp.param_key ASC, count(*) DESC, pp.value_text ASC
+  `;
+}
+
+/**
+ * Assembles the parameter facet list from the numeric and categorical facet rows.
+ *
+ * Registry-unknown keys are dropped so display always has a label and unit. Numeric facets carry bounds;
+ * categorical facets group their value buckets. partCount for a categorical facet is the sum of its
+ * bucket counts (one row per part per parameter, so buckets partition the parts that have the parameter).
+ */
+function buildParameterFacets(
+  numericRows: DatabaseSearchFacetNumericParameterRow[],
+  categoricalRows: DatabaseSearchFacetCategoricalParameterRow[]
+): ParameterFacet[] {
+  const facets: ParameterFacet[] = [];
+
+  for (const row of numericRows) {
+    const def = getCanonicalParamDefByKey(row.param_key);
+
+    if (!def) {
+      continue;
+    }
+
+    facets.push({
+      kind: "numeric",
+      label: def.label,
+      ...(row.max_v === null ? {} : { max: Number(row.max_v) }),
+      ...(row.min_v === null ? {} : { min: Number(row.min_v) }),
+      paramKey: row.param_key,
+      partCount: Number(row.facet_count),
+      unit: def.unit
+    });
+  }
+
+  const valuesByKey = new Map<string, ParameterFacet["values"]>();
+
+  for (const row of categoricalRows) {
+    if (!getCanonicalParamDefByKey(row.param_key)) {
+      continue;
+    }
+
+    const bucket = valuesByKey.get(row.param_key) ?? [];
+
+    bucket.push({ count: Number(row.facet_count), value: row.value_text });
+    valuesByKey.set(row.param_key, bucket);
+  }
+
+  for (const [paramKey, values] of valuesByKey) {
+    const def = getCanonicalParamDefByKey(paramKey);
+
+    if (!def || !values) {
+      continue;
+    }
+
+    facets.push({
+      kind: "categorical",
+      label: def.label,
+      paramKey,
+      partCount: values.reduce((sum, entry) => sum + entry.count, 0),
+      unit: def.unit,
+      values
+    });
+  }
+
+  return facets;
+}
+
+/**
  * Counts distinct parts that satisfy the same verified CAD predicate used by search filters.
  */
 function buildSearchCadAvailableCountSql(whereSql: string): string {
@@ -4280,6 +4405,7 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
     "lower(COALESCE(datasheet_asset.source_url, ''))",
     filters.datasheetUrl
   );
+  appendParameterFilterClauses(clauses, params, filters.parameters);
 
   if (cadAvailability === "available") {
     clauses.push(`p.id IN (${CAD_READY_PART_IDS_SQL})`);
@@ -4296,6 +4422,64 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
     queryText,
     whereSql: clauses.length > 0 ? `WHERE ${clauses.join("\n    AND ")}` : ""
   };
+}
+
+/**
+ * Appends non-correlated part-id subquery clauses for typed parameter filters.
+ *
+ * Each parameter constraint becomes `p.id IN (SELECT pp.part_id FROM part_parameters pp WHERE ...)` --
+ * the same non-correlated shape the provider/datasheet filters use so the planner rides
+ * part_parameters_type_key_numeric_idx and search-sql-shape's no-correlated-EXISTS rule holds. The
+ * paramKey is validated against the registry and bound as a parameter (never inlined).
+ */
+function appendParameterFilterClauses(clauses: string[], params: unknown[], parameters: PartSearchFilters["parameters"]): void {
+  if (!parameters || parameters.length === 0) {
+    return;
+  }
+
+  for (const parameter of parameters) {
+    const def = getCanonicalParamDefByKey(parameter.paramKey);
+
+    if (!def) {
+      continue;
+    }
+
+    const predicates: string[] = [];
+
+    params.push(parameter.paramKey);
+    predicates.push(`pp.param_key = $${params.length}`);
+
+    if (def.valueKind === "numeric") {
+      if (typeof parameter.min === "number" && Number.isFinite(parameter.min)) {
+        params.push(parameter.min);
+        predicates.push(`pp.value_numeric >= $${params.length}`);
+      }
+
+      if (typeof parameter.max === "number" && Number.isFinite(parameter.max)) {
+        params.push(parameter.max);
+        predicates.push(`pp.value_numeric <= $${params.length}`);
+      }
+
+      // A parameter with no usable bound would select every part that merely has the parameter, which
+      // is not a filter the caller intends -- skip it.
+      if (predicates.length === 1) {
+        params.pop();
+        continue;
+      }
+    } else {
+      const value = parameter.value?.trim();
+
+      if (!value) {
+        params.pop();
+        continue;
+      }
+
+      params.push(value.toLowerCase());
+      predicates.push(`lower(pp.value_text) = $${params.length}`);
+    }
+
+    clauses.push(`p.id IN (SELECT pp.part_id FROM part_parameters pp WHERE ${predicates.join(" AND ")})`);
+  }
 }
 
 /**

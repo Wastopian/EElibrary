@@ -5,7 +5,7 @@
 
 import { resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getAssetReviewStatus } from "@ee-library/shared/review-workflow";
-import { formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
+import { formatMetricLabel, formatMetricValue, formatParameterLabel, formatParameterValue } from "@ee-library/shared/catalog-runtime";
 import { assetTrustStageTone, formatAssetTrustStageLabel } from "./detail-view-model";
 import { getAssetPreviewState } from "../components/AssetInlinePreview";
 import type { AssetPreviewState } from "../components/AssetInlinePreview";
@@ -64,6 +64,48 @@ export function formatCompareMetricCell(record: PartSearchRecord, metricKey: str
  */
 export function detailsToRecords(details: PartDetailResponse[]): PartSearchRecord[] {
   return details.map((detail) => detail.record);
+}
+
+/**
+ * Collects sorted normalized-parameter keys present on any compared part.
+ *
+ * Reads `detail.parameters` (the reconciled part_parameters), which the compare loader already fetches
+ * per part and which `detailsToRecords` drops -- so no extra request is needed.
+ */
+export function collectCompareParameterKeys(details: PartDetailResponse[]): string[] {
+  const keys = new Set<string>();
+
+  for (const detail of details) {
+    for (const parameter of detail.parameters) {
+      keys.add(parameter.paramKey);
+    }
+  }
+
+  return [...keys].sort((first, second) => formatParameterLabel(first).localeCompare(formatParameterLabel(second)));
+}
+
+/**
+ * Builds the normalized-parameter matrix rows: one row per parameter key, one cell per part with the
+ * typed value in canonical units, an em dash when absent, and a conflict marker when sources disagree.
+ */
+export function buildCompareParameterRows(details: PartDetailResponse[]): CompareRow[] {
+  return collectCompareParameterKeys(details).map<CompareRow>((paramKey) => ({
+    label: formatParameterLabel(paramKey),
+    rowKey: `parameter:${paramKey}`,
+    values: details.map<CompareCellValue>((detail) => {
+      const parameter = detail.parameters.find((candidate) => candidate.paramKey === paramKey);
+
+      if (!parameter) {
+        return { partId: detail.record.part.id, text: "—", tone: "neutral" };
+      }
+
+      return {
+        partId: detail.record.part.id,
+        text: `${formatParameterValue(parameter)}${parameter.isConflicted ? " · sources disagree" : ""}`,
+        tone: parameter.isConflicted ? "review" : "info"
+      };
+    })
+  }));
 }
 
 const ASSET_CLASS_LABELS: Record<AssetType, string> = {
