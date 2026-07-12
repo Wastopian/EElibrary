@@ -394,6 +394,7 @@ function createAdminDbBackedPool(): TestPool {
     CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_specifications (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, spec_key TEXT, spec_value TEXT, spec_group TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, provider_id, spec_key));
     CREATE TABLE mate_relations (id TEXT PRIMARY KEY, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE accessory_requirements (id TEXT PRIMARY KEY, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE cable_compatibilities (id TEXT PRIMARY KEY, part_id TEXT, cable_part_id TEXT, relationship_type TEXT, wire_gauge_min INTEGER, wire_gauge_max INTEGER, shielding_requirement TEXT, termination_style TEXT, compatibility_status TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
@@ -419,6 +420,7 @@ function createAdminDbBackedPool(): TestPool {
     ALTER TABLE assets ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE datasheet_revisions ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE part_metrics ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_specifications ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE mate_relations ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE accessory_requirements ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE cable_compatibilities ADD COLUMN org_id TEXT DEFAULT 'org-default';

@@ -27,6 +27,7 @@ import type {
   PartDuplicateCandidate,
   PartIssue,
   PartMetric,
+  PartSpecification,
   ProviderImportDiagnostic,
   ReviewRecord,
   SimilarPartRelation,
@@ -677,6 +678,12 @@ export function namespaceNormalizedPartIds(normalizedPart: NormalizedProviderPar
       sourceRecordId: scopeNullable(metric.sourceRecordId),
       sourceRevisionId: scope(metric.sourceRevisionId)
     })),
+    specifications: (normalizedPart.specifications ?? []).map((specification) => ({
+      ...specification,
+      id: scope(specification.id),
+      partId: scope(specification.partId),
+      sourceRecordId: scopeNullable(specification.sourceRecordId)
+    })),
     supplyOfferings: normalizedPart.supplyOfferings.map((offering) => ({
       ...offering,
       id: scope(offering.id),
@@ -728,6 +735,8 @@ export async function persistNormalizedPartRows(client: PoolClient, rawNormalize
     await persistMetric(client, metric);
   }
 
+  await persistPartSpecifications(client, normalizedPart.part.id, normalizedPart.sourceRecord.providerId, normalizedPart.specifications ?? []);
+
   for (const supplyOffering of normalizedPart.supplyOfferings) {
     await persistSupplyOffering(client, supplyOffering);
   }
@@ -775,6 +784,7 @@ async function stampPartChildOrgIds(client: PoolClient, partId: string): Promise
     "assets",
     "datasheet_revisions",
     "part_metrics",
+    "part_specifications",
     "supply_offerings",
     "source_extraction_signals",
     "mate_relations",
@@ -1607,6 +1617,47 @@ async function persistMetric(client: PoolClient, metric: PartMetric): Promise<vo
       metric.lastUpdatedAt
     ]
   );
+}
+
+/**
+ * Replaces this part's specification rows for one provider with the latest verbatim snapshot.
+ *
+ * Spec rows are a display snapshot with no dependents, so a delete-then-insert per
+ * (part_id, provider_id) is the honest behavior: the panel always shows exactly what the provider
+ * returned on the most recent import, and stale rows never linger when a provider drops a label.
+ * The delete keys on the provider from the source record so a re-import that returns no rows still
+ * clears the old ones. Rows insert with a null org_id and are stamped by stampPartChildOrgIds.
+ */
+async function persistPartSpecifications(client: PoolClient, partId: string, providerId: string, specifications: PartSpecification[]): Promise<void> {
+  await client.query("DELETE FROM part_specifications WHERE part_id = $1 AND provider_id = $2", [partId, providerId]);
+
+  for (const specification of specifications) {
+    await client.query(
+      `
+        INSERT INTO part_specifications (
+          id,
+          part_id,
+          provider_id,
+          source_record_id,
+          spec_key,
+          spec_value,
+          spec_group,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        specification.id,
+        specification.partId,
+        specification.providerId,
+        specification.sourceRecordId,
+        specification.specKey,
+        specification.specValue,
+        specification.specGroup,
+        specification.lastUpdatedAt
+      ]
+    );
+  }
 }
 
 /**

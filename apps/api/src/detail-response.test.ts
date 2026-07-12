@@ -87,6 +87,40 @@ test("buildPartDetailResponse preserves an explicit unavailable acquisition summ
 });
 
 /**
+ * Verifies specifications default to an empty list and pass through verbatim when provided.
+ */
+test("buildPartDetailResponse defaults specifications to empty and passes provided rows through", () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seeded regulator part");
+
+  assert.deepEqual(buildPartDetailResponse(record, records).specifications, []);
+
+  const specifications = [
+    {
+      id: "spec-mouser-x-tolerance",
+      lastUpdatedAt: "2026-05-16T00:00:00.000Z",
+      partId: record.part.id,
+      providerId: "mouser",
+      sourceRecordId: "source-x",
+      specGroup: "parametric" as const,
+      specKey: "Tolerance",
+      specValue: "1%"
+    }
+  ];
+  const response = buildPartDetailResponse(
+    record,
+    records,
+    buildUnavailablePartAcquisitionSummary("unavailable"),
+    buildUnavailablePartEnrichmentSummary("unavailable"),
+    specifications
+  );
+
+  assert.deepEqual(response.specifications, specifications);
+});
+
+/**
  * Verifies detail responses can carry an explicit unavailable enrichment summary without inventing job history.
  */
 test("buildPartDetailResponse preserves an explicit unavailable enrichment summary", () => {

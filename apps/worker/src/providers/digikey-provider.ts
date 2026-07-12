@@ -15,6 +15,7 @@ import {
   readPositiveNumber,
   readRequiredText,
   type NeutralSpec,
+  type NeutralSpecification,
   type NeutralSupplyOffering
 } from "./distributor-normalize";
 
@@ -291,8 +292,26 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     providerPartKey: normalizeOptionalText(variations[0]?.DigiKeyProductNumber) ?? `${manufacturerName}:${mpn}`,
     rawPayload: payload,
     sourceUrl: normalizeOptionalText(product.ProductUrl) ?? `https://www.digikey.com/en/products/result?keywords=${encodeURIComponent(mpn)}`,
+    specifications: buildSpecifications(product),
     supplyOfferings: buildSupplyOfferings(product),
     trustScore: 0.66
+  });
+}
+
+/**
+ * Builds verbatim specification rows from the full DigiKey parameter table.
+ *
+ * Unlike readMetricCandidates, which keeps only six normalized numeric metrics, this preserves
+ * every parameter DigiKey returns so the part page can show the complete parametric table.
+ */
+function buildSpecifications(product: DigiKeyProduct): NeutralSpecification[] {
+  const parameters = Array.isArray(product.Parameters) ? product.Parameters : [];
+
+  return parameters.flatMap<NeutralSpecification>((parameter) => {
+    const specKey = normalizeOptionalText(parameter.ParameterText);
+    const specValue = normalizeOptionalText(parameter.ValueText);
+
+    return specKey && specValue ? [{ specGroup: "parametric", specKey, specValue }] : [];
   });
 }
 

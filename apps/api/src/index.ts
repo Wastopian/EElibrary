@@ -12,7 +12,7 @@ import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartSearchFacetsFromDatabase, readPartSpecificationsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
@@ -1121,10 +1121,18 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
           (result) => result.state
         )
       : buildUnavailablePartEnrichmentSummary("Enrichment history is unavailable while this part detail is being served from seed fallback data.");
+    const specifications = catalog.source === "database"
+      ? await timeRouteOperation(
+          response,
+          "detail-specifications-read",
+          () => readPartSpecificationsFromDatabase(partId, { onQueryTiming: buildQueryTimingSink(response) }),
+          (result) => `${result.length} specifications`
+        )
+      : [];
     const detailResponse = timeSyncRouteOperation(
       response,
       "detail-build",
-      () => buildPartDetailResponse(record, records, acquisitionSummary, enrichmentSummary),
+      () => buildPartDetailResponse(record, records, acquisitionSummary, enrichmentSummary, specifications),
       (result) => `${result.relatedPartSummaries.length} related summaries`
     );
 
