@@ -4,11 +4,22 @@
 
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { extractDatasheetParameters } from "@ee-library/shared/datasheet-extract";
+import { DATASHEET_EXTRACTION_CONFIDENCE } from "@ee-library/shared/parameter-normalize";
+import { resolvePartType, type PartType } from "@ee-library/shared/part-type";
 import {
   getWorkerDatabasePool,
-  markDatasheetAssetAsDownloaded
+  markDatasheetAssetAsDownloaded,
+  persistDatasheetExtractedParameters,
+  readLatestDatasheetRevisionId,
+  readPartForParameterRecompute,
+  recomputePartParameters,
+  stampDatasheetExtractionOrgIds,
+  updateDatasheetRevisionParseConfidence,
+  type DatasheetExtractedParameterInput
 } from "./catalog-repository";
 import { getWorkerStorageClient } from "./file-storage";
+import { extractPdfDocument } from "./project-document-extraction";
 import type { PoolClient } from "pg";
 import type {
   ProviderEnrichmentJob,
@@ -233,34 +244,50 @@ export async function processNextProviderEnrichmentJob(): Promise<ProviderEnrich
   }
 }
 
+/** DATASHEET_EXTRACTABLE_PART_TYPES limits heuristic datasheet extraction to passives (clear label:value text). */
+const DATASHEET_EXTRACTABLE_PART_TYPES: ReadonlySet<PartType> = new Set(["resistor", "capacitor", "inductor"]);
+
 /**
- * Enqueues the Phase 2C.1 datasheet-capture job only when datasheet evidence is still missing.
+ * Enqueues gap-driven enrichment jobs for one part: datasheet capture when evidence is still missing,
+ * and datasheet extraction for passive parts (extraction self-ensures the PDF is stored, so it does not
+ * depend on capture having run first). Each type dedupes against its own active job.
  */
 async function enqueueProviderEnrichmentJobsWithClient(
   client: PoolClient,
   input: ProviderEnrichmentEnqueueInput
 ): Promise<ProviderEnrichmentQueueResult> {
-  if (await partHasDatasheetEvidence(client, input.partId)) {
-    return {
-      createdJobs: [],
-      reusedJobs: []
-    };
+  const result: ProviderEnrichmentQueueResult = { createdJobs: [], reusedJobs: [] };
+
+  if (!(await partHasDatasheetEvidence(client, input.partId))) {
+    await enqueueEnrichmentJobOfType(client, input, "datasheet_capture", result);
   }
 
-  const existingJob = await findActiveProviderEnrichmentJob(
-    client,
-    input.partId,
-    "datasheet_capture"
-  );
+  const part = await readPartForParameterRecompute(client, input.partId);
+
+  if (part && DATASHEET_EXTRACTABLE_PART_TYPES.has(resolvePartType(part))) {
+    await enqueueEnrichmentJobOfType(client, input, "datasheet_extraction", result);
+  }
+
+  return result;
+}
+
+/**
+ * Enqueues one enrichment job of a given type for a part, reusing an active job instead of duplicating.
+ */
+async function enqueueEnrichmentJobOfType(
+  client: PoolClient,
+  input: ProviderEnrichmentEnqueueInput,
+  jobType: ProviderEnrichmentJobType,
+  result: ProviderEnrichmentQueueResult
+): Promise<void> {
+  const existingJob = await findActiveProviderEnrichmentJob(client, input.partId, jobType);
 
   if (existingJob) {
-    return {
-      createdJobs: [],
-      reusedJobs: [existingJob]
-    };
+    result.reusedJobs.push(existingJob);
+    return;
   }
 
-  const createdJob = buildProviderEnrichmentJobRecord(input, "datasheet_capture");
+  const createdJob = buildProviderEnrichmentJobRecord(input, jobType);
   const createdEvent = buildProviderEnrichmentJobEvent(
     createdJob.id,
     "queued",
@@ -279,30 +306,19 @@ async function enqueueProviderEnrichmentJobsWithClient(
   try {
     await insertProviderEnrichmentJob(client, createdJob);
     await insertProviderEnrichmentJobEvent(client, createdEvent);
-
-    return {
-      createdJobs: [createdJob],
-      reusedJobs: []
-    };
+    result.createdJobs.push(createdJob);
   } catch (error) {
     if (!isUniqueViolationError(error)) {
       throw error;
     }
 
-    const reusedJob = await findActiveProviderEnrichmentJob(
-      client,
-      input.partId,
-      "datasheet_capture"
-    );
+    const reusedJob = await findActiveProviderEnrichmentJob(client, input.partId, jobType);
 
     if (!reusedJob) {
       throw error;
     }
 
-    return {
-      createdJobs: [],
-      reusedJobs: [reusedJob]
-    };
+    result.reusedJobs.push(reusedJob);
   }
 }
 
@@ -442,7 +458,136 @@ async function runProviderEnrichmentJob(
   switch (job.jobType) {
     case "datasheet_capture":
       return datasheetCaptureHandlerImpl(job);
+    case "datasheet_extraction":
+      return runDatasheetExtractionJob(job);
   }
+}
+
+/** DATASHEET_PARSE_CONFIDENCE_FOUND is the datasheet_revision parse confidence when parameters were extracted. */
+const DATASHEET_PARSE_CONFIDENCE_FOUND = 0.4;
+
+/** DATASHEET_PARSE_CONFIDENCE_EMPTY marks that text was read but nothing structured was recognized. */
+const DATASHEET_PARSE_CONFIDENCE_EMPTY = 0.1;
+
+/**
+ * Reads a part's stored datasheet PDF, heuristically extracts canonical parameters, and re-reconciles.
+ *
+ * Extraction is a corroborating source: values carry a modest confidence and never override distributor
+ * data (see reconcileParameterSources). The job self-ensures the PDF is stored (running capture if
+ * needed), so it cannot run before a datasheet exists even if claimed early. Only passive parts are
+ * extracted; anything else succeeds as a no-op.
+ */
+async function runDatasheetExtractionJob(
+  job: ProviderEnrichmentJob
+): Promise<ProviderEnrichmentDatasheetCaptureResult> {
+  const databasePool = getWorkerDatabasePool();
+
+  const readClient = await databasePool.connect();
+  let part: Awaited<ReturnType<typeof readPartForParameterRecompute>>;
+
+  try {
+    part = await readPartForParameterRecompute(readClient, job.partId);
+  } finally {
+    readClient.release();
+  }
+
+  if (!part) {
+    throw new ProviderEnrichmentJobError("PART_NOT_FOUND", "No part exists for this datasheet extraction job.");
+  }
+
+  const partType = resolvePartType(part);
+
+  if (!DATASHEET_EXTRACTABLE_PART_TYPES.has(partType)) {
+    return {
+      detail: { partType, result: "noop_unsupported_part_type" },
+      message: "Datasheet extraction supports passive parts only; skipping."
+    };
+  }
+
+  const storageClient = getWorkerStorageClient();
+
+  if (storageClient.backend === "not_configured") {
+    throw new ProviderEnrichmentJobError("STORAGE_NOT_CONFIGURED", "Storage backend is not configured — cannot read the datasheet.");
+  }
+
+  // Ensure the PDF is stored: run the capture handler when there is no downloaded datasheet yet. A part
+  // with no official datasheet source simply has nothing to extract.
+  const evidenceClient = await databasePool.connect();
+  let hasDatasheet: boolean;
+
+  try {
+    hasDatasheet = await partHasDatasheetEvidence(evidenceClient, job.partId);
+  } finally {
+    evidenceClient.release();
+  }
+
+  if (!hasDatasheet) {
+    try {
+      await datasheetCaptureHandlerImpl(job);
+    } catch (error) {
+      if (error instanceof ProviderEnrichmentJobError && error.code === "NO_DATASHEET_SOURCE") {
+        return { detail: { result: "noop_no_datasheet" }, message: "No datasheet available to extract from." };
+      }
+
+      throw error;
+    }
+  }
+
+  const fileBytes = await storageClient.read(buildDatasheetStorageKey(job.partId));
+  const extraction = await extractPdfDocument(fileBytes);
+  const parameters = extractDatasheetParameters(extraction.extractedText, partType).map(toDatasheetExtractedParameterInput);
+
+  const writeClient = await databasePool.connect();
+
+  try {
+    await writeClient.query("BEGIN");
+    const revisionId = await readLatestDatasheetRevisionId(writeClient, job.partId);
+    const extractedAt = new Date().toISOString();
+
+    await persistDatasheetExtractedParameters(writeClient, job.partId, revisionId, extractedAt, parameters);
+
+    if (revisionId) {
+      await updateDatasheetRevisionParseConfidence(
+        writeClient,
+        revisionId,
+        parameters.length > 0 ? DATASHEET_PARSE_CONFIDENCE_FOUND : DATASHEET_PARSE_CONFIDENCE_EMPTY
+      );
+    }
+
+    await recomputePartParameters(writeClient, part, extractedAt);
+    await stampDatasheetExtractionOrgIds(writeClient, job.partId);
+    await writeClient.query("COMMIT");
+
+    return {
+      detail: { parametersExtracted: parameters.length, result: "extracted", revisionId },
+      message: `Extracted ${parameters.length} datasheet parameter(s).`
+    };
+  } catch (error) {
+    await writeClient.query("ROLLBACK");
+    throw error;
+  } finally {
+    writeClient.release();
+  }
+}
+
+/**
+ * Converts a shared datasheet-extracted parameter into the persistence input shape.
+ */
+function toDatasheetExtractedParameterInput(
+  extracted: ReturnType<typeof extractDatasheetParameters>[number]
+): DatasheetExtractedParameterInput {
+  const { typed } = extracted;
+
+  return {
+    confidence: DATASHEET_EXTRACTION_CONFIDENCE,
+    paramKey: extracted.paramKey,
+    unit: typed.unit,
+    valueKind: typed.kind,
+    valueMax: typed.kind === "range" ? typed.max : null,
+    valueMin: typed.kind === "range" ? typed.min : null,
+    valueNumeric: typed.kind === "numeric" ? typed.value : null,
+    valueText: typed.kind === "enum" || typed.kind === "text" || typed.kind === "boolean" ? typed.text : null
+  };
 }
 
 /**

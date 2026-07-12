@@ -30,6 +30,10 @@
       "types": "./src/catalog-runtime.ts",
       "default": "./src/catalog-runtime.ts"
     },
+    "./datasheet-extract": {
+      "types": "./src/datasheet-extract.ts",
+      "default": "./src/datasheet-extract.ts"
+    },
     "./circuit-block-readiness": {
       "types": "./src/circuit-block-readiness.ts",
       "default": "./src/circuit-block-readiness.ts"

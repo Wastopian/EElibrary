@@ -152,6 +152,7 @@ export function formatSupplySourceLabel(source: { providerId: string; supplierNa
 
 /** PROVIDER_DISPLAY_LABELS maps known provider ids to the names engineers recognize. */
 const PROVIDER_DISPLAY_LABELS: Record<string, string> = {
+  datasheet: "Datasheet",
   digikey: "DigiKey",
   jlcparts: "JLCPCB / LCSC",
   kicad: "KiCad library",

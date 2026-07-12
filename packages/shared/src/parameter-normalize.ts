@@ -44,10 +44,18 @@ export interface ReconciledParameter {
 }
 
 /**
- * DEFAULT_PARAMETER_TRUST_ORDER ranks sources when confidence ties. Datasheet extraction (a later phase)
- * is deliberately first so, once present, it wins over distributor specs.
+ * DEFAULT_PARAMETER_TRUST_ORDER breaks ties only when two sources report the SAME confidence. Datasheet
+ * is listed first so a reviewed datasheet value (confidence raised to a distributor's level) edges it,
+ * but an unreviewed heuristic extraction stays below via its lower confidence (see reconcile note).
  */
 export const DEFAULT_PARAMETER_TRUST_ORDER: readonly string[] = ["datasheet", "digikey", "mouser", "octopart", "jlcparts"];
+
+/**
+ * DATASHEET_EXTRACTION_CONFIDENCE is the modest confidence assigned to a heuristic datasheet extraction.
+ * It sits below the distributor-spec confidence so an unreviewed datasheet value corroborates or flags a
+ * conflict but never silently overrides a distributor value.
+ */
+export const DATASHEET_EXTRACTION_CONFIDENCE = 0.5;
 
 /** RELATIVE_NUMERIC_TOLERANCE is the fraction two numeric values may differ before they count as a conflict. */
 const RELATIVE_NUMERIC_TOLERANCE = 0.01;
@@ -126,8 +134,13 @@ export function parseEngineeringValue(rawValue: string, def: CanonicalParameterD
 /**
  * Reconciles multiple parsed contributions into one winning value with an explicit conflict flag.
  *
- * Winner precedence: datasheet source first, then higher parse confidence, then provider trust order.
- * A parameter is conflicted when any source disagrees with the winner beyond tolerance.
+ * Winner precedence: higher parse confidence, then provider trust order. There is deliberately NO
+ * datasheet-first override: an unreviewed heuristic datasheet extraction carries a modest confidence
+ * (below a distributor spec), so it corroborates the distributor value when they agree and flags a
+ * conflict when they disagree, but does not silently replace good distributor data. A datasheet value
+ * still wins when it is the only source for a parameter (filling a gap) or, later, when a review raises
+ * its confidence above the distributors'. A parameter is conflicted when any source disagrees with the
+ * winner beyond tolerance.
  */
 export function reconcileParameterSources(
   contributions: ParameterContribution[],
@@ -144,13 +157,6 @@ export function reconcileParameterSources(
   };
 
   const ranked = [...contributions].sort((left, right) => {
-    const leftDatasheet = left.providerId === "datasheet" ? 0 : 1;
-    const rightDatasheet = right.providerId === "datasheet" ? 0 : 1;
-
-    if (leftDatasheet !== rightDatasheet) {
-      return leftDatasheet - rightDatasheet;
-    }
-
     if (right.confidence !== left.confidence) {
       return right.confidence - left.confidence;
     }

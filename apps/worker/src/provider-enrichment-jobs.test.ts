@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { newDb } from "pg-mem";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { setWorkerRepositoryPoolForTests } from "./catalog-repository";
 import {
   enqueueProviderEnrichmentJobsForPart,
@@ -532,6 +533,103 @@ test("provider enrichment worker fails job with DATASHEET_FETCH_FAILED when HTTP
   }
 });
 
+test("provider enrichment worker extracts datasheet parameters and corroborates distributor values", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  const partId = "part-extract";
+  const timestamp = "2026-04-24T12:00:00.000Z";
+
+  await seedPartAndAcquisition(pool, partId, "acqjob-extract", "Resistors / Chip Resistor - Surface Mount");
+  // A downloaded datasheet asset so the extraction job reads the stored PDF instead of re-capturing.
+  await pool.query(
+    `INSERT INTO assets (
+       id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode, provenance,
+       availability_status, review_status, export_status, asset_status, generation_method, generation_source_asset_id,
+       validation_status, preview_status, asset_state, source_url, source_record_id, last_updated_at
+     ) VALUES (
+       'asset-extract', $1, 'datasheet', 'pdf', 'datasheets/part-extract.pdf', 'hash', 'digikey', 'metadata_only', 'trusted_external',
+       'downloaded', 'not_reviewed', 'not_exportable', 'downloaded', NULL, NULL,
+       'not_validated', 'not_available', 'downloaded', 'https://example.test/rc0603.pdf', NULL, $2
+     )`,
+    [partId, timestamp]
+  );
+  await pool.query(
+    `INSERT INTO datasheet_revisions (id, part_id, revision_label, parse_confidence, pin_table_status, last_updated_at)
+     VALUES ('dsr-extract', $1, 'Provider datasheet reference', 0, 'not_available', $2)`,
+    [partId, timestamp]
+  );
+  // An existing distributor resistance spec the datasheet should corroborate (agree, not conflict).
+  await pool.query(
+    `INSERT INTO part_specifications (id, part_id, provider_id, source_record_id, spec_key, spec_value, spec_group, last_updated_at, org_id)
+     VALUES ('spec-extract-res', $1, 'digikey', NULL, 'Resistance', '10 kOhms', 'parametric', $2, 'org-default')`,
+    [partId, timestamp]
+  );
+  await seedQueuedEnrichmentJob(pool, "enrichjob-extract", partId, "acqjob-extract", timestamp, "datasheet_extraction");
+
+  const document = await PDFDocument.create();
+  const page = document.addPage();
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("Resistance 10 kOhm Tolerance 1% Power 0.1W", { font, size: 12, x: 40, y: 700 });
+  const pdfBytes = Buffer.from(await document.save());
+
+  setWorkerStorageClientForTests({
+    backend: "local",
+    exists: async () => true,
+    getDownloadUrl: async () => null,
+    read: async () => pdfBytes,
+    write: async () => {}
+  } as FileStorageClient);
+
+  try {
+    const result = await processNextProviderEnrichmentJob();
+
+    assert.equal(result?.status, "succeeded");
+    assert.equal(result?.jobType, "datasheet_extraction");
+
+    const datasheetParams = await pool.query<{ param_key: string; value_numeric: string | null }>(
+      "SELECT param_key, value_numeric FROM part_datasheet_parameters WHERE part_id = $1 ORDER BY param_key",
+      [partId]
+    );
+    const byKey = new Map(datasheetParams.rows.map((row) => [row.param_key, Number(row.value_numeric)]));
+
+    assert.equal(byKey.get("resistance"), 10_000, "resistance extracted from the datasheet");
+    assert.equal(byKey.get("tolerance"), 1);
+    assert.equal(byKey.get("power_rating"), 0.1);
+
+    const revision = await pool.query<{ parse_confidence: string }>(
+      "SELECT parse_confidence FROM datasheet_revisions WHERE id = 'dsr-extract'"
+    );
+    assert.ok(Number(revision.rows[0]?.parse_confidence) > 0, "parse_confidence moved off the 0 stub");
+
+    const resistance = await pool.query<{ winning_provider_id: string; is_conflicted: boolean; sources: unknown }>(
+      "SELECT winning_provider_id, is_conflicted, sources FROM part_parameters WHERE part_id = $1 AND param_key = 'resistance'",
+      [partId]
+    );
+    const sources = typeof resistance.rows[0]?.sources === "string" ? JSON.parse(resistance.rows[0].sources as string) : resistance.rows[0]?.sources;
+
+    assert.equal(resistance.rows[0]?.winning_provider_id, "digikey", "the distributor value stays the winner");
+    assert.equal(resistance.rows[0]?.is_conflicted, false, "agreeing datasheet value does not flag a conflict");
+    assert.ok(Array.isArray(sources) && sources.some((entry: { providerId: string }) => entry.providerId === "datasheet"), "datasheet corroboration is recorded in sources");
+
+    const tolerance = await pool.query<{ winning_provider_id: string }>(
+      "SELECT winning_provider_id FROM part_parameters WHERE part_id = $1 AND param_key = 'tolerance'",
+      [partId]
+    );
+    assert.equal(tolerance.rows[0]?.winning_provider_id, "datasheet", "a datasheet-only parameter fills the gap");
+
+    // The extraction job stamps org_id on the rows it adds/recomputes so org-scoped reads still see them.
+    const orgStamps = await pool.query<{ org_id: string | null }>(
+      "SELECT org_id FROM part_datasheet_parameters WHERE part_id = $1 UNION SELECT org_id FROM part_parameters WHERE part_id = $1",
+      [partId]
+    );
+    assert.ok(orgStamps.rows.length > 0 && orgStamps.rows.every((row) => row.org_id === "org-default"), "datasheet and reconciled rows are org-stamped");
+  } finally {
+    setWorkerStorageClientForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
 /**
  * Creates a minimal in-memory schema for provider enrichment queue tests.
  */
@@ -540,7 +638,10 @@ function createProviderEnrichmentPool(): TestPool {
 
   db.public.none(`
     CREATE TABLE parts (
-      id TEXT PRIMARY KEY
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL DEFAULT '',
+      connector_family_id TEXT,
+      org_id TEXT DEFAULT 'org-default'
     );
     CREATE TABLE provider_acquisition_jobs (
       id TEXT PRIMARY KEY,
@@ -632,6 +733,11 @@ function createProviderEnrichmentPool(): TestPool {
       import_error_details TEXT,
       last_updated_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_specifications (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, spec_key TEXT, spec_value TEXT, spec_group TEXT, last_updated_at TIMESTAMPTZ, org_id TEXT);
+    CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ, org_id TEXT);
+    CREATE TABLE part_parameters (id TEXT PRIMARY KEY, part_id TEXT, part_type TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, is_conflicted BOOLEAN, confidence_score NUMERIC, winning_provider_id TEXT, winning_source_record_id TEXT, sources JSONB, last_updated_at TIMESTAMPTZ, org_id TEXT, UNIQUE (part_id, param_key));
+    CREATE TABLE part_datasheet_parameters (id TEXT PRIMARY KEY, part_id TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, confidence_score NUMERIC, datasheet_revision_id TEXT, extracted_at TIMESTAMPTZ, org_id TEXT, UNIQUE (part_id, param_key));
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();
@@ -645,9 +751,10 @@ function createProviderEnrichmentPool(): TestPool {
 async function seedPartAndAcquisition(
   pool: TestPool,
   partId: string,
-  acquisitionJobId: string
+  acquisitionJobId: string,
+  category = ""
 ): Promise<void> {
-  await pool.query(`INSERT INTO parts (id) VALUES ($1)`, [partId]);
+  await pool.query(`INSERT INTO parts (id, category) VALUES ($1, $2)`, [partId, category]);
   await pool.query(
     `
       INSERT INTO provider_acquisition_jobs (
@@ -709,7 +816,8 @@ async function seedQueuedEnrichmentJob(
   jobId: string,
   partId: string,
   acquisitionJobId: string,
-  requestedAt: string
+  requestedAt: string,
+  jobType: "datasheet_capture" | "datasheet_extraction" = "datasheet_capture"
 ): Promise<void> {
   await pool.query(
     `
@@ -727,9 +835,9 @@ async function seedQueuedEnrichmentJob(
         error_message,
         last_updated_at
       )
-      VALUES ($1, $2, $3, 'datasheet_capture', 'queued', 'admin-user', $4, NULL, NULL, NULL, NULL, $4)
+      VALUES ($1, $2, $3, $5, 'queued', 'admin-user', $4, NULL, NULL, NULL, NULL, $4)
     `,
-    [jobId, partId, acquisitionJobId, requestedAt]
+    [jobId, partId, acquisitionJobId, requestedAt, jobType]
   );
   await pool.query(
     `
