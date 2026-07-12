@@ -2,7 +2,7 @@
  * File header: Builds typed provider-neutral part detail responses from a chosen catalog record set.
  */
 
-import type { PartAcquisitionSummary, PartDetailResponse, PartEnrichmentSummary, PartSearchRecord, PartSpecification, RelatedPartSummary } from "@ee-library/shared/types";
+import type { PartAcquisitionSummary, PartDetailResponse, PartEnrichmentSummary, PartParameter, PartSearchRecord, PartSpecification, RelatedPartSummary } from "@ee-library/shared/types";
 import { getBundleReadinessSummary, getGenerationOptions, resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getAssetPromotionSummaries, getAssetReviewStatuses, getAssetValidationSummaries, getWorkflowReviewStatuses } from "@ee-library/shared/review-workflow";
 
@@ -14,7 +14,8 @@ export function buildPartDetailResponse(
   records: PartSearchRecord[],
   acquisitionSummary: PartAcquisitionSummary = buildNotRecordedPartAcquisitionSummary(),
   enrichmentSummary: PartEnrichmentSummary = buildNotRecordedPartEnrichmentSummary(),
-  specifications: PartSpecification[] = []
+  specifications: PartSpecification[] = [],
+  parameters: PartParameter[] = []
 ): PartDetailResponse {
   const relatedIds = new Set<string>([
     ...record.mateRelations.map((relation) => relation.matePartId),
@@ -46,6 +47,7 @@ export function buildPartDetailResponse(
     bundleReadiness: getBundleReadinessSummary(record),
     enrichmentSummary,
     generationOptions: getGenerationOptions(record, assetGroups),
+    parameters,
     record,
     relatedPartSummaries,
     specifications,

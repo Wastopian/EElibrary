@@ -6,6 +6,9 @@ import { Pool, type PoolClient } from "pg";
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
 import { buildBuildableMatingSet, getConnectorRelationEffectiveConfidence } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
+import { findParamDefForSpecKey, getParameterDefs } from "@ee-library/shared/parameter-registry";
+import { parseEngineeringValue, reconcileParameterSources, type ParameterContribution } from "@ee-library/shared/parameter-normalize";
+import { resolvePartType } from "@ee-library/shared/part-type";
 import { SUPPLY_OFFER_MISSING_FROM_PROVIDER_REASON } from "@ee-library/shared/supply-offers";
 import { scopeEntityId } from "@ee-library/shared/tenant";
 import type {
@@ -736,6 +739,7 @@ export async function persistNormalizedPartRows(client: PoolClient, rawNormalize
   }
 
   await persistPartSpecifications(client, normalizedPart.part.id, normalizedPart.sourceRecord.providerId, normalizedPart.specifications ?? []);
+  await persistPartParameters(client, normalizedPart.part, normalizedPart.part.lastUpdatedAt);
 
   for (const supplyOffering of normalizedPart.supplyOfferings) {
     await persistSupplyOffering(client, supplyOffering);
@@ -785,6 +789,7 @@ async function stampPartChildOrgIds(client: PoolClient, partId: string): Promise
     "datasheet_revisions",
     "part_metrics",
     "part_specifications",
+    "part_parameters",
     "supply_offerings",
     "source_extraction_signals",
     "mate_relations",
@@ -1655,6 +1660,150 @@ async function persistPartSpecifications(client: PoolClient, partId: string, pro
         specification.specValue,
         specification.specGroup,
         specification.lastUpdatedAt
+      ]
+    );
+  }
+}
+
+/** DISTRIBUTOR_SPEC_CONFIDENCE is the parse confidence assigned to a value read from a distributor spec. */
+const DISTRIBUTOR_SPEC_CONFIDENCE = 0.6;
+
+/** DatabaseSpecForReconciliation is the minimal spec row shape the parameter projection reads. */
+interface DatabaseSpecForReconciliation {
+  provider_id: string;
+  source_record_id: string | null;
+  spec_key: string;
+  spec_value: string;
+}
+
+/** DatabaseMetricForReconciliation is the minimal metric row shape the parameter projection reads. */
+interface DatabaseMetricForReconciliation {
+  metric_key: string;
+  metric_value: string | number | null;
+  source_record_id: string | null;
+  confidence_score: string | number | null;
+  provider_id: string | null;
+}
+
+/**
+ * Recomputes this part's normalized parameters from all of its stored specifications.
+ *
+ * This is a derived projection over part_specifications (like part_readiness_summaries over evidence),
+ * recomputed on every import. It resolves the part type, maps each provider spec label onto a canonical
+ * parameter, parses the verbatim value into a base unit, and reconciles the sources into one winning
+ * value per parameter with an explicit conflict flag. Delete-then-insert per part keeps the set exactly
+ * in step with the current specs. Rows insert with a null org_id and are stamped by stampPartChildOrgIds.
+ */
+async function persistPartParameters(client: PoolClient, part: Part, lastUpdatedAt: string): Promise<void> {
+  await client.query("DELETE FROM part_parameters WHERE part_id = $1", [part.id]);
+
+  const partType = resolvePartType(part);
+  const specResult = await client.query<DatabaseSpecForReconciliation>(
+    "SELECT provider_id, source_record_id, spec_key, spec_value FROM part_specifications WHERE part_id = $1",
+    [part.id]
+  );
+  // Some parameters (notably resistance for passives) are only ever captured as normalized metrics --
+  // e.g. parsed from a distributor description string -- and never appear as a verbatim spec row. The
+  // registry's metricKeys let those metrics corroborate a parameter so the most important spec is not
+  // dropped. The provider is resolved from the metric's source record so provenance stays honest.
+  const metricResult = await client.query<DatabaseMetricForReconciliation>(
+    `SELECT pm.metric_key, pm.metric_value, pm.source_record_id, pm.confidence_score, sr.provider_id
+     FROM part_metrics pm
+     LEFT JOIN source_records sr ON sr.id = pm.source_record_id
+     WHERE pm.part_id = $1`,
+    [part.id]
+  );
+
+  for (const def of getParameterDefs(partType)) {
+    const contributions: ParameterContribution[] = [];
+
+    for (const row of specResult.rows) {
+      if (findParamDefForSpecKey(partType, row.spec_key)?.paramKey !== def.paramKey) {
+        continue;
+      }
+
+      const typed = parseEngineeringValue(row.spec_value, def);
+
+      if (!typed) {
+        continue;
+      }
+
+      contributions.push({
+        confidence: DISTRIBUTOR_SPEC_CONFIDENCE,
+        providerId: row.provider_id,
+        rawSpecKey: row.spec_key,
+        rawValue: row.spec_value,
+        sourceRecordId: row.source_record_id,
+        typed
+      });
+    }
+
+    for (const row of metricResult.rows) {
+      if (def.valueKind !== "numeric" || !def.metricKeys.includes(row.metric_key) || row.metric_value === null) {
+        continue;
+      }
+
+      const value = Number(row.metric_value);
+
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      contributions.push({
+        confidence: row.confidence_score === null ? DISTRIBUTOR_SPEC_CONFIDENCE : Number(row.confidence_score),
+        providerId: row.provider_id ?? "unknown",
+        rawSpecKey: row.metric_key,
+        rawValue: String(row.metric_value),
+        sourceRecordId: row.source_record_id,
+        typed: { kind: "numeric", unit: def.unit, value }
+      });
+    }
+
+    const reconciled = reconcileParameterSources(contributions);
+
+    if (!reconciled) {
+      continue;
+    }
+
+    await client.query(
+      `
+        INSERT INTO part_parameters (
+          id,
+          part_id,
+          part_type,
+          param_key,
+          value_kind,
+          value_numeric,
+          value_min,
+          value_max,
+          value_text,
+          unit,
+          is_conflicted,
+          confidence_score,
+          winning_provider_id,
+          winning_source_record_id,
+          sources,
+          last_updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
+      `,
+      [
+        `param-${part.id}-${def.paramKey}`,
+        part.id,
+        partType,
+        def.paramKey,
+        reconciled.valueKind,
+        reconciled.valueNumeric,
+        reconciled.valueMin,
+        reconciled.valueMax,
+        reconciled.valueText,
+        reconciled.unit,
+        reconciled.isConflicted,
+        reconciled.confidenceScore,
+        reconciled.winningProviderId,
+        reconciled.winningSourceRecordId,
+        JSON.stringify(reconciled.sources),
+        lastUpdatedAt
       ]
     );
   }

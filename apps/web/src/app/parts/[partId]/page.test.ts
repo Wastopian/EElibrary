@@ -12,7 +12,7 @@ import {
   buildUnavailablePartEnrichmentSummary
 } from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
-import type { Asset, DocumentRevisionListResponse, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
+import type { Asset, DocumentRevisionListResponse, PartParameter, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
 
 /**
  * Verifies the detail page renders V3-style readiness record truth without whole-part approval claims.
@@ -128,6 +128,58 @@ test("part detail renders distributor specification rows and an empty state when
     const panel = extractPanelHtml(html, "Distributor details");
 
     assert.match(panel, /No distributor details are stored for this part yet/u);
+  } finally {
+    restoreEmpty();
+  }
+});
+
+/**
+ * Verifies the Specifications panel renders reconciled, typed parameter rows, marks conflicts, and
+ * falls back to an empty state when no parameters are derived.
+ */
+test("part detail renders reconciled specification rows and flags source conflicts", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed part detail record");
+
+  const parameters = [
+    buildParameter({ id: "param-a", isConflicted: false, paramKey: "resistance", unit: "ohm", valueNumeric: 10_000, winningProviderId: "mouser" }),
+    buildParameter({ id: "param-b", isConflicted: true, paramKey: "voltage_rating", unit: "V", valueNumeric: 50, winningProviderId: "digikey" })
+  ];
+
+  const restoreWithParams = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, undefined, undefined, [], parameters),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Specifications");
+
+    assert.match(panel, /Key specs combined across distributors/u);
+    assert.match(panel, /Resistance/u);
+    assert.match(panel, /10000 ohm/u);
+    assert.match(panel, /Voltage Rating/u);
+    assert.match(panel, /sources disagree/u);
+  } finally {
+    restoreWithParams();
+  }
+
+  const restoreEmpty = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Specifications");
+
+    assert.match(panel, /No standardized specifications are derived for this part yet/u);
   } finally {
     restoreEmpty();
   }
@@ -734,6 +786,31 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
 /**
  * Replaces global fetch for detail, where-used, document-control, and supply-offer API calls.
  */
+/**
+ * Builds a reconciled PartParameter with numeric defaults for detail-page tests.
+ */
+function buildParameter(overrides: Partial<PartParameter>): PartParameter {
+  return {
+    confidenceScore: 0.6,
+    id: "param-x",
+    isConflicted: false,
+    lastUpdatedAt: "2026-07-09T00:00:00.000Z",
+    paramKey: "resistance",
+    partId: "part-tps7a02dbvr",
+    partType: "resistor",
+    sources: [],
+    unit: "ohm",
+    valueKind: "numeric",
+    valueMax: null,
+    valueMin: null,
+    valueNumeric: 10_000,
+    valueText: null,
+    winningProviderId: "mouser",
+    winningSourceRecordId: null,
+    ...overrides
+  };
+}
+
 function mockFetch(
   handler: (url: URL) => Response,
   whereUsedHandler?: (url: URL) => Response,
