@@ -179,6 +179,7 @@ type AdminPageSearchParams = {
   auditTargetType?: string | string[];
   auditTargetId?: string | string[];
   auditOutcome?: string | string[];
+  issuePage?: string | string[];
 };
 
 interface AdminPageProps {
@@ -221,10 +222,13 @@ export default async function AdminPage(props: AdminPageProps) {
   /**
    * Dense queues render at most this many rows. Without a cap the page ran to ~85,000px with the
    * demo catalog alone (247 issue rows) — unusable to scroll and slow to render. Counts stay honest
-   * in each panel title; a per-table note says how many more exist and how to narrow.
+   * in each panel title; dense action tables expose every row through paging or reload batching.
    */
   const QUEUE_ROW_DISPLAY_LIMIT = 20;
-  const displayedIssueWorkflowRows = issueWorkflowRows.slice(0, QUEUE_ROW_DISPLAY_LIMIT);
+  const issueWorkflowPageCount = Math.max(1, Math.ceil(issueWorkflowRows.length / QUEUE_ROW_DISPLAY_LIMIT));
+  const issueWorkflowPage = clampNumber(readPositiveIntegerSearchParam(resolvedSearchParams.issuePage), 1, issueWorkflowPageCount);
+  const issueWorkflowOffset = (issueWorkflowPage - 1) * QUEUE_ROW_DISPLAY_LIMIT;
+  const displayedIssueWorkflowRows = issueWorkflowRows.slice(issueWorkflowOffset, issueWorkflowOffset + QUEUE_ROW_DISPLAY_LIMIT);
   const displayedReviewQueue = reviewQueue.slice(0, QUEUE_ROW_DISPLAY_LIMIT);
   const displayedPromotionQueue = promotionQueue.slice(0, QUEUE_ROW_DISPLAY_LIMIT);
   const overviewStats = buildAdminOverviewStats(reviewQueue, promotionQueue, failedImportRows.length, validationAttentionRows.length, issueQueueRows, assistantTriageRows.length);
@@ -508,9 +512,25 @@ export default async function AdminPage(props: AdminPageProps) {
                 </tbody>
               </table>
               {issueWorkflowRows.length > displayedIssueWorkflowRows.length ? (
-                <p className="muted-copy">
-                  Showing the first {displayedIssueWorkflowRows.length} of {issueWorkflowRows.length}. Use the issue queue links above to open a narrower filtered view.
-                </p>
+                <div className="pagination-bar" aria-label="Issue workflow pages">
+                  {issueWorkflowPage > 1 ? (
+                    <Link className="button-link button-link--quiet" href={buildAdminIssuePageHref(resolvedSearchParams, issueWorkflowPage - 1)}>
+                      Previous issue page
+                    </Link>
+                  ) : (
+                    <span>First issue page</span>
+                  )}
+                  <strong>
+                    Showing {issueWorkflowOffset + 1}-{issueWorkflowOffset + displayedIssueWorkflowRows.length} of {issueWorkflowRows.length} issue workflow items.
+                  </strong>
+                  {issueWorkflowPage < issueWorkflowPageCount ? (
+                    <Link className="button-link button-link--quiet" href={buildAdminIssuePageHref(resolvedSearchParams, issueWorkflowPage + 1)}>
+                      Next issue page
+                    </Link>
+                  ) : (
+                    <span>Last issue page</span>
+                  )}
+                </div>
               ) : null}
             </div>
           ) : (
@@ -1025,6 +1045,64 @@ function readAuditFiltersFromSearchParams(searchParams: AdminPageSearchParams): 
 function readFirst(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
   return value;
+}
+
+/**
+ * Reads a positive integer search param, falling back to page 1 for invalid links.
+ */
+function readPositiveIntegerSearchParam(value: string | string[] | undefined): number {
+  const rawValue = readFirst(value);
+  if (!rawValue) {
+    return 1;
+  }
+
+  const parsedValue = Number(rawValue);
+  return Number.isSafeInteger(parsedValue) && parsedValue > 0 ? parsedValue : 1;
+}
+
+/**
+ * Keeps dense-table pagination inside the available page range.
+ */
+function clampNumber(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+/**
+ * Builds admin issue-workflow page links without dropping existing admin filters.
+ */
+function buildAdminIssuePageHref(searchParams: AdminPageSearchParams, issuePage: number): string {
+  const params = new URLSearchParams();
+
+  appendSearchParam(params, "auditActorId", searchParams.auditActorId);
+  appendSearchParam(params, "auditAction", searchParams.auditAction);
+  appendSearchParam(params, "auditTargetType", searchParams.auditTargetType);
+  appendSearchParam(params, "auditTargetId", searchParams.auditTargetId);
+  appendSearchParam(params, "auditOutcome", searchParams.auditOutcome);
+
+  if (issuePage > 1) {
+    params.set("issuePage", String(issuePage));
+  }
+
+  const query = params.toString();
+  return query ? `/admin?${query}#issue-ops-heading` : "/admin#issue-ops-heading";
+}
+
+/**
+ * Appends string-or-array search params in the order Next.js supplied them.
+ */
+function appendSearchParam(params: URLSearchParams, key: string, value: string | string[] | undefined): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (entry) {
+        params.append(key, entry);
+      }
+    }
+    return;
+  }
+
+  if (value) {
+    params.append(key, value);
+  }
 }
 
 /**
