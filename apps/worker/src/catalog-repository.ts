@@ -1636,12 +1636,10 @@ async function retireMissingMetrics(client: PoolClient, normalizedPart: Normaliz
 
   await client.query(
     `
-      DELETE FROM part_metrics pm
-      USING source_records sr
-      WHERE pm.source_record_id = sr.id
-        AND pm.part_id = $1
-        AND sr.provider_id = $2
-        AND NOT (pm.id = ANY($3::text[]))
+      DELETE FROM part_metrics
+      WHERE part_id = $1
+        AND source_record_id IN (SELECT id FROM source_records WHERE provider_id = $2)
+        AND NOT (id = ANY($3::text[]))
     `,
     [normalizedPart.part.id, normalizedPart.sourceRecord.providerId, metricIds]
   );
