@@ -738,6 +738,7 @@ export async function persistNormalizedPartRows(client: PoolClient, rawNormalize
     await persistMetric(client, metric);
   }
 
+  await retireMissingMetrics(client, normalizedPart);
   await persistPartSpecifications(client, normalizedPart.part.id, normalizedPart.sourceRecord.providerId, normalizedPart.specifications ?? []);
   await persistPartParameters(client, normalizedPart.part, normalizedPart.part.lastUpdatedAt);
 
@@ -1621,6 +1622,26 @@ async function persistMetric(client: PoolClient, metric: PartMetric): Promise<vo
       metric.sourceRecordId,
       metric.lastUpdatedAt
     ]
+  );
+}
+
+/**
+ * Replaces this provider's normalized metric snapshot for the part.
+ *
+ * Metric ids can change when a provider payload changes shape, so upsert alone would leave retired
+ * metrics behind. Parameters are derived from all stored metrics, which makes stale rows look current.
+ */
+async function retireMissingMetrics(client: PoolClient, normalizedPart: NormalizedProviderPart): Promise<void> {
+  const metricIds = normalizedPart.metrics.map((metric) => metric.id);
+
+  await client.query(
+    `
+      DELETE FROM part_metrics
+      WHERE part_id = $1
+        AND source_record_id IN (SELECT id FROM source_records WHERE provider_id = $2)
+        AND NOT (id = ANY($3::text[]))
+    `,
+    [normalizedPart.part.id, normalizedPart.sourceRecord.providerId, metricIds]
   );
 }
 

@@ -572,6 +572,61 @@ test("persistNormalizedPartRows derives a parameter from a corroborating metric 
   }
 });
 
+test("persistNormalizedPartRows retires provider metrics that disappear on re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const firstImport = buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+    ]);
+    firstImport.metrics = [
+      {
+        confidenceScore: 0.56,
+        id: "metric-repeat-provider-c1-resistance-1",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        maxValue: null,
+        metricKey: "resistance",
+        metricValue: 10_000,
+        minValue: null,
+        partId: firstImport.part.id,
+        sourceRecordId: firstImport.sourceRecord.id,
+        sourceRevisionId: "dsr-repeat-provider-c1",
+        unit: "ohm"
+      }
+    ];
+
+    await persistNormalizedPartRows(client, firstImport);
+
+    const firstParameter = await client.query<{ value_numeric: string | null }>(
+      "SELECT value_numeric FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+    assert.equal(Number(firstParameter.rows[0]?.value_numeric), 10_000, "first import derives resistance from the metric");
+
+    const secondImport = buildResistorImportWithSpecs("2026-04-12T03:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+    ]);
+
+    await persistNormalizedPartRows(client, secondImport);
+
+    const staleMetrics = await client.query<{ count: string | number }>(
+      "SELECT COUNT(*) AS count FROM part_metrics WHERE part_id = $1 AND metric_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+    const staleParameter = await client.query<{ count: string | number }>(
+      "SELECT COUNT(*) AS count FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+
+    assert.equal(Number(staleMetrics.rows[0]?.count), 0, "the provider's missing metric is removed");
+    assert.equal(Number(staleParameter.rows[0]?.count), 0, "stale metric evidence no longer keeps a parameter alive");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 test("persistNormalizedPartRows flags a conflict when two spec labels disagree on one parameter", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
