@@ -634,7 +634,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   if (request.method === "POST" && url.pathname === "/imports/provider") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleProviderImportCreate(request, response);
+    await handleProviderImportCreate(request, response, session.orgId);
     return;
   }
 
@@ -1276,7 +1276,7 @@ async function handleProviderLookupCreate(request: IncomingMessage, response: Se
 /**
  * Handles operator-facing single-part provider imports through the shared worker import path.
  */
-async function handleProviderImportCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleProviderImportCreate(request: IncomingMessage, response: ServerResponse, orgId: string): Promise<void> {
   const body = await readJsonBody<Record<string, unknown>>(request);
 
   if (!body) {
@@ -1305,7 +1305,7 @@ async function handleProviderImportCreate(request: IncomingMessage, response: Se
     const summary = await timeRouteOperation(
       response,
       "provider-import-run",
-      () => runProviderPartImport(parsed.providerId, parsed.workerRequest),
+      () => runProviderPartImport(parsed.providerId, parsed.workerRequest, orgId),
       (value) => value.importStatus
     );
 
