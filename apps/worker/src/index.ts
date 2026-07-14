@@ -8,7 +8,7 @@ import { DEFAULT_HEARTBEAT_INTERVAL_MS, emitHeartbeat, resolveWorkerId, shutdown
 import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts, replayLocalCatalogCrossPartRelations } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
-import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
+import { enqueueProviderEnrichmentJobsForPart, processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
@@ -111,6 +111,20 @@ async function ingestProviderPart(adapterId: string, request: ProviderPartReques
     const summary = await runProviderPartImport(adapterId, request);
 
     console.log(JSON.stringify(summary, null, 2));
+
+    // The CLI persists directly (no acquisition job), so enqueue enrichment here — matching what the API
+    // acquisition-success path does — so datasheet capture/extraction run on the next enrichment pass.
+    // Enqueue is best-effort: a failure here must not fail an otherwise-successful import.
+    try {
+      await enqueueProviderEnrichmentJobsForPart({
+        partId: summary.partId,
+        requestedAt: new Date().toISOString(),
+        requestedBy: "cli:ingest",
+        sourceAcquisitionJobId: null
+      });
+    } catch (enqueueError) {
+      console.error(`worker.ingest_provider_part: enrichment enqueue failed (import still succeeded): ${String(enqueueError)}`);
+    }
   } catch (error) {
     logWorkerFailure("worker.ingest_provider_part", error, timings);
     throw error;
@@ -799,6 +813,12 @@ const DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS = 20_000;
 /** DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT bounds document reads per daemon tick. */
 const DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT = 3;
 
+/** DEFAULT_PROVIDER_ENRICHMENT_INTERVAL_MS paces datasheet capture/extraction so imports enrich automatically. */
+const DEFAULT_PROVIDER_ENRICHMENT_INTERVAL_MS = 30_000;
+
+/** DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT bounds enrichment jobs (each fetches a PDF) per daemon tick. */
+const DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT = 5;
+
 /**
  * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, drains
  * pending export-bundle asset-byte assemblies, and refreshes stale active supply-offer snapshots.
@@ -842,6 +862,10 @@ async function runDaemon(): Promise<void> {
     void safeProcessProjectDocumentExtractions();
   }, DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS);
 
+  const providerEnrichmentInterval = setInterval(() => {
+    void safeProcessProviderEnrichmentJobs();
+  }, DEFAULT_PROVIDER_ENRICHMENT_INTERVAL_MS);
+
   // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
   // not have to wait a full interval before the worker picks it up.
   void safeProcessPendingExportBundleAssembly();
@@ -849,6 +873,7 @@ async function runDaemon(): Promise<void> {
   void safeProcessPendingThreeDPreviews();
   void safeRunAssetValidations();
   void safeProcessProjectDocumentExtractions();
+  void safeProcessProviderEnrichmentJobs();
 
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -858,6 +883,7 @@ async function runDaemon(): Promise<void> {
       clearInterval(threeDPreviewInterval);
       clearInterval(assetValidationInterval);
       clearInterval(projectDocumentExtractionInterval);
+      clearInterval(providerEnrichmentInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -893,6 +919,26 @@ async function safeProcessProjectDocumentExtractions(): Promise<void> {
     );
   } catch (error) {
     console.error("Project document extraction tick failed.", error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Processes queued provider enrichment jobs (datasheet capture + confirm-by-search extraction) without
+ * crashing the daemon on one bad job or a slow PDF fetch.
+ */
+async function safeProcessProviderEnrichmentJobs(): Promise<void> {
+  try {
+    const summary = await processProviderEnrichmentJobs(DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT);
+
+    if (summary.processed.length === 0) {
+      return;
+    }
+
+    const succeeded = summary.processed.filter((row) => row.status === "succeeded").length;
+    const failed = summary.processed.filter((row) => row.status === "failed").length;
+    console.log(`Worker daemon: processed ${succeeded} enrichment job${succeeded === 1 ? "" : "s"}` + (failed > 0 ? `, ${failed} failed` : "") + ".");
+  } catch (error) {
+    console.error("Provider enrichment tick failed.", error instanceof Error ? error.message : error);
   }
 }
 

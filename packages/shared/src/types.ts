@@ -3562,7 +3562,8 @@ export interface PartAcquisitionSummary {
 export interface ProviderEnrichmentJob {
   id: string;
   partId: string;
-  sourceAcquisitionJobId: string;
+  /** Acquisition job that triggered this enrichment, or null when enqueued outside that flow (CLI/backfill). */
+  sourceAcquisitionJobId: string | null;
   jobType: ProviderEnrichmentJobType;
   jobStatus: ProviderEnrichmentJobStatus;
   requestedBy: string;

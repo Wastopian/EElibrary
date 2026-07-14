@@ -1932,6 +1932,36 @@ export async function persistDatasheetExtractedParameters(
   }
 }
 
+/** PartParameterCandidate is one distributor-provided parameter value the datasheet job tries to confirm. */
+export interface PartParameterCandidate {
+  paramKey: string;
+  valueKind: string;
+  valueNumeric: number | null;
+  valueText: string | null;
+  unit: string | null;
+}
+
+/**
+ * Reads a part's distributor-provided parameter values (the reconciled winners that are not themselves a
+ * prior datasheet confirmation) for the datasheet confirm-by-search step.
+ */
+export async function readPartParameterCandidates(client: PoolClient, partId: string): Promise<PartParameterCandidate[]> {
+  const result = await client.query<{ param_key: string; value_kind: string; value_numeric: string | null; value_text: string | null; unit: string | null }>(
+    `SELECT param_key, value_kind, value_numeric, value_text, unit
+     FROM part_parameters
+     WHERE part_id = $1 AND (winning_provider_id IS NULL OR winning_provider_id <> 'datasheet')`,
+    [partId]
+  );
+
+  return result.rows.map((row) => ({
+    paramKey: row.param_key,
+    unit: row.unit,
+    valueKind: row.value_kind,
+    valueNumeric: row.value_numeric === null ? null : Number(row.value_numeric),
+    valueText: row.value_text
+  }));
+}
+
 /**
  * Stamps org_id on the parameter rows a datasheet extraction adds or recomputes, from the part's org.
  *

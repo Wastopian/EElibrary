@@ -1,64 +1,57 @@
 /**
- * File header: Tests the conservative heuristic datasheet parameter extractor.
+ * File header: Tests confirm-by-search of distributor parameter values against datasheet text.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractDatasheetParameters } from "./datasheet-extract";
+import { confirmDatasheetParameters, type DatasheetConfirmationCandidate } from "./datasheet-extract";
+
+const RESISTANCE: DatasheetConfirmationCandidate = { paramKey: "resistance", unit: "ohm", valueKind: "numeric", valueNumeric: 10_000, valueText: null };
+const TOLERANCE_1: DatasheetConfirmationCandidate = { paramKey: "tolerance", unit: "%", valueKind: "numeric", valueNumeric: 1, valueText: null };
+const TOLERANCE_5: DatasheetConfirmationCandidate = { paramKey: "tolerance", unit: "%", valueKind: "numeric", valueNumeric: 5, valueText: null };
+const POWER: DatasheetConfirmationCandidate = { paramKey: "power_rating", unit: "W", valueKind: "numeric", valueNumeric: 0.1, valueText: null };
+const CAPACITANCE: DatasheetConfirmationCandidate = { paramKey: "capacitance", unit: "F", valueKind: "numeric", valueNumeric: 100e-9, valueText: null };
+const PACKAGE: DatasheetConfirmationCandidate = { paramKey: "package", unit: null, valueKind: "text", valueNumeric: null, valueText: "0603" };
+
+/** A datasheet-like text spread across "layout" whitespace, containing some values but not others. */
+const DATASHEET_TEXT = "RC_L series ± 0.1%, ± 0. 5%, ± 1% Sizes 0402 / 0603 / 0805 Value = 10 K Ω Power 0.1W";
 
 /**
- * Verifies passive datasheet text yields the expected canonical parameters in base units.
+ * Verifies confirmation returns only the candidates whose value appears in the datasheet text.
  */
-test("extractDatasheetParameters reads passive parameters from datasheet text", () => {
-  const text = [
-    "YAGEO RC0603 Thick Film Chip Resistor",
-    "Resistance: 10 kOhm",
-    "Tolerance: ±1%",
-    "Power Rating: 0.1 W",
-    "Temperature Coefficient: ±100 ppm/°C"
-  ].join("\n");
+test("confirmDatasheetParameters confirms values present in the datasheet, ignores absent ones", () => {
+  const confirmed = confirmDatasheetParameters(DATASHEET_TEXT, [RESISTANCE, TOLERANCE_1, POWER, PACKAGE, CAPACITANCE]);
+  const keys = confirmed.map((candidate) => candidate.paramKey).sort();
 
-  const extracted = extractDatasheetParameters(text, "resistor");
-  const byKey = new Map(extracted.map((entry) => [entry.paramKey, entry.typed]));
-  const numeric = (key: string): number | null => {
-    const typed = byKey.get(key);
-
-    return typed?.kind === "numeric" ? typed.value : null;
-  };
-
-  assert.equal(numeric("resistance"), 10_000);
-  assert.equal(numeric("tolerance"), 1);
-  assert.equal(numeric("power_rating"), 0.1);
-  // Package is a text param and is intentionally not extracted from datasheet prose.
-  assert.equal(byKey.has("package"), false);
+  assert.deepEqual(keys, ["package", "power_rating", "resistance", "tolerance"]);
+  assert.equal(confirmed.some((candidate) => candidate.paramKey === "capacitance"), false, "an absent value is not confirmed");
 });
 
 /**
- * Verifies the extractor stays silent on text without recognizable label/value pairs.
+ * Verifies a value that does not appear (wrong tolerance) is not confirmed — no false corroboration.
  */
-test("extractDatasheetParameters emits nothing for junk text", () => {
-  assert.deepEqual(extractDatasheetParameters("The quick brown fox jumps over the lazy dog.", "resistor"), []);
-  assert.deepEqual(extractDatasheetParameters("", "capacitor"), []);
+test("confirmDatasheetParameters does not confirm a value the datasheet lacks", () => {
+  // The text lists ±1% (and ±0.1%, ±0.5%) but not ±5%.
+  const confirmed = confirmDatasheetParameters("Tolerance ± 1% only", [TOLERANCE_5]);
+
+  assert.deepEqual(confirmed, []);
 });
 
 /**
- * Verifies isolated-word matching so labels inside other words do not trigger false extractions.
+ * Verifies confirmation is silent on junk / empty text.
  */
-test("extractDatasheetParameters requires isolated labels", () => {
-  // "increase" contains "case" but must not be read as a package/case value; resistor has no case param
-  // anyway, and this guards the boundary logic used by every label.
-  const extracted = extractDatasheetParameters("A gradual increase 47 in temperature.", "resistor");
-
-  assert.deepEqual(extracted, []);
+test("confirmDatasheetParameters returns nothing for junk or empty text", () => {
+  assert.deepEqual(confirmDatasheetParameters("The quick brown fox.", [RESISTANCE, TOLERANCE_1]), []);
+  assert.deepEqual(confirmDatasheetParameters("", [PACKAGE]), []);
 });
 
 /**
- * Verifies capacitor dielectric (enum) extraction from a datasheet line.
+ * Verifies the SI/unit form generator matches common datasheet spellings across unit families.
  */
-test("extractDatasheetParameters reads a capacitor dielectric enum", () => {
-  const extracted = extractDatasheetParameters("Capacitance 100 nF Dielectric X7R", "capacitor");
-  const dielectric = extracted.find((entry) => entry.paramKey === "dielectric")?.typed;
-
-  assert.equal(dielectric?.kind, "enum");
-  assert.equal(dielectric && dielectric.kind === "enum" ? dielectric.text : null, "X7R");
+test("confirmDatasheetParameters matches SI and unit spellings", () => {
+  assert.equal(confirmDatasheetParameters("Resistance 10kΩ", [RESISTANCE]).length, 1, "compact ohm form");
+  assert.equal(confirmDatasheetParameters("Rated 10000 ohms", [RESISTANCE]).length, 1, "plain number + unit");
+  assert.equal(confirmDatasheetParameters("Power rating 1/10W", [POWER]).length, 1, "power fraction form");
+  assert.equal(confirmDatasheetParameters("Power 100 mW", [POWER]).length, 1, "milliwatt form");
+  assert.equal(confirmDatasheetParameters("Capacitance 100 nF", [CAPACITANCE]).length, 1, "nanofarad form");
 });
