@@ -734,9 +734,12 @@ export async function persistNormalizedPartRows(client: PoolClient, rawNormalize
     await persistDatasheetRevision(client, datasheetRevision);
   }
 
-  for (const metric of normalizedPart.metrics) {
-    await persistMetric(client, metric);
-  }
+  await replaceSourceMetrics(
+    client,
+    normalizedPart.part.id,
+    normalizedPart.sourceRecord.id,
+    normalizedPart.metrics
+  );
 
   await persistPartSpecifications(client, normalizedPart.part.id, normalizedPart.sourceRecord.providerId, normalizedPart.specifications ?? []);
   await persistPartParameters(client, normalizedPart.part, normalizedPart.part.lastUpdatedAt);
@@ -1574,6 +1577,28 @@ async function persistDatasheetRevision(client: PoolClient, datasheetRevision: D
       datasheetRevision.lastUpdatedAt
     ]
   );
+}
+
+/**
+ * Replaces the metrics contributed by one provider source with its latest snapshot.
+ *
+ * Provider adapters return a complete metric set for the fetched part. Removing the old rows first
+ * prevents values that disappeared upstream from remaining in detail views and derived parameters.
+ */
+async function replaceSourceMetrics(
+  client: PoolClient,
+  partId: string,
+  sourceRecordId: string,
+  metrics: PartMetric[]
+): Promise<void> {
+  await client.query(
+    "DELETE FROM part_metrics WHERE part_id = $1 AND source_record_id = $2",
+    [partId, sourceRecordId]
+  );
+
+  for (const metric of metrics) {
+    await persistMetric(client, metric);
+  }
 }
 
 /**
