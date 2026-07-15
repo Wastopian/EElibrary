@@ -572,6 +572,55 @@ test("persistNormalizedPartRows derives a parameter from a corroborating metric 
   }
 });
 
+test("persistNormalizedPartRows removes metrics that disappear from a provider re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const firstImport = buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+    ]);
+    firstImport.metrics = [
+      {
+        confidenceScore: 0.56,
+        id: "metric-repeat-provider-c1-resistance-1",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        maxValue: null,
+        metricKey: "resistance",
+        metricValue: 10_000,
+        minValue: null,
+        partId: firstImport.part.id,
+        sourceRecordId: firstImport.sourceRecord.id,
+        sourceRevisionId: "dsr-repeat-provider-c1",
+        unit: "ohm"
+      }
+    ];
+
+    await persistNormalizedPartRows(client, firstImport);
+    await persistNormalizedPartRows(
+      client,
+      buildResistorImportWithSpecs("2026-04-13T00:00:00.000Z", [
+        { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+      ])
+    );
+
+    const metric = await client.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM part_metrics WHERE part_id = $1 AND metric_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+    const parameter = await client.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+
+    assert.equal(Number(metric.rows[0]?.count), 0, "the latest source snapshot removes its stale metric");
+    assert.equal(Number(parameter.rows[0]?.count), 0, "the stale metric cannot remain searchable as a parameter");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 test("persistNormalizedPartRows flags a conflict when two spec labels disagree on one parameter", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
