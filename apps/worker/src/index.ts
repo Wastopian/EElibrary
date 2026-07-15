@@ -922,11 +922,21 @@ async function safeProcessProjectDocumentExtractions(): Promise<void> {
   }
 }
 
+/** enrichmentTickRunning guards against overlapping enrichment ticks, since each job may fetch a PDF. */
+let enrichmentTickRunning = false;
+
 /**
  * Processes queued provider enrichment jobs (datasheet capture + confirm-by-search extraction) without
- * crashing the daemon on one bad job or a slow PDF fetch.
+ * crashing the daemon on one bad job or a slow PDF fetch. Skips re-entry so a slow batch (each job can
+ * fetch a datasheet) does not pile up overlapping runs when the interval fires again.
  */
 async function safeProcessProviderEnrichmentJobs(): Promise<void> {
+  if (enrichmentTickRunning) {
+    return;
+  }
+
+  enrichmentTickRunning = true;
+
   try {
     const summary = await processProviderEnrichmentJobs(DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT);
 
@@ -939,6 +949,8 @@ async function safeProcessProviderEnrichmentJobs(): Promise<void> {
     console.log(`Worker daemon: processed ${succeeded} enrichment job${succeeded === 1 ? "" : "s"}` + (failed > 0 ? `, ${failed} failed` : "") + ".");
   } catch (error) {
     console.error("Provider enrichment tick failed.", error instanceof Error ? error.message : error);
+  } finally {
+    enrichmentTickRunning = false;
   }
 }
 

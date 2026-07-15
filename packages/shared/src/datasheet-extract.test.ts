@@ -54,4 +54,19 @@ test("confirmDatasheetParameters matches SI and unit spellings", () => {
   assert.equal(confirmDatasheetParameters("Power rating 1/10W", [POWER]).length, 1, "power fraction form");
   assert.equal(confirmDatasheetParameters("Power 100 mW", [POWER]).length, 1, "milliwatt form");
   assert.equal(confirmDatasheetParameters("Capacitance 100 nF", [CAPACITANCE]).length, 1, "nanofarad form");
+  assert.equal(confirmDatasheetParameters("Capacitance 100 µF", [{ ...CAPACITANCE, valueNumeric: 100e-6 }]).length, 1, "micro-sign form");
+});
+
+/**
+ * Verifies the matcher does not false-confirm: a value must appear with its own unit and boundaries.
+ */
+test("confirmDatasheetParameters avoids substring, wrong-unit, and in-token false matches", () => {
+  // "1%" must not be read out of "0.1%" / "±0.1%".
+  assert.deepEqual(confirmDatasheetParameters("Tolerance options ±0.1%, ±0.5%", [TOLERANCE_1]), []);
+  // A 10 kOhm value must not match a 10 kV mention (different unit).
+  assert.deepEqual(confirmDatasheetParameters("Maximum working voltage 10 kV", [RESISTANCE]), []);
+  // "0603" must not match inside a longer part number.
+  assert.deepEqual(confirmDatasheetParameters("Ordering code RC0603FR-0710KL", [PACKAGE]), []);
+  // A bare number without the unit must not confirm.
+  assert.deepEqual(confirmDatasheetParameters("Figure 10 shows the 10 K test setup", [RESISTANCE]), []);
 });

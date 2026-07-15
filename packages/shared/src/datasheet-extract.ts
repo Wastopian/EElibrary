@@ -8,6 +8,10 @@
  * searches the datasheet text for each one, returning the subset that appears. A found value is a genuine
  * corroboration ("confirmed by datasheet"); a missing one is silent. It never invents a value and never
  * produces a conflict, so it can only raise trust, never poison it.
+ *
+ * Matching is deliberately strict to avoid false corroboration: each value is matched with an anchored,
+ * whitespace-tolerant regex that requires the value's UNIT (so "1%" can never be read out of "0.1%", and
+ * a 10 kOhm value can never match a "10 kV" mention) and a numeric boundary on both sides.
  */
 
 import type { PartParameterValueKind } from "./types";
@@ -22,60 +26,34 @@ export interface DatasheetConfirmationCandidate {
 }
 
 /**
- * Returns the candidates whose value appears in the datasheet text (case-, space-, and unit-tolerant).
+ * Returns the candidates whose value appears in the datasheet text (case-, spacing-, and unit-tolerant).
  */
 export function confirmDatasheetParameters(text: string, candidates: DatasheetConfirmationCandidate[]): DatasheetConfirmationCandidate[] {
-  // Strip whitespace entirely so a value split across the PDF's layout (e.g. "10 K Ω") still matches a
-  // compact form ("10kω"). Value search does not rely on adjacency, so this is safe.
-  const haystack = text.toLowerCase().replace(/\s+/gu, "");
+  // Collapse (do not strip) whitespace: the matchers allow optional spaces inside a value, so "10 K Ω"
+  // and "10kΩ" both match while numeric boundaries stay meaningful.
+  const haystack = text.toLowerCase().replace(/\s+/gu, " ").trim();
 
   if (haystack.length === 0) {
     return [];
   }
 
-  return candidates.filter((candidate) => datasheetContainsValue(haystack, candidate));
+  return candidates.filter((candidate) => valueMatchers(candidate).some((matcher) => matcher.test(haystack)));
 }
 
-/**
- * Reports whether any search form of a candidate's value appears in the (space-stripped) datasheet text.
- */
-function datasheetContainsValue(haystack: string, candidate: DatasheetConfirmationCandidate): boolean {
-  const forms = searchFormsFor(candidate);
-
-  return forms.some((form) => form.length > 0 && haystack.includes(form));
-}
-
-/**
- * Builds the candidate search strings for one parameter value (already lowercased and space-free).
- */
-function searchFormsFor(candidate: DatasheetConfirmationCandidate): string[] {
-  if (candidate.valueKind === "enum" || candidate.valueKind === "text" || candidate.valueKind === "boolean") {
-    const value = candidate.valueText?.trim().toLowerCase().replace(/\s+/gu, "");
-
-    return value ? [value] : [];
-  }
-
-  if (candidate.valueKind === "numeric" && candidate.valueNumeric !== null) {
-    return numericSearchForms(candidate.valueNumeric, candidate.unit);
-  }
-
-  return [];
-}
-
-/** UNIT_SEARCH_TOKENS lists the lowercased unit spellings a datasheet may use, per canonical unit. */
-const UNIT_SEARCH_TOKENS: Record<string, string[]> = {
-  "%": ["%"],
-  A: ["a"],
-  F: ["f", "farad"],
-  H: ["h", "henry"],
-  Hz: ["hz"],
-  ohm: ["ω", "ohm", "ohms", "r"],
-  ppm_per_c: ["ppm"],
-  V: ["v"],
-  W: ["w", "watt", "watts"]
+/** UNIT_MATCHERS maps a canonical unit to a regex fragment matching how a datasheet may spell it. */
+const UNIT_MATCHERS: Record<string, string> = {
+  "%": "%",
+  A: "a",
+  F: "(?:f|farads?)",
+  H: "(?:h|henr(?:y|ies))",
+  Hz: "(?:hz)",
+  ohm: "(?:ω|ohms?)",
+  ppm_per_c: "ppm",
+  V: "v",
+  W: "(?:w|watts?)"
 };
 
-/** SI_PREFIXES maps a scale factor to the lowercased prefix symbol a datasheet may print. */
+/** SI_PREFIXES maps a scale factor to the lowercased prefix symbols a datasheet may print for it. */
 const SI_PREFIXES: ReadonlyArray<{ factor: number; symbols: string[] }> = [
   { factor: 1e9, symbols: ["g"] },
   { factor: 1e6, symbols: ["m", "meg"] },
@@ -100,62 +78,85 @@ const POWER_FRACTIONS: Record<string, string> = {
 };
 
 /**
- * Generates lowercased, space-free search forms for a numeric value in its canonical unit.
- *
- * Every form carries either an SI prefix letter or the unit token so a bare number (e.g. "1") can never
- * false-match arbitrary digits in the space-stripped haystack.
+ * Builds the anchored regex matchers for one candidate value.
  */
-function numericSearchForms(value: number, unit: string | null): string[] {
-  const forms = new Set<string>();
-  const unitTokens = unit ? UNIT_SEARCH_TOKENS[unit] ?? [] : [];
-  const bases: Array<{ mantissa: string; prefix: string }> = [{ mantissa: formatNumber(value), prefix: "" }];
+function valueMatchers(candidate: DatasheetConfirmationCandidate): RegExp[] {
+  if (candidate.valueKind === "enum" || candidate.valueKind === "text" || candidate.valueKind === "boolean") {
+    const value = candidate.valueText?.trim().toLowerCase();
+
+    if (!value) {
+      return [];
+    }
+
+    // A short code like "0603" must sit on its own, not inside a longer token (e.g. an MPN "rc0603fr").
+    return [new RegExp(`(?<![a-z0-9])${escapeRegExp(value).replace(/\s+/gu, "\\s*")}(?![a-z0-9])`, "u")];
+  }
+
+  if (candidate.valueKind === "numeric" && candidate.valueNumeric !== null && Number.isFinite(candidate.valueNumeric)) {
+    return numericMatchers(candidate.valueNumeric, candidate.unit);
+  }
+
+  return [];
+}
+
+/**
+ * Builds anchored, whitespace-tolerant, unit-bearing matchers for a numeric value in its canonical unit.
+ *
+ * Every matcher requires the unit and a numeric boundary on each side, so a bare number can never
+ * false-match arbitrary digits and a value can never be read out of a longer or differently-united one.
+ */
+function numericMatchers(value: number, unit: string | null): RegExp[] {
+  const unitMatcher = unit ? UNIT_MATCHERS[unit] : undefined;
+
+  if (!unitMatcher) {
+    return [];
+  }
+
+  const matchers: RegExp[] = [];
+  const add = (numberSource: string, prefixSource: string, unitSource: string): void => {
+    matchers.push(new RegExp(`(?<![a-z0-9.])${numberSource}\\s*${prefixSource}\\s*${unitSource}(?![a-z0-9])`, "u"));
+  };
+
+  const mantissa = escapeRegExp(formatNumber(value));
+
+  add(mantissa, "", unitMatcher);
 
   const compact = compactSiForm(value);
 
   if (compact) {
-    bases.push(compact);
-  }
+    const escapedMantissa = escapeRegExp(compact.mantissa);
 
-  for (const base of bases) {
-    const prefixVariants = base.prefix ? [base.prefix] : SI_PREFIXES.find((entry) => entry.factor === 1)?.symbols ?? [""];
-
-    for (const prefix of prefixVariants) {
-      const stem = `${base.mantissa}${prefix}`;
-
-      // A prefixed stem (e.g. "10k") is distinctive on its own; a bare number needs the unit.
-      if (prefix) {
-        forms.add(stem);
-      }
-
-      for (const token of unitTokens) {
-        forms.add(`${stem}${token}`);
-      }
+    for (const symbol of compact.symbols) {
+      add(escapedMantissa, escapeRegExp(symbol), unitMatcher);
     }
   }
 
   if (unit === "%") {
-    forms.add(`±${formatNumber(value)}%`);
+    // Allow a leading tolerance sign and an explicit ".0", e.g. "± 1.0 %".
+    matchers.push(new RegExp(`(?<![a-z0-9.])[±+-]?\\s*${mantissa}(?:\\.0+)?\\s*%(?![a-z0-9])`, "u"));
   }
 
   if (unit === "W") {
     const fraction = POWER_FRACTIONS[formatNumber(value)];
 
     if (fraction) {
-      forms.add(`${fraction}w`);
+      const [numerator, denominator] = fraction.split("/");
+      matchers.push(new RegExp(`(?<![a-z0-9.])${numerator}\\s*/\\s*${denominator}\\s*${unitMatcher}(?![a-z0-9])`, "u"));
     }
 
     if (value < 1) {
-      forms.add(`${formatNumber(value * 1000)}mw`);
+      add(escapeRegExp(formatNumber(value * 1000)), "m", unitMatcher);
     }
   }
 
-  return [...forms].map((form) => form.toLowerCase().replace(/\s+/gu, ""));
+  return matchers;
 }
 
 /**
- * Returns the compact SI mantissa/prefix for a value (mantissa in [1, 1000)), or null for zero.
+ * Returns the compact SI mantissa/prefix symbols for a value (mantissa in [1, 1000)), or null for zero
+ * and values outside the supported prefix range.
  */
-function compactSiForm(value: number): { mantissa: string; prefix: string } | null {
+function compactSiForm(value: number): { mantissa: string; symbols: string[] } | null {
   if (value === 0) {
     return null;
   }
@@ -163,12 +164,14 @@ function compactSiForm(value: number): { mantissa: string; prefix: string } | nu
   const magnitude = Math.abs(value);
 
   for (const entry of SI_PREFIXES) {
+    if (entry.factor === 1) {
+      continue;
+    }
+
     const mantissa = magnitude / entry.factor;
 
     if (mantissa >= 1 && mantissa < 1000) {
-      const symbol = entry.symbols[0] ?? "";
-
-      return { mantissa: formatNumber(Math.sign(value) * mantissa), prefix: symbol };
+      return { mantissa: formatNumber(Math.sign(value) * mantissa), symbols: entry.symbols };
     }
   }
 
@@ -180,4 +183,11 @@ function compactSiForm(value: number): { mantissa: string; prefix: string } | nu
  */
 function formatNumber(value: number): string {
   return Number.parseFloat(value.toPrecision(6)).toString();
+}
+
+/**
+ * Escapes regex metacharacters in a literal fragment.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

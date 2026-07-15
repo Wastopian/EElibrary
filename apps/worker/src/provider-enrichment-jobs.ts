@@ -536,8 +536,16 @@ async function runDatasheetExtractionJob(
     }
   }
 
-  const fileBytes = await storageClient.read(buildDatasheetStorageKey(job.partId));
-  const extraction = await extractPdfDocument(fileBytes);
+  // Reading stored bytes and parsing the PDF can fail on a missing file or a corrupt/non-PDF datasheet;
+  // map that to a clear, non-crashing job failure rather than a raw throw.
+  let extraction: Awaited<ReturnType<typeof extractPdfDocument>>;
+
+  try {
+    const fileBytes = await storageClient.read(buildDatasheetStorageKey(job.partId));
+    extraction = await extractPdfDocument(fileBytes);
+  } catch (error) {
+    throw new ProviderEnrichmentJobError("DATASHEET_EXTRACT_FAILED", `Failed to read or parse the stored datasheet: ${formatUnknownError(error)}`);
+  }
 
   const writeClient = await databasePool.connect();
 
