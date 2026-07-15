@@ -29,9 +29,12 @@ export interface DatasheetConfirmationCandidate {
  * Returns the candidates whose value appears in the datasheet text (case-, spacing-, and unit-tolerant).
  */
 export function confirmDatasheetParameters(text: string, candidates: DatasheetConfirmationCandidate[]): DatasheetConfirmationCandidate[] {
+  // Preserve the case-significant SI distinction before lowercasing: "M" is mega while "m" is milli.
+  // Converting both directly to lowercase would make 1 MΩ and 1 mΩ indistinguishable.
+  const normalizedText = normalizeUppercaseMegaPrefixes(text);
   // Collapse (do not strip) whitespace: the matchers allow optional spaces inside a value, so "10 K Ω"
   // and "10kΩ" both match while numeric boundaries stay meaningful.
-  const haystack = text.toLowerCase().replace(/\s+/gu, " ").trim();
+  const haystack = normalizedText.toLowerCase().replace(/\s+/gu, " ").trim();
 
   if (haystack.length === 0) {
     return [];
@@ -56,7 +59,7 @@ const UNIT_MATCHERS: Record<string, string> = {
 /** SI_PREFIXES maps a scale factor to the lowercased prefix symbols a datasheet may print for it. */
 const SI_PREFIXES: ReadonlyArray<{ factor: number; symbols: string[] }> = [
   { factor: 1e9, symbols: ["g"] },
-  { factor: 1e6, symbols: ["m", "meg"] },
+  { factor: 1e6, symbols: ["meg"] },
   { factor: 1e3, symbols: ["k"] },
   { factor: 1, symbols: [""] },
   { factor: 1e-3, symbols: ["m"] },
@@ -64,6 +67,20 @@ const SI_PREFIXES: ReadonlyArray<{ factor: number; symbols: string[] }> = [
   { factor: 1e-9, symbols: ["n"] },
   { factor: 1e-12, symbols: ["p"] }
 ];
+
+/**
+ * Rewrites an uppercase mega prefix before a supported unit to an unambiguous textual prefix.
+ *
+ * SI prefixes are case-sensitive, but the rest of confirmation is intentionally case-insensitive.
+ * Publishers that incorrectly use lowercase "m" for mega cannot be corroborated safely because that
+ * spelling means milli under SI.
+ */
+function normalizeUppercaseMegaPrefixes(text: string): string {
+  return text.replace(
+    /(\d(?:[\d.,]*\d)?\s*)M(?=\s*(?:[AaFfHhVvWw]|[Hh][Zz]|[ΩΩ]|[Oo][Hh][Mm]))/gu,
+    "$1meg"
+  );
+}
 
 /** POWER_FRACTIONS maps common resistor power ratings to their datasheet fraction spelling. */
 const POWER_FRACTIONS: Record<string, string> = {
