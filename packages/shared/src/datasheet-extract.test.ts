@@ -12,6 +12,8 @@ const TOLERANCE_5: DatasheetConfirmationCandidate = { paramKey: "tolerance", uni
 const POWER: DatasheetConfirmationCandidate = { paramKey: "power_rating", unit: "W", valueKind: "numeric", valueNumeric: 0.1, valueText: null };
 const CAPACITANCE: DatasheetConfirmationCandidate = { paramKey: "capacitance", unit: "F", valueKind: "numeric", valueNumeric: 100e-9, valueText: null };
 const PACKAGE: DatasheetConfirmationCandidate = { paramKey: "package", unit: null, valueKind: "text", valueNumeric: null, valueText: "0603" };
+const MEGOHM_RESISTANCE: DatasheetConfirmationCandidate = { ...RESISTANCE, valueNumeric: 1e6 };
+const MILLIOHM_RESISTANCE: DatasheetConfirmationCandidate = { ...RESISTANCE, valueNumeric: 1e-3 };
 
 /** A datasheet-like text spread across "layout" whitespace, containing some values but not others. */
 const DATASHEET_TEXT = "RC_L series ± 0.1%, ± 0. 5%, ± 1% Sizes 0402 / 0603 / 0805 Value = 10 K Ω Power 0.1W";
@@ -69,4 +71,14 @@ test("confirmDatasheetParameters avoids substring, wrong-unit, and in-token fals
   assert.deepEqual(confirmDatasheetParameters("Ordering code RC0603FR-0710KL", [PACKAGE]), []);
   // A bare number without the unit must not confirm.
   assert.deepEqual(confirmDatasheetParameters("Figure 10 shows the 10 K test setup", [RESISTANCE]), []);
+});
+
+/**
+ * Verifies case-sensitive SI prefixes cannot corroborate a resistance at the opposite scale.
+ */
+test("confirmDatasheetParameters distinguishes megaohms from milliohms", () => {
+  assert.equal(confirmDatasheetParameters("Insulation resistance 1 MΩ", [MEGOHM_RESISTANCE]).length, 1);
+  assert.equal(confirmDatasheetParameters("Contact resistance 1 mΩ", [MILLIOHM_RESISTANCE]).length, 1);
+  assert.deepEqual(confirmDatasheetParameters("Contact resistance 1 mΩ", [MEGOHM_RESISTANCE]), []);
+  assert.deepEqual(confirmDatasheetParameters("Insulation resistance 1 MΩ", [MILLIOHM_RESISTANCE]), []);
 });
