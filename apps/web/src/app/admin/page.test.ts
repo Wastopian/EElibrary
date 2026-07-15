@@ -396,6 +396,7 @@ function createAdminDbBackedPool(): TestPool {
     CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_specifications (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, spec_key TEXT, spec_value TEXT, spec_group TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, provider_id, spec_key));
     CREATE TABLE part_parameters (id TEXT PRIMARY KEY, part_id TEXT, part_type TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, is_conflicted BOOLEAN, confidence_score NUMERIC, winning_provider_id TEXT, winning_source_record_id TEXT, sources JSONB, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, param_key));
+    CREATE TABLE part_datasheet_parameters (id TEXT PRIMARY KEY, part_id TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, confidence_score NUMERIC, datasheet_revision_id TEXT, extracted_at TIMESTAMPTZ, UNIQUE (part_id, param_key));
     CREATE TABLE mate_relations (id TEXT PRIMARY KEY, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE accessory_requirements (id TEXT PRIMARY KEY, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE cable_compatibilities (id TEXT PRIMARY KEY, part_id TEXT, cable_part_id TEXT, relationship_type TEXT, wire_gauge_min INTEGER, wire_gauge_max INTEGER, shielding_requirement TEXT, termination_style TEXT, compatibility_status TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
@@ -423,6 +424,7 @@ function createAdminDbBackedPool(): TestPool {
     ALTER TABLE part_metrics ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE part_specifications ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE part_parameters ADD COLUMN org_id TEXT DEFAULT 'org-default';
+    ALTER TABLE part_datasheet_parameters ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE mate_relations ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE accessory_requirements ADD COLUMN org_id TEXT DEFAULT 'org-default';
     ALTER TABLE cable_compatibilities ADD COLUMN org_id TEXT DEFAULT 'org-default';

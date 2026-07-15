@@ -1062,6 +1062,8 @@ function formatPartEnrichmentJobLabel(jobType: PartEnrichmentSummary["jobs"][num
   switch (jobType) {
     case "datasheet_capture":
       return "Datasheet capture";
+    case "datasheet_extraction":
+      return "Datasheet extraction";
   }
 }
 

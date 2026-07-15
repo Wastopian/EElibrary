@@ -115,15 +115,30 @@ test("reconcileParameterSources prefers confidence and flags divergence", () => 
 });
 
 /**
- * Verifies a datasheet source wins over any distributor even at equal confidence.
+ * Verifies the "corroborate, don't override" policy: an unreviewed datasheet value (modest confidence)
+ * does not beat a distributor, but fills gaps and is promoted once its confidence is raised by review.
  */
-test("reconcileParameterSources ranks a datasheet source above distributors", () => {
-  const reconciled = reconcileParameterSources([
-    numericContribution("digikey", 10_000, 0.9),
-    numericContribution("datasheet", 9_000, 0.6)
+test("reconcileParameterSources treats an unreviewed datasheet as corroborating, not overriding", () => {
+  // Datasheet below distributor confidence: distributor stays the winner; the divergent datasheet
+  // value flags a conflict for review rather than silently replacing good data.
+  const contested = reconcileParameterSources([
+    numericContribution("digikey", 10_000, 0.6),
+    numericContribution("datasheet", 9_000, 0.5)
   ]);
 
-  assert.equal(reconciled?.winningProviderId, "datasheet", "datasheet outranks distributors even at lower confidence");
-  assert.equal(reconciled?.valueNumeric, 9_000);
-  assert.equal(reconciled?.isConflicted, true, "10% apart is a conflict");
+  assert.equal(contested?.winningProviderId, "digikey", "distributor keeps the shown value");
+  assert.equal(contested?.valueNumeric, 10_000);
+  assert.equal(contested?.isConflicted, true, "the divergent datasheet value flags a conflict");
+
+  // Datasheet as the only source fills a gap.
+  const soleSource = reconcileParameterSources([numericContribution("datasheet", 9_000, 0.5)]);
+  assert.equal(soleSource?.winningProviderId, "datasheet");
+  assert.equal(soleSource?.valueNumeric, 9_000);
+
+  // A reviewed datasheet (confidence raised above the distributor) wins.
+  const reviewed = reconcileParameterSources([
+    numericContribution("digikey", 10_000, 0.6),
+    numericContribution("datasheet", 9_000, 0.9)
+  ]);
+  assert.equal(reviewed?.winningProviderId, "datasheet");
 });

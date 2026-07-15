@@ -4,11 +4,24 @@
 
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { confirmDatasheetParameters, type DatasheetConfirmationCandidate } from "@ee-library/shared/datasheet-extract";
+import { DATASHEET_EXTRACTION_CONFIDENCE } from "@ee-library/shared/parameter-normalize";
+import { resolvePartType, type PartType } from "@ee-library/shared/part-type";
 import {
   getWorkerDatabasePool,
-  markDatasheetAssetAsDownloaded
+  markDatasheetAssetAsDownloaded,
+  persistDatasheetExtractedParameters,
+  readLatestDatasheetRevisionId,
+  readPartForParameterRecompute,
+  readPartParameterCandidates,
+  recomputePartParameters,
+  stampDatasheetExtractionOrgIds,
+  updateDatasheetRevisionParseConfidence,
+  type DatasheetExtractedParameterInput,
+  type PartParameterCandidate
 } from "./catalog-repository";
 import { getWorkerStorageClient } from "./file-storage";
+import { extractPdfDocument } from "./project-document-extraction";
 import type { PoolClient } from "pg";
 import type {
   ProviderEnrichmentJob,
@@ -49,8 +62,8 @@ export interface ProviderEnrichmentProcessingSummary {
 export interface ProviderEnrichmentEnqueueInput {
   /** Canonical part id that may need enrichment. */
   partId: string;
-  /** Acquisition job that triggered the enrichment enqueue. */
-  sourceAcquisitionJobId: string;
+  /** Acquisition job that triggered the enqueue, or null when enqueued outside that flow (CLI/backfill). */
+  sourceAcquisitionJobId: string | null;
   /** Operator or system identity that requested the originating acquisition. */
   requestedBy: string;
   /** Timestamp shared with the originating acquisition success write when available. */
@@ -69,7 +82,7 @@ interface ProviderEnrichmentDatasheetCaptureResult {
 interface DatabaseProviderEnrichmentJobRow {
   id: string;
   part_id: string;
-  source_acquisition_job_id: string;
+  source_acquisition_job_id: string | null;
   job_type: ProviderEnrichmentJobType;
   job_status: ProviderEnrichmentJobStatus;
   requested_by: string;
@@ -233,34 +246,50 @@ export async function processNextProviderEnrichmentJob(): Promise<ProviderEnrich
   }
 }
 
+/** DATASHEET_EXTRACTABLE_PART_TYPES limits heuristic datasheet extraction to passives (clear label:value text). */
+const DATASHEET_EXTRACTABLE_PART_TYPES: ReadonlySet<PartType> = new Set(["resistor", "capacitor", "inductor"]);
+
 /**
- * Enqueues the Phase 2C.1 datasheet-capture job only when datasheet evidence is still missing.
+ * Enqueues gap-driven enrichment jobs for one part: datasheet capture when evidence is still missing,
+ * and datasheet extraction for passive parts (extraction self-ensures the PDF is stored, so it does not
+ * depend on capture having run first). Each type dedupes against its own active job.
  */
 async function enqueueProviderEnrichmentJobsWithClient(
   client: PoolClient,
   input: ProviderEnrichmentEnqueueInput
 ): Promise<ProviderEnrichmentQueueResult> {
-  if (await partHasDatasheetEvidence(client, input.partId)) {
-    return {
-      createdJobs: [],
-      reusedJobs: []
-    };
+  const result: ProviderEnrichmentQueueResult = { createdJobs: [], reusedJobs: [] };
+
+  if (!(await partHasDatasheetEvidence(client, input.partId))) {
+    await enqueueEnrichmentJobOfType(client, input, "datasheet_capture", result);
   }
 
-  const existingJob = await findActiveProviderEnrichmentJob(
-    client,
-    input.partId,
-    "datasheet_capture"
-  );
+  const part = await readPartForParameterRecompute(client, input.partId);
+
+  if (part && DATASHEET_EXTRACTABLE_PART_TYPES.has(resolvePartType(part))) {
+    await enqueueEnrichmentJobOfType(client, input, "datasheet_extraction", result);
+  }
+
+  return result;
+}
+
+/**
+ * Enqueues one enrichment job of a given type for a part, reusing an active job instead of duplicating.
+ */
+async function enqueueEnrichmentJobOfType(
+  client: PoolClient,
+  input: ProviderEnrichmentEnqueueInput,
+  jobType: ProviderEnrichmentJobType,
+  result: ProviderEnrichmentQueueResult
+): Promise<void> {
+  const existingJob = await findActiveProviderEnrichmentJob(client, input.partId, jobType);
 
   if (existingJob) {
-    return {
-      createdJobs: [],
-      reusedJobs: [existingJob]
-    };
+    result.reusedJobs.push(existingJob);
+    return;
   }
 
-  const createdJob = buildProviderEnrichmentJobRecord(input, "datasheet_capture");
+  const createdJob = buildProviderEnrichmentJobRecord(input, jobType);
   const createdEvent = buildProviderEnrichmentJobEvent(
     createdJob.id,
     "queued",
@@ -279,30 +308,19 @@ async function enqueueProviderEnrichmentJobsWithClient(
   try {
     await insertProviderEnrichmentJob(client, createdJob);
     await insertProviderEnrichmentJobEvent(client, createdEvent);
-
-    return {
-      createdJobs: [createdJob],
-      reusedJobs: []
-    };
+    result.createdJobs.push(createdJob);
   } catch (error) {
     if (!isUniqueViolationError(error)) {
       throw error;
     }
 
-    const reusedJob = await findActiveProviderEnrichmentJob(
-      client,
-      input.partId,
-      "datasheet_capture"
-    );
+    const reusedJob = await findActiveProviderEnrichmentJob(client, input.partId, jobType);
 
     if (!reusedJob) {
       throw error;
     }
 
-    return {
-      createdJobs: [],
-      reusedJobs: [reusedJob]
-    };
+    result.reusedJobs.push(reusedJob);
   }
 }
 
@@ -442,7 +460,158 @@ async function runProviderEnrichmentJob(
   switch (job.jobType) {
     case "datasheet_capture":
       return datasheetCaptureHandlerImpl(job);
+    case "datasheet_extraction":
+      return runDatasheetExtractionJob(job);
   }
+}
+
+/** DATASHEET_PARSE_CONFIDENCE_FOUND is the datasheet_revision parse confidence when parameters were extracted. */
+const DATASHEET_PARSE_CONFIDENCE_FOUND = 0.4;
+
+/** DATASHEET_PARSE_CONFIDENCE_EMPTY marks that text was read but nothing structured was recognized. */
+const DATASHEET_PARSE_CONFIDENCE_EMPTY = 0.1;
+
+/**
+ * Reads a part's stored datasheet PDF and confirms the distributor's parameter values against its text.
+ *
+ * Confirmation is a corroborating source: it searches the datasheet for values the distributor already
+ * reports and records the ones it finds at a modest confidence, so it can only raise trust (never
+ * override or conflict; see reconcileParameterSources). The job self-ensures the PDF is stored (running
+ * capture if needed), so it cannot run before a datasheet exists even if claimed early. Only passive
+ * parts are processed; anything else succeeds as a no-op.
+ */
+async function runDatasheetExtractionJob(
+  job: ProviderEnrichmentJob
+): Promise<ProviderEnrichmentDatasheetCaptureResult> {
+  const databasePool = getWorkerDatabasePool();
+
+  const readClient = await databasePool.connect();
+  let part: Awaited<ReturnType<typeof readPartForParameterRecompute>>;
+
+  try {
+    part = await readPartForParameterRecompute(readClient, job.partId);
+  } finally {
+    readClient.release();
+  }
+
+  if (!part) {
+    throw new ProviderEnrichmentJobError("PART_NOT_FOUND", "No part exists for this datasheet extraction job.");
+  }
+
+  const partType = resolvePartType(part);
+
+  if (!DATASHEET_EXTRACTABLE_PART_TYPES.has(partType)) {
+    return {
+      detail: { partType, result: "noop_unsupported_part_type" },
+      message: "Datasheet extraction supports passive parts only; skipping."
+    };
+  }
+
+  const storageClient = getWorkerStorageClient();
+
+  if (storageClient.backend === "not_configured") {
+    throw new ProviderEnrichmentJobError("STORAGE_NOT_CONFIGURED", "Storage backend is not configured — cannot read the datasheet.");
+  }
+
+  // Ensure the PDF is stored: run the capture handler when there is no downloaded datasheet yet. A part
+  // with no official datasheet source simply has nothing to extract.
+  const evidenceClient = await databasePool.connect();
+  let hasDatasheet: boolean;
+
+  try {
+    hasDatasheet = await partHasDatasheetEvidence(evidenceClient, job.partId);
+  } finally {
+    evidenceClient.release();
+  }
+
+  if (!hasDatasheet) {
+    try {
+      await datasheetCaptureHandlerImpl(job);
+    } catch (error) {
+      if (error instanceof ProviderEnrichmentJobError && error.code === "NO_DATASHEET_SOURCE") {
+        return { detail: { result: "noop_no_datasheet" }, message: "No datasheet available to extract from." };
+      }
+
+      throw error;
+    }
+  }
+
+  // Reading stored bytes and parsing the PDF can fail on a missing file or a corrupt/non-PDF datasheet;
+  // map that to a clear, non-crashing job failure rather than a raw throw.
+  let extraction: Awaited<ReturnType<typeof extractPdfDocument>>;
+
+  try {
+    const fileBytes = await storageClient.read(buildDatasheetStorageKey(job.partId));
+    extraction = await extractPdfDocument(fileBytes);
+  } catch (error) {
+    throw new ProviderEnrichmentJobError("DATASHEET_EXTRACT_FAILED", `Failed to read or parse the stored datasheet: ${formatUnknownError(error)}`);
+  }
+
+  const writeClient = await databasePool.connect();
+
+  try {
+    await writeClient.query("BEGIN");
+    // Read the distributor's values first (recompute rewrites part_parameters), then keep only the ones
+    // the datasheet text actually contains.
+    const candidates = await readPartParameterCandidates(writeClient, job.partId);
+    const confirmed = confirmDatasheetParameters(extraction.extractedText, candidates.map(toConfirmationCandidate));
+    const parameters = confirmed.map(toDatasheetExtractedParameterInput);
+    const revisionId = await readLatestDatasheetRevisionId(writeClient, job.partId);
+    const extractedAt = new Date().toISOString();
+
+    await persistDatasheetExtractedParameters(writeClient, job.partId, revisionId, extractedAt, parameters);
+
+    if (revisionId) {
+      await updateDatasheetRevisionParseConfidence(
+        writeClient,
+        revisionId,
+        parameters.length > 0 ? DATASHEET_PARSE_CONFIDENCE_FOUND : DATASHEET_PARSE_CONFIDENCE_EMPTY
+      );
+    }
+
+    await recomputePartParameters(writeClient, part, extractedAt);
+    await stampDatasheetExtractionOrgIds(writeClient, job.partId);
+    await writeClient.query("COMMIT");
+
+    return {
+      detail: { parametersConfirmed: parameters.length, result: "confirmed", revisionId },
+      message: `Confirmed ${parameters.length} datasheet parameter(s).`
+    };
+  } catch (error) {
+    await writeClient.query("ROLLBACK");
+    throw error;
+  } finally {
+    writeClient.release();
+  }
+}
+
+/**
+ * Adapts a stored distributor parameter into the shape the confirm-by-search step consumes.
+ */
+function toConfirmationCandidate(candidate: PartParameterCandidate): DatasheetConfirmationCandidate {
+  return {
+    paramKey: candidate.paramKey,
+    unit: candidate.unit,
+    valueKind: candidate.valueKind as DatasheetConfirmationCandidate["valueKind"],
+    valueNumeric: candidate.valueNumeric,
+    valueText: candidate.valueText
+  };
+}
+
+/**
+ * Converts a confirmed distributor value into the datasheet-source persistence input.
+ */
+function toDatasheetExtractedParameterInput(confirmed: DatasheetConfirmationCandidate): DatasheetExtractedParameterInput {
+  return {
+    confidence: DATASHEET_EXTRACTION_CONFIDENCE,
+    paramKey: confirmed.paramKey,
+    unit: confirmed.unit,
+    valueKind: confirmed.valueKind,
+    valueMax: null,
+    valueMin: null,
+    valueNumeric: confirmed.valueNumeric,
+    valueText: confirmed.valueText
+  };
 }
 
 /**
@@ -453,9 +622,11 @@ async function runDatasheetCaptureJob(
 ): Promise<ProviderEnrichmentDatasheetCaptureResult> {
   const databasePool = getWorkerDatabasePool();
 
-  // Phase 1: check already-downloaded and read source URL (short-lived read, no transaction).
+  // Phase 1: check already-downloaded and read source URL (short-lived read, no transaction). The stored
+  // datasheet asset's source_url is provider-agnostic (every adapter records it), so it is the primary
+  // source; the raw-payload parse is a fallback for older rows without a datasheet asset.
   const readClient = await databasePool.connect();
-  let datasheetSource: (DatabaseSourceDatasheetRow & { datasheetSourceUrl: string }) | null = null;
+  let datasheetSourceUrl: string | null = null;
 
   try {
     if (await partHasDatasheetEvidence(readClient, job.partId)) {
@@ -465,12 +636,15 @@ async function runDatasheetCaptureJob(
       };
     }
 
-    datasheetSource = await readLatestOfficialDatasheetSourceRow(readClient, job.partId);
+    datasheetSourceUrl =
+      (await readDatasheetUrlFromAsset(readClient, job.partId)) ??
+      (await readLatestOfficialDatasheetSourceRow(readClient, job.partId))?.datasheetSourceUrl ??
+      null;
   } finally {
     readClient.release();
   }
 
-  if (!datasheetSource) {
+  if (!datasheetSourceUrl) {
     throw new ProviderEnrichmentJobError(
       "NO_DATASHEET_SOURCE",
       "No official provider datasheet source is recorded for this part yet."
@@ -481,7 +655,7 @@ async function runDatasheetCaptureJob(
   let fileBytes: Buffer;
 
   try {
-    fileBytes = await fetchDatasheetWithLimit(datasheetSource.datasheetSourceUrl);
+    fileBytes = await fetchDatasheetWithLimit(datasheetSourceUrl);
   } catch (error) {
     throw new ProviderEnrichmentJobError(
       "DATASHEET_FETCH_FAILED",
@@ -512,7 +686,7 @@ async function runDatasheetCaptureJob(
     const { assetId } = await markDatasheetAssetAsDownloaded(writeClient, {
       fileHash,
       partId: job.partId,
-      sourceUrl: datasheetSource.datasheetSourceUrl,
+      sourceUrl: datasheetSourceUrl,
       storageKey,
       updatedAt: completedAt
     });
@@ -523,7 +697,7 @@ async function runDatasheetCaptureJob(
         assetId,
         fileHash,
         result: "downloaded",
-        sourceUrl: datasheetSource.datasheetSourceUrl,
+        sourceUrl: datasheetSourceUrl,
         storageKey
       },
       message: "Datasheet downloaded and stored successfully."
@@ -740,6 +914,30 @@ async function findActiveProviderEnrichmentJob(
   );
 
   return result.rows[0] ? mapProviderEnrichmentJobRow(result.rows[0]) : null;
+}
+
+/**
+ * Reads the datasheet URL from the part's stored datasheet asset, provider-agnostically.
+ *
+ * Every provider adapter records the official datasheet URL on the datasheet asset's source_url at
+ * import, so this works uniformly for Mouser, DigiKey, and JLC without per-provider payload parsing.
+ */
+async function readDatasheetUrlFromAsset(client: PoolClient, partId: string): Promise<string | null> {
+  const result = await client.query<{ source_url: string }>(
+    `
+      SELECT source_url
+      FROM assets
+      WHERE part_id = $1
+        AND asset_type = 'datasheet'
+        AND source_url IS NOT NULL
+        AND source_url <> ''
+      ORDER BY last_updated_at DESC, id DESC
+      LIMIT 1
+    `,
+    [partId]
+  );
+
+  return normalizeHttpUrl(result.rows[0]?.source_url);
 }
 
 /**

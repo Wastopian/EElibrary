@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { newDb } from "pg-mem";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { setWorkerRepositoryPoolForTests } from "./catalog-repository";
 import {
   enqueueProviderEnrichmentJobsForPart,
@@ -532,6 +533,192 @@ test("provider enrichment worker fails job with DATASHEET_FETCH_FAILED when HTTP
   }
 });
 
+test("provider enrichment worker confirms distributor values found in the datasheet", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  const partId = "part-extract";
+  const timestamp = "2026-04-24T12:00:00.000Z";
+
+  await seedPartAndAcquisition(pool, partId, "acqjob-extract", "Resistors / Chip Resistor - Surface Mount");
+  // A downloaded datasheet asset so the job reads the stored PDF instead of re-capturing.
+  await pool.query(
+    `INSERT INTO assets (
+       id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode, provenance,
+       availability_status, review_status, export_status, asset_status, generation_method, generation_source_asset_id,
+       validation_status, preview_status, asset_state, source_url, source_record_id, last_updated_at
+     ) VALUES (
+       'asset-extract', $1, 'datasheet', 'pdf', 'datasheets/part-extract.pdf', 'hash', 'mouser', 'metadata_only', 'trusted_external',
+       'downloaded', 'not_reviewed', 'not_exportable', 'downloaded', NULL, NULL,
+       'not_validated', 'not_available', 'downloaded', 'https://example.test/rc0603.pdf', NULL, $2
+     )`,
+    [partId, timestamp]
+  );
+  await pool.query(
+    `INSERT INTO datasheet_revisions (id, part_id, revision_label, parse_confidence, pin_table_status, last_updated_at)
+     VALUES ('dsr-extract', $1, 'Provider datasheet reference', 0, 'not_available', $2)`,
+    [partId, timestamp]
+  );
+  // The distributor specs recompute reconciles into part_parameters (resistance + tolerance stay the
+  // distributor winners; the datasheet confirms them below).
+  await pool.query(
+    `INSERT INTO part_specifications (id, part_id, provider_id, source_record_id, spec_key, spec_value, spec_group, last_updated_at, org_id) VALUES
+     ('spec-res', $1, 'mouser', NULL, 'Resistance', '10 kOhms', 'parametric', $2, 'org-default'),
+     ('spec-tol', $1, 'mouser', NULL, 'Tolerance', '1%', 'parametric', $2, 'org-default')`,
+    [partId, timestamp]
+  );
+  // The distributor's reconciled parameter values are the confirm-by-search candidates: resistance and
+  // tolerance appear in the datasheet text below; capacitance is a candidate whose value does not.
+  await pool.query(
+    `INSERT INTO part_parameters (id, part_id, part_type, param_key, value_kind, value_numeric, value_text, unit, is_conflicted, confidence_score, winning_provider_id, sources, last_updated_at, org_id) VALUES
+     ('pp-res', $1, 'resistor', 'resistance', 'numeric', 10000, NULL, 'ohm', FALSE, 0.6, 'mouser', '[{"providerId":"mouser","agreesWithWinner":true}]'::jsonb, $2, 'org-default'),
+     ('pp-tol', $1, 'resistor', 'tolerance', 'numeric', 1, NULL, '%', FALSE, 0.6, 'mouser', '[{"providerId":"mouser","agreesWithWinner":true}]'::jsonb, $2, 'org-default'),
+     ('pp-cap', $1, 'resistor', 'capacitance', 'numeric', 0.000001, NULL, 'F', FALSE, 0.6, 'mouser', '[{"providerId":"mouser","agreesWithWinner":true}]'::jsonb, $2, 'org-default')`,
+    [partId, timestamp]
+  );
+  await seedQueuedEnrichmentJob(pool, "enrichjob-extract", partId, "acqjob-extract", timestamp, "datasheet_extraction");
+
+  const document = await PDFDocument.create();
+  const page = document.addPage();
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("General purpose chip resistor. Resistance 10 kOhm. Tolerance +/- 1%.", { font, size: 12, x: 40, y: 700 });
+  const pdfBytes = Buffer.from(await document.save());
+
+  setWorkerStorageClientForTests({
+    backend: "local",
+    exists: async () => true,
+    getDownloadUrl: async () => null,
+    read: async () => pdfBytes,
+    write: async () => {}
+  } as FileStorageClient);
+
+  try {
+    const result = await processNextProviderEnrichmentJob();
+
+    assert.equal(result?.status, "succeeded");
+    assert.equal(result?.jobType, "datasheet_extraction");
+
+    // Only the values present in the datasheet are confirmed; capacitance (absent) is not.
+    const datasheetParams = await pool.query<{ param_key: string; value_numeric: string | null }>(
+      "SELECT param_key, value_numeric FROM part_datasheet_parameters WHERE part_id = $1 ORDER BY param_key",
+      [partId]
+    );
+    assert.deepEqual(datasheetParams.rows.map((row) => row.param_key).sort(), ["resistance", "tolerance"]);
+    const confirmed = new Map(datasheetParams.rows.map((row) => [row.param_key, Number(row.value_numeric)]));
+    assert.equal(confirmed.get("resistance"), 10_000, "the confirmed value equals the distributor value");
+
+    const revision = await pool.query<{ parse_confidence: string }>("SELECT parse_confidence FROM datasheet_revisions WHERE id = 'dsr-extract'");
+    assert.ok(Number(revision.rows[0]?.parse_confidence) > 0, "parse_confidence moved off the 0 stub");
+
+    // Reconciliation: the datasheet corroborates the distributor value (agrees), never overrides or conflicts.
+    const resistance = await pool.query<{ winning_provider_id: string; is_conflicted: boolean; sources: unknown }>(
+      "SELECT winning_provider_id, is_conflicted, sources FROM part_parameters WHERE part_id = $1 AND param_key = 'resistance'",
+      [partId]
+    );
+    const sources = typeof resistance.rows[0]?.sources === "string" ? JSON.parse(resistance.rows[0].sources as string) : resistance.rows[0]?.sources;
+    const datasheetSource = Array.isArray(sources) ? sources.find((entry: { providerId: string }) => entry.providerId === "datasheet") : undefined;
+
+    assert.equal(resistance.rows[0]?.winning_provider_id, "mouser", "the distributor value stays the winner");
+    assert.equal(resistance.rows[0]?.is_conflicted, false, "an agreeing datasheet confirmation never conflicts");
+    assert.ok(datasheetSource && datasheetSource.agreesWithWinner === true, "datasheet corroboration is recorded and agrees");
+
+    const orgStamps = await pool.query<{ org_id: string | null }>(
+      "SELECT org_id FROM part_datasheet_parameters WHERE part_id = $1 UNION SELECT org_id FROM part_parameters WHERE part_id = $1",
+      [partId]
+    );
+    assert.ok(orgStamps.rows.length > 0 && orgStamps.rows.every((row) => row.org_id === "org-default"), "datasheet and reconciled rows are org-stamped");
+  } finally {
+    setWorkerStorageClientForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("datasheet capture resolves the URL from the datasheet asset when raw payload has none", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  const partId = "part-asseturl";
+  const timestamp = "2026-04-24T12:00:00.000Z";
+
+  await seedPartAndAcquisition(pool, partId, "acqjob-asseturl");
+  // Source record whose raw payload carries NO datasheet URL (the Mouser/DigiKey blind spot).
+  await pool.query(
+    `INSERT INTO source_records (id, provider_id, provider_part_key, part_id, source_url, fetched_at, raw_payload, source_last_seen_at, import_status, last_updated_at)
+     VALUES ('src-asseturl', 'mouser', '603-RC0603', $1, NULL, $2, '{"part":{"ManufacturerPartNumber":"RC0603FR-0710KL"}}'::jsonb, $2, 'imported', $2)`,
+    [partId, timestamp]
+  );
+  // Referenced datasheet asset (no storage_key yet) carrying the official URL on source_url.
+  await pool.query(
+    `INSERT INTO assets (
+       id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode, provenance,
+       availability_status, review_status, export_status, asset_status, generation_method, generation_source_asset_id,
+       validation_status, preview_status, asset_state, source_url, source_record_id, last_updated_at
+     ) VALUES (
+       'asset-asseturl', $1, 'datasheet', 'pdf', NULL, NULL, 'mouser', 'metadata_only', 'trusted_external',
+       'referenced', 'not_reviewed', 'not_exportable', 'referenced', NULL, NULL,
+       'not_validated', 'not_available', 'referenced', 'https://www.mouser.com/catalog/specsheets/yageo_rc0603.pdf', 'src-asseturl', $2
+     )`,
+    [partId, timestamp]
+  );
+  await seedQueuedEnrichmentJob(pool, "enrichjob-asseturl", partId, "acqjob-asseturl", timestamp, "datasheet_capture");
+
+  const pdfBytes = Buffer.from("%PDF-1.4 asset-url datasheet");
+  const fetched: string[] = [];
+  setDatasheetFetcherForTests(async (url) => { fetched.push(String(url)); return new Response(pdfBytes); });
+  const writtenFiles: string[] = [];
+  setWorkerStorageClientForTests({
+    backend: "local",
+    exists: async () => false,
+    getDownloadUrl: async () => null,
+    read: async () => Buffer.from(""),
+    write: async (key) => { writtenFiles.push(key); }
+  } as FileStorageClient);
+
+  try {
+    const result = await processNextProviderEnrichmentJob();
+
+    assert.equal(result?.status, "succeeded");
+    assert.deepEqual(fetched, ["https://www.mouser.com/catalog/specsheets/yageo_rc0603.pdf"], "fetched via the asset source_url");
+    assert.deepEqual(writtenFiles, ["datasheets/part-asseturl.pdf"]);
+
+    const asset = await pool.query<{ availability_status: string; storage_key: string | null }>(
+      "SELECT availability_status, storage_key FROM assets WHERE id = 'asset-asseturl'"
+    );
+    assert.equal(asset.rows[0]?.availability_status, "downloaded");
+    assert.equal(asset.rows[0]?.storage_key, "datasheets/part-asseturl.pdf");
+  } finally {
+    setDatasheetFetcherForTests(null);
+    setWorkerStorageClientForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("enqueueProviderEnrichmentJobsForPart accepts a null acquisition source (CLI ingest path)", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await pool.query(`INSERT INTO parts (id, category) VALUES ('part-cli', 'Resistors / Chip Resistor')`);
+
+  try {
+    const result = await enqueueProviderEnrichmentJobsForPart({
+      partId: "part-cli",
+      requestedAt: "2026-04-24T12:00:00.000Z",
+      requestedBy: "cli:ingest",
+      sourceAcquisitionJobId: null
+    });
+
+    assert.deepEqual(result.createdJobs.map((job) => job.jobType).sort(), ["datasheet_capture", "datasheet_extraction"]);
+
+    const rows = await pool.query<{ job_type: string; source_acquisition_job_id: string | null }>(
+      "SELECT job_type, source_acquisition_job_id FROM provider_enrichment_jobs WHERE part_id = 'part-cli' ORDER BY job_type"
+    );
+    assert.equal(rows.rows.length, 2);
+    assert.ok(rows.rows.every((row) => row.source_acquisition_job_id === null), "jobs enqueue with a null acquisition source");
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
 /**
  * Creates a minimal in-memory schema for provider enrichment queue tests.
  */
@@ -540,7 +727,10 @@ function createProviderEnrichmentPool(): TestPool {
 
   db.public.none(`
     CREATE TABLE parts (
-      id TEXT PRIMARY KEY
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL DEFAULT '',
+      connector_family_id TEXT,
+      org_id TEXT DEFAULT 'org-default'
     );
     CREATE TABLE provider_acquisition_jobs (
       id TEXT PRIMARY KEY,
@@ -568,7 +758,7 @@ function createProviderEnrichmentPool(): TestPool {
     CREATE TABLE provider_enrichment_jobs (
       id TEXT PRIMARY KEY,
       part_id TEXT NOT NULL REFERENCES parts(id),
-      source_acquisition_job_id TEXT NOT NULL REFERENCES provider_acquisition_jobs(id),
+      source_acquisition_job_id TEXT REFERENCES provider_acquisition_jobs(id),
       job_type TEXT NOT NULL,
       job_status TEXT NOT NULL,
       requested_by TEXT NOT NULL,
@@ -632,6 +822,11 @@ function createProviderEnrichmentPool(): TestPool {
       import_error_details TEXT,
       last_updated_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_specifications (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, spec_key TEXT, spec_value TEXT, spec_group TEXT, last_updated_at TIMESTAMPTZ, org_id TEXT);
+    CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ, org_id TEXT);
+    CREATE TABLE part_parameters (id TEXT PRIMARY KEY, part_id TEXT, part_type TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, is_conflicted BOOLEAN, confidence_score NUMERIC, winning_provider_id TEXT, winning_source_record_id TEXT, sources JSONB, last_updated_at TIMESTAMPTZ, org_id TEXT, UNIQUE (part_id, param_key));
+    CREATE TABLE part_datasheet_parameters (id TEXT PRIMARY KEY, part_id TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, confidence_score NUMERIC, datasheet_revision_id TEXT, extracted_at TIMESTAMPTZ, org_id TEXT, UNIQUE (part_id, param_key));
   `);
 
   const { Pool: MemoryPool } = db.adapters.createPg();
@@ -645,9 +840,10 @@ function createProviderEnrichmentPool(): TestPool {
 async function seedPartAndAcquisition(
   pool: TestPool,
   partId: string,
-  acquisitionJobId: string
+  acquisitionJobId: string,
+  category = ""
 ): Promise<void> {
-  await pool.query(`INSERT INTO parts (id) VALUES ($1)`, [partId]);
+  await pool.query(`INSERT INTO parts (id, category) VALUES ($1, $2)`, [partId, category]);
   await pool.query(
     `
       INSERT INTO provider_acquisition_jobs (
@@ -709,7 +905,8 @@ async function seedQueuedEnrichmentJob(
   jobId: string,
   partId: string,
   acquisitionJobId: string,
-  requestedAt: string
+  requestedAt: string,
+  jobType: "datasheet_capture" | "datasheet_extraction" = "datasheet_capture"
 ): Promise<void> {
   await pool.query(
     `
@@ -727,9 +924,9 @@ async function seedQueuedEnrichmentJob(
         error_message,
         last_updated_at
       )
-      VALUES ($1, $2, $3, 'datasheet_capture', 'queued', 'admin-user', $4, NULL, NULL, NULL, NULL, $4)
+      VALUES ($1, $2, $3, $5, 'queued', 'admin-user', $4, NULL, NULL, NULL, NULL, $4)
     `,
-    [jobId, partId, acquisitionJobId, requestedAt]
+    [jobId, partId, acquisitionJobId, requestedAt, jobType]
   );
   await pool.query(
     `

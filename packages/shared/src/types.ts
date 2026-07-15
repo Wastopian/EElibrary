@@ -167,8 +167,8 @@ export type ProviderAcquisitionJobEventType = ProviderAcquisitionJobStatus;
 /** PartAcquisitionSummaryState keeps part-detail acquisition history explicit without changing search records. */
 export type PartAcquisitionSummaryState = "available" | "legacy_source_only" | "not_recorded" | "unavailable";
 
-/** ProviderEnrichmentJobType keeps Phase 2C.1 explicit while only datasheet capture is supported. */
-export type ProviderEnrichmentJobType = "datasheet_capture";
+/** ProviderEnrichmentJobType names the enrichment work a job performs against a part's provider evidence. */
+export type ProviderEnrichmentJobType = "datasheet_capture" | "datasheet_extraction";
 
 /** ProviderEnrichmentJobStatus is the durable queued-to-terminal lifecycle for provider enrichment work. */
 export type ProviderEnrichmentJobStatus = "queued" | "running" | "succeeded" | "failed";
@@ -3562,7 +3562,8 @@ export interface PartAcquisitionSummary {
 export interface ProviderEnrichmentJob {
   id: string;
   partId: string;
-  sourceAcquisitionJobId: string;
+  /** Acquisition job that triggered this enrichment, or null when enqueued outside that flow (CLI/backfill). */
+  sourceAcquisitionJobId: string | null;
   jobType: ProviderEnrichmentJobType;
   jobStatus: ProviderEnrichmentJobStatus;
   requestedBy: string;

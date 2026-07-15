@@ -7,7 +7,7 @@ import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/as
 import { buildBuildableMatingSet, getConnectorRelationEffectiveConfidence } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { findParamDefForSpecKey, getParameterDefs } from "@ee-library/shared/parameter-registry";
-import { parseEngineeringValue, reconcileParameterSources, type ParameterContribution } from "@ee-library/shared/parameter-normalize";
+import { DATASHEET_EXTRACTION_CONFIDENCE, parseEngineeringValue, reconcileParameterSources, type ParameterContribution, type TypedParameterValue } from "@ee-library/shared/parameter-normalize";
 import { resolvePartType } from "@ee-library/shared/part-type";
 import { SUPPLY_OFFER_MISSING_FROM_PROVIDER_REASON } from "@ee-library/shared/supply-offers";
 import { scopeEntityId } from "@ee-library/shared/tenant";
@@ -739,7 +739,7 @@ export async function persistNormalizedPartRows(client: PoolClient, rawNormalize
   }
 
   await persistPartSpecifications(client, normalizedPart.part.id, normalizedPart.sourceRecord.providerId, normalizedPart.specifications ?? []);
-  await persistPartParameters(client, normalizedPart.part, normalizedPart.part.lastUpdatedAt);
+  await recomputePartParameters(client, normalizedPart.part, normalizedPart.part.lastUpdatedAt);
 
   for (const supplyOffering of normalizedPart.supplyOfferings) {
     await persistSupplyOffering(client, supplyOffering);
@@ -790,6 +790,7 @@ async function stampPartChildOrgIds(client: PoolClient, partId: string): Promise
     "part_metrics",
     "part_specifications",
     "part_parameters",
+    "part_datasheet_parameters",
     "supply_offerings",
     "source_extraction_signals",
     "mate_relations",
@@ -1685,16 +1686,49 @@ interface DatabaseMetricForReconciliation {
   provider_id: string | null;
 }
 
+/** DatabaseDatasheetParamForReconciliation is the minimal datasheet-extracted row shape the projection reads. */
+interface DatabaseDatasheetParamForReconciliation {
+  param_key: string;
+  value_kind: string;
+  value_numeric: string | number | null;
+  value_min: string | number | null;
+  value_max: string | number | null;
+  value_text: string | null;
+  unit: string | null;
+  confidence_score: string | number | null;
+}
+
 /**
- * Recomputes this part's normalized parameters from all of its stored specifications.
- *
- * This is a derived projection over part_specifications (like part_readiness_summaries over evidence),
- * recomputed on every import. It resolves the part type, maps each provider spec label onto a canonical
- * parameter, parses the verbatim value into a base unit, and reconciles the sources into one winning
- * value per parameter with an explicit conflict flag. Delete-then-insert per part keeps the set exactly
- * in step with the current specs. Rows insert with a null org_id and are stamped by stampPartChildOrgIds.
+ * Rebuilds a typed value from a stored datasheet-extracted parameter row, or null when incomplete.
  */
-async function persistPartParameters(client: PoolClient, part: Part, lastUpdatedAt: string): Promise<void> {
+function typedFromDatasheetRow(row: DatabaseDatasheetParamForReconciliation): TypedParameterValue | null {
+  if (row.value_kind === "numeric" && row.value_numeric !== null) {
+    return { kind: "numeric", unit: row.unit, value: Number(row.value_numeric) };
+  }
+
+  if (row.value_kind === "range" && row.value_min !== null && row.value_max !== null) {
+    return { kind: "range", max: Number(row.value_max), min: Number(row.value_min), unit: row.unit };
+  }
+
+  if ((row.value_kind === "enum" || row.value_kind === "text" || row.value_kind === "boolean") && row.value_text !== null) {
+    return { kind: row.value_kind, text: row.value_text, unit: row.unit };
+  }
+
+  return null;
+}
+
+/**
+ * Recomputes this part's normalized parameters from all of its stored sources.
+ *
+ * This is a derived projection (like part_readiness_summaries over evidence), recomputed on every import
+ * and after each datasheet extraction. It reconciles three sources per canonical parameter: verbatim
+ * distributor specifications, corroborating distributor metrics, and heuristic datasheet extractions.
+ * Datasheet values carry a modest confidence so they corroborate or flag conflicts but do not override
+ * distributor values. Delete-then-insert per part keeps the set exactly in step. Rows insert with a null
+ * org_id and are stamped by stampPartChildOrgIds. Exported so the datasheet-extraction job can
+ * re-reconcile an existing part without a full re-import.
+ */
+export async function recomputePartParameters(client: PoolClient, part: Pick<Part, "id" | "category" | "connectorFamilyId">, lastUpdatedAt: string): Promise<void> {
   await client.query("DELETE FROM part_parameters WHERE part_id = $1", [part.id]);
 
   const partType = resolvePartType(part);
@@ -1711,6 +1745,10 @@ async function persistPartParameters(client: PoolClient, part: Part, lastUpdated
      FROM part_metrics pm
      LEFT JOIN source_records sr ON sr.id = pm.source_record_id
      WHERE pm.part_id = $1`,
+    [part.id]
+  );
+  const datasheetResult = await client.query<DatabaseDatasheetParamForReconciliation>(
+    "SELECT param_key, value_kind, value_numeric, value_min, value_max, value_text, unit, confidence_score FROM part_datasheet_parameters WHERE part_id = $1",
     [part.id]
   );
 
@@ -1756,6 +1794,27 @@ async function persistPartParameters(client: PoolClient, part: Part, lastUpdated
         rawValue: String(row.metric_value),
         sourceRecordId: row.source_record_id,
         typed: { kind: "numeric", unit: def.unit, value }
+      });
+    }
+
+    for (const row of datasheetResult.rows) {
+      if (row.param_key !== def.paramKey) {
+        continue;
+      }
+
+      const typed = typedFromDatasheetRow(row);
+
+      if (!typed) {
+        continue;
+      }
+
+      contributions.push({
+        confidence: row.confidence_score === null ? DATASHEET_EXTRACTION_CONFIDENCE : Number(row.confidence_score),
+        providerId: "datasheet",
+        rawSpecKey: def.label,
+        rawValue: row.value_text ?? (row.value_numeric === null ? "" : String(row.value_numeric)),
+        sourceRecordId: null,
+        typed
       });
     }
 
@@ -1807,6 +1866,148 @@ async function persistPartParameters(client: PoolClient, part: Part, lastUpdated
       ]
     );
   }
+}
+
+/** DatasheetExtractedParameterInput is one heuristic datasheet parameter to persist as a source row. */
+export interface DatasheetExtractedParameterInput {
+  paramKey: string;
+  valueKind: string;
+  valueNumeric: number | null;
+  valueMin: number | null;
+  valueMax: number | null;
+  valueText: string | null;
+  unit: string | null;
+  confidence: number;
+}
+
+/**
+ * Replaces this part's datasheet-extracted parameter rows with the latest extraction.
+ *
+ * Delete-then-insert per part keeps the datasheet source exactly in step with the most recent
+ * extraction. Rows insert with a null org_id and are stamped by stampPartChildOrgIds.
+ */
+export async function persistDatasheetExtractedParameters(
+  client: PoolClient,
+  partId: string,
+  datasheetRevisionId: string | null,
+  extractedAt: string,
+  parameters: DatasheetExtractedParameterInput[]
+): Promise<void> {
+  await client.query("DELETE FROM part_datasheet_parameters WHERE part_id = $1", [partId]);
+
+  for (const parameter of parameters) {
+    await client.query(
+      `
+        INSERT INTO part_datasheet_parameters (
+          id,
+          part_id,
+          param_key,
+          value_kind,
+          value_numeric,
+          value_min,
+          value_max,
+          value_text,
+          unit,
+          confidence_score,
+          datasheet_revision_id,
+          extracted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `,
+      [
+        `dsparam-${partId}-${parameter.paramKey}`,
+        partId,
+        parameter.paramKey,
+        parameter.valueKind,
+        parameter.valueNumeric,
+        parameter.valueMin,
+        parameter.valueMax,
+        parameter.valueText,
+        parameter.unit,
+        parameter.confidence,
+        datasheetRevisionId,
+        extractedAt
+      ]
+    );
+  }
+}
+
+/** PartParameterCandidate is one distributor-provided parameter value the datasheet job tries to confirm. */
+export interface PartParameterCandidate {
+  paramKey: string;
+  valueKind: string;
+  valueNumeric: number | null;
+  valueText: string | null;
+  unit: string | null;
+}
+
+/**
+ * Reads a part's distributor-provided parameter values (the reconciled winners that are not themselves a
+ * prior datasheet confirmation) for the datasheet confirm-by-search step.
+ */
+export async function readPartParameterCandidates(client: PoolClient, partId: string): Promise<PartParameterCandidate[]> {
+  const result = await client.query<{ param_key: string; value_kind: string; value_numeric: string | null; value_text: string | null; unit: string | null }>(
+    `SELECT param_key, value_kind, value_numeric, value_text, unit
+     FROM part_parameters
+     WHERE part_id = $1 AND (winning_provider_id IS NULL OR winning_provider_id <> 'datasheet')`,
+    [partId]
+  );
+
+  return result.rows.map((row) => ({
+    paramKey: row.param_key,
+    unit: row.unit,
+    valueKind: row.value_kind,
+    valueNumeric: row.value_numeric === null ? null : Number(row.value_numeric),
+    valueText: row.value_text
+  }));
+}
+
+/**
+ * Stamps org_id on the parameter rows a datasheet extraction adds or recomputes, from the part's org.
+ *
+ * The extraction job writes outside the import path, so the general stampPartChildOrgIds pass never runs
+ * for it. Both part_datasheet_parameters and the recomputed part_parameters insert with a null org_id;
+ * without this stamp, org-scoped reads (which compare org_id to the acting org) would filter them out.
+ */
+export async function stampDatasheetExtractionOrgIds(client: PoolClient, partId: string): Promise<void> {
+  const orgId = await readPartOrgId(client, partId);
+
+  for (const table of ["part_datasheet_parameters", "part_parameters"]) {
+    // Table names are hardcoded constants, not user input.
+    await client.query(`UPDATE ${table} SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
+  }
+}
+
+/**
+ * Sets a real parse confidence on an existing datasheet revision (default is the 0 stub written at import).
+ */
+export async function updateDatasheetRevisionParseConfidence(client: PoolClient, revisionId: string, confidence: number): Promise<void> {
+  await client.query("UPDATE datasheet_revisions SET parse_confidence = $2, last_updated_at = now() WHERE id = $1", [revisionId, confidence]);
+}
+
+/**
+ * Reads the latest datasheet revision id for a part, or null when none exists.
+ */
+export async function readLatestDatasheetRevisionId(client: PoolClient, partId: string): Promise<string | null> {
+  const result = await client.query<{ id: string }>(
+    "SELECT id FROM datasheet_revisions WHERE part_id = $1 ORDER BY last_updated_at DESC, id DESC LIMIT 1",
+    [partId]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Reads the minimal part fields needed to resolve a part type and recompute its parameters.
+ */
+export async function readPartForParameterRecompute(client: PoolClient, partId: string): Promise<Pick<Part, "id" | "category" | "connectorFamilyId"> | null> {
+  const result = await client.query<{ id: string; category: string; connector_family_id: string | null }>(
+    "SELECT id, category, connector_family_id FROM parts WHERE id = $1",
+    [partId]
+  );
+  const row = result.rows[0];
+
+  return row ? { category: row.category, connectorFamilyId: row.connector_family_id, id: row.id } : null;
 }
 
 /**
