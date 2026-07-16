@@ -41,14 +41,14 @@ export const PARAMETER_REGISTRY: Record<PartType, CanonicalParameterDef[]> = {
     { label: "Resistance", metricKeys: ["resistance"], paramKey: "resistance", specKeyPatterns: ["resistance"], unit: "ohm", valueKind: "numeric" },
     { label: "Tolerance", metricKeys: [], paramKey: "tolerance", specKeyPatterns: ["tolerance"], unit: "%", valueKind: "numeric" },
     { label: "Power Rating", metricKeys: [], paramKey: "power_rating", specKeyPatterns: ["power rating", "power(w)", "power"], unit: "W", valueKind: "numeric" },
-    { label: "Voltage Rating", metricKeys: ["voltage_rating"], paramKey: "voltage_rating", specKeyPatterns: ["overload voltage", "voltage rating", "voltage - rated", "rated voltage"], unit: "V", valueKind: "numeric" },
+    { label: "Voltage Rating", metricKeys: ["voltage_rating", "rated_voltage"], paramKey: "voltage_rating", specKeyPatterns: ["overload voltage", "voltage rating", "voltage - rated", "rated voltage"], unit: "V", valueKind: "numeric" },
     { label: "Temperature Coefficient", metricKeys: [], paramKey: "temp_coefficient", specKeyPatterns: ["temperature coefficient", "tcr"], unit: "ppm_per_c", valueKind: "numeric" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   capacitor: [
     { label: "Capacitance", metricKeys: ["capacitance"], paramKey: "capacitance", specKeyPatterns: ["capacitance"], unit: "F", valueKind: "numeric" },
     { label: "Tolerance", metricKeys: [], paramKey: "tolerance", specKeyPatterns: ["tolerance"], unit: "%", valueKind: "numeric" },
-    { label: "Voltage Rating", metricKeys: ["voltage_rating"], paramKey: "voltage_rating", specKeyPatterns: ["voltage rated", "voltage - rated", "rated voltage", "voltage rating"], unit: "V", valueKind: "numeric" },
+    { label: "Voltage Rating", metricKeys: ["voltage_rating", "rated_voltage"], paramKey: "voltage_rating", specKeyPatterns: ["voltage rated", "voltage - rated", "rated voltage", "voltage rating"], unit: "V", valueKind: "numeric" },
     { enumValues: ["C0G", "NP0", "X7R", "X5R", "X6S", "X7S", "Y5V", "Z5U"], label: "Dielectric", metricKeys: [], paramKey: "dielectric", specKeyPatterns: ["dielectric", "temperature characteristic"], unit: null, valueKind: "enum" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
@@ -121,6 +121,30 @@ export function getCanonicalParamDefByKey(paramKey: string): CanonicalParameterD
   }
 
   return null;
+}
+
+/**
+ * Collects the legacy part_metrics keys already represented by a set of reconciled parameters, so
+ * metric displays can hide rows the Specifications table covers. A parameter covers its own paramKey
+ * plus every metricKey its registry definition folds in during recompute — the exact keys whose metric
+ * evidence already contributed to the reconciled value, and would otherwise render twice with two
+ * different confidence presentations.
+ */
+export function collectCoveredMetricKeys(parameters: ReadonlyArray<{ paramKey: string; partType: string }>): Set<string> {
+  const covered = new Set<string>();
+
+  for (const parameter of parameters) {
+    covered.add(parameter.paramKey);
+
+    const typedDefs = (PARAMETER_REGISTRY as Record<string, CanonicalParameterDef[] | undefined>)[parameter.partType];
+    const def = typedDefs?.find((candidate) => candidate.paramKey === parameter.paramKey) ?? getCanonicalParamDefByKey(parameter.paramKey);
+
+    for (const metricKey of def?.metricKeys ?? []) {
+      covered.add(metricKey);
+    }
+  }
+
+  return covered;
 }
 
 /**

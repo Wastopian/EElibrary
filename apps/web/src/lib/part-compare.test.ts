@@ -15,6 +15,7 @@ import {
   buildCompareParameterRows,
   collectCompareParameterKeys,
   collectCompareMetricKeys,
+  collectUncoveredCompareMetricKeys,
   formatCompareMetricCell,
   shouldRenderConnectorCompareRows
 } from "./part-compare";
@@ -78,8 +79,8 @@ function stubParameter(partId: string, paramKey: string, overrides: Partial<Part
   };
 }
 
-function stubDetail(partId: string, parameters: PartParameter[]): PartDetailResponse {
-  return { parameters, record: { part: { id: partId } } } as PartDetailResponse;
+function stubDetail(partId: string, parameters: PartParameter[], metrics: PartMetric[] = []): PartDetailResponse {
+  return { parameters, record: { metrics, part: { id: partId } } } as PartDetailResponse;
 }
 
 test("collectCompareParameterKeys unions parameter keys across details", () => {
@@ -90,6 +91,30 @@ test("collectCompareParameterKeys unions parameter keys across details", () => {
 
   assert.ok(keys.includes("resistance") && keys.includes("tolerance"));
   assert.equal(keys.length, 2);
+});
+
+/**
+ * Verifies metric de-duplication against the Specifications matrix: a metric key disappears only when
+ * every part that has the metric also has a covering reconciled parameter, and survives while any part
+ * still relies on it as its only display of the value.
+ */
+test("collectUncoveredCompareMetricKeys drops covered metrics but keeps a part's only display", () => {
+  // Both parts have the resistance metric and a covering resistance parameter -> dropped; the
+  // unregistered supply_voltage metric has no covering parameter anywhere -> kept.
+  const fullyCovered = collectUncoveredCompareMetricKeys([
+    stubDetail("p1", [stubParameter("p1", "resistance")], [stubMetric("resistance"), stubMetric("supply_voltage")]),
+    stubDetail("p2", [stubParameter("p2", "resistance")], [stubMetric("resistance")])
+  ]);
+
+  assert.deepEqual(fullyCovered, ["supply_voltage"]);
+
+  // p2 has the metric but no covering parameter -> the row must stay for p2's sake.
+  const partiallyCovered = collectUncoveredCompareMetricKeys([
+    stubDetail("p1", [stubParameter("p1", "resistance")], [stubMetric("resistance")]),
+    stubDetail("p2", [], [stubMetric("resistance")])
+  ]);
+
+  assert.deepEqual(partiallyCovered, ["resistance"]);
 });
 
 test("buildCompareParameterRows renders typed values, an em dash when absent, and a conflict marker", () => {

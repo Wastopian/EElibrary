@@ -157,6 +157,19 @@ test("compare page mounts the Specifications parameter matrix", () => {
 });
 
 /**
+ * Verifies the metric section de-duplicates against the Specifications matrix and disappears when
+ * everything is covered, instead of repeating values under a second heading.
+ */
+test("compare page renders only uncovered metrics in the Other measured specs section", () => {
+  const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /collectUncoveredCompareMetricKeys\(details\)/u);
+  assert.match(source, /title="Other measured specs"/u);
+  assert.match(source, /metricKeys\.length > 0 \? \(/u);
+  assert.doesNotMatch(source, /collectCompareMetricKeys\(records\)/u, "the raw metric union must not drive the section anymore");
+});
+
+/**
  * Verifies the compare route mounts the side-by-side CAD preview band promised by
  * the product docs, not just the helper that prepares its rows.
  */

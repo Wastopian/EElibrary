@@ -13,6 +13,7 @@ import { notFound } from "next/navigation";
 import { AssetCard, EmptyState, MetricTable, SectionHeading, SectionPanel, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { isFileBackedAsset } from "@ee-library/shared/asset-state";
 import { formatAssetAvailabilityStatus, formatAssetExportStatus, formatMetricLabel, formatMetricValue, formatParameterLabel, formatParameterValue } from "@ee-library/shared/catalog-runtime";
+import { collectCoveredMetricKeys } from "@ee-library/shared/parameter-registry";
 import { DetailSectionNav } from "./DetailSectionNav";
 import { loadPartDetailPage, loadRecentActivityForPart } from "./loaders";
 import type {
@@ -66,6 +67,7 @@ import {
   generationWorkflowTone,
   inventoryStatusTone,
   mapViewToneToBadge,
+  metricConfidenceTone,
   previewTone,
   readinessStatusTone,
   redlineStatusTone,
@@ -210,12 +212,18 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
   const nextActions = getPartNextActions(record);
   const primaryNextAction = nextActions[0];
   const latestSource = record.sources[0];
-  const metricRows = record.metrics.map<MetricTableRow>((metric) => ({
-    label: formatMetricLabel(metric.metricKey),
-    meta: `${Math.round(metric.confidenceScore * 100)}% confidence`,
-    tone: scoreTone(metric.confidenceScore),
-    value: formatMetricValue(metric)
-  }));
+  // Metric rows the reconciled parameters already cover would render the same value twice with two
+  // different confidence presentations, so only uncovered metrics (part types the registry does not
+  // model yet) keep a row here; the Specifications panel is the canonical spec display.
+  const coveredMetricKeys = collectCoveredMetricKeys(detail.parameters);
+  const metricRows = record.metrics
+    .filter((metric) => !coveredMetricKeys.has(metric.metricKey))
+    .map<MetricTableRow>((metric) => ({
+      label: formatMetricLabel(metric.metricKey),
+      meta: `${Math.round(metric.confidenceScore * 100)}% confidence`,
+      tone: metricConfidenceTone(metric.confidenceScore),
+      value: formatMetricValue(metric)
+    }));
   const specificationRows = detail.specifications.map<MetricTableRow>((specification) => ({
     key: specification.id,
     label: specification.specKey,
@@ -530,9 +538,17 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </div>
 
         <div className="detail-two-col">
-          <SectionPanel description="Key specs in standard units. Always confirm against the official datasheet before final use." title="Key metrics">
-            {metricRows.length > 0 ? <MetricTable rows={metricRows} /> : <EmptyState body="No specs are attached to this part yet." title="No specs" />}
-          </SectionPanel>
+          {/*
+            Key metrics only lists measured specs the Specifications panel below does not already
+            cover — a covered metric would repeat the same value with a second, conflicting
+            confidence badge. When everything is covered (or no metrics exist), the panel
+            disappears and Specifications is the one place to read specs.
+          */}
+          {metricRows.length > 0 ? (
+            <SectionPanel description="Extra measured specs not yet part of the Specifications table below. Always confirm against the official datasheet before final use." title="Key metrics">
+              <MetricTable rows={metricRows} />
+            </SectionPanel>
+          ) : null}
           <SectionPanel description="Package outline and dimensions. Toggle between millimeters and inches for the unit you build in." title="Package">
             <PackageDimensions
               partPackage={{

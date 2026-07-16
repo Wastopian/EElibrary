@@ -198,6 +198,65 @@ test("part detail renders reconciled specification rows and flags source conflic
 });
 
 /**
+ * Verifies the Key metrics panel de-duplicates against Specifications: metrics covered by reconciled
+ * parameters (via paramKey or registry metricKeys) hide the panel entirely, while uncovered metrics
+ * keep it with calm confidence tones (info, never danger) for moderately confident parsed values.
+ */
+test("part detail hides Key metrics when Specifications covers every metric", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-grm188r71c104ka01d");
+
+  assert.ok(record, "expected seed capacitor record");
+  assert.ok(record.metrics.some((metric) => metric.metricKey === "rated_voltage"), "seed capacitor carries the rated_voltage metric");
+
+  // Capacitance and voltage_rating parameters cover both seed metrics (capacitance directly,
+  // rated_voltage via the registry metricKeys alias) -> the Key metrics panel disappears.
+  const parameters = [
+    buildParameter({ id: "param-cap", paramKey: "capacitance", partId: record.part.id, partType: "capacitor", unit: "F", valueNumeric: 100e-9 }),
+    buildParameter({ id: "param-vr", paramKey: "voltage_rating", partId: record.part.id, partType: "capacitor", unit: "V", valueNumeric: 16 })
+  ];
+
+  const restoreCovered = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, undefined, undefined, [], parameters),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.equal(html.includes("<h2>Key metrics</h2>"), false, "a fully covered Key metrics panel is not rendered");
+    const specPanel = extractPanelHtml(html, "Specifications");
+    assert.match(specPanel, /Capacitance/u);
+    assert.match(specPanel, /100 nF/u);
+  } finally {
+    restoreCovered();
+  }
+
+  // Without parameters nothing is covered: the panel stays, and a 76%-confidence parsed value gets
+  // the info tone rather than an alarming danger badge.
+  const restoreUncovered = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Key metrics");
+
+    assert.match(panel, /Capacitance/u);
+    assert.match(panel, /76% confidence/u);
+    assert.match(panel, /ui-badge--info/u);
+    assert.doesNotMatch(panel, /ui-badge--danger/u, "spec confidence badges never use the danger tone");
+  } finally {
+    restoreUncovered();
+  }
+});
+
+/**
  * Verifies the decision-point push: confirmed "this bit us" memory interrupts at the top of the
  * part-detail hero as a warning (not a gate) before the use decision.
  */

@@ -6,6 +6,7 @@
 import { resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getAssetReviewStatus } from "@ee-library/shared/review-workflow";
 import { formatMetricLabel, formatMetricValue, formatParameterLabel, formatParameterValue } from "@ee-library/shared/catalog-runtime";
+import { collectCoveredMetricKeys } from "@ee-library/shared/parameter-registry";
 import { assetTrustStageTone, formatAssetTrustStageLabel } from "./detail-view-model";
 import { getAssetPreviewState } from "../components/AssetInlinePreview";
 import type { AssetPreviewState } from "../components/AssetInlinePreview";
@@ -48,6 +49,25 @@ export function collectCompareMetricKeys(records: PartSearchRecord[]): string[] 
   }
 
   return [...keys].sort((first, second) => formatMetricLabel(first).localeCompare(formatMetricLabel(second)));
+}
+
+/**
+ * Collects the metric keys the Specs section still needs after the Specifications matrix: a key is
+ * dropped only when every compared part that has the metric also has a reconciled parameter covering
+ * it (so no part's only display of a value is lost), and kept as long as any part still relies on it.
+ */
+export function collectUncoveredCompareMetricKeys(details: PartDetailResponse[]): string[] {
+  const coveredByPart = new Map(
+    details.map((detail) => [detail.record.part.id, collectCoveredMetricKeys(detail.parameters)])
+  );
+
+  return collectCompareMetricKeys(detailsToRecords(details)).filter((metricKey) =>
+    details.some(
+      (detail) =>
+        detail.record.metrics.some((metric) => metric.metricKey === metricKey)
+        && !coveredByPart.get(detail.record.part.id)?.has(metricKey)
+    )
+  );
 }
 
 /**
