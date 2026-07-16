@@ -59,15 +59,28 @@ export const PARAMETER_REGISTRY: Record<PartType, CanonicalParameterDef[]> = {
     { label: "DC Resistance", metricKeys: [], paramKey: "dc_resistance", specKeyPatterns: ["dc resistance", "dcr"], unit: "ohm", valueKind: "numeric" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
-  // diode / mcu / regulator are recognized part types but carry only the generic set in this phase; their
-  // registries expand as parameter coverage grows, without changing the PartType union.
+  // Patterns below follow DigiKey's parametric label vocabulary ("Voltage - DC Reverse (Vr) (Max)",
+  // "Speed", "Current - Output") plus the spec keys the Mouser description parser emits ("Flash Size",
+  // "Output Current"), so both sources feed the same canonical parameters.
   diode: [
+    { label: "Forward Voltage", metricKeys: [], paramKey: "forward_voltage", specKeyPatterns: ["voltage - forward", "forward voltage"], unit: "V", valueKind: "numeric" },
+    { label: "Reverse Voltage", metricKeys: [], paramKey: "reverse_voltage", specKeyPatterns: ["voltage - dc reverse", "reverse voltage", "voltage - reverse"], unit: "V", valueKind: "numeric" },
+    { label: "Forward Current", metricKeys: [], paramKey: "forward_current", specKeyPatterns: ["current - average rectified", "forward current", "current - forward"], unit: "A", valueKind: "numeric" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   mcu: [
+    { label: "Clock Frequency", metricKeys: ["clock_frequency_max"], paramKey: "clock_frequency", specKeyPatterns: ["clock frequency", "speed", "frequency"], unit: "Hz", valueKind: "numeric" },
+    { label: "Flash Size", metricKeys: [], paramKey: "flash_size", specKeyPatterns: ["program memory size", "flash size", "flash"], unit: "B", valueKind: "numeric" },
+    { label: "RAM Size", metricKeys: [], paramKey: "ram_size", specKeyPatterns: ["ram size", "ram"], unit: "B", valueKind: "numeric" },
+    { label: "Supply Voltage", metricKeys: [], paramKey: "supply_voltage_range", specKeyPatterns: ["voltage - supply", "supply voltage", "operating voltage"], unit: "V", valueKind: "range" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   regulator: [
+    { label: "Output Voltage", metricKeys: [], paramKey: "output_voltage", specKeyPatterns: ["voltage - output", "output voltage"], unit: "V", valueKind: "numeric" },
+    { label: "Output Current", metricKeys: ["output_current_max"], paramKey: "output_current", specKeyPatterns: ["current - output", "output current"], unit: "A", valueKind: "numeric" },
+    { label: "Quiescent Current", metricKeys: [], paramKey: "quiescent_current", specKeyPatterns: ["current - quiescent", "quiescent current", "supply current (iq)"], unit: "A", valueKind: "numeric" },
+    { label: "Dropout Voltage", metricKeys: [], paramKey: "dropout_voltage", specKeyPatterns: ["voltage - dropout", "dropout voltage"], unit: "V", valueKind: "numeric" },
+    { label: "Input Voltage Max", metricKeys: ["input_voltage_max"], paramKey: "input_voltage_max", specKeyPatterns: ["voltage - input", "input voltage"], unit: "V", valueKind: "numeric" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   connector: [

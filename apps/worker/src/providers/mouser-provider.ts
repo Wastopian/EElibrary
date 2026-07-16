@@ -327,6 +327,11 @@ const PASSIVE_VALUE_METRICS: ReadonlyArray<{ categoryHint: RegExp; metricKey: st
  * "...Chip Resistor 0603, 10kOhms, 1%, 1/10W"). This runs only for resistor/capacitor/inductor
  * categories and stays conservative: one value metric matched to the category, plus tolerance and
  * power-rating spec rows. It never guesses temperature coefficients, voltages, or other fields.
+ *
+ * MCU and regulator categories get the same treatment for the handful of specs Mouser reliably puts
+ * in their descriptions ("64 Kbytes of Flash 8 Kbytes RAM, 64 MHz CPU"; "200mA nanopower-IQ ( 25 nA)"):
+ * verbatim fragments become parametric spec rows the shared registry parses into typed parameters.
+ * Nothing is emitted for categories whose descriptions carry no numbers (e.g. small-signal diodes).
  */
 function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; specifications: NeutralSpecification[] } {
   const category = normalizeOptionalText(part.Category);
@@ -334,6 +339,14 @@ function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; speci
 
   if (!category || !description) {
     return { metrics: [], specifications: [] };
+  }
+
+  if (/microcontroller|mcu/iu.test(category)) {
+    return { metrics: [], specifications: readMcuDescriptionSpecs(description) };
+  }
+
+  if (/regulator/iu.test(category)) {
+    return { metrics: [], specifications: readRegulatorDescriptionSpecs(description) };
   }
 
   const valueMetric = PASSIVE_VALUE_METRICS.find((entry) => entry.categoryHint.test(category));
@@ -363,6 +376,59 @@ function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; speci
   }
 
   return { metrics, specifications };
+}
+
+/**
+ * Reads flash size, RAM size, and clock frequency from an MCU description ("Mainstream Arm Cortex-M0+
+ * MCU 64 Kbytes of Flash 8 Kbytes RAM, 64 MHz CPU"). Each value must appear with its unit and its
+ * anchor word (Flash / RAM / a frequency unit), so nothing is guessed from bare numbers.
+ */
+function readMcuDescriptionSpecs(description: string): NeutralSpecification[] {
+  const specifications: NeutralSpecification[] = [];
+  const flashMatch = description.match(/(\d+(?:\.\d+)?\s*[kmg]?(?:b|bytes?))\s*(?:of\s+)?flash/iu) ?? description.match(/flash\s*[:=]?\s*(\d+(?:\.\d+)?\s*[kmg]?(?:b|bytes?))\b/iu);
+
+  if (flashMatch?.[1]) {
+    specifications.push({ specGroup: "parametric", specKey: "Flash Size", specValue: flashMatch[1].trim() });
+  }
+
+  const ramMatch = description.match(/(\d+(?:\.\d+)?\s*[kmg]?(?:b|bytes?))\s*(?:of\s+)?s?ram/iu);
+
+  if (ramMatch?.[1]) {
+    specifications.push({ specGroup: "parametric", specKey: "RAM Size", specValue: ramMatch[1].trim() });
+  }
+
+  const clockMatch = description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu);
+
+  if (clockMatch?.[1]) {
+    specifications.push({ specGroup: "parametric", specKey: "Clock Frequency", specValue: clockMatch[1].trim() });
+  }
+
+  return specifications;
+}
+
+/**
+ * Reads output current and quiescent current from a regulator description ("200mA nanopower-IQ
+ * ( 25 nA) low-dropout"). The milli/whole-amp value is the output rating; a nano/micro-amp value is
+ * only read as quiescent current when the description says so (IQ / quiescent / nanopower). Output
+ * voltage is deliberately never guessed — fixed-output parts encode it in the MPN, not the text.
+ */
+function readRegulatorDescriptionSpecs(description: string): NeutralSpecification[] {
+  const specifications: NeutralSpecification[] = [];
+  const outputMatch = description.match(/(\d+(?:\.\d+)?\s*m?A)\b/u);
+
+  if (outputMatch?.[1]) {
+    specifications.push({ specGroup: "parametric", specKey: "Output Current", specValue: outputMatch[1].trim() });
+  }
+
+  if (/iq|quiescent|nanopower/iu.test(description)) {
+    const quiescentMatch = description.match(/(\d+(?:\.\d+)?\s*[nuµμ]A)\b/u);
+
+    if (quiescentMatch?.[1]) {
+      specifications.push({ specGroup: "parametric", specKey: "Quiescent Current", specValue: quiescentMatch[1].trim() });
+    }
+  }
+
+  return specifications;
 }
 
 /**

@@ -51,10 +51,11 @@ test("mouser provider rejects a foreign raw payload", () => {
 });
 
 /**
- * Verifies product attributes become verbatim spec rows and that a non-passive part triggers no
- * description parsing (no tolerance/power rows, no invented metrics).
+ * Verifies product attributes become verbatim spec rows and an MCU description with no anchored
+ * values (this one truncates before "of Flash") emits nothing — no tolerance/power rows, no invented
+ * metrics, no guessed sizes.
  */
-test("mouser provider keeps product attributes as spec rows and skips description parsing for non-passives", () => {
+test("mouser provider keeps product attributes as spec rows and invents nothing from anchorless descriptions", () => {
   const normalized = mouserProviderAdapter.normalizeRawPart(buildRawPayload());
   const specifications = normalized.specifications ?? [];
 
@@ -68,6 +69,52 @@ test("mouser provider keeps product attributes as spec rows and skips descriptio
   assert.ok(!specifications.some((row) => row.specKey === "Tolerance"), "no tolerance row for a microcontroller");
   assert.ok(!specifications.some((row) => row.specKey === "Power Rating"), "no power row for a microcontroller");
   assert.ok(!normalized.metrics.some((metric) => metric.metricKey === "resistance"), "no invented resistance metric");
+});
+
+/**
+ * Verifies the MCU and regulator description parsing against the live Mouser descriptions captured
+ * on 2026-07-16, and that a numbers-free diode description emits nothing. Values must sit next to
+ * their anchor word (Flash/RAM/CPU-frequency, output/quiescent current) — never bare numbers.
+ */
+test("mouser provider parses MCU and regulator description specs conservatively", () => {
+  const parametricRows = (category: string, description: string) => {
+    const payload = buildRawPayload();
+    const part = (payload.payload as { part: Record<string, unknown> }).part;
+    part["Category"] = category;
+    part["Description"] = description;
+    part["ProductAttributes"] = [];
+    const normalized = mouserProviderAdapter.normalizeRawPart(payload);
+
+    return {
+      metrics: normalized.metrics,
+      rows: (normalized.specifications ?? []).filter((row) => row.specGroup === "parametric").map((row) => [row.specKey, row.specValue])
+    };
+  };
+
+  const mcu = parametricRows("ARM Microcontrollers - MCU", "ARM Microcontrollers - MCU Mainstream Arm Cortex-M0+ MCU 64 Kbytes of Flash 8 Kbytes RAM, 64 MHz CPU, 2x USART");
+
+  assert.deepEqual(mcu.rows, [
+    ["Flash Size", "64 Kbytes"],
+    ["RAM Size", "8 Kbytes"],
+    ["Clock Frequency", "64 MHz"]
+  ]);
+  assert.equal(mcu.metrics.length, 0, "description parsing emits verbatim spec rows, not metrics");
+
+  const ldo = parametricRows("LDO Voltage Regulators", "LDO Voltage Regulators 200mA nanopower-IQ ( 25 nA) low-dropout");
+
+  assert.deepEqual(ldo.rows, [
+    ["Output Current", "200mA"],
+    ["Quiescent Current", "25 nA"]
+  ]);
+
+  // A regulator without IQ language must not read a small current as quiescent.
+  const plainLdo = parametricRows("LDO Voltage Regulators", "LDO Voltage Regulators 300mA low-dropout regulator");
+
+  assert.deepEqual(plainLdo.rows, [["Output Current", "300mA"]]);
+
+  const diode = parametricRows("Small Signal Switching Diodes", "Small Signal Switching Diodes SURFACE MOUNT FAST SWITCHING DIODE");
+
+  assert.deepEqual(diode.rows, [], "a numbers-free description yields no parametric rows");
 });
 
 /**
