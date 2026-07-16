@@ -12,6 +12,9 @@ const TOLERANCE: CanonicalParameterDef = { label: "Tolerance", metricKeys: [], p
 const POWER: CanonicalParameterDef = { label: "Power", metricKeys: [], paramKey: "power_rating", specKeyPatterns: ["power"], unit: "W", valueKind: "numeric" };
 const CAPACITANCE: CanonicalParameterDef = { label: "Capacitance", metricKeys: [], paramKey: "capacitance", specKeyPatterns: ["capacitance"], unit: "F", valueKind: "numeric" };
 const TEMP_RANGE: CanonicalParameterDef = { label: "Operating Temperature Range", metricKeys: [], paramKey: "operating_temperature_range", specKeyPatterns: ["operating temperature"], unit: "deg C", valueKind: "range" };
+const CURRENT: CanonicalParameterDef = { label: "Output Current", metricKeys: [], paramKey: "output_current", specKeyPatterns: ["output current"], unit: "A", valueKind: "numeric" };
+const FREQUENCY: CanonicalParameterDef = { label: "Clock Frequency", metricKeys: [], paramKey: "clock_frequency", specKeyPatterns: ["clock frequency"], unit: "Hz", valueKind: "numeric" };
+const MEMORY: CanonicalParameterDef = { label: "Flash Size", metricKeys: [], paramKey: "flash_size", specKeyPatterns: ["flash"], unit: "B", valueKind: "numeric" };
 const DIELECTRIC: CanonicalParameterDef = { enumValues: ["C0G", "X7R", "X5R"], label: "Dielectric", metricKeys: [], paramKey: "dielectric", specKeyPatterns: ["dielectric"], unit: null, valueKind: "enum" };
 const PACKAGE: CanonicalParameterDef = { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package"], unit: null, valueKind: "text" };
 
@@ -38,6 +41,29 @@ test("parseEngineeringValue normalizes numeric values into canonical base units"
   const cap = parseEngineeringValue("100 nF", CAPACITANCE);
 
   assert.ok(cap?.kind === "numeric" && Math.abs(cap.value - 100e-9) <= 1e-18);
+});
+
+/**
+ * Verifies the attached-prefix forms providers actually send ("200mA", "64MHz") and the byte unit for
+ * memory sizes parse into base units — the vocabulary the MCU/regulator registry entries rely on.
+ */
+test("parseEngineeringValue handles attached prefixes and memory sizes", () => {
+  const numeric = (raw: string, def: CanonicalParameterDef): number | null => {
+    const parsed = parseEngineeringValue(raw, def);
+
+    return parsed?.kind === "numeric" ? parsed.value : null;
+  };
+
+  assert.equal(numeric("200mA", CURRENT), 0.2, "attached milli prefix");
+  assert.equal(numeric("200 mA", CURRENT), 0.2);
+  const quiescent = numeric("25 nA", CURRENT);
+  assert.ok(quiescent !== null && Math.abs(quiescent - 25e-9) <= 1e-18);
+  assert.equal(numeric("64MHz", FREQUENCY), 64_000_000, "attached MHz");
+  assert.equal(numeric("64 MHz", FREQUENCY), 64_000_000);
+  assert.equal(numeric("32 kHz", FREQUENCY), 32_000);
+  assert.equal(numeric("64 Kbytes", MEMORY), 64_000, "spelled-out kilobytes");
+  assert.equal(numeric("64KB", MEMORY), 64_000, "attached KB");
+  assert.equal(numeric("1 MB", MEMORY), 1_000_000);
 });
 
 /**
@@ -73,6 +99,8 @@ test("formatEngineeringValue renders base-unit values in engineering notation", 
   assert.equal(formatEngineeringValue(0.5, "%"), "0.5%");
   assert.equal(formatEngineeringValue(125, "deg C"), "125 °C");
   assert.equal(formatEngineeringValue(100, "ppm_per_c"), "100 ppm/°C");
+  assert.equal(formatEngineeringValue(64_000, "B"), "64 kB");
+  assert.equal(formatEngineeringValue(64_000_000, "Hz"), "64 MHz");
   assert.equal(formatEngineeringValue(0, "ohm"), "0 Ω");
   assert.equal(formatEngineeringValue(42, null), "42");
 

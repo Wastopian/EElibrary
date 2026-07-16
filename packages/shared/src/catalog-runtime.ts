@@ -4,6 +4,7 @@
 
 import { isValidatedDownloadableAsset } from "./asset-state";
 import { formatEngineeringValue } from "./parameter-normalize";
+import { getCanonicalParamDefByKey } from "./parameter-registry";
 import type {
   Asset,
   AssetAvailabilityStatus,
@@ -273,10 +274,11 @@ export function formatMetricValue(metric: PartMetric): string {
 }
 
 /**
- * Formats a canonical parameter key into a readable label.
+ * Formats a canonical parameter key into a readable label, preferring the registry's curated label
+ * ("RAM Size", "DC Resistance") over mechanical title-casing of the key ("Ram Size", "Dc Resistance").
  */
 export function formatParameterLabel(paramKey: string): string {
-  return formatMetricLabel(paramKey);
+  return getCanonicalParamDefByKey(paramKey)?.label ?? formatMetricLabel(paramKey);
 }
 
 /**

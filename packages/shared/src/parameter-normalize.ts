@@ -144,8 +144,8 @@ const DISPLAY_SI_PREFIXES: ReadonlyArray<{ factor: number; prefix: string }> = [
   { factor: 1e-12, prefix: "p" }
 ];
 
-/** SI_PREFIXABLE_UNITS are the canonical units an engineer expects in SI-prefixed form (10 kΩ, 100 nF). */
-const SI_PREFIXABLE_UNITS = new Set(["ohm", "F", "H", "V", "A", "W", "Hz", "s"]);
+/** SI_PREFIXABLE_UNITS are the canonical units an engineer expects in SI-prefixed form (10 kΩ, 100 nF, 64 kB). */
+const SI_PREFIXABLE_UNITS = new Set(["ohm", "F", "H", "V", "A", "W", "Hz", "s", "B"]);
 
 /** UNIT_DISPLAY_GLYPH maps a canonical unit to the glyph engineers read (only ohm needs translating). */
 const UNIT_DISPLAY_GLYPH: Record<string, string> = {
@@ -418,22 +418,33 @@ function readMultiplier(text: string, unit: string | null): number {
     if (/\b(mh|millihenry)\b/u.test(normalized)) return 1e-3;
   }
 
+  // Prefixes are matched with (?<![a-z0-9]) rather than \b so attached provider forms parse too:
+  // "200mA", "64MHz", "1.2mV" put a digit directly before the prefix letter, where \b never fires.
   if (unit === "V") {
-    if (/\b(uv|µv)\b/u.test(normalized)) return 1e-6;
-    if (/\bmv\b/u.test(normalized)) return 1e-3;
-    if (/\bkv\b/u.test(normalized)) return 1_000;
+    if (/(?<![a-z0-9])(uv|µv)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])mv\b/u.test(normalized) || /\dmv\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])kv\b/u.test(normalized) || /\dkv\b/u.test(normalized)) return 1_000;
+    if (/\d(uv|µv)\b/u.test(normalized)) return 1e-6;
   }
 
   if (unit === "A") {
-    if (/\b(na)\b/u.test(normalized)) return 1e-9;
-    if (/\b(ua|µa)\b/u.test(normalized)) return 1e-6;
-    if (/\bma\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])na\b/u.test(normalized) || /\dna\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(ua|µa)\b/u.test(normalized) || /\d(ua|µa)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])ma\b/u.test(normalized) || /\dma\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "Hz") {
-    if (/\bkhz\b/u.test(normalized)) return 1_000;
-    if (/\bmhz\b/u.test(normalized)) return 1_000_000;
-    if (/\bghz\b/u.test(normalized)) return 1_000_000_000;
+    if (/(?<![a-z0-9])khz\b/u.test(normalized) || /\dkhz\b/u.test(normalized)) return 1_000;
+    if (/(?<![a-z0-9])mhz\b/u.test(normalized) || /\dmhz\b/u.test(normalized)) return 1_000_000;
+    if (/(?<![a-z0-9])ghz\b/u.test(normalized) || /\dghz\b/u.test(normalized)) return 1_000_000_000;
+  }
+
+  if (unit === "B") {
+    // Memory sizes ("64 Kbytes of Flash", "64KB", "1MB") use decimal SI here: the nominal figure is
+    // the universal search/compare handle; the verbatim provider string stays available alongside.
+    if (/(?<![a-z0-9])(kb|kbytes?)\b/u.test(normalized) || /\dkb\b/u.test(normalized)) return 1e3;
+    if (/(?<![a-z0-9])(mb|mbytes?)\b/u.test(normalized) || /\dmb\b/u.test(normalized)) return 1e6;
+    if (/(?<![a-z0-9])(gb|gbytes?)\b/u.test(normalized) || /\dgb\b/u.test(normalized)) return 1e9;
   }
 
   if (unit === "W") {
