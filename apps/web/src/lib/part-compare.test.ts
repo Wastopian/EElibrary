@@ -102,9 +102,9 @@ test("buildCompareParameterRows renders typed values, an em dash when absent, an
 
   assert.ok(resistanceRow, "expected a resistance row");
   assert.equal(resistanceRow.label, "Resistance");
-  assert.equal(resistanceRow.values[0]?.text, "10000 ohm");
+  assert.equal(resistanceRow.values[0]?.text, "10 kΩ");
   assert.equal(resistanceRow.values[0]?.tone, "info");
-  assert.equal(resistanceRow.values[1]?.text, "4700 ohm · sources disagree");
+  assert.equal(resistanceRow.values[1]?.text, "4.7 kΩ · sources disagree");
   assert.equal(resistanceRow.values[1]?.tone, "review");
 });
 

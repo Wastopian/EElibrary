@@ -39,7 +39,7 @@ function buildParameter(overrides: Partial<PartParameter>): PartParameter {
 test("formatParameterUnit expands non-obvious unit codes", () => {
   assert.equal(formatParameterUnit("ppm_per_c"), "ppm/°C");
   assert.equal(formatParameterUnit("deg C"), "°C");
-  assert.equal(formatParameterUnit("ohm"), "ohm");
+  assert.equal(formatParameterUnit("ohm"), "Ω");
   assert.equal(formatParameterUnit(null), "");
 });
 
@@ -48,7 +48,9 @@ test("formatParameterUnit expands non-obvious unit codes", () => {
  */
 test("formatParameterValue renders each value kind with its unit", () => {
   assert.equal(formatParameterLabel("power_rating"), "Power Rating");
-  assert.equal(formatParameterValue(buildParameter({ unit: "ohm", valueNumeric: 10_000 })), "10000 ohm");
+  assert.equal(formatParameterValue(buildParameter({ unit: "ohm", valueNumeric: 10_000 })), "10 kΩ", "numeric values render in engineering notation");
+  assert.equal(formatParameterValue(buildParameter({ paramKey: "power_rating", unit: "W", valueNumeric: 0.1 })), "100 mW");
+  assert.equal(formatParameterValue(buildParameter({ paramKey: "tolerance", unit: "%", valueNumeric: 1 })), "1%");
   assert.equal(
     formatParameterValue(buildParameter({ paramKey: "operating_temperature_range", unit: "deg C", valueKind: "range", valueMax: 125, valueMin: -55, valueNumeric: null })),
     "-55 to 125 °C"

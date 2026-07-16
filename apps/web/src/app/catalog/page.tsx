@@ -6,7 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { looksLikeConcreteProviderLookupQuery } from "@ee-library/shared";
 import { formatParameterLabel, formatParameterUnit } from "@ee-library/shared/catalog-runtime";
-import { parseBareEngineeringNumber } from "@ee-library/shared/parameter-normalize";
+import { formatBareEngineeringNumber, formatEngineeringValue, parseBareEngineeringNumber } from "@ee-library/shared/parameter-normalize";
 import { getCanonicalParamDefByKey, listCanonicalParameterKeys } from "@ee-library/shared/parameter-registry";
 import { EmptyState, StatusBadge, TrustMeter } from "@ee-library/ui";
 import { CatalogResultsPresentation } from "../../components/CatalogResultsPresentation";
@@ -1451,17 +1451,22 @@ function ParameterFilterControl({ facet, rawValues }: { facet: ParameterFacet; r
   const countLabel = `${facet.partCount} part${facet.partCount === 1 ? "" : "s"}`;
 
   if (facet.kind === "numeric") {
+    // Placeholders echo the real bounds of the current result set as typeable shorthand, so a
+    // power-rating box suggests "100m", not a misleading generic "1k".
+    const minPlaceholder = typeof facet.min === "number" ? `e.g. ${formatBareEngineeringNumber(facet.min)}` : "e.g. 1k";
+    const maxPlaceholder = typeof facet.max === "number" ? `e.g. ${formatBareEngineeringNumber(facet.max)}` : "e.g. 10k";
+
     return (
       <fieldset className="filter-rail__parameter">
         <legend>{`${facet.label}${unitSuffix} · ${countLabel}`}</legend>
         <div className="filter-rail__parameter-range">
           <label>
             Min
-            <input defaultValue={rawValues[`pmin_${facet.paramKey}`] ?? ""} name={`pmin_${facet.paramKey}`} placeholder="e.g. 1k" type="text" />
+            <input defaultValue={rawValues[`pmin_${facet.paramKey}`] ?? ""} name={`pmin_${facet.paramKey}`} placeholder={minPlaceholder} type="text" />
           </label>
           <label>
             Max
-            <input defaultValue={rawValues[`pmax_${facet.paramKey}`] ?? ""} name={`pmax_${facet.paramKey}`} placeholder="e.g. 10k" type="text" />
+            <input defaultValue={rawValues[`pmax_${facet.paramKey}`] ?? ""} name={`pmax_${facet.paramKey}`} placeholder={maxPlaceholder} type="text" />
           </label>
         </div>
       </fieldset>
@@ -1839,20 +1844,17 @@ function formatParameterFilterPill(filter: PartParameterFilter): string | null {
     return null;
   }
 
-  const unit = formatParameterUnit(def.unit);
-  const suffix = unit ? ` ${unit}` : "";
-
   if (def.valueKind === "numeric") {
     if (typeof filter.min === "number" && typeof filter.max === "number") {
-      return `${def.label}: ${filter.min}–${filter.max}${suffix}`;
+      return `${def.label}: ${formatEngineeringValue(filter.min, def.unit)} – ${formatEngineeringValue(filter.max, def.unit)}`;
     }
 
     if (typeof filter.min === "number") {
-      return `${def.label}: ≥ ${filter.min}${suffix}`;
+      return `${def.label}: ≥ ${formatEngineeringValue(filter.min, def.unit)}`;
     }
 
     if (typeof filter.max === "number") {
-      return `${def.label}: ≤ ${filter.max}${suffix}`;
+      return `${def.label}: ≤ ${formatEngineeringValue(filter.max, def.unit)}`;
     }
 
     return null;

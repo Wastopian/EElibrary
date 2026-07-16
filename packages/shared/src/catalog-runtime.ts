@@ -3,6 +3,7 @@
  */
 
 import { isValidatedDownloadableAsset } from "./asset-state";
+import { formatEngineeringValue } from "./parameter-normalize";
 import type {
   Asset,
   AssetAvailabilityStatus,
@@ -253,19 +254,19 @@ export function formatMetricLabel(metricKey: string): string {
  */
 export function formatMetricValue(metric: PartMetric): string {
   if (metric.metricValue !== null) {
-    return `${formatMetricNumber(metric.metricValue)} ${metric.unit}`;
+    return formatEngineeringValue(metric.metricValue, metric.unit);
   }
 
   if (metric.minValue !== null && metric.maxValue !== null) {
-    return `${formatMetricNumber(metric.minValue)}-${formatMetricNumber(metric.maxValue)} ${metric.unit}`;
+    return `${formatEngineeringValue(metric.minValue, metric.unit)} to ${formatEngineeringValue(metric.maxValue, metric.unit)}`;
   }
 
   if (metric.minValue !== null) {
-    return `>= ${formatMetricNumber(metric.minValue)} ${metric.unit}`;
+    return `≥ ${formatEngineeringValue(metric.minValue, metric.unit)}`;
   }
 
   if (metric.maxValue !== null) {
-    return `<= ${formatMetricNumber(metric.maxValue)} ${metric.unit}`;
+    return `≤ ${formatEngineeringValue(metric.maxValue, metric.unit)}`;
   }
 
   return `Unknown ${metric.unit}`;
@@ -294,6 +295,10 @@ export function formatParameterUnit(unit: string | null): string {
     return "°C";
   }
 
+  if (unit === "ohm") {
+    return "Ω";
+  }
+
   return unit;
 }
 
@@ -305,7 +310,7 @@ export function formatParameterValue(parameter: PartParameter): string {
   const suffix = unit.length > 0 ? ` ${unit}` : "";
 
   if (parameter.valueKind === "numeric" && parameter.valueNumeric !== null) {
-    return `${formatMetricNumber(parameter.valueNumeric)}${suffix}`;
+    return formatEngineeringValue(parameter.valueNumeric, parameter.unit);
   }
 
   if (parameter.valueKind === "range" && parameter.valueMin !== null && parameter.valueMax !== null) {

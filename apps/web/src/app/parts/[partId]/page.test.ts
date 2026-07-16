@@ -144,7 +144,18 @@ test("part detail renders reconciled specification rows and flags source conflic
   assert.ok(record, "expected seed part detail record");
 
   const parameters = [
-    buildParameter({ id: "param-a", isConflicted: false, paramKey: "resistance", unit: "ohm", valueNumeric: 10_000, winningProviderId: "mouser" }),
+    buildParameter({
+      id: "param-a",
+      isConflicted: false,
+      paramKey: "resistance",
+      sources: [
+        { agreesWithWinner: true, confidence: 0.6, providerId: "mouser", rawSpecKey: "Resistance", rawValue: "10 kOhms", sourceRecordId: "source-a", valueMax: null, valueMin: null, valueNumeric: 10_000, valueText: null },
+        { agreesWithWinner: true, confidence: 0.5, providerId: "datasheet", rawSpecKey: "Resistance", rawValue: "10000", sourceRecordId: null, valueMax: null, valueMin: null, valueNumeric: 10_000, valueText: null }
+      ],
+      unit: "ohm",
+      valueNumeric: 10_000,
+      winningProviderId: "mouser"
+    }),
     buildParameter({ id: "param-b", isConflicted: true, paramKey: "voltage_rating", unit: "V", valueNumeric: 50, winningProviderId: "digikey" })
   ];
 
@@ -161,7 +172,8 @@ test("part detail renders reconciled specification rows and flags source conflic
 
     assert.match(panel, /Key specs combined across distributors/u);
     assert.match(panel, /Resistance/u);
-    assert.match(panel, /10000 ohm/u);
+    assert.match(panel, /10 kΩ/u, "numeric values render in engineering notation, not raw base units");
+    assert.match(panel, /confirmed by datasheet/u, "a corroborating datasheet source is surfaced on the row");
     assert.match(panel, /Voltage Rating/u);
     assert.match(panel, /sources disagree/u);
   } finally {
