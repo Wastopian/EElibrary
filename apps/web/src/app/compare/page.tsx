@@ -18,7 +18,7 @@ import {
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
   buildCompareParameterRows,
-  collectCompareMetricKeys,
+  collectUncoveredCompareMetricKeys,
   detailsToRecords,
   formatCompareMetricCell,
   shouldRenderConnectorCompareRows
@@ -56,7 +56,9 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
 
   const records = detailsToRecords(details);
   const parameterRows = buildCompareParameterRows(details);
-  const metricKeys = collectCompareMetricKeys(records);
+  // Only metrics the Specifications matrix does not already cover keep a row; a covered metric would
+  // repeat the same value under a second heading.
+  const metricKeys = collectUncoveredCompareMetricKeys(details);
   const assetClassRows = buildCompareAssetClassRows(records);
   const assetTrustRows = buildCompareAssetTrustRows(records);
   const assetPreviewRows = buildCompareAssetPreviewRows(records);
@@ -176,10 +178,12 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             )}
           </SectionPanel>
 
-          <SectionPanel description="Specs use the same units as the part page. Confidence is shown per metric — high confidence on one number does not mean the whole part is verified." title="Specs">
-            {metricKeys.length === 0 ? (
-              <EmptyState body="None of these parts have spec data yet." title="No shared specs" />
-            ) : (
+          {/*
+            Extra measured specs the Specifications matrix above does not cover. When everything is
+            covered, the section disappears rather than repeating values under a second heading.
+          */}
+          {metricKeys.length > 0 ? (
+            <SectionPanel description="Extra measured specs not yet part of the Specifications table above. Values use the same units as the part page." title="Other measured specs">
               <div className="admin-table-wrap compare-table-wrap">
                 <table className="admin-table compare-table compare-table--metrics">
                   <thead>
@@ -206,8 +210,8 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                   </tbody>
                 </table>
               </div>
-            )}
-          </SectionPanel>
+            </SectionPanel>
+          ) : null}
 
           <SectionPanel description="Where each CAD file type stands for each part. A stored file is not the same as a verified file." title="CAD file status">
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetClassRows} />

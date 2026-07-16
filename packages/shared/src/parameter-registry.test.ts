@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PARAMETER_REGISTRY, findParamDefForSpecKey, getCanonicalParamDefByKey, getParameterDefs, listCanonicalParameterKeys } from "./parameter-registry";
+import { PARAMETER_REGISTRY, collectCoveredMetricKeys, findParamDefForSpecKey, getCanonicalParamDefByKey, getParameterDefs, listCanonicalParameterKeys } from "./parameter-registry";
 import type { PartType } from "./part-type";
 
 const ALL_PART_TYPES: PartType[] = ["resistor", "capacitor", "inductor", "diode", "mcu", "regulator", "connector", "other"];
@@ -47,6 +47,29 @@ test("findParamDefForSpecKey maps provider labels to canonical params, most-spec
   assert.equal(findParamDefForSpecKey("capacitor", "Dielectric")?.paramKey, "dielectric");
   assert.equal(findParamDefForSpecKey("inductor", "DCR")?.paramKey, "dc_resistance");
   assert.equal(findParamDefForSpecKey("resistor", "Unrelated Attribute"), null);
+});
+
+/**
+ * Verifies covered-metric-key collection: a parameter hides its own key plus every metricKey its def
+ * folds in during recompute, falls back to the global def for unregistered part types, and never
+ * covers unrelated keys.
+ */
+test("collectCoveredMetricKeys covers paramKey plus registry metricKeys and nothing else", () => {
+  const covered = collectCoveredMetricKeys([
+    { paramKey: "resistance", partType: "resistor" },
+    { paramKey: "voltage_rating", partType: "capacitor" }
+  ]);
+
+  assert.ok(covered.has("resistance"), "own key covered");
+  assert.ok(covered.has("voltage_rating"), "def metricKey covered");
+  assert.ok(covered.has("rated_voltage"), "seed-vocabulary alias covered via def metricKeys");
+  assert.equal(covered.has("input_voltage_max"), false, "unrelated metric keys stay uncovered");
+
+  // A part type outside the registry still covers via the global def lookup.
+  const fallback = collectCoveredMetricKeys([{ paramKey: "capacitance", partType: "mystery_type" }]);
+
+  assert.ok(fallback.has("capacitance"));
+  assert.deepEqual([...collectCoveredMetricKeys([])], [], "no parameters cover nothing");
 });
 
 /**
