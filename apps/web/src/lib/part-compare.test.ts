@@ -16,12 +16,12 @@ import {
   collectCompareParameterKeys,
   collectCompareMetricKeys,
   collectUncoveredCompareMetricKeys,
-  formatCompareMetricCell,
+  formatUncoveredCompareMetricCell,
   shouldRenderConnectorCompareRows
 } from "./part-compare";
 import type { PartDetailResponse, PartParameter } from "@ee-library/shared/types";
 
-function stubMetric(key: string): PartMetric {
+function stubMetric(key: string, overrides: Partial<PartMetric> = {}): PartMetric {
   return {
     confidenceScore: 1,
     id: `m-${key}`,
@@ -33,7 +33,8 @@ function stubMetric(key: string): PartMetric {
     partId: "p",
     sourceRecordId: null,
     sourceRevisionId: "sr",
-    unit: "V"
+    unit: "V",
+    ...overrides
   };
 }
 
@@ -52,9 +53,9 @@ test("collectCompareMetricKeys unions keys across records", () => {
   assert.equal(keys.length, 2);
 });
 
-test("formatCompareMetricCell returns dash when metric missing", () => {
-  const record = stubRecord([stubMetric("supply_voltage_max")]);
-  assert.equal(formatCompareMetricCell(record, "missing_key"), "—");
+test("formatUncoveredCompareMetricCell returns dash when metric missing", () => {
+  const detail = stubDetail("p1", [], [stubMetric("supply_voltage_max")]);
+  assert.equal(formatUncoveredCompareMetricCell(detail, "missing_key"), "—");
 });
 
 function stubParameter(partId: string, paramKey: string, overrides: Partial<PartParameter> = {}): PartParameter {
@@ -115,6 +116,15 @@ test("collectUncoveredCompareMetricKeys drops covered metrics but keeps a part's
   ]);
 
   assert.deepEqual(partiallyCovered, ["resistance"]);
+});
+
+test("formatUncoveredCompareMetricCell hides covered values in a row retained for another part", () => {
+  const legacyResistance = stubMetric("resistance", { metricValue: 5_600, unit: "ohm" });
+  const covered = stubDetail("p1", [stubParameter("p1", "resistance")], [legacyResistance]);
+  const uncovered = stubDetail("p2", [], [legacyResistance]);
+
+  assert.equal(formatUncoveredCompareMetricCell(covered, "resistance"), "—");
+  assert.equal(formatUncoveredCompareMetricCell(uncovered, "resistance"), "5.6 kΩ");
 });
 
 test("buildCompareParameterRows renders typed values, an em dash when absent, and a conflict marker", () => {
