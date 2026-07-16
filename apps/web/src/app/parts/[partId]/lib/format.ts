@@ -14,6 +14,7 @@ import type {
   DocumentRedlineStatus,
   DocumentRevisionLifecycleStatus,
   InventoryStatus,
+  PartParameter,
   PreviewStatus,
   PriceBreak,
   ProjectPartUsageStatus,
@@ -166,6 +167,36 @@ const PROVIDER_DISPLAY_LABELS: Record<string, string> = {
  */
 export function formatProviderLabel(providerId: string): string {
   return PROVIDER_DISPLAY_LABELS[providerId] ?? providerId;
+}
+
+/**
+ * Builds the source badge for one reconciled parameter row, surfacing the trust states an engineer
+ * needs at a glance: a conflict outranks everything ("sources disagree"), datasheet corroboration of a
+ * distributor value earns the verified tone ("confirmed by datasheet"), and a bare distributor value
+ * stays informational. A datasheet-only value is labeled as such rather than pretending a distributor
+ * reported it.
+ */
+export function buildParameterSourceMeta(parameter: PartParameter): { meta: string; tone: BadgeTone } {
+  const winnerLabel = parameter.winningProviderId ? formatProviderLabel(parameter.winningProviderId) : null;
+
+  if (parameter.isConflicted) {
+    return { meta: winnerLabel ? `${winnerLabel} · sources disagree` : "sources disagree", tone: "review" };
+  }
+
+  // The datasheet corroborates when it contributed a non-winning value that agrees with the winner.
+  const datasheetCorroborates = parameter.sources.some(
+    (source) => source.providerId === "datasheet" && source.agreesWithWinner && parameter.winningProviderId !== "datasheet"
+  );
+
+  if (winnerLabel && datasheetCorroborates) {
+    return { meta: `${winnerLabel} · confirmed by datasheet`, tone: "verified" };
+  }
+
+  if (parameter.winningProviderId === "datasheet") {
+    return { meta: "Datasheet only", tone: "info" };
+  }
+
+  return { meta: winnerLabel ?? "—", tone: "info" };
 }
 
 /**

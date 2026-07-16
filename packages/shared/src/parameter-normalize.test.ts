@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseBareEngineeringNumber, parseEngineeringValue, reconcileParameterSources, type ParameterContribution } from "./parameter-normalize";
+import { formatBareEngineeringNumber, formatEngineeringValue, parseBareEngineeringNumber, parseEngineeringValue, reconcileParameterSources, type ParameterContribution } from "./parameter-normalize";
 import type { CanonicalParameterDef } from "./parameter-registry";
 
 const RESISTANCE: CanonicalParameterDef = { label: "Resistance", metricKeys: [], paramKey: "resistance", specKeyPatterns: ["resistance"], unit: "ohm", valueKind: "numeric" };
@@ -53,6 +53,53 @@ test("parseBareEngineeringNumber resolves unit-less SI prefixes for filter input
   assert.equal(parseBareEngineeringNumber("1000"), 1_000);
   assert.equal(parseBareEngineeringNumber("abc"), null);
   assert.equal(parseBareEngineeringNumber("10kOhm"), null, "a trailing unit is rejected; this parser is unit-less");
+});
+
+/**
+ * Verifies base-unit values render in the engineering notation an EE reads, the display inverse of
+ * parseBareEngineeringNumber ("10 kΩ", "100 nF", "1%"), across the registry's canonical units.
+ */
+test("formatEngineeringValue renders base-unit values in engineering notation", () => {
+  assert.equal(formatEngineeringValue(10_000, "ohm"), "10 kΩ");
+  assert.equal(formatEngineeringValue(4_700, "ohm"), "4.7 kΩ");
+  assert.equal(formatEngineeringValue(220, "ohm"), "220 Ω");
+  assert.equal(formatEngineeringValue(0.05, "ohm"), "50 mΩ");
+  assert.equal(formatEngineeringValue(1_000_000, "ohm"), "1 MΩ");
+  assert.equal(formatEngineeringValue(100e-9, "F"), "100 nF");
+  assert.equal(formatEngineeringValue(4.7e-6, "F"), "4.7 µF");
+  assert.equal(formatEngineeringValue(0.1, "W"), "100 mW");
+  assert.equal(formatEngineeringValue(50, "V"), "50 V");
+  assert.equal(formatEngineeringValue(1, "%"), "1%");
+  assert.equal(formatEngineeringValue(0.5, "%"), "0.5%");
+  assert.equal(formatEngineeringValue(125, "deg C"), "125 °C");
+  assert.equal(formatEngineeringValue(100, "ppm_per_c"), "100 ppm/°C");
+  assert.equal(formatEngineeringValue(0, "ohm"), "0 Ω");
+  assert.equal(formatEngineeringValue(42, null), "42");
+
+  // Round-trip: what the formatter prints, the filter parser reads back to the same base value.
+  assert.equal(parseBareEngineeringNumber("10k"), 10_000);
+  assert.equal(formatEngineeringValue(parseBareEngineeringNumber("4.7k") ?? Number.NaN, "ohm"), "4.7 kΩ");
+});
+
+/**
+ * Verifies the unit-less shorthand formatter emits exactly what parseBareEngineeringNumber accepts,
+ * so facet-derived placeholders are always typeable back into the filter inputs.
+ */
+test("formatBareEngineeringNumber emits parser-compatible shorthand", () => {
+  assert.equal(formatBareEngineeringNumber(10_000), "10k");
+  assert.equal(formatBareEngineeringNumber(1_000_000), "1M");
+  assert.equal(formatBareEngineeringNumber(0.1), "100m");
+  assert.equal(formatBareEngineeringNumber(4.7e-6), "4.7µ");
+  assert.equal(formatBareEngineeringNumber(220), "220");
+  assert.equal(formatBareEngineeringNumber(-55), "-55");
+  assert.equal(formatBareEngineeringNumber(0), "0");
+
+  for (const value of [10_000, 1_000_000, 0.1, 4.7e-6, 220, 100e-9]) {
+    const shorthand = formatBareEngineeringNumber(value);
+    const parsed = parseBareEngineeringNumber(shorthand);
+
+    assert.ok(parsed !== null && Math.abs(parsed - value) <= Math.abs(value) * 1e-9, `round-trip failed for ${value} -> "${shorthand}" -> ${parsed}`);
+  }
 });
 
 /**

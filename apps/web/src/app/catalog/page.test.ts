@@ -201,8 +201,8 @@ test("catalog page renders parameter filter controls and an active parameter pil
     assert.match(html, /value="1k"/u);
     assert.match(html, /name="pval_package"/u);
     assert.match(html, /0603 \(7\)/u);
-    // The active-filter pill shows the parsed base-unit bound and the categorical value.
-    assert.match(html, /Resistance: ≥ 1000 ohm/u);
+    // The active-filter pill echoes the bound in engineering notation and the categorical value.
+    assert.match(html, /Resistance: ≥ 1 kΩ/u);
     assert.match(html, /Package: 0603/u);
   } finally {
     restoreFetch();

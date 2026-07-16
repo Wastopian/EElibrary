@@ -131,6 +131,106 @@ export function parseEngineeringValue(rawValue: string, def: CanonicalParameterD
   return value === null ? null : { kind: "numeric", unit: def.unit, value };
 }
 
+/** DISPLAY_SI_PREFIXES is the canonical single-symbol prefix ladder used to render a base-unit value. */
+const DISPLAY_SI_PREFIXES: ReadonlyArray<{ factor: number; prefix: string }> = [
+  { factor: 1e12, prefix: "T" },
+  { factor: 1e9, prefix: "G" },
+  { factor: 1e6, prefix: "M" },
+  { factor: 1e3, prefix: "k" },
+  { factor: 1, prefix: "" },
+  { factor: 1e-3, prefix: "m" },
+  { factor: 1e-6, prefix: "µ" },
+  { factor: 1e-9, prefix: "n" },
+  { factor: 1e-12, prefix: "p" }
+];
+
+/** SI_PREFIXABLE_UNITS are the canonical units an engineer expects in SI-prefixed form (10 kΩ, 100 nF). */
+const SI_PREFIXABLE_UNITS = new Set(["ohm", "F", "H", "V", "A", "W", "Hz", "s"]);
+
+/** UNIT_DISPLAY_GLYPH maps a canonical unit to the glyph engineers read (only ohm needs translating). */
+const UNIT_DISPLAY_GLYPH: Record<string, string> = {
+  ohm: "Ω",
+  "deg C": "°C",
+  ppm_per_c: "ppm/°C"
+};
+
+/**
+ * Formats a clean mantissa string: integers stay exact, decimals trim to ~4 significant figures without
+ * floating-point noise or trailing zeros ("10" -> "10", "4.7000" -> "4.7", "0.1000" -> "0.1").
+ */
+function formatEngineeringMantissa(value: number): string {
+  if (Number.isInteger(value)) {
+    return value.toString();
+  }
+
+  return Number.parseFloat(value.toPrecision(4)).toString();
+}
+
+/**
+ * Formats a base value as the unit-less engineering shorthand the parameter filter inputs accept
+ * ("10k", "4.7u", "220", "100m"): the display inverse of {@link parseBareEngineeringNumber}, used to
+ * derive typeable placeholder examples from real facet bounds.
+ */
+export function formatBareEngineeringNumber(value: number): string {
+  if (!Number.isFinite(value) || value === 0) {
+    return "0";
+  }
+
+  const magnitude = Math.abs(value);
+
+  for (const { factor, prefix } of DISPLAY_SI_PREFIXES) {
+    const mantissa = magnitude / factor;
+
+    if (mantissa >= 1 && mantissa < 1000) {
+      return `${formatEngineeringMantissa((value / magnitude) * mantissa)}${prefix}`;
+    }
+  }
+
+  return formatEngineeringMantissa(value);
+}
+
+/**
+ * Renders a base-unit numeric value in the engineering notation an EE reads: SI-prefixed with the proper
+ * glyph for prefixable units (10000 ohm -> "10 kΩ", 1e-7 F -> "100 nF", 0.1 W -> "100 mW"), bare percent
+ * ("1%"), or number-plus-unit for the rest ("125 °C"). The inverse of {@link parseBareEngineeringNumber}.
+ */
+export function formatEngineeringValue(value: number, unit: string | null): string {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+
+  if (unit === "%") {
+    return `${formatEngineeringMantissa(value)}%`;
+  }
+
+  if (unit !== null && SI_PREFIXABLE_UNITS.has(unit)) {
+    const glyph = UNIT_DISPLAY_GLYPH[unit] ?? unit;
+
+    if (value === 0) {
+      return `0 ${glyph}`;
+    }
+
+    const magnitude = Math.abs(value);
+
+    for (const { factor, prefix } of DISPLAY_SI_PREFIXES) {
+      const mantissa = magnitude / factor;
+
+      if (mantissa >= 1 && mantissa < 1000) {
+        return `${formatEngineeringMantissa((value / magnitude) * mantissa)} ${prefix}${glyph}`;
+      }
+    }
+
+    // Outside the prefix ladder (e.g. sub-pico or tera-plus): clamp to the nearest extreme prefix.
+    const clamp = magnitude >= 1 ? { factor: 1e12, prefix: "T" } : { factor: 1e-12, prefix: "p" };
+
+    return `${formatEngineeringMantissa(value / clamp.factor)} ${clamp.prefix}${glyph}`;
+  }
+
+  const glyph = unit === null ? "" : (UNIT_DISPLAY_GLYPH[unit] ?? unit);
+
+  return glyph.length > 0 ? `${formatEngineeringMantissa(value)} ${glyph}` : formatEngineeringMantissa(value);
+}
+
 /**
  * Reconciles multiple parsed contributions into one winning value with an explicit conflict flag.
  *

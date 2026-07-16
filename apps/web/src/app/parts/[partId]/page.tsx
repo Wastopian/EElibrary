@@ -28,6 +28,7 @@ import type {
 import {
   assetTypeLabel,
   buildConnectorConfidenceSummary,
+  buildParameterSourceMeta,
   buildUseDecision,
   datasheetAssetLabel,
   formatAclPrincipal,
@@ -222,17 +223,17 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
     tone: "info",
     value: specification.specValue
   }));
-  const parameterRows = detail.parameters.map<MetricTableRow>((parameter) => ({
-    key: parameter.id,
-    label: formatParameterLabel(parameter.paramKey),
-    meta: parameter.winningProviderId
-      ? `${formatProviderLabel(parameter.winningProviderId)}${parameter.isConflicted ? " · sources disagree" : ""}`
-      : parameter.isConflicted
-        ? "sources disagree"
-        : "—",
-    tone: parameter.isConflicted ? "review" : "info",
-    value: formatParameterValue(parameter)
-  }));
+  const parameterRows = detail.parameters.map<MetricTableRow>((parameter) => {
+    const source = buildParameterSourceMeta(parameter);
+
+    return {
+      key: parameter.id,
+      label: formatParameterLabel(parameter.paramKey),
+      meta: source.meta,
+      tone: source.tone,
+      value: formatParameterValue(parameter)
+    };
+  });
   const detailTabs = buildDetailTabs(hasConnectorIntelligence, record, assetGroups, exportActions, whereUsedState, documentControlState, supplyOffersState);
   const populatedAssetGroups = assetGroups.filter((group) => group.bestAsset !== null);
   const missingAssetGroups = assetGroups.filter((group) => group.bestAsset === null);
@@ -546,7 +547,7 @@ export default async function PartDetailPage({ params }: DetailPageProps) {
         </div>
 
         <SectionPanel
-          description="Key specs combined across distributors and shown in standard units. A “sources disagree” mark means the distributors report different values — always confirm against the datasheet."
+          description="Key specs combined across distributors and shown in standard units. “Confirmed by datasheet” means we found the same value in the official datasheet. “Sources disagree” means the sources report different values — check the datasheet before relying on it."
           title="Specifications"
         >
           {parameterRows.length > 0 ? (
