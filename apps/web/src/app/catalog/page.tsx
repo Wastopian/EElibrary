@@ -336,7 +336,20 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 ))}
               </select>
             </label>
-            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, parameters, readinessStatus, sort })}>
+            {/*
+              Electrical parameters get top billing next to Manufacturer/Category/Package — for a
+              parts catalog, a resistance range IS the filter — instead of hiding behind the
+              "More filters" disclosure with the workflow-state selects.
+            */}
+            {facets.parameterFacets && facets.parameterFacets.length > 0 ? (
+              <div className="filter-rail__parameters">
+                <p className="filter-rail__parameters-heading">Parameters</p>
+                {facets.parameterFacets.map((facet) => (
+                  <ParameterFilterControl facet={facet} key={facet.paramKey} rawValues={parameterRawValues} />
+                ))}
+              </div>
+            ) : null}
+            <details className="filter-rail__more" open={hasAdvancedFilters({ approvalStatus, cadAvailability, connectorClass, lifecycleStatus, pageSize, readinessStatus, sort })}>
               <summary>More filters</summary>
               <div className="filter-rail__more-fields">
                 <label>
@@ -392,14 +405,6 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                       ))}
                     </select>
                   </label>
-                ) : null}
-                {facets.parameterFacets && facets.parameterFacets.length > 0 ? (
-                  <div className="filter-rail__parameters">
-                    <p className="filter-rail__parameters-heading">Parameters</p>
-                    {facets.parameterFacets.map((facet) => (
-                      <ParameterFilterControl facet={facet} key={facet.paramKey} rawValues={parameterRawValues} />
-                    ))}
-                  </div>
                 ) : null}
                 <label>
                   Sort
@@ -1706,7 +1711,6 @@ function hasAdvancedFilters(input: {
   connectorClass: ConnectorClass | undefined;
   lifecycleStatus: LifecycleStatus | undefined;
   pageSize: number | undefined;
-  parameters: PartParameterFilter[] | undefined;
   readinessStatus: PartReadinessStatus | undefined;
   sort: PartSearchSort;
 }): boolean {
@@ -1717,7 +1721,6 @@ function hasAdvancedFilters(input: {
   if (input.readinessStatus !== undefined) return true;
   if (input.sort !== "mpn_asc") return true;
   if (input.pageSize !== undefined && input.pageSize !== 20) return true;
-  if (input.parameters !== undefined && input.parameters.length > 0) return true;
   return false;
 }
 

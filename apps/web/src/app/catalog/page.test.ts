@@ -204,6 +204,15 @@ test("catalog page renders parameter filter controls and an active parameter pil
     // The active-filter pill echoes the bound in engineering notation and the categorical value.
     assert.match(html, /Resistance: ≥ 1 kΩ/u);
     assert.match(html, /Package: 0603/u);
+
+    // Parameter controls are promoted to the top-level rail: they render BEFORE the "More filters"
+    // disclosure, and an active parameter filter no longer forces that disclosure open.
+    const parametersIndex = html.indexOf("filter-rail__parameters");
+    const moreFiltersIndex = html.indexOf("filter-rail__more");
+    assert.notEqual(parametersIndex, -1, "expected the promoted parameters block");
+    assert.notEqual(moreFiltersIndex, -1, "expected the More filters disclosure");
+    assert.ok(parametersIndex < moreFiltersIndex, "parameters must sit above the More filters disclosure");
+    assert.doesNotMatch(html, /<details class="filter-rail__more" open/u, "a parameter filter alone must not expand More filters");
   } finally {
     restoreFetch();
   }

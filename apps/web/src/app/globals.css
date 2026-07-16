@@ -2653,6 +2653,17 @@ details[open] .trust-breakdown__toggle::before {
   grid-template-columns: minmax(120px, 0.75fr) repeat(auto-fit, minmax(132px, 1fr));
 }
 
+/* Promoted parameter filters span their own full row of the bar, fieldsets side by side. */
+.filter-rail--bar .filter-rail__parameters {
+  align-items: start;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 240px));
+}
+
+.filter-rail--bar .filter-rail__parameters-heading {
+  grid-column: 1 / -1;
+}
+
 .filter-rail__intro {
   display: grid;
   gap: 2px;
