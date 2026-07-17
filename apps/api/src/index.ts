@@ -18,6 +18,7 @@ import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcq
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
+import { readBomBackfillStatusForBomImport, startBomBackfillForBomImport } from "./bom-backfill-store";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
@@ -284,6 +285,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   const followUpDetailMatch = /^\/follow-ups\/([^/]+)$/u.exec(url.pathname);
   const bomImportLinesMatch = /^\/bom-imports\/([^/]+)\/lines$/u.exec(url.pathname);
   const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(url.pathname);
+  const bomImportBackfillMatch = /^\/bom-imports\/([^/]+)\/backfill$/u.exec(url.pathname);
   const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(url.pathname);
   const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
   const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
@@ -367,6 +369,13 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleBomImportMatch(response, decodeURIComponent(bomImportMatchMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && bomImportBackfillMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleBomBackfillStart(response, decodeURIComponent(bomImportBackfillMatch[1]), session.sub);
     return;
   }
 
@@ -792,7 +801,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
+      error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match/backfill POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -993,6 +1002,11 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
 
   if (bomImportDiagnosticsMatch?.[1]) {
     await handleBomImportDiagnosticsRead(response, decodeURIComponent(bomImportDiagnosticsMatch[1]));
+    return;
+  }
+
+  if (bomImportBackfillMatch?.[1]) {
+    await handleBomBackfillStatusRead(response, decodeURIComponent(bomImportBackfillMatch[1]));
     return;
   }
 
@@ -1710,6 +1724,63 @@ async function handleBomImportMatch(response: ServerResponse, bomImportId: strin
       response,
       "bom-import-match",
       () => matchBomImportRowsInDatabase(bomImportId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "BOM_IMPORT_NOT_FOUND", "BOM import not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated batch queueing of one BOM import's missing parts for background import.
+ * Queueing never approves, validates, or export-promotes anything.
+ */
+async function handleBomBackfillStart(response: ServerResponse, bomImportId: string, requestedBy: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "bom-backfill-start",
+      () => startBomBackfillForBomImport(bomImportId, requestedBy),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "BOM_IMPORT_NOT_FOUND", "BOM import not found.");
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 202, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles the polling read of one BOM import's backfill progress buckets.
+ */
+async function handleBomBackfillStatusRead(response: ServerResponse, bomImportId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "bom-backfill-read",
+      () => readBomBackfillStatusForBomImport(bomImportId),
       (value) => value.status
     );
 
@@ -6099,6 +6170,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 2, pattern: /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u, targetType: "project_revision" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/revision-approval-gates$/u, targetType: "project_revision_approval_gate" },
     { idIndex: 1, pattern: /^\/bom-imports\/([^/]+)\/match$/u, targetType: "bom_import" },
+    { idIndex: 1, pattern: /^\/bom-imports\/([^/]+)\/backfill$/u, targetType: "bom_import" },
     { idIndex: 1, pattern: /^\/evidence-attachments\/([^/]+)$/u, targetType: "evidence_attachment" },
     { idIndex: 1, pattern: /^\/follow-ups\/([^/]+)$/u, targetType: "follow_up" },
     { idIndex: 1, pattern: /^\/circuit-blocks\/([^/]+)$/u, targetType: "circuit_block" },
@@ -6360,6 +6432,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/bom-imports\/[^/]+\/lines$/u.test(pathname)) return "api-bom-import-lines";
   if (method === "POST" && pathname === "/bom-imports/preview") return "api-bom-import-preview";
   if (method === "POST" && /^\/bom-imports\/[^/]+\/match$/u.test(pathname)) return "api-bom-import-match";
+  if (method === "POST" && /^\/bom-imports\/[^/]+\/backfill$/u.test(pathname)) return "api-bom-backfill-start";
+  if (method === "GET" && /^\/bom-imports\/[^/]+\/backfill$/u.test(pathname)) return "api-bom-backfill-read";
   if (method === "GET" && pathname === "/evidence-attachments") return "api-evidence-attachments";
   if (method === "POST" && pathname === "/evidence-attachments") return "api-evidence-attachment-create";
   if (method === "POST" && pathname === "/evidence-attachments/files") return "api-evidence-file-upload";

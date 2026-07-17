@@ -55,6 +55,49 @@ Area 1 is the messy-folder/documentation wedge: help engineering teams walk up t
 4. **Revision compare** - Next: compare two mapped documents or revisions and summarize changed connector refs, pins, cables, fixtures, requirements language, and procedure steps without claiming review status.
 5. **Where-used bridge** - _Started 2026-06-16:_ `/where-used` now includes a Project documents target that searches the current project file maps for connector refs, pin numbers, cable ids, fixture ids, signals, revisions, filenames, and clear document types, then links hits back to the owning project's files section. Remaining: fold Area 2 interconnect rows into the same plain search path and add persisted indexing only after live file-map search proves the workflow.
 
+### 0C. Library backfill and bulk import - folder-first onboarding
+
+The adoption chokepoint found in the 2026-07-16 project review: every retention feature (where-used,
+prior-project overlap, past-mistake interrupts) only pays off once a team's existing project history is
+inside EE Library, but today backfilling a library means hand-creating each project, re-uploading BOM
+files the mirror already holds, and importing every missing part one click at a time. A 30-project
+backlog with ~1,500 unseen MPNs is weeks of tedium; teams will import three projects and stop. This
+wedge makes the file mirror the onboarding surface: **drop your project folders in, scan, review the
+exceptions, and the library is populated.**
+
+**Operator bar for everything in this section:** an engineer (or the one server admin) copies existing
+project folders into the mirror as-is — no renaming, no reorganizing, no re-exporting BOMs — and gets
+their library populated through a fluid, folder-first flow: the app finds the folders, finds the parts
+lists inside them, imports the missing parts in bulk, and asks a human only about the genuinely
+ambiguous leftovers. Uncertainty stays visible: low-confidence classifications and ambiguous provider
+candidates queue for review, never auto-confirm. Backfilled data obeys every existing trust boundary —
+imported is never approved, validated, or export-ready.
+
+1. **Batch import of missing BOM parts** - _Landed 2026-07-17:_ after BOM matching, one admin-gated
+   action queues every unmatched exact-MPN row into the org-scoped `bom_backfill_requests` queue
+   (migration 060, RLS per the 055 contract), and the worker daemon drains it on a paced 20s tick:
+   exact provider lookup → direct import through the shared `runProviderPartImport` flow **only when
+   every exact candidate agrees on one part identity** (enrichment chains exactly like one-at-a-time
+   import; the acquisition-jobs queue was deliberately not used because the daemon does not drain it)
+   → disagreement parks as **needs your pick** with candidates preserved → nothing found is an honest
+   **not found**. `BomBackfillPanel` polls progress buckets, survives reloads, links parked rows into
+   the existing catalog import flow, and prompts a match re-run once settled; retryable rows re-queue
+   on a fresh start. See the `IMPLEMENTATION_STATUS.md` row for the full surface. Remaining: none —
+   follow-ons live in items 2 and 3.
+2. **Import the BOM the folder already has** - The document map already classifies parts-list files in
+   the project mirror (filename wording scores 0.94; bare spreadsheets 0.64 "confirm what it contains")
+   but ingestion still requires re-uploading the same file through the browser. Bridge them: a "Use as
+   BOM import" action on parts-list-classified files reads the file server-side from the mirror
+   (reusing the existing path-traversal guards), feeds the existing preview → column-map → create flow,
+   and records the mirror path as provenance. Composes with item 1 for the missing parts.
+3. **Whole-library backfill wizard** - A "Scan for unimported projects" action on `/projects`: list
+   mirror-root folders with no matching project, create-project-from-folder (folder name → project key,
+   reusing the `/projects/from-csv` one-shot machinery), auto-detect the best parts-list candidate by
+   classifier confidence, then chain items 2 + 1 across every selected folder with a summary report
+   (projects created, BOMs found / ambiguous / missing, parts imported / needs review). Never
+   auto-confirm a low-confidence column mapping or a 0.64-confidence spreadsheet classification — those
+   rows queue for human review, consistent with never presenting uncertain metadata as certain.
+
 ### 0. Team deployment and operations — current top priority
 
 EE Library today runs only on a single developer workstation: `compose.yaml` starts Postgres, Redis, and MinIO, but `web`, `api`, and `worker` run via `npm run dev`. A shared engineering memory that only one engineer can reach is not yet a team tool. The 2026-06-12 project review ranked this gap above all feature work.
