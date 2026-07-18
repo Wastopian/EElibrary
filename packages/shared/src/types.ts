@@ -624,6 +624,24 @@ export interface BomImportCreateResponse {
   summary: BomImportPersistSummary;
 }
 
+/** ProjectFileBomImportInput asks the API to ingest a BOM file already in the project folder mirror. */
+export interface ProjectFileBomImportInput {
+  /** Relative path of the mapped file inside the project's mirror folder. */
+  relativePath: string;
+  projectRevisionId?: string | null;
+  revisionLabel?: string | null;
+  /** Confirmed column mapping; omit to let the server suggest one from the headers. */
+  columnMapping?: BomColumnMapping | null;
+}
+
+/**
+ * ProjectFileBomImportResponse either creates the import (when the MPN column is recognizable or a
+ * confirmed mapping was supplied) or honestly asks for a human column mapping with the preview.
+ */
+export type ProjectFileBomImportResponse =
+  | { outcome: "created"; created: BomImportCreateResponse; sourceRelativePath: string }
+  | { outcome: "mapping_required"; preview: BomImportPreviewResponse; sourceRelativePath: string };
+
 /** BomImportMatchSummary reports one deterministic matching pass without hiding weak rows. */
 export interface BomImportMatchSummary {
   totalLineCount: number;

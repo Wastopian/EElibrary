@@ -6306,6 +6306,42 @@ details[open] .trust-breakdown__toggle::before {
   gap: 4px;
 }
 
+.project-file-bom-import {
+  border-top: 1px dashed var(--color-border);
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+.project-file-bom-import label {
+  display: grid;
+  font-size: 0.8rem;
+  gap: 2px;
+}
+
+.project-file-bom-import button:not(.button-link) {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.project-file-bom-import__status,
+.project-file-bom-import__error {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.project-file-bom-import__error {
+  color: var(--color-review);
+}
+
+.project-file-bom-import__mapping {
+  display: grid;
+  gap: 6px;
+}
+
 .admin-action-row {
   display: flex;
   flex-wrap: wrap;

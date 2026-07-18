@@ -84,12 +84,15 @@ imported is never approved, validated, or export-ready.
    the existing catalog import flow, and prompts a match re-run once settled; retryable rows re-queue
    on a fresh start. See the `IMPLEMENTATION_STATUS.md` row for the full surface. Remaining: none —
    follow-ons live in items 2 and 3.
-2. **Import the BOM the folder already has** - The document map already classifies parts-list files in
-   the project mirror (filename wording scores 0.94; bare spreadsheets 0.64 "confirm what it contains")
-   but ingestion still requires re-uploading the same file through the browser. Bridge them: a "Use as
-   BOM import" action on parts-list-classified files reads the file server-side from the mirror
-   (reusing the existing path-traversal guards), feeds the existing preview → column-map → create flow,
-   and records the mirror path as provenance. Composes with item 1 for the missing parts.
+2. **Import the BOM the folder already has** - _Landed 2026-07-18:_ document-map rows classified as
+   parts lists (`.csv`/`.xlsx`) now carry a "Use as BOM import" action. `POST
+   /projects/:id/bom-imports/from-file` reads the file server-side from the mirror
+   (`readProjectBomSourceFile`, same path-traversal guards as the copy action; legacy `.xls` keeps
+   its conversion guidance), auto-creates the import when the MPN column is recognizable from the
+   headers, and otherwise returns an honest `mapping_required` preview for a compact human mapping
+   step — uncertain structure is never guessed into catalog identity. Provenance records the
+   mirror-relative path as the import's source filename. Composes with item 1 for the missing parts.
+   Verified live: auto-map create, cryptic-header mapping fallback, and traversal refusal.
 3. **Whole-library backfill wizard** - A "Scan for unimported projects" action on `/projects`: list
    mirror-root folders with no matching project, create-project-from-folder (folder name → project key,
    reusing the `/projects/from-csv` one-shot machinery), auto-detect the best parts-list candidate by

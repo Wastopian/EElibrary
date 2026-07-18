@@ -852,3 +852,78 @@ test("saveProjectFile keeps writes inside the sandboxed project root", async () 
     await sandbox.restore();
   }
 });
+
+test("readProjectBomSourceFile reads csv text and xlsx base64 with mirror-relative provenance", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { readProjectBomSourceFile } = await import("./project-files");
+    const projectRoot = path.join(sandbox.root, "demo-project");
+    await mkdir(path.join(projectRoot, "parts-list"), { recursive: true });
+    const csvBody = "MPN,Qty\r\nRC0402FR-0710KL,4\r\n";
+    await writeFile(path.join(projectRoot, "parts-list", "main.csv"), csvBody, "utf8");
+    const xlsxBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01, 0x02, 0x03]);
+    await writeFile(path.join(projectRoot, "parts-list", "alt.xlsx"), xlsxBytes);
+
+    const project = { id: "proj-1", projectKey: "demo-project" };
+    const csvResult = await readProjectBomSourceFile(project, "parts-list/main.csv");
+    assert.equal(csvResult.status, "ok");
+    if (csvResult.status === "ok") {
+      assert.equal(csvResult.response.sourceFormat, "csv");
+      assert.equal(csvResult.response.rawContent, csvBody);
+      assert.equal(csvResult.response.sourceFilename, "parts-list/main.csv");
+    }
+
+    const xlsxResult = await readProjectBomSourceFile(project, "parts-list/alt.xlsx");
+    assert.equal(xlsxResult.status, "ok");
+    if (xlsxResult.status === "ok") {
+      assert.equal(xlsxResult.response.sourceFormat, "xlsx");
+      assert.equal(xlsxResult.response.rawContent, xlsxBytes.toString("base64"));
+    }
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("readProjectBomSourceFile refuses traversal, legacy formats, and reports missing files honestly", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { readProjectBomSourceFile } = await import("./project-files");
+    const projectRoot = path.join(sandbox.root, "demo-project");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(path.join(sandbox.root, "outside.csv"), "MPN\nX\n", "utf8");
+    const project = { id: "proj-1", projectKey: "demo-project" };
+
+    const traversal = await readProjectBomSourceFile(project, "../outside.csv");
+    assert.equal(traversal.status, "invalid_source");
+
+    const legacy = await readProjectBomSourceFile(project, "old-bom.xls");
+    assert.equal(legacy.status, "unsupported");
+    if (legacy.status === "unsupported") {
+      assert.match(legacy.message, /\.xlsx/u);
+    }
+
+    const wrongType = await readProjectBomSourceFile(project, "notes/readme.pdf");
+    assert.equal(wrongType.status, "unsupported");
+
+    const missing = await readProjectBomSourceFile(project, "parts-list/not-there.csv");
+    assert.equal(missing.status, "not_found");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("readProjectBomSourceFile reports not_configured when the mirror is disabled", async () => {
+  const previous = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  try {
+    process.env.EE_LIBRARY_PROJECT_FILES_ROOT = "off";
+    const { readProjectBomSourceFile } = await import("./project-files");
+    const result = await readProjectBomSourceFile({ id: "proj-1", projectKey: "demo-project" }, "parts-list/main.csv");
+    assert.equal(result.status, "not_configured");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+    } else {
+      process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previous;
+    }
+  }
+});

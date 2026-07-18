@@ -18,6 +18,8 @@ import type {
   BomBackfillStartResponse,
   BomBackfillStatusResponse,
   BomImportMatchResponse,
+  ProjectFileBomImportInput,
+  ProjectFileBomImportResponse,
   BomImportPreviewInput,
   BomImportPreviewResponse,
   BomRevisionCompareResponse,
@@ -728,6 +730,27 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
   }
 
   const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Imports a parts-list file the project folder already has: the server reads the mirror file,
+ * suggests a column mapping, and either creates the import or asks for a confirmed mapping.
+ */
+export async function importProjectFileAsBom(projectId: string, input: ProjectFileBomImportInput): Promise<ProjectFileBomImportResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-imports/from-file`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project-file BOM import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFileBomImportResponse>;
 
   return envelope.data;
 }
