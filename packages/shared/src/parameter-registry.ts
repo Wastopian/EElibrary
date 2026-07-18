@@ -71,16 +71,20 @@ export const PARAMETER_REGISTRY: Record<PartType, CanonicalParameterDef[]> = {
   mcu: [
     { label: "Clock Frequency", metricKeys: ["clock_frequency_max"], paramKey: "clock_frequency", specKeyPatterns: ["clock frequency", "speed", "frequency"], unit: "Hz", valueKind: "numeric" },
     { label: "Flash Size", metricKeys: [], paramKey: "flash_size", specKeyPatterns: ["program memory size", "flash size", "flash"], unit: "B", valueKind: "numeric" },
-    { label: "RAM Size", metricKeys: [], paramKey: "ram_size", specKeyPatterns: ["ram size", "ram"], unit: "B", valueKind: "numeric" },
-    { label: "Supply Voltage", metricKeys: [], paramKey: "supply_voltage_range", specKeyPatterns: ["voltage - supply", "supply voltage", "operating voltage"], unit: "V", valueKind: "range" },
+    { label: "RAM Size", metricKeys: [], paramKey: "ram_size", specKeyPatterns: ["ram size", "data ram", "sram"], unit: "B", valueKind: "numeric" },
+    { label: "Supply Voltage", metricKeys: ["supply_voltage"], paramKey: "supply_voltage_range", specKeyPatterns: ["voltage - supply", "supply voltage", "operating voltage"], unit: "V", valueKind: "range" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   regulator: [
+    { label: "Output Voltage Range", metricKeys: [], paramKey: "output_voltage_range", specKeyPatterns: ["voltage - output (min/max)", "output voltage (min/max)"], unit: "V", valueKind: "range" },
+    { label: "Output Voltage Min", metricKeys: [], paramKey: "output_voltage_min", specKeyPatterns: ["voltage - output (min/fixed)", "voltage - output (min)", "output voltage (min)", "minimum output voltage", "output voltage min"], unit: "V", valueKind: "numeric" },
+    { label: "Output Voltage Max", metricKeys: [], paramKey: "output_voltage_max", specKeyPatterns: ["voltage - output (max)", "output voltage (max)", "maximum output voltage", "output voltage max"], unit: "V", valueKind: "numeric" },
     { label: "Output Voltage", metricKeys: [], paramKey: "output_voltage", specKeyPatterns: ["voltage - output", "output voltage"], unit: "V", valueKind: "numeric" },
     { label: "Output Current", metricKeys: ["output_current_max"], paramKey: "output_current", specKeyPatterns: ["current - output", "output current"], unit: "A", valueKind: "numeric" },
     { label: "Quiescent Current", metricKeys: [], paramKey: "quiescent_current", specKeyPatterns: ["current - quiescent", "quiescent current", "supply current (iq)"], unit: "A", valueKind: "numeric" },
     { label: "Dropout Voltage", metricKeys: [], paramKey: "dropout_voltage", specKeyPatterns: ["voltage - dropout", "dropout voltage"], unit: "V", valueKind: "numeric" },
-    { label: "Input Voltage Max", metricKeys: ["input_voltage_max"], paramKey: "input_voltage_max", specKeyPatterns: ["voltage - input", "input voltage"], unit: "V", valueKind: "numeric" },
+    { label: "Input Voltage Min", metricKeys: [], paramKey: "input_voltage_min", specKeyPatterns: ["voltage - input (min)", "input voltage (min)", "minimum input voltage", "input voltage min"], unit: "V", valueKind: "numeric" },
+    { label: "Input Voltage Max", metricKeys: ["input_voltage_max"], paramKey: "input_voltage_max", specKeyPatterns: ["voltage - input (max)", "input voltage (max)", "maximum input voltage", "input voltage max", "voltage - input", "input voltage"], unit: "V", valueKind: "numeric" },
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   connector: [
