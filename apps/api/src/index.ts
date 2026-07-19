@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createHash, randomUUID } from "node:crypto";
 import { extname, basename } from "node:path";
 import { performance } from "node:perf_hooks";
-import { BomCsvParseError, buildBomImportPreview } from "@ee-library/shared/bom-csv";
+import { BomCsvParseError, buildBomImportPreview, hasMappedHeader } from "@ee-library/shared/bom-csv";
 import { filterPartRecords, filterSortAndPaginatePartRecords, getSearchFacetsFromRecords } from "@ee-library/shared/catalog-runtime";
 import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-library/shared/connector-intelligence";
 import { parseBareEngineeringNumber } from "@ee-library/shared/parameter-normalize";
@@ -18,12 +18,13 @@ import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcq
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
+import { readBomBackfillStatusForBomImport, startBomBackfillForBomImport } from "./bom-backfill-store";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookup } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
-import { applyProjectDocumentExtractions, buildProjectFilesResponse, copyProjectDocumentToSuggestedFolder, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import { applyProjectDocumentExtractions, buildProjectFilesResponse, copyProjectDocumentToSuggestedFolder, readProjectBomSourceFile, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
 import {
   readProjectDocumentExtractionStatuses,
   requeueProjectDocumentExtraction,
@@ -146,6 +147,9 @@ import type {
   ProjectDocumentCopyInput,
   ProjectDocumentExtractionRetryInput,
   ProjectFileUploadInput,
+  BomImportPreviewResponse,
+  ProjectFileBomImportInput,
+  ProjectFileBomImportResponse,
   ProjectFromCsvInput,
   ProjectRevisionApprovalGateRequest,
   VendorCreateInput,
@@ -262,6 +266,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   const projectRevisionApprovalGatesMatch = /^\/projects\/([^/]+)\/revision-approval-gates$/u.exec(url.pathname);
   const projectRevisionDetailMatch = /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u.exec(url.pathname);
   const projectBomImportsMatch = /^\/projects\/([^/]+)\/bom-imports$/u.exec(url.pathname);
+  const projectFileBomImportMatch = /^\/projects\/([^/]+)\/bom-imports\/from-file$/u.exec(url.pathname);
   const projectUsagesMatch = /^\/projects\/([^/]+)\/usages$/u.exec(url.pathname);
   const projectBomHealthMatch = /^\/projects\/([^/]+)\/bom-health$/u.exec(url.pathname);
   const projectEvidenceMatch = /^\/projects\/([^/]+)\/evidence$/u.exec(url.pathname);
@@ -284,6 +289,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   const followUpDetailMatch = /^\/follow-ups\/([^/]+)$/u.exec(url.pathname);
   const bomImportLinesMatch = /^\/bom-imports\/([^/]+)\/lines$/u.exec(url.pathname);
   const bomImportMatchMatch = /^\/bom-imports\/([^/]+)\/match$/u.exec(url.pathname);
+  const bomImportBackfillMatch = /^\/bom-imports\/([^/]+)\/backfill$/u.exec(url.pathname);
   const bomImportDiagnosticsMatch = /^\/bom-imports\/([^/]+)\/diagnostics$/u.exec(url.pathname);
   const partUsagesMatch = /^\/parts\/([^/]+)\/usages$/u.exec(url.pathname);
   const partSupplyOffersMatch = /^\/parts\/([^/]+)\/supply-offers$/u.exec(url.pathname);
@@ -363,10 +369,24 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
     return;
   }
 
+  if (request.method === "POST" && projectFileBomImportMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFileBomImport(request, response, decodeURIComponent(projectFileBomImportMatch[1]), session.sub);
+    return;
+  }
+
   if (request.method === "POST" && bomImportMatchMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleBomImportMatch(response, decodeURIComponent(bomImportMatchMatch[1]));
+    return;
+  }
+
+  if (request.method === "POST" && bomImportBackfillMatch?.[1]) {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleBomBackfillStart(response, decodeURIComponent(bomImportBackfillMatch[1]), session.sub);
     return;
   }
 
@@ -792,7 +812,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
 
   if (request.method !== "GET") {
     sendJson(response, 405, {
-      error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
+      error: "Only GET, project POST/PATCH, project revision PATCH, project revision approval gate POST, BOM preview/import/match/backfill POST, evidence attachment POST/PATCH, follow-up POST/PATCH, circuit-block POST/PATCH, circuit-block part POST/PATCH, document-control POST/PATCH, provider-lookup POST, provider-import POST, provider-acquisition-job POST, generation-request POST, review POST, asset-promotion POST, issue-workflow POST, source-reconciliation POST, export-bundle POST, and approval-batch POST routes are enabled for the catalog API"
     });
     return;
   }
@@ -993,6 +1013,11 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
 
   if (bomImportDiagnosticsMatch?.[1]) {
     await handleBomImportDiagnosticsRead(response, decodeURIComponent(bomImportDiagnosticsMatch[1]));
+    return;
+  }
+
+  if (bomImportBackfillMatch?.[1]) {
+    await handleBomBackfillStatusRead(response, decodeURIComponent(bomImportBackfillMatch[1]));
     return;
   }
 
@@ -1710,6 +1735,194 @@ async function handleBomImportMatch(response: ServerResponse, bomImportId: strin
       response,
       "bom-import-match",
       () => matchBomImportRowsInDatabase(bomImportId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "BOM_IMPORT_NOT_FOUND", "BOM import not found.");
+      return;
+    }
+
+    sendCatalogJson(response, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated BOM ingestion straight from the project's mirror folder: the server reads
+ * the parts-list file the folder already has (no browser re-upload), suggests a column mapping
+ * from its headers, and creates the import when the MPN column is recognizable or a confirmed
+ * mapping was supplied. An unrecognizable MPN column returns the preview for a human mapping —
+ * uncertain structure is never guessed into catalog identity.
+ */
+async function handleProjectFileBomImport(request: IncomingMessage, response: ServerResponse, projectId: string, importedBy: string): Promise<void> {
+  const body = await readJsonBody<ProjectFileBomImportInput>(request);
+
+  if (!body || typeof body.relativePath !== "string" || body.relativePath.trim().length === 0) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FILE_BOM_IMPORT",
+        message: "Importing a BOM from the project folder requires the file's relative path."
+      }
+    });
+    return;
+  }
+
+  try {
+    const projectResult = await timeRouteOperation(
+      response,
+      "project-file-bom-import-project-read",
+      () => readProjectDetailFromDatabase(projectId),
+      (value) => value.status
+    );
+
+    if (projectResult.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (projectResult.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    const project = projectResult.response.project;
+    const source = await readProjectBomSourceFile({ id: project.id, projectKey: project.projectKey }, body.relativePath);
+
+    if (source.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_FILES_NOT_CONFIGURED",
+          message: "The project file mirror is disabled on this server, so folder files cannot be imported."
+        }
+      });
+      return;
+    }
+
+    if (source.status === "not_found") {
+      sendJson(response, 404, { error: { code: "PROJECT_FILE_NOT_FOUND", message: source.message } });
+      return;
+    }
+
+    if (source.status !== "ok") {
+      sendJson(response, 400, { error: { code: "PROJECT_FILE_NOT_IMPORTABLE", message: source.message } });
+      return;
+    }
+
+    let preview: BomImportPreviewResponse;
+
+    try {
+      preview = buildBomImportPreview(source.response);
+    } catch (error) {
+      if (error instanceof BomCsvParseError) {
+        sendJson(response, 400, { error: { code: error.code, message: error.message } });
+        return;
+      }
+
+      throw error;
+    }
+
+    const confirmedMapping = body.columnMapping ?? null;
+    const suggestedMapping = hasMappedHeader(preview.headers, preview.suggestedMapping.mpn ?? null) ? preview.suggestedMapping : null;
+    const columnMapping = confirmedMapping ?? suggestedMapping;
+
+    if (!columnMapping) {
+      sendCatalogJson<ProjectFileBomImportResponse>(
+        response,
+        { outcome: "mapping_required", preview, sourceRelativePath: source.response.sourceFilename },
+        "database"
+      );
+      return;
+    }
+
+    const created = await timeRouteOperation(
+      response,
+      "project-file-bom-import-create",
+      () => createBomImportInDatabase(
+        projectId,
+        {
+          columnMapping,
+          projectRevisionId: body.projectRevisionId ?? null,
+          rawContent: source.response.rawContent,
+          revisionLabel: body.revisionLabel ?? null,
+          sourceFilename: source.response.sourceFilename,
+          sourceFormat: source.response.sourceFormat
+        },
+        importedBy
+      ),
+      (value) => value.status
+    );
+
+    if (created.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (created.status === "not_found") {
+      sendProjectMemoryNotFound(response, "PROJECT_NOT_FOUND", "Project not found.");
+      return;
+    }
+
+    if (created.status === "invalid") {
+      sendJson(response, 400, { error: { code: created.code, message: created.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus<ProjectFileBomImportResponse>(
+      response,
+      201,
+      { created: created.response, outcome: "created", sourceRelativePath: source.response.sourceFilename },
+      "database"
+    );
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated batch queueing of one BOM import's missing parts for background import.
+ * Queueing never approves, validates, or export-promotes anything.
+ */
+async function handleBomBackfillStart(response: ServerResponse, bomImportId: string, requestedBy: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "bom-backfill-start",
+      () => startBomBackfillForBomImport(bomImportId, requestedBy),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "not_found") {
+      sendProjectMemoryNotFound(response, "BOM_IMPORT_NOT_FOUND", "BOM import not found.");
+      return;
+    }
+
+    sendCatalogJsonWithStatus(response, 202, result.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles the polling read of one BOM import's backfill progress buckets.
+ */
+async function handleBomBackfillStatusRead(response: ServerResponse, bomImportId: string): Promise<void> {
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "bom-backfill-read",
+      () => readBomBackfillStatusForBomImport(bomImportId),
       (value) => value.status
     );
 
@@ -6090,6 +6303,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 1, pattern: /^\/substitutions\/([^/]+)\/revoke$/u, targetType: "substitution" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/bom-imports$/u, targetType: "project" },
+    { idIndex: 1, pattern: /^\/projects\/([^/]+)\/bom-imports\/from-file$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/follow-ups$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/files\/document-map\/retry-extraction$/u, targetType: "project" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/files\/([^/]+)$/u, targetType: "project" },
@@ -6099,6 +6313,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
     { idIndex: 2, pattern: /^\/projects\/([^/]+)\/revisions\/([^/]+)$/u, targetType: "project_revision" },
     { idIndex: 1, pattern: /^\/projects\/([^/]+)\/revision-approval-gates$/u, targetType: "project_revision_approval_gate" },
     { idIndex: 1, pattern: /^\/bom-imports\/([^/]+)\/match$/u, targetType: "bom_import" },
+    { idIndex: 1, pattern: /^\/bom-imports\/([^/]+)\/backfill$/u, targetType: "bom_import" },
     { idIndex: 1, pattern: /^\/evidence-attachments\/([^/]+)$/u, targetType: "evidence_attachment" },
     { idIndex: 1, pattern: /^\/follow-ups\/([^/]+)$/u, targetType: "follow_up" },
     { idIndex: 1, pattern: /^\/circuit-blocks\/([^/]+)$/u, targetType: "circuit_block" },
@@ -6342,6 +6557,7 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "PATCH" && /^\/projects\/[^/]+\/revisions\/[^/]+$/u.test(pathname)) return "api-project-revision-update";
   if (method === "GET" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-project-bom-imports";
   if (method === "POST" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-bom-import-create";
+  if (method === "POST" && /^\/projects\/[^/]+\/bom-imports\/from-file$/u.test(pathname)) return "api-bom-import-from-project-file";
   if (method === "GET" && /^\/projects\/[^/]+\/usages$/u.test(pathname)) return "api-project-usages";
   if (method === "GET" && /^\/projects\/[^/]+\/bom-health$/u.test(pathname)) return "api-project-bom-health";
   if (method === "GET" && /^\/projects\/[^/]+\/evidence$/u.test(pathname)) return "api-project-evidence";
@@ -6360,6 +6576,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/bom-imports\/[^/]+\/lines$/u.test(pathname)) return "api-bom-import-lines";
   if (method === "POST" && pathname === "/bom-imports/preview") return "api-bom-import-preview";
   if (method === "POST" && /^\/bom-imports\/[^/]+\/match$/u.test(pathname)) return "api-bom-import-match";
+  if (method === "POST" && /^\/bom-imports\/[^/]+\/backfill$/u.test(pathname)) return "api-bom-backfill-start";
+  if (method === "GET" && /^\/bom-imports\/[^/]+\/backfill$/u.test(pathname)) return "api-bom-backfill-read";
   if (method === "GET" && pathname === "/evidence-attachments") return "api-evidence-attachments";
   if (method === "POST" && pathname === "/evidence-attachments") return "api-evidence-attachment-create";
   if (method === "POST" && pathname === "/evidence-attachments/files") return "api-evidence-file-upload";

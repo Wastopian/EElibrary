@@ -2410,6 +2410,101 @@ function normalizeRequestedRelativePath(rawPath: string): string | null {
   return normalized;
 }
 
+/** ReadProjectBomSourceResult reports one mirror BOM file read or its explicit non-success state. */
+export type ReadProjectBomSourceResult =
+  | { status: "not_configured" }
+  | { status: "invalid_source"; message: string }
+  | { status: "not_found"; message: string }
+  | { status: "unsupported"; message: string }
+  | { status: "too_large"; message: string }
+  | { status: "ok"; response: { sourceFilename: string; sourceFormat: "csv" | "xlsx"; rawContent: string } };
+
+/**
+ * Reads one BOM source file (CSV or XLSX) from the project's mirror folder so an engineer can
+ * import the parts list the folder already has without re-uploading it through the browser.
+ *
+ * Path safety mirrors the copy action: the relative path is normalized, resolved inside the
+ * project root, and refused when it escapes. The returned `sourceFilename` is the mirror-relative
+ * path so BOM provenance records where the file actually lives. Reading never moves, renames, or
+ * modifies the file.
+ */
+export async function readProjectBomSourceFile(
+  project: ProjectFilesProjectInput,
+  rawRelativePath: string
+): Promise<ReadProjectBomSourceResult> {
+  const root = getProjectFilesRoot();
+  if (!root) {
+    return { status: "not_configured" };
+  }
+
+  const relativePath = normalizeRequestedRelativePath(rawRelativePath);
+  if (!relativePath || relativePath === ".") {
+    return { message: "Choose one mapped file to import.", status: "invalid_source" };
+  }
+
+  const extension = path.extname(relativePath).toLowerCase();
+
+  if (extension === ".xls") {
+    return {
+      message: "Legacy .xls workbooks cannot be read directly. Open the file in Excel and save it as .xlsx, then rescan the folder.",
+      status: "unsupported"
+    };
+  }
+
+  if (extension !== ".csv" && extension !== ".xlsx") {
+    return {
+      message: "Only .csv and .xlsx parts lists can be imported from the project folder.",
+      status: "unsupported"
+    };
+  }
+
+  try {
+    const safeKey = sanitizeProjectKey(project.projectKey);
+    const projectRoot = resolveProjectRoot(root, safeKey);
+    const absolutePath = resolveProjectRelativePath(projectRoot, relativePath);
+    const info = await stat(absolutePath);
+
+    if (!info.isFile()) {
+      return { message: "That path is a folder, not a parts-list file.", status: "invalid_source" };
+    }
+
+    if (info.size > MAX_PROJECT_FILE_BYTES) {
+      return {
+        message: `The file is larger than the ${Math.round(MAX_PROJECT_FILE_BYTES / (1024 * 1024))} MB import limit.`,
+        status: "too_large"
+      };
+    }
+
+    const buffer = await readFile(absolutePath);
+
+    return {
+      response: {
+        rawContent: extension === ".xlsx" ? buffer.toString("base64") : buffer.toString("utf8"),
+        sourceFilename: relativePath,
+        sourceFormat: extension === ".xlsx" ? "xlsx" : "csv"
+      },
+      status: "ok"
+    };
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return { message: "That file is no longer in the project folder. Reload and try again.", status: "not_found" };
+    }
+
+    if (error instanceof Error && /escaped the project folder/u.test(error.message)) {
+      return { message: "That path points outside the project folder.", status: "invalid_source" };
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Detects a missing-file filesystem error without matching unrelated failures.
+ */
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
 /** Resolves one project-relative path and asserts it stays inside the project folder. */
 function resolveProjectRelativePath(projectRoot: string, relativePath: string): string {
   const absolutePath = path.resolve(projectRoot, relativePath.replace(/\//gu, path.sep));
