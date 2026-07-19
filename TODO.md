@@ -116,7 +116,7 @@ EE Library today runs only on a single developer workstation: `compose.yaml` sta
 
 These keep onboarding and boundaries honest for contributors and operators.
 
-1. **Periodic README ↔ implementation-status pass** — After any nav or major route change, verify [`README.md`](README.md) “Current Capabilities”, “Still Planned”, and “Current Boundaries” match [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (e.g. `/compare` in nav vs `/tools` absent). _Known drift as of 2026-06-12:_ README has a duplicated “Problems It Solves” section (appears twice), and the “What EE Library Is Not” / “Current Boundaries” copy still says `/tools` must stay out of navigation “until that route exists” — `/tools` shipped (PR #37) and is in the status matrix, so those lines need the post-ship phrasing.
+1. **Periodic README ↔ implementation-status pass** — After any nav or major route change, verify [`README.md`](README.md) “Current Capabilities”, “Still Planned”, and “Current Boundaries” match [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (e.g. `/compare` in nav vs `/tools` absent). _The 2026-06-12 drift (duplicated “Problems It Solves”, pre-ship `/tools` copy) was fixed; no known drift as of 2026-07-19._
 2. **UI/UX brief vs shipped surfaces** — When adding or changing primary workspaces, update [`docs/UI_UX_BRIEF.md`](docs/UI_UX_BRIEF.md) only where it describes **live** behavior, or call out intentional deltas in the implementation matrix.
 
 ### 2. Core build priorities ([`AGENTS.md`](AGENTS.md) order)
