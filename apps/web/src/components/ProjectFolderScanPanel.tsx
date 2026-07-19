@@ -56,16 +56,17 @@ export function ProjectFolderScanPanel(): React.ReactElement {
   }, []);
 
   /**
-   * Onboards one folder and records its honest per-step report.
+   * Onboards one folder and records its honest per-step report. The parts-list path is the
+   * row's explicit choice when the folder held more than one candidate.
    */
   const onAddFolder = useCallback(
-    async (entry: ProjectFolderScanEntry) => {
+    async (entry: ProjectFolderScanEntry, partsListRelativePath: string | null = entry.bestPartsListRelativePath) => {
       setFolderStatus((current) => ({ ...current, [entry.folderName]: { kind: "running" } }));
 
       try {
         const report = await onboardProjectFolder({
           folderName: entry.folderName,
-          partsListRelativePath: entry.bestPartsListRelativePath,
+          partsListRelativePath,
           projectName: entry.suggestedProjectName
         });
         setFolderStatus((current) => ({ ...current, [entry.folderName]: { kind: "done", report } }));
@@ -119,7 +120,7 @@ export function ProjectFolderScanPanel(): React.ReactElement {
           addingAll={addingAll}
           folderStatus={folderStatus}
           onAddAll={(entries) => void onAddAll(entries)}
-          onAddFolder={(entry) => void onAddFolder(entry)}
+          onAddFolder={(entry, partsListRelativePath) => void onAddFolder(entry, partsListRelativePath)}
           response={scan.response}
         />
       ) : null}
@@ -140,7 +141,7 @@ function ScanResults({
   addingAll: boolean;
   folderStatus: Record<string, FolderOnboardStatus>;
   onAddAll: (entries: ProjectFolderScanEntry[]) => void;
-  onAddFolder: (entry: ProjectFolderScanEntry) => void;
+  onAddFolder: (entry: ProjectFolderScanEntry, partsListRelativePath: string | null) => void;
   response: ProjectFolderScanResponse;
 }): React.ReactElement {
   const { unimportedFolders } = response;
@@ -205,9 +206,11 @@ function FolderRow({
 }: {
   addingAll: boolean;
   entry: ProjectFolderScanEntry;
-  onAddFolder: (entry: ProjectFolderScanEntry) => void;
+  onAddFolder: (entry: ProjectFolderScanEntry, partsListRelativePath: string | null) => void;
   status: FolderOnboardStatus | undefined;
 }): React.ReactElement {
+  const importableCandidates = entry.partsListCandidates.filter((candidate) => candidate.importable);
+  const [selectedPath, setSelectedPath] = useState(entry.bestPartsListRelativePath);
   const bestCandidate = entry.partsListCandidates.find((candidate) => candidate.relativePath === entry.bestPartsListRelativePath);
 
   return (
@@ -224,7 +227,26 @@ function FolderRow({
         ) : null}
       </td>
       <td>
-        {bestCandidate ? (
+        {importableCandidates.length > 1 ? (
+          // More than one parts list in the folder is a human decision, not a silent best-guess.
+          <label className="project-folder-scan__picker">
+            <span className="muted-copy">
+              {importableCandidates.length} parts lists found - choose which one to import
+            </span>
+            <select
+              disabled={status !== undefined}
+              onChange={(event) => setSelectedPath(event.target.value || null)}
+              value={selectedPath ?? ""}
+            >
+              {importableCandidates.map((candidate) => (
+                <option key={candidate.relativePath} value={candidate.relativePath}>
+                  {candidate.relativePath} ({Math.round(candidate.confidenceScore * 100)}% sure)
+                </option>
+              ))}
+              <option value="">None - start the project empty</option>
+            </select>
+          </label>
+        ) : bestCandidate ? (
           <>
             <code className="ui-mono">{bestCandidate.relativePath}</code>
             <div className="muted-copy">{Math.round(bestCandidate.confidenceScore * 100)}% sure - {bestCandidate.reason}</div>
@@ -239,7 +261,12 @@ function FolderRow({
             A folder named <code className="ui-mono">{entry.renameTarget}</code> already exists - merge or rename by hand, then rescan
           </span>
         ) : (
-          <FolderOutcome addingAll={addingAll} entry={entry} onAddFolder={onAddFolder} status={status} />
+          <FolderOutcome
+            addingAll={addingAll}
+            entry={entry}
+            onAdd={() => onAddFolder(entry, selectedPath)}
+            status={status}
+          />
         )}
       </td>
     </tr>
@@ -251,18 +278,17 @@ function FolderRow({
  */
 function FolderOutcome({
   addingAll,
-  entry,
-  onAddFolder,
+  onAdd,
   status
 }: {
   addingAll: boolean;
   entry: ProjectFolderScanEntry;
-  onAddFolder: (entry: ProjectFolderScanEntry) => void;
+  onAdd: () => void;
   status: FolderOnboardStatus | undefined;
 }): React.ReactElement {
   if (!status) {
     return (
-      <button disabled={addingAll} onClick={() => onAddFolder(entry)} type="button">
+      <button disabled={addingAll} onClick={onAdd} type="button">
         Add to library
       </button>
     );

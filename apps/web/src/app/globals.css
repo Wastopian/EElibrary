@@ -6385,6 +6385,15 @@ details[open] .trust-breakdown__toggle::before {
   justify-items: start;
 }
 
+.project-folder-scan__picker {
+  display: grid;
+  gap: 4px;
+}
+
+.project-folder-scan__picker select {
+  max-width: 340px;
+}
+
 .admin-action-row {
   display: flex;
   flex-wrap: wrap;
