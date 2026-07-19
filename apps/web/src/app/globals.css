@@ -6342,6 +6342,49 @@ details[open] .trust-breakdown__toggle::before {
   gap: 6px;
 }
 
+.project-folder-scan {
+  display: grid;
+  gap: 10px;
+}
+
+.project-folder-scan button:not(.button-link) {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.project-folder-scan__error {
+  color: var(--color-review);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.project-folder-scan__results {
+  display: grid;
+  gap: 10px;
+}
+
+.project-folder-scan__table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  width: 100%;
+}
+
+.project-folder-scan__table th,
+.project-folder-scan__table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px 10px 8px 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.project-folder-scan__outcome {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
 .admin-action-row {
   display: flex;
   flex-wrap: wrap;

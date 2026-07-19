@@ -20,6 +20,9 @@ import type {
   BomImportMatchResponse,
   ProjectFileBomImportInput,
   ProjectFileBomImportResponse,
+  ProjectFolderOnboardInput,
+  ProjectFolderOnboardReport,
+  ProjectFolderScanResponse,
   BomImportPreviewInput,
   BomImportPreviewResponse,
   BomRevisionCompareResponse,
@@ -730,6 +733,45 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
   }
 
   const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Scans the mirror root for folders no library project claims yet.
+ */
+export async function fetchProjectFolderScan(): Promise<ProjectFolderScanResponse> {
+  const response = await fetch(buildApiUrl("/project-folder-scan"), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder scan");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderScanResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Onboards one scanned folder: disclosed rename, project creation, BOM import, matching, and
+ * missing-part queueing, reported step by step.
+ */
+export async function onboardProjectFolder(input: ProjectFolderOnboardInput): Promise<ProjectFolderOnboardReport> {
+  const response = await fetch(buildApiUrl("/project-folder-onboard"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder onboarding");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderOnboardReport>;
 
   return envelope.data;
 }
