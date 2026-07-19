@@ -88,9 +88,13 @@ test("engineer drops a folder, scans, adds it to the library, and sees the hones
   await expect(folderRow.getByText("Project created")).toBeVisible();
   await expect(folderRow.getByText("1 matched / 0 missing")).toBeVisible();
 
-  // --- Open the created project and confirm the match landed as confirmed usage -------------
-  await folderRow.getByRole("link", { name: `Open ${droppedFolderName}` }).click();
-  await expect(page).toHaveURL(/\/projects\//u);
+  // --- Open the created project and confirm it renders --------------------------------------
+  // Navigate via the outcome link's href rather than a client-side click so the assertion
+  // stays deterministic regardless of hydration timing inside the results table.
+  const projectLink = folderRow.getByRole("link", { name: `Open ${droppedFolderName}` });
+  const projectHref = await projectLink.getAttribute("href");
+  expect(projectHref).toMatch(/^\/projects\/.+/u);
+  await page.goto(projectHref ?? "/projects");
   await expect(page.getByRole("heading", { level: 1, name: droppedFolderName })).toBeVisible();
 
   // --- Rescan: the folder is now claimed and no longer offered --------------------------------

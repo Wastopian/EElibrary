@@ -12,7 +12,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import React, { useCallback, useState } from "react";
 import { StatusBadge } from "@ee-library/ui";
 import { fetchProjectFolderScan, isApiClientError, onboardProjectFolder } from "../lib/api-client";
@@ -35,7 +34,6 @@ type FolderOnboardStatus =
  * Renders the scan action and the per-folder onboarding table.
  */
 export function ProjectFolderScanPanel(): React.ReactElement {
-  const router = useRouter();
   const [scan, setScan] = useState<ScanStatus>({ kind: "idle" });
   const [folderStatus, setFolderStatus] = useState<Record<string, FolderOnboardStatus>>({});
   const [addingAll, setAddingAll] = useState(false);
@@ -69,8 +67,9 @@ export function ProjectFolderScanPanel(): React.ReactElement {
           partsListRelativePath,
           projectName: entry.suggestedProjectName
         });
+        // No router refresh here: the outcome row is the receipt, and it links straight into the
+        // created project. The projects list above updates on the next navigation.
         setFolderStatus((current) => ({ ...current, [entry.folderName]: { kind: "done", report } }));
-        router.refresh();
         return true;
       } catch (error) {
         setFolderStatus((current) => ({
@@ -80,7 +79,7 @@ export function ProjectFolderScanPanel(): React.ReactElement {
         return false;
       }
     },
-    [router]
+    []
   );
 
   /**
