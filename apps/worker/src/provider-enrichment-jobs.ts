@@ -56,6 +56,8 @@ export interface ProviderEnrichmentProcessingResult {
 export interface ProviderEnrichmentProcessingSummary {
   /** One result per claimed enrichment job in processing order. */
   processed: ProviderEnrichmentProcessingResult[];
+  /** Running jobs recovered after their worker stopped before a terminal write. */
+  recoveredStaleCount: number;
 }
 
 /** ProviderEnrichmentEnqueueInput carries the caller context needed to queue gap-driven enrichment work. */
@@ -137,6 +139,12 @@ const DATASHEET_MAX_BYTES = 50 * 1024 * 1024;
 /** Timeout in milliseconds for a single datasheet fetch. */
 const DATASHEET_FETCH_TIMEOUT_MS = 30_000;
 
+/** Running jobs older than this threshold are treated as abandoned worker work. */
+const STALE_PROVIDER_ENRICHMENT_MS = 15 * 60 * 1000;
+
+/** Heartbeat writes keep long PDF parsing work from looking abandoned. */
+const PROVIDER_ENRICHMENT_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+
 /**
  * Overrides the datasheet capture handler for queue tests; pass null to restore the real handler.
  */
@@ -197,6 +205,7 @@ export async function processProviderEnrichmentJobs(
 ): Promise<ProviderEnrichmentProcessingSummary> {
   const processed: ProviderEnrichmentProcessingResult[] = [];
   const boundedLimit = Math.max(1, Math.min(limit, 100));
+  const recoveredStaleCount = await recoverStaleProviderEnrichmentJobs();
 
   for (let index = 0; index < boundedLimit; index += 1) {
     const nextResult = await processNextProviderEnrichmentJob();
@@ -208,7 +217,7 @@ export async function processProviderEnrichmentJobs(
     processed.push(nextResult);
   }
 
-  return { processed };
+  return { processed, recoveredStaleCount };
 }
 
 /**
@@ -221,8 +230,11 @@ export async function processNextProviderEnrichmentJob(): Promise<ProviderEnrich
     return null;
   }
 
+  const stopHeartbeat = startProviderEnrichmentHeartbeat(claimedJob.id);
+
   try {
     const result = await runProviderEnrichmentJob(claimedJob);
+    stopHeartbeat();
     await markProviderEnrichmentJobSucceeded(claimedJob.id, result);
 
     return {
@@ -233,6 +245,7 @@ export async function processNextProviderEnrichmentJob(): Promise<ProviderEnrich
       status: "succeeded"
     };
   } catch (error) {
+    stopHeartbeat();
     const failure = mapProviderEnrichmentFailure(error);
     await markProviderEnrichmentJobFailed(claimedJob.id, failure);
 
@@ -244,6 +257,68 @@ export async function processNextProviderEnrichmentJob(): Promise<ProviderEnrich
       status: "failed"
     };
   }
+}
+
+/**
+ * Returns abandoned running jobs to the queue after a worker crash or forced restart.
+ *
+ * Active jobs refresh `last_updated_at` through a heartbeat, so only work with no live
+ * worker for the full stale interval is retried.
+ */
+async function recoverStaleProviderEnrichmentJobs(): Promise<number> {
+  const staleBefore = new Date(Date.now() - STALE_PROVIDER_ENRICHMENT_MS).toISOString();
+  const result = await getWorkerDatabasePool().query(
+    `
+      UPDATE provider_enrichment_jobs
+      SET
+        job_status = 'queued',
+        requested_at = now(),
+        started_at = NULL,
+        completed_at = NULL,
+        error_code = NULL,
+        error_message = NULL,
+        last_updated_at = now()
+      WHERE job_status = 'running'
+        AND last_updated_at < $1
+      RETURNING id
+    `,
+    [staleBefore]
+  );
+
+  return result.rowCount ?? 0;
+}
+
+/** Starts a low-frequency liveness heartbeat and returns an idempotent stop function. */
+function startProviderEnrichmentHeartbeat(jobId: string): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    void touchProviderEnrichmentHeartbeat(jobId).catch(() => {
+      // A later heartbeat or terminal write can recover from a transient heartbeat error.
+    });
+  }, PROVIDER_ENRICHMENT_HEARTBEAT_INTERVAL_MS);
+  timer.unref();
+
+  return () => {
+    if (stopped) {
+      return;
+    }
+
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/** Refreshes only the liveness timestamp for a job that is still running. */
+async function touchProviderEnrichmentHeartbeat(jobId: string): Promise<void> {
+  await getWorkerDatabasePool().query(
+    `
+      UPDATE provider_enrichment_jobs
+      SET last_updated_at = now()
+      WHERE id = $1
+        AND job_status = 'running'
+    `,
+    [jobId]
+  );
 }
 
 /** DATASHEET_EXTRACTABLE_PART_TYPES limits heuristic datasheet extraction to passives (clear label:value text). */

@@ -378,6 +378,70 @@ test("provider enrichment worker no-ops cleanly when no queued jobs exist", asyn
 
     assert.equal(nextJob, null);
     assert.deepEqual(summary.processed, []);
+    assert.equal(summary.recoveredStaleCount, 0);
+  } finally {
+    setProviderEnrichmentDatasheetCaptureHandlerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("provider enrichment worker retries abandoned running work without stealing fresh work", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartAndAcquisition(pool, "part-abandoned", "acqjob-abandoned");
+  await seedPartAndAcquisition(pool, "part-active", "acqjob-active");
+  await seedQueuedEnrichmentJob(
+    pool,
+    "enrichjob-abandoned",
+    "part-abandoned",
+    "acqjob-abandoned",
+    "2026-04-24T12:00:00.000Z"
+  );
+  await seedQueuedEnrichmentJob(
+    pool,
+    "enrichjob-active",
+    "part-active",
+    "acqjob-active",
+    "2026-04-24T12:01:00.000Z"
+  );
+  await pool.query(`
+    UPDATE provider_enrichment_jobs
+    SET
+      job_status = 'running',
+      started_at = now(),
+      last_updated_at = now() - INTERVAL '20 minutes'
+    WHERE id = 'enrichjob-abandoned';
+
+    UPDATE provider_enrichment_jobs
+    SET
+      job_status = 'running',
+      started_at = now(),
+      last_updated_at = now()
+    WHERE id = 'enrichjob-active';
+  `);
+  setProviderEnrichmentDatasheetCaptureHandlerForTests(async () => ({
+    detail: { result: "captured" },
+    message: "Referenced datasheet evidence was captured from provider source data."
+  }));
+
+  try {
+    const summary = await processProviderEnrichmentJobs(1);
+    const rows = await pool.query<{ id: string; job_status: string }>(
+      "SELECT id, job_status FROM provider_enrichment_jobs ORDER BY id"
+    );
+    const events = await pool.query<{ event_type: string }>(
+      "SELECT event_type FROM provider_enrichment_job_events WHERE job_id = 'enrichjob-abandoned' ORDER BY created_at ASC"
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, row.job_status]));
+
+    assert.equal(summary.recoveredStaleCount, 1);
+    assert.equal(summary.processed.length, 1);
+    assert.equal(summary.processed[0]?.jobId, "enrichjob-abandoned");
+    assert.equal(summary.processed[0]?.status, "succeeded");
+    assert.equal(byId.get("enrichjob-abandoned"), "succeeded");
+    assert.equal(byId.get("enrichjob-active"), "running");
+    assert.deepEqual(events.rows.map((row) => row.event_type), ["queued", "running", "succeeded"]);
   } finally {
     setProviderEnrichmentDatasheetCaptureHandlerForTests(null);
     setWorkerRepositoryPoolForTests(null);
