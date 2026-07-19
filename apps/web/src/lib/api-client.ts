@@ -138,8 +138,8 @@ import type {
   PartSearchRecord,
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
-  ProviderLookupCandidate,
   ProviderLookupRequestInput,
+  ProviderLookupResponse,
   ProviderImportCreateInput,
   ProviderImportCreateResponse,
   ReviewActionInput,
@@ -1384,7 +1384,7 @@ export async function requestProviderImport(input: ProviderImportCreateInput): P
 /**
  * Runs an explicit exact-match provider candidate lookup without changing normal catalog search behavior.
  */
-export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupCandidate[]> {
+export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupResponse> {
   const response = await fetch(buildApiUrl("/provider-lookups"), {
     body: JSON.stringify(input),
     cache: "no-store",
@@ -1396,7 +1396,7 @@ export async function requestProviderLookup(input: ProviderLookupRequestInput): 
     throw await buildApiError(response, "Provider lookup");
   }
 
-  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupCandidate[]>;
+  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupResponse>;
 
   return envelope.data;
 }

@@ -3,10 +3,28 @@
  */
 
 import { providerAdapters } from "./provider-adapters";
+import type { ProviderAdapter, ProviderExactLookupRequest } from "./provider-adapters";
 import type { ProviderLookupCandidateBase } from "@ee-library/shared/types";
-import type { ProviderExactLookupRequest } from "./provider-adapters";
 
 export type { ProviderExactLookupRequest } from "./provider-adapters";
+
+/** ProviderPartLookupFailure captures one provider adapter that failed during the exact-lookup fan-out. */
+export interface ProviderPartLookupFailure {
+  /** Registered adapter id, such as digikey. */
+  providerId: string;
+  /** Display-ready adapter name for logs and user-facing failure mapping. */
+  providerName: string;
+  /** Raw adapter failure text; API surfaces map this to calm user-facing wording before display. */
+  message: string;
+}
+
+/** SettledProviderPartLookup pairs candidates from adapters that answered with per-adapter failures. */
+export interface SettledProviderPartLookup {
+  /** Deduplicated candidates from every adapter that answered, in adapter registry order. */
+  candidates: ProviderLookupCandidateBase[];
+  /** Adapters that threw during the fan-out; empty means every adapter answered. */
+  failures: ProviderPartLookupFailure[];
+}
 
 /**
  * Queries every registered provider adapter for exact-match candidates and preserves adapter registry order.
@@ -17,6 +35,45 @@ export async function runProviderPartLookup(request: ProviderExactLookupRequest)
   );
 
   return dedupeLookupCandidates(results.flat());
+}
+
+/**
+ * Queries every registered provider adapter but tolerates individual failures, so one provider outage
+ * (for example expired distributor credentials) cannot hide answers from the providers that worked.
+ */
+export async function runProviderPartLookupSettled(
+  request: ProviderExactLookupRequest,
+  adapters: ProviderAdapter[] = providerAdapters
+): Promise<SettledProviderPartLookup> {
+  const settled = await Promise.allSettled(
+    adapters.map((adapter) => adapter.findExactPartCandidates(request))
+  );
+  const candidates: ProviderLookupCandidateBase[] = [];
+  const failures: ProviderPartLookupFailure[] = [];
+
+  settled.forEach((result, index) => {
+    const adapter = adapters[index];
+
+    if (!adapter) {
+      return;
+    }
+
+    if (result.status === "fulfilled") {
+      candidates.push(...result.value);
+      return;
+    }
+
+    failures.push({
+      message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      providerId: adapter.id,
+      providerName: adapter.name
+    });
+  });
+
+  return {
+    candidates: dedupeLookupCandidates(candidates),
+    failures
+  };
 }
 
 /**

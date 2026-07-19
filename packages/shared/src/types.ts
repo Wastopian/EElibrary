@@ -3737,6 +3737,24 @@ export interface ProviderLookupCandidate extends ProviderLookupCandidateBase {
   importAllowed: boolean;
 }
 
+/** ProviderLookupProviderFailure reports one provider that did not answer an exact lookup. */
+export interface ProviderLookupProviderFailure {
+  /** Registered provider adapter id, such as digikey. */
+  providerId: string;
+  /** Display-ready provider name for user-facing failure notes. */
+  providerName: string;
+  /** Calm user-facing reason the provider did not answer, without provider internals. */
+  message: string;
+}
+
+/** ProviderLookupResponse pairs exact candidates with providers that did not answer, so an empty list never silently means "not found anywhere". */
+export interface ProviderLookupResponse {
+  /** Exact-match candidate rows from the providers that answered. */
+  candidates: ProviderLookupCandidate[];
+  /** Providers that failed during this lookup; empty means every provider answered. */
+  providerFailures: ProviderLookupProviderFailure[];
+}
+
 /** ProviderAcquisitionJob stores one admin-gated provider intake job without implying part approval. */
 export interface ProviderAcquisitionJob {
   id: string;

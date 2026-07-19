@@ -20,8 +20,8 @@ import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildU
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
 import { formatProviderImportFailureMessage, parseProviderImportRequest } from "./provider-import-request";
 import { runProviderPartImport } from "./provider-import-runner";
-import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
-import { runProviderPartLookup } from "./provider-lookup-runner";
+import { formatProviderLookupFailureMessage, formatProviderLookupProviderDisplayName, formatProviderLookupProviderFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
+import { runProviderPartLookupSettled } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
 import { applyProjectDocumentExtractions, buildProjectFilesResponse, copyProjectDocumentToSuggestedFolder, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
 import {
@@ -132,7 +132,7 @@ import type {
   PartIssueWorkflowUpdateInput,
   PartIssueWorkflowStatus,
   ProviderAcquisitionJobDetailResponse,
-  ProviderLookupCandidate,
+  ProviderLookupResponse,
   PartParameterFilter,
   PartSearchFilters,
   PartSearchRecord,
@@ -1244,21 +1244,28 @@ async function handleProviderLookupCreate(request: IncomingMessage, response: Se
       ...(parsed.lookupRequest.manufacturerName ? { manufacturerName: parsed.lookupRequest.manufacturerName } : {}),
       query: parsed.lookupRequest.query
     };
-    const [session, databaseStatus, lookupCandidates] = await Promise.all([
+    const [session, databaseStatus, lookupResult] = await Promise.all([
       readOptionalSession(request),
       timeRouteOperation(response, "catalog-status", () => getCatalogStoreStatus(), (status) => status.label),
       timeRouteOperation(
         response,
         "provider-lookup-run",
-        () => runProviderPartLookup(workerLookupRequest),
-        (value) => `${value.length} candidates`
+        () => runProviderPartLookupSettled(workerLookupRequest),
+        (value) => `${value.candidates.length} candidates, ${value.failures.length} provider failures`
       )
     ]);
     const importAllowed = Boolean(session && session.role === "admin" && databaseStatus.connected);
-    const payload: ProviderLookupCandidate[] = lookupCandidates.map((candidate) => ({
-      ...candidate,
-      importAllowed
-    }));
+    const payload: ProviderLookupResponse = {
+      candidates: lookupResult.candidates.map((candidate) => ({
+        ...candidate,
+        importAllowed
+      })),
+      providerFailures: lookupResult.failures.map((failure) => ({
+        message: formatProviderLookupProviderFailureMessage(failure),
+        providerId: failure.providerId,
+        providerName: formatProviderLookupProviderDisplayName(failure)
+      }))
+    };
 
     sendJson(response, 200, {
       data: payload
