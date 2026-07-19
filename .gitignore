@@ -30,3 +30,22 @@ Thumbs.db
 
 # Docker Desktop "Dev Environments" metadata (auto-generated, machine-local).
 compose-dev.yaml
+
+# Worker-local file storage (downloaded datasheets/CAD bytes; dev data, never committed).
+apps/worker/storage/
+
+# Stray Chromium automation-profile debris: a browser launched with its user-data-dir
+# pointed at the repo root leaves these. Safe to delete on sight.
+Crashpad/
+CrashpadMetrics*.pma
+Default/
+GPUPersistentCache/
+GrShaderCache/
+ShaderCache/
+component_crx_cache/
+extensions_crx_cache/
+segmentation_platform/
+Local State
+Last Version
+Variations
+Safe Browsing/
