@@ -38,8 +38,10 @@ import type {
   ProjectDocumentType,
   ProjectFilesResponse,
   ProjectFolderCategory,
-  ProjectFolderListing
+  ProjectFolderListing,
+  ProjectRevision
 } from "@ee-library/shared/types";
+import { ProjectFileBomImportAction } from "./ProjectFileBomImportAction";
 
 /**
  * Refreshes the page so the listing always reflects what's on disk. Using a full reload
@@ -58,6 +60,8 @@ interface ProjectFilesPanelProps {
   projectId: string;
   /** Response from `GET /projects/:id/files`, or null when the API is unavailable. */
   files: ProjectFilesResponse | null;
+  /** Existing project revisions so parts-list files can be imported as BOMs in place. */
+  revisions?: ProjectRevision[];
 }
 
 /** MAX_UPLOAD_BYTES mirrors the API limit so the UI rejects oversize files before the round-trip. */
@@ -76,7 +80,7 @@ type ProjectDocumentMapScope = "all" | "attention" | "ready" | "reader_issues";
  * Top-level panel. Decides which honest state to render and otherwise lays out one
  * category card per folder, plus the inline notes composer.
  */
-export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) {
+export function ProjectFilesPanel({ projectId, files, revisions = [] }: ProjectFilesPanelProps) {
   const [liveFiles, setLiveFiles] = useState<ProjectFilesResponse | null>(files);
   const activeExtractionCount =
     (liveFiles?.documentMap?.summary.extractionQueuedCount ?? 0) +
@@ -176,7 +180,7 @@ export function ProjectFilesPanel({ projectId, files }: ProjectFilesPanelProps) 
 
       <ProjectReentryBrief files={liveFiles} />
 
-      {liveFiles.documentMap ? <ProjectDocumentMapPanel documentMap={liveFiles.documentMap} projectId={projectId} /> : null}
+      {liveFiles.documentMap ? <ProjectDocumentMapPanel documentMap={liveFiles.documentMap} projectId={projectId} revisions={revisions} /> : null}
 
       <ProjectPdfReviewPanel files={liveFiles} projectId={projectId} />
 
@@ -253,7 +257,7 @@ export function mergeProjectDocumentExtractionStatuses(
  * Project document map. The rows come from a bounded folder scan, so every classification
  * is shown as a sorting hint rather than a reviewed document record.
  */
-function ProjectDocumentMapPanel({ documentMap, projectId }: { documentMap: ProjectDocumentMap; projectId: string }) {
+function ProjectDocumentMapPanel({ documentMap, projectId, revisions }: { documentMap: ProjectDocumentMap; projectId: string; revisions: ProjectRevision[] }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<ProjectDocumentMapScope>("all");
   const attentionCount = documentMap.documents.filter((entry) => entry.needsAttention).length;
@@ -374,7 +378,7 @@ function ProjectDocumentMapPanel({ documentMap, projectId }: { documentMap: Proj
             </thead>
             <tbody>
               {visibleDocuments.map((entry) => (
-                <ProjectDocumentMapRow entry={entry} key={entry.id} projectId={projectId} />
+                <ProjectDocumentMapRow entry={entry} key={entry.id} projectId={projectId} revisions={revisions} />
               ))}
             </tbody>
           </table>
@@ -580,8 +584,16 @@ function DocumentMapSummaryItem({ label, value }: { label: string; value: number
   );
 }
 
+/**
+ * Marks a map entry the folder-first BOM bridge can ingest: classified as a parts list and in a
+ * format the shared BOM parser reads. Legacy .xls files keep their conversion guidance instead.
+ */
+function isImportablePartsListEntry(entry: ProjectDocumentMapEntry): boolean {
+  return entry.documentType === "parts_list" && /\.(csv|xlsx)$/iu.test(entry.filename);
+}
+
 /** Renders one document-map row with file clues, a sorting hint, and safe copy action. */
-function ProjectDocumentMapRow({ entry, projectId }: { entry: ProjectDocumentMapEntry; projectId: string }) {
+function ProjectDocumentMapRow({ entry, projectId, revisions }: { entry: ProjectDocumentMapEntry; projectId: string; revisions: ProjectRevision[] }) {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "success" | "error">("idle");
   const [copyMessage, setCopyMessage] = useState("");
   const canCopySuggestion = entry.sortPlan.action === "move_to_standard_folder" && Boolean(entry.sortPlan.targetRelativePath);
@@ -641,6 +653,9 @@ function ProjectDocumentMapRow({ entry, projectId }: { entry: ProjectDocumentMap
           >
             {copyStatus === "copying" ? "Copying..." : "Copy to suggested folder"}
           </button>
+        ) : null}
+        {isImportablePartsListEntry(entry) ? (
+          <ProjectFileBomImportAction projectId={projectId} relativePath={entry.relativePath} revisions={revisions} />
         ) : null}
         {copyStatus !== "idle" && copyMessage ? (
           <div

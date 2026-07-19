@@ -15,7 +15,11 @@ import type {
   BomImportCreateResponse,
   BomImportDiagnosticsResponse,
   BomImportLinesResponse,
+  BomBackfillStartResponse,
+  BomBackfillStatusResponse,
   BomImportMatchResponse,
+  ProjectFileBomImportInput,
+  ProjectFileBomImportResponse,
   BomImportPreviewInput,
   BomImportPreviewResponse,
   BomRevisionCompareResponse,
@@ -726,6 +730,69 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
   }
 
   const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Imports a parts-list file the project folder already has: the server reads the mirror file,
+ * suggests a column mapping, and either creates the import or asks for a confirmed mapping.
+ */
+export async function importProjectFileAsBom(projectId: string, input: ProjectFileBomImportInput): Promise<ProjectFileBomImportResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-imports/from-file`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project-file BOM import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFileBomImportResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Queues every missing part of one matched BOM import for background supplier import.
+ */
+export async function startBomBackfill(bomImportId: string): Promise<BomBackfillStartResponse> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/backfill`), {
+    body: JSON.stringify({}),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Missing-part import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomBackfillStartResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches the progress of one BOM import's queued missing-part imports, or null when none exist.
+ */
+export async function fetchBomBackfillStatus(bomImportId: string): Promise<BomBackfillStatusResponse | null> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/backfill`), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Missing-part import status");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomBackfillStatusResponse>;
 
   return envelope.data;
 }

@@ -624,6 +624,24 @@ export interface BomImportCreateResponse {
   summary: BomImportPersistSummary;
 }
 
+/** ProjectFileBomImportInput asks the API to ingest a BOM file already in the project folder mirror. */
+export interface ProjectFileBomImportInput {
+  /** Relative path of the mapped file inside the project's mirror folder. */
+  relativePath: string;
+  projectRevisionId?: string | null;
+  revisionLabel?: string | null;
+  /** Confirmed column mapping; omit to let the server suggest one from the headers. */
+  columnMapping?: BomColumnMapping | null;
+}
+
+/**
+ * ProjectFileBomImportResponse either creates the import (when the MPN column is recognizable or a
+ * confirmed mapping was supplied) or honestly asks for a human column mapping with the preview.
+ */
+export type ProjectFileBomImportResponse =
+  | { outcome: "created"; created: BomImportCreateResponse; sourceRelativePath: string }
+  | { outcome: "mapping_required"; preview: BomImportPreviewResponse; sourceRelativePath: string };
+
 /** BomImportMatchSummary reports one deterministic matching pass without hiding weak rows. */
 export interface BomImportMatchSummary {
   totalLineCount: number;
@@ -651,6 +669,79 @@ export interface BomImportMatchResponse {
   linesPreview: BomLine[];
   summary: BomImportMatchSummary;
   usagesPreview: ProjectPartUsage[];
+}
+
+/**
+ * BomBackfillRequestStatus tracks one queued missing-part import through the backfill pipeline.
+ *
+ * queued/searching are worker-pending; imported, needs_choice, no_match, and failed are terminal
+ * until the engineer retries or picks a candidate through the existing one-at-a-time import flow.
+ */
+export type BomBackfillRequestStatus =
+  | "queued"
+  | "searching"
+  | "needs_choice"
+  | "no_match"
+  | "imported"
+  | "failed";
+
+/** BomBackfillCandidate preserves one exact provider candidate for a parked human pick. */
+export interface BomBackfillCandidate {
+  providerId: string;
+  providerPartKey: string;
+  manufacturerName: string;
+  mpn: string;
+  package: string;
+  sourceUrl: string | null;
+  /** Exact-match kind, preserved so a human pick can feed the existing acquisition route. */
+  matchType: ProviderLookupMatchType;
+}
+
+/** BomBackfillRequestRecord is one deduplicated missing-part request from a BOM import. */
+export interface BomBackfillRequestRecord {
+  id: string;
+  bomImportId: string;
+  mpn: string;
+  manufacturerName: string | null;
+  requestStatus: BomBackfillRequestStatus;
+  /** Exact provider candidates preserved when the outcome parked as needs_choice. */
+  candidates: BomBackfillCandidate[];
+  /** Catalog part created or resolved by a successful import. Never implies approval. */
+  partId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  requestedBy: string;
+  requestedAt: string;
+  completedAt: string | null;
+  lastUpdatedAt: string;
+}
+
+/** BomBackfillSummary buckets one BOM import's backfill requests for the progress panel. */
+export interface BomBackfillSummary {
+  totalCount: number;
+  /** queued + searching rows still waiting on the worker. */
+  pendingCount: number;
+  importedCount: number;
+  needsChoiceCount: number;
+  noMatchCount: number;
+  failedCount: number;
+  /** True when no row is pending, so polling can stop. */
+  settled: boolean;
+}
+
+/** BomBackfillStatusResponse reports every backfill request for one BOM import plus bucket counts. */
+export interface BomBackfillStatusResponse {
+  bomImportId: string;
+  requests: BomBackfillRequestRecord[];
+  summary: BomBackfillSummary;
+}
+
+/** BomBackfillStartResponse confirms how many missing-part requests one start action queued. */
+export interface BomBackfillStartResponse extends BomBackfillStatusResponse {
+  /** Rows newly queued (or re-queued from a terminal retryable state) by this start. */
+  createdCount: number;
+  /** Unmatched rows skipped because an equivalent request was already queued, running, or imported. */
+  skippedCount: number;
 }
 
 /**

@@ -2728,8 +2728,9 @@ function collectRelatedPartIds(record: PartSearchRecord): string[] {
 
 /**
  * Converts unknown Postgres/network failures into explicit catalog-store failures.
+ * Exported so sibling stores (e.g. the BOM backfill store) surface the same failure contract.
  */
-function toCatalogStoreError(error: unknown): CatalogStoreError {
+export function toCatalogStoreError(error: unknown): CatalogStoreError {
   if (isSchemaMismatchError(error)) {
     return new CatalogStoreError("schema_mismatch", "Catalog database schema does not match the API query contract.", error);
   }
