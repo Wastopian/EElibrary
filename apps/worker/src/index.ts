@@ -1020,7 +1020,7 @@ async function safeProcessBomBackfillRequests(): Promise<void> {
   try {
     const summary = await processBomBackfillRequests(DEFAULT_BOM_BACKFILL_BATCH_LIMIT);
 
-    if (summary.processed.length === 0) {
+    if (summary.processed.length === 0 && summary.recoveredStaleCount === 0) {
       return;
     }
 
@@ -1031,6 +1031,9 @@ async function safeProcessBomBackfillRequests(): Promise<void> {
       `Worker daemon: backfilled ${imported} missing part${imported === 1 ? "" : "s"}` +
         (parked > 0 ? `, ${parked} parked for review` : "") +
         (failed > 0 ? `, ${failed} failed` : "") +
+        (summary.recoveredStaleCount > 0
+          ? `, ${summary.recoveredStaleCount} abandoned search${summary.recoveredStaleCount === 1 ? "" : "es"} retried`
+          : "") +
         "."
     );
   } catch (error) {

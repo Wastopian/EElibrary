@@ -161,6 +161,52 @@ test("backfill worker reuses an existing catalog part without re-importing", asy
   }
 });
 
+test("backfill worker retries abandoned searches without stealing active work", async () => {
+  const pool = createBomBackfillPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-recovered");
+  await seedQueuedRequest(pool, "bomfill-abandoned", "2026-07-16T12:00:00.000Z", "RC0402FR-0710KL", null);
+  await seedQueuedRequest(pool, "bomfill-active", "2026-07-16T12:05:00.000Z", "GRM155R71C104KA88D", null);
+  await pool.query(`
+    UPDATE bom_backfill_requests
+    SET
+      request_status = 'searching',
+      started_at = now(),
+      last_updated_at = now() - INTERVAL '20 minutes'
+    WHERE id = 'bomfill-abandoned';
+
+    UPDATE bom_backfill_requests
+    SET
+      request_status = 'searching',
+      started_at = now(),
+      last_updated_at = now()
+    WHERE id = 'bomfill-active';
+  `);
+
+  setBomBackfillLookupRunnerForTests(async () => ({ candidates: [buildCandidate({})], failures: [] }));
+  setBomBackfillImportRunnerForTests(async () => buildImportSummary("part-recovered", "C1091"));
+
+  try {
+    const summary = await processBomBackfillRequests(1, 1);
+    const rows = await pool.query<{ id: string; request_status: string }>(
+      "SELECT id, request_status FROM bom_backfill_requests ORDER BY id"
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, row.request_status]));
+
+    assert.equal(summary.recoveredStaleCount, 1);
+    assert.deepEqual(summary.processed, [
+      { mpn: "RC0402FR-0710KL", requestId: "bomfill-abandoned", status: "imported" }
+    ]);
+    assert.equal(byId.get("bomfill-abandoned"), "imported");
+    assert.equal(byId.get("bomfill-active"), "searching");
+  } finally {
+    setBomBackfillLookupRunnerForTests(null);
+    setBomBackfillImportRunnerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
 test("backfill worker parks ambiguity as needs_choice with candidates persisted, and empty lookups as no_match", async () => {
   const pool = createBomBackfillPool();
   setWorkerRepositoryPoolForTests(pool);

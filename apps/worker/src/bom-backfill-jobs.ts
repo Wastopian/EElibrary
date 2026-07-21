@@ -49,6 +49,8 @@ export interface BomBackfillProcessingResult {
 /** BomBackfillProcessingSummary groups one drain pass for CLI and daemon logging. */
 export interface BomBackfillProcessingSummary {
   processed: BomBackfillProcessingResult[];
+  /** Searching requests recovered after their worker stopped before a terminal write. */
+  recoveredStaleCount: number;
 }
 
 /** runProviderPartLookupImpl keeps the real lookup runner replaceable in queue tests. */
@@ -56,6 +58,12 @@ let runProviderPartLookupImpl: RunProviderPartLookupSettled = defaultRunProvider
 
 /** runProviderPartImportImpl keeps the real import runner replaceable in queue tests. */
 let runProviderPartImportImpl: RunProviderPartImport = defaultRunProviderPartImport;
+
+/** Searching requests older than this threshold are treated as abandoned worker work. */
+const STALE_BOM_BACKFILL_MS = 15 * 60 * 1000;
+
+/** Heartbeat writes keep slow provider lookups and imports from looking abandoned. */
+const BOM_BACKFILL_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 /**
  * Overrides the provider lookup runner for queue tests; pass null to restore the real worker lookup.
@@ -132,6 +140,7 @@ export async function processBomBackfillRequests(limit = 10, concurrency = 2): P
   const processed: BomBackfillProcessingResult[] = [];
   const boundedLimit = Math.max(1, Math.min(limit, 50));
   const boundedConcurrency = Math.max(1, Math.min(concurrency, 5));
+  const recoveredStaleCount = await recoverStaleBomBackfillRequests();
   let exhausted = false;
 
   while (!exhausted && processed.length < boundedLimit) {
@@ -148,7 +157,7 @@ export async function processBomBackfillRequests(limit = 10, concurrency = 2): P
     }
   }
 
-  return { processed };
+  return { processed, recoveredStaleCount };
 }
 
 /**
@@ -160,6 +169,8 @@ export async function processNextBomBackfillRequest(): Promise<BomBackfillProces
   if (!claimed) {
     return null;
   }
+
+  const stopHeartbeat = startBomBackfillHeartbeat(claimed.id);
 
   try {
     const lookupRequest = {
@@ -205,7 +216,81 @@ export async function processNextBomBackfillRequest(): Promise<BomBackfillProces
     });
 
     return { mpn: claimed.mpn, requestId: claimed.id, status: "failed" };
+  } finally {
+    stopHeartbeat();
   }
+}
+
+/**
+ * Returns abandoned searching requests to the queue after a worker crash or forced restart.
+ *
+ * Active requests refresh `last_updated_at` through a heartbeat, so only work with no live
+ * worker for the full stale interval is retried.
+ */
+async function recoverStaleBomBackfillRequests(): Promise<number> {
+  const staleBefore = new Date(Date.now() - STALE_BOM_BACKFILL_MS).toISOString();
+  const result = await getWorkerDatabasePool().query(
+    `
+      UPDATE bom_backfill_requests
+      SET
+        request_status = 'queued',
+        requested_at = now(),
+        started_at = NULL,
+        completed_at = NULL,
+        error_code = NULL,
+        error_message = NULL,
+        last_updated_at = now()
+      WHERE request_status = 'searching'
+        AND last_updated_at < $1
+      RETURNING id
+    `,
+    [staleBefore]
+  );
+
+  return result.rowCount ?? 0;
+}
+
+/** Starts a low-frequency liveness heartbeat and returns an idempotent stop function. */
+function startBomBackfillHeartbeat(requestId: string): () => void {
+  let stopped = false;
+  let writeInFlight = false;
+  const timer = setInterval(() => {
+    if (writeInFlight) {
+      return;
+    }
+
+    writeInFlight = true;
+    void touchBomBackfillHeartbeat(requestId)
+      .catch(() => {
+        // A later heartbeat or terminal write can recover from a transient heartbeat error.
+      })
+      .finally(() => {
+        writeInFlight = false;
+      });
+  }, BOM_BACKFILL_HEARTBEAT_INTERVAL_MS);
+  timer.unref();
+
+  return () => {
+    if (stopped) {
+      return;
+    }
+
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/** Refreshes only the liveness timestamp for a request that is still being processed. */
+async function touchBomBackfillHeartbeat(requestId: string): Promise<void> {
+  await getWorkerDatabasePool().query(
+    `
+      UPDATE bom_backfill_requests
+      SET last_updated_at = now()
+      WHERE id = $1
+        AND request_status = 'searching'
+    `,
+    [requestId]
+  );
 }
 
 /**
