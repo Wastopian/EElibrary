@@ -63,6 +63,8 @@ test("confirmDatasheetParameters matches SI and unit spellings", () => {
 test("confirmDatasheetParameters avoids substring, wrong-unit, and in-token false matches", () => {
   // "1%" must not be read out of "0.1%" / "±0.1%".
   assert.deepEqual(confirmDatasheetParameters("Tolerance options ±0.1%, ±0.5%", [TOLERANCE_1]), []);
+  // PDF extraction may split a decimal with whitespace; "5%" must not be read out of "0. 5%".
+  assert.deepEqual(confirmDatasheetParameters("Tolerance options ±0. 5%", [TOLERANCE_5]), []);
   // A 10 kOhm value must not match a 10 kV mention (different unit).
   assert.deepEqual(confirmDatasheetParameters("Maximum working voltage 10 kV", [RESISTANCE]), []);
   // "0603" must not match inside a longer part number.
