@@ -193,6 +193,9 @@ jobs:
           EE_SMOKE_ADMIN_EMAIL: admin@ci.local
           EE_SMOKE_ADMIN_PASSWORD: ${{ env.CI_ADMIN_PW }}
           PLAYWRIGHT_BASE_URL: http://localhost:8080
+          # Host path of the stack's project-files bind mount, so the folder-wizard journey
+          # can drop a project folder into the mirror the way an engineer would.
+          EE_E2E_PROJECT_FILES_DIR: ${{ github.workspace }}/team-data/project-files
         run: npx playwright test
 
       - name: Upload Playwright report on failure

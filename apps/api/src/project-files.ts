@@ -15,7 +15,7 @@
  * traversal regardless of how a project key was persisted upstream.
  */
 
-import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Dirent, Stats } from "node:fs";
@@ -37,6 +37,8 @@ import type {
   ProjectDocumentType,
   ProjectFilesAvailability,
   ProjectFilesResponse,
+  ProjectFolderScanEntry,
+  ProjectFolderScanResponse,
   ProjectFileUploadInput,
   ProjectFolderCategory,
   ProjectFolderEntry,
@@ -2408,6 +2410,181 @@ function normalizeRequestedRelativePath(rawPath: string): string | null {
   }
 
   return normalized;
+}
+
+/** MAX_SCANNED_UNIMPORTED_FOLDERS bounds document-map work per scan pass so huge drops stay responsive. */
+const MAX_SCANNED_UNIMPORTED_FOLDERS = 25;
+
+/** ScanUnimportedProjectFoldersResult reports one mirror-root scan or the disabled state. */
+export type ScanUnimportedProjectFoldersResult =
+  | { status: "not_configured" }
+  | { status: "ok"; response: ProjectFolderScanResponse };
+
+/**
+ * Scans the mirror root for folders no library project claims yet, and inside each finds the
+ * parts-list candidates the document classifier already recognizes. Existing-project comparison is
+ * case-insensitive against the folder each project key resolves to, so a case-variant drop never
+ * onboards a duplicate. The scan reads only — it never creates, renames, or reorganizes anything.
+ */
+export async function scanUnimportedProjectFolders(existingProjectKeys: string[]): Promise<ScanUnimportedProjectFoldersResult> {
+  const root = getProjectFilesRoot();
+  if (!root) {
+    return { status: "not_configured" };
+  }
+
+  const claimedFolderNames = new Set(existingProjectKeys.map((key) => sanitizeProjectKey(key).toUpperCase()));
+  let entries: Dirent[] = [];
+
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return { response: { rootPath: root, skippedExistingCount: 0, truncated: false, unimportedFolders: [] }, status: "ok" };
+    }
+
+    throw error;
+  }
+
+  const folderNames = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+  const unimportedNames = folderNames.filter((name) => !claimedFolderNames.has(buildOnboardingRenameTarget(name).toUpperCase()));
+  const scannedNames = unimportedNames.slice(0, MAX_SCANNED_UNIMPORTED_FOLDERS);
+  const unimportedFolders: ProjectFolderScanEntry[] = [];
+
+  for (const folderName of scannedNames) {
+    const folderPath = path.join(root, folderName);
+    const documentMap = await buildProjectDocumentMap(folderPath);
+    const partsListCandidates = documentMap.documents
+      .filter((entry) => entry.documentType === "parts_list")
+      .sort((left, right) => right.confidenceScore - left.confidenceScore)
+      .slice(0, 3)
+      .map((entry) => ({
+        confidenceScore: entry.confidenceScore,
+        importable: /\.(csv|xlsx)$/iu.test(entry.filename),
+        reason: entry.reason,
+        relativePath: entry.relativePath
+      }));
+    const renameTarget = buildOnboardingRenameTarget(folderName);
+
+    unimportedFolders.push({
+      bestPartsListRelativePath: partsListCandidates.find((candidate) => candidate.importable)?.relativePath ?? null,
+      fileCount: documentMap.documents.length,
+      folderName,
+      partsListCandidates,
+      renameCollision: renameTarget !== folderName && folderNames.some((name) => name !== folderName && name.toUpperCase() === renameTarget.toUpperCase()),
+      renameTarget,
+      suggestedProjectName: buildSuggestedProjectName(folderName)
+    });
+  }
+
+  return {
+    response: {
+      rootPath: root,
+      skippedExistingCount: folderNames.length - unimportedNames.length,
+      truncated: unimportedNames.length > scannedNames.length,
+      unimportedFolders
+    },
+    status: "ok"
+  };
+}
+
+/**
+ * Computes the folder name onboarding must end at: the sanitized form of the normalized (uppercase,
+ * space-collapsed) project key that folder name produces — exactly how every other mirror surface
+ * resolves a project's folder.
+ */
+export function buildOnboardingRenameTarget(folderName: string): string {
+  return sanitizeProjectKey(folderName.trim().toUpperCase().replace(/\s+/gu, "-"));
+}
+
+/**
+ * Derives a plain project-name suggestion from an on-disk folder name.
+ */
+function buildSuggestedProjectName(folderName: string): string {
+  const spaced = folderName.replace(/[-_]+/gu, " ").replace(/\s+/gu, " ").trim();
+
+  return spaced.length > 0 ? spaced : folderName;
+}
+
+/** RenameFolderForOnboardingResult reports the disclosed onboarding rename or its refusal. */
+export type RenameFolderForOnboardingResult =
+  | { status: "not_configured" }
+  | { status: "invalid_source"; message: string }
+  | { status: "collision"; message: string }
+  | { status: "ok"; renamedTo: string; renamed: boolean };
+
+/**
+ * Renames one mirror-root folder to its project-key form so the created project's mirror resolves
+ * to the dropped folder on every filesystem (Linux team servers are case-sensitive). The rename is
+ * disclosed in the wizard, changes no file contents, and refuses honestly when the target name is
+ * already taken by a different folder.
+ */
+export async function renameFolderForOnboarding(folderName: string): Promise<RenameFolderForOnboardingResult> {
+  const root = getProjectFilesRoot();
+  if (!root) {
+    return { status: "not_configured" };
+  }
+
+  const trimmed = folderName.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+    return { message: "Choose one folder directly under the project files root.", status: "invalid_source" };
+  }
+
+  const sourcePath = path.resolve(root, trimmed);
+  if (!isPathInside(root, sourcePath)) {
+    return { message: "That folder is outside the project files root.", status: "invalid_source" };
+  }
+
+  let sourceInfo: Stats;
+
+  try {
+    sourceInfo = await stat(sourcePath);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return { message: "That folder is no longer under the project files root.", status: "invalid_source" };
+    }
+
+    throw error;
+  }
+
+  if (!sourceInfo.isDirectory()) {
+    return { message: "That path is a file, not a project folder.", status: "invalid_source" };
+  }
+
+  const renamedTo = buildOnboardingRenameTarget(trimmed);
+
+  if (renamedTo === trimmed) {
+    return { renamed: false, renamedTo, status: "ok" };
+  }
+
+  const targetPath = path.resolve(root, renamedTo);
+  if (!isPathInside(root, targetPath)) {
+    return { message: "The renamed folder path escaped the project files root.", status: "invalid_source" };
+  }
+
+  // A case-only rename resolves to the same directory on case-insensitive filesystems; rename in
+  // place. Anything else that already exists at the target is a genuine collision.
+  const caseOnlyRename = renamedTo.toUpperCase() === trimmed.toUpperCase();
+
+  if (!caseOnlyRename) {
+    try {
+      await stat(targetPath);
+      return {
+        message: `A folder named ${renamedTo} already exists. Rename or merge the folders by hand, then rescan.`,
+        status: "collision"
+      };
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  await rename(sourcePath, targetPath);
+
+  return { renamed: true, renamedTo, status: "ok" };
 }
 
 /** ReadProjectBomSourceResult reports one mirror BOM file read or its explicit non-success state. */

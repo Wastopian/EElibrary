@@ -24,7 +24,8 @@ import { runProviderPartImport } from "./provider-import-runner";
 import { formatProviderLookupFailureMessage, formatProviderLookupProviderDisplayName, formatProviderLookupProviderFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 import { runProviderPartLookupSettled } from "./provider-lookup-runner";
 import { getStorageClient } from "./file-storage";
-import { applyProjectDocumentExtractions, buildProjectFilesResponse, copyProjectDocumentToSuggestedFolder, readProjectBomSourceFile, resolveProjectFolderCategory, saveProjectFile } from "./project-files";
+import { applyProjectDocumentExtractions, buildProjectFilesResponse, copyProjectDocumentToSuggestedFolder, readProjectBomSourceFile, resolveProjectFolderCategory, saveProjectFile, scanUnimportedProjectFolders } from "./project-files";
+import { onboardProjectFolder } from "./project-folder-onboard";
 import {
   readProjectDocumentExtractionStatuses,
   requeueProjectDocumentExtraction,
@@ -150,6 +151,9 @@ import type {
   BomImportPreviewResponse,
   ProjectFileBomImportInput,
   ProjectFileBomImportResponse,
+  ProjectFolderOnboardInput,
+  ProjectFolderOnboardReport,
+  ProjectFolderScanResponse,
   ProjectFromCsvInput,
   ProjectRevisionApprovalGateRequest,
   VendorCreateInput,
@@ -373,6 +377,20 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
     await handleProjectFileBomImport(request, response, decodeURIComponent(projectFileBomImportMatch[1]), session.sub);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/project-folder-scan") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFolderScan(response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/project-folder-onboard") {
+    const session = await requireAdmin(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleProjectFolderOnboard(request, response, session.sub);
     return;
   }
 
@@ -1887,6 +1905,83 @@ async function handleProjectFileBomImport(request: IncomingMessage, response: Se
       { created: created.response, outcome: "created", sourceRelativePath: source.response.sourceFilename },
       "database"
     );
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles the admin-gated mirror-root scan for folders no library project claims yet.
+ * The scan reads only — it never creates, renames, or reorganizes anything.
+ */
+async function handleProjectFolderScan(response: ServerResponse): Promise<void> {
+  try {
+    const projectsResult = await timeRouteOperation(
+      response,
+      "project-folder-scan-projects-read",
+      () => readProjectsFromDatabase(),
+      (value) => value.status
+    );
+
+    if (projectsResult.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    const scan = await scanUnimportedProjectFolders(projectsResult.response.projects.map((summary) => summary.project.projectKey));
+
+    if (scan.status === "not_configured") {
+      sendJson(response, 503, {
+        error: {
+          code: "PROJECT_FILES_NOT_CONFIGURED",
+          message: "The project file mirror is disabled on this server, so folders cannot be scanned."
+        }
+      });
+      return;
+    }
+
+    sendCatalogJson<ProjectFolderScanResponse>(response, scan.response, "database");
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+  }
+}
+
+/**
+ * Handles admin-gated onboarding of one scanned folder: disclosed rename, project creation, BOM
+ * import, matching, and missing-part queueing — reported step by step, never rolled back silently.
+ */
+async function handleProjectFolderOnboard(request: IncomingMessage, response: ServerResponse, actorId: string): Promise<void> {
+  const body = await readJsonBody<ProjectFolderOnboardInput>(request);
+
+  if (!body || typeof body.folderName !== "string" || body.folderName.trim().length === 0) {
+    sendJson(response, 400, {
+      error: {
+        code: "INVALID_PROJECT_FOLDER_ONBOARD",
+        message: "Onboarding a folder requires its name under the project files root."
+      }
+    });
+    return;
+  }
+
+  try {
+    const result = await timeRouteOperation(
+      response,
+      "project-folder-onboard",
+      () => onboardProjectFolder(body, actorId),
+      (value) => value.status
+    );
+
+    if (result.status === "not_configured") {
+      sendProjectMemoryNotConfigured(response);
+      return;
+    }
+
+    if (result.status === "invalid") {
+      sendJson(response, 400, { error: { code: result.code, message: result.message } });
+      return;
+    }
+
+    sendCatalogJsonWithStatus<ProjectFolderOnboardReport>(response, 201, result.report, "database");
   } catch (error) {
     sendCatalogStoreError(response, error);
   }
@@ -6342,6 +6437,7 @@ function classifyAuditTarget(pathname: string): { targetType: AuditEventTargetTy
   ];
 
   if (pathname === "/projects") return { targetId: null, targetType: "project" };
+  if (pathname === "/project-folder-onboard") return { targetId: null, targetType: "project" };
   if (pathname === "/evidence-attachments" || pathname === "/evidence-attachments/files") return { targetId: null, targetType: "evidence_attachment" };
   if (pathname === "/circuit-blocks") return { targetId: null, targetType: "circuit_block" };
   if (pathname === "/imports/provider") return { targetId: null, targetType: "provider_import" };
@@ -6565,6 +6661,8 @@ function classifyRouteOperation(method: string, pathname: string): string {
   if (method === "GET" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-project-bom-imports";
   if (method === "POST" && /^\/projects\/[^/]+\/bom-imports$/u.test(pathname)) return "api-bom-import-create";
   if (method === "POST" && /^\/projects\/[^/]+\/bom-imports\/from-file$/u.test(pathname)) return "api-bom-import-from-project-file";
+  if (method === "GET" && pathname === "/project-folder-scan") return "api-project-folder-scan";
+  if (method === "POST" && pathname === "/project-folder-onboard") return "api-project-folder-onboard";
   if (method === "GET" && /^\/projects\/[^/]+\/usages$/u.test(pathname)) return "api-project-usages";
   if (method === "GET" && /^\/projects\/[^/]+\/bom-health$/u.test(pathname)) return "api-project-bom-health";
   if (method === "GET" && /^\/projects\/[^/]+\/evidence$/u.test(pathname)) return "api-project-evidence";

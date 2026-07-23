@@ -642,6 +642,76 @@ export type ProjectFileBomImportResponse =
   | { outcome: "created"; created: BomImportCreateResponse; sourceRelativePath: string }
   | { outcome: "mapping_required"; preview: BomImportPreviewResponse; sourceRelativePath: string };
 
+/** ProjectFolderScanCandidate is one parts-list file found inside an unimported mirror folder. */
+export interface ProjectFolderScanCandidate {
+  /** Relative path inside the folder. */
+  relativePath: string;
+  /** Classifier confidence for the parts-list call. */
+  confidenceScore: number;
+  /** Short classifier explanation. */
+  reason: string;
+  /** True when the format is one the BOM importer reads (.csv/.xlsx). */
+  importable: boolean;
+}
+
+/** ProjectFolderScanEntry describes one mirror-root folder with no matching project yet. */
+export interface ProjectFolderScanEntry {
+  /** On-disk folder name under the mirror root. */
+  folderName: string;
+  /** Folder name the onboarding rename would produce (the project-key form). */
+  renameTarget: string;
+  /** True when the rename target collides with another on-disk folder. */
+  renameCollision: boolean;
+  /** Plain project name suggestion derived from the folder name. */
+  suggestedProjectName: string;
+  /** Files seen by the bounded scan. */
+  fileCount: number;
+  /** Parts-list files ranked by classifier confidence (best first, capped). */
+  partsListCandidates: ProjectFolderScanCandidate[];
+  /** Best importable parts-list path, or null when none was found. */
+  bestPartsListRelativePath: string | null;
+}
+
+/** ProjectFolderScanResponse lists mirror-root folders that are not yet library projects. */
+export interface ProjectFolderScanResponse {
+  /** Absolute mirror root path shown for operator orientation. */
+  rootPath: string;
+  unimportedFolders: ProjectFolderScanEntry[];
+  /** Folders skipped because a project already claims them (case-insensitive). */
+  skippedExistingCount: number;
+  /** True when more unimported folders exist than one scan pass processes. */
+  truncated: boolean;
+}
+
+/** ProjectFolderOnboardInput turns one scanned mirror folder into a project with its BOM. */
+export interface ProjectFolderOnboardInput {
+  folderName: string;
+  projectName?: string | null;
+  /** Revision label for the created project and its BOM import. Defaults to "A". */
+  revisionLabel?: string | null;
+  /** Parts-list file to import, normally the scan's best candidate. Omit to skip the BOM step. */
+  partsListRelativePath?: string | null;
+}
+
+/** ProjectFolderOnboardReport is the honest per-step outcome of one folder onboarding. */
+export interface ProjectFolderOnboardReport {
+  folderName: string;
+  /** Folder name after the disclosed onboarding rename (contents untouched). */
+  renamedTo: string | null;
+  projectOutcome: "created" | "already_exists" | "failed";
+  project: { id: string; projectKey: string; name: string } | null;
+  /** BOM step outcome; mapping_required parks honestly for the project page's inline mapping. */
+  bomOutcome: "imported" | "mapping_required" | "skipped" | "failed";
+  bomImportId: string | null;
+  partsListRelativePath: string | null;
+  /** Deterministic match pass counts, when matching ran. */
+  matchOutcome: { matchedLineCount: number; unmatchedLineCount: number; usageCount: number } | null;
+  /** Missing-part imports queued for the background worker, when any rows stayed unmatched. */
+  backfillQueuedCount: number | null;
+  /** Plain-language explanation for parked or failed steps. */
+  message: string | null;
+}
+
 /** BomImportMatchSummary reports one deterministic matching pass without hiding weak rows. */
 export interface BomImportMatchSummary {
   totalLineCount: number;
