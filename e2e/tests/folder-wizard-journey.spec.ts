@@ -50,11 +50,6 @@ test.beforeEach(async ({ page }) => {
   await expect(page).not.toHaveURL(/\/sign-in/u);
 });
 
-// Cold production Next.js SSR plus force-dynamic navigations legitimately take a while on the first
-// hit; give this journey headroom beyond the default 60s so it measures behavior, not first-request
-// compile latency.
-test.setTimeout(120_000);
-
 test("engineer drops a folder, scans, adds it to the library, and sees the honest outcome", async ({ page }, testInfo) => {
   // Unique per attempt so an automatic retry never inherits the first attempt's rename/project.
   const uniqueStamp = `${runStamp}-${testInfo.retry}`;
@@ -96,7 +91,11 @@ test("engineer drops a folder, scans, adds it to the library, and sees the hones
     await expect(folderRow.getByText("Project created")).toBeVisible();
     await expect(folderRow.getByText("1 matched / 0 missing")).toBeVisible();
 
-    const projectHref = await folderRow.getByRole("link", { name: `Open ${droppedFolderName}` }).getAttribute("href");
+    // Match the outcome link by its "Open ..." prefix, not the full project name: the wizard derives
+    // the project name from the folder via buildSuggestedProjectName, which turns dashes into spaces,
+    // so "e2e wizard <stamp>-<retry>" becomes "...<stamp> <retry>". There is exactly one Open link
+    // in the row, so the prefix is unambiguous.
+    const projectHref = await folderRow.getByRole("link", { name: /^Open / }).getAttribute("href");
     expect(projectHref).toMatch(/^\/projects\/.+/u);
   } finally {
     // Onboarding renamed the folder, so clean up whichever name is present.
