@@ -217,3 +217,20 @@ test("reconcileParameterSources treats an unreviewed datasheet as corroborating,
   ]);
   assert.equal(reviewed?.winningProviderId, "datasheet");
 });
+
+test("parseEngineeringValue parses DigiKey memory sizes including the bare-K 'N K x 8' form", () => {
+  const FLASH: CanonicalParameterDef = { label: "Flash Size", metricKeys: [], paramKey: "flash_size", specKeyPatterns: ["flash"], unit: "B", valueKind: "numeric" };
+  const RAM: CanonicalParameterDef = { label: "RAM Size", metricKeys: [], paramKey: "ram_size", specKeyPatterns: ["ram"], unit: "B", valueKind: "numeric" };
+  const numeric = (raw: string, def: CanonicalParameterDef): number | null => {
+    const parsed = parseEngineeringValue(raw, def);
+    return parsed?.kind === "numeric" ? parsed.value : null;
+  };
+
+  // The bug this covers: "8K x 8" previously read as a wrong 8 bytes.
+  assert.equal(numeric("8K x 8", RAM), 8_000);
+  assert.equal(numeric("64K x 8", FLASH), 64_000);
+  // The verbose DigiKey flash form still resolves via the kb branch.
+  assert.equal(numeric("64KB (64K x 8)", FLASH), 64_000);
+  assert.equal(numeric("256 Kbytes", FLASH), 256_000);
+  assert.equal(numeric("2M x 8", FLASH), 2_000_000);
+});
