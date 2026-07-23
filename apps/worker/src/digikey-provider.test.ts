@@ -108,3 +108,39 @@ function buildRawPayload(): RawProviderPayload {
     providerId: "digikey"
   };
 }
+
+test("resolveLeafCategoryName walks DigiKey's hierarchy to the specific leaf", async () => {
+  const { resolveLeafCategoryName } = await import("./providers/digikey-provider");
+
+  // The real MCU shape: coarse top node, specific leaf two levels down.
+  assert.equal(
+    resolveLeafCategoryName({
+      Name: "Integrated Circuits (ICs)",
+      ChildCategories: [{ Name: "Embedded", ChildCategories: [{ Name: "Microcontrollers" }] }]
+    }),
+    "Microcontrollers"
+  );
+  // A flat category (no children) keeps its own name — backward compatible with older fixtures.
+  assert.equal(resolveLeafCategoryName({ Name: "Linear Regulators" }), "Linear Regulators");
+  // Blank leaf names are skipped so the walk never lands on an empty classification.
+  assert.equal(
+    resolveLeafCategoryName({ Name: "Integrated Circuits (ICs)", ChildCategories: [{ Name: "   " }] }),
+    "Integrated Circuits (ICs)"
+  );
+  assert.equal(resolveLeafCategoryName(null), null);
+});
+
+test("digikey provider types a microcontroller by its leaf category so parameters can normalize", () => {
+  const payload = buildRawPayload();
+  const product = (payload.payload as { product: Record<string, unknown> }).product;
+  product.ManufacturerProductNumber = "STM32G031K8T6";
+  product.Category = {
+    Name: "Integrated Circuits (ICs)",
+    ChildCategories: [{ Name: "Embedded", ChildCategories: [{ Name: "Microcontrollers" }] }]
+  };
+
+  const normalized = digikeyProviderAdapter.normalizeRawPart(payload);
+
+  // The specific leaf, not the coarse top node, is what resolvePartType keys "mcu" off.
+  assert.equal(normalized.part.category, "Microcontrollers");
+});

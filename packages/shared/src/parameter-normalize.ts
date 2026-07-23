@@ -445,6 +445,11 @@ function readMultiplier(text: string, unit: string | null): number {
     if (/(?<![a-z0-9])(kb|kbytes?)\b/u.test(normalized) || /\dkb\b/u.test(normalized)) return 1e3;
     if (/(?<![a-z0-9])(mb|mbytes?)\b/u.test(normalized) || /\dmb\b/u.test(normalized)) return 1e6;
     if (/(?<![a-z0-9])(gb|gbytes?)\b/u.test(normalized) || /\dgb\b/u.test(normalized)) return 1e9;
+    // DigiKey memory sizes use a bare-K/M/G "N K x 8" word-width form ("8K x 8", "64K x 8"). The
+    // leading figure is the size in K/M/G; without this a "8K x 8" RAM would read as a wrong 8 bytes.
+    if (/\dk\b/u.test(normalized)) return 1e3;
+    if (/\dm\b/u.test(normalized)) return 1e6;
+    if (/\dg\b/u.test(normalized)) return 1e9;
   }
 
   if (unit === "W") {
