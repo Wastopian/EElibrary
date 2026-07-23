@@ -1523,6 +1523,32 @@ export const users = pgTable(
   ]
 );
 
+/**
+ * orgInviteTokens holds single-use, expiring teammate invites (migration 061). Consumed atomically at
+ * sign-up so one token admits exactly one account. Not under RLS — like organizations/users it is read
+ * before any tenant context exists at sign-up.
+ */
+export const orgInviteTokens = pgTable(
+  "org_invite_tokens",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    token: text("token").notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    consumedByEmail: text("consumed_by_email"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("org_invite_tokens_token_unique").on(t.token),
+    index("org_invite_tokens_org_idx").on(t.orgId, t.createdAt),
+  ]
+);
+
 /** auditEvents stores API user-action facts without request bodies or secrets. */
 export const auditEvents = pgTable(
   "audit_events",

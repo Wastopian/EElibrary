@@ -160,28 +160,38 @@ test("requestProviderLookup posts to the provider lookup route", async () => {
     assert.match(init?.body as string, /C1091/u);
 
     return jsonResponse({
-      data: [
-        {
-          importAllowed: false,
-          manufacturerName: "Guangdong Fenghua Advanced Tech",
-          matchConfidence: 1,
-          matchType: "exact_provider_part_id",
-          mpn: "RC-02W300JT",
-          package: "0402",
-          providerId: "jlcparts",
-          providerPartKey: "C1091",
-          sourceUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
-        }
-      ]
+      data: {
+        candidates: [
+          {
+            importAllowed: false,
+            manufacturerName: "Guangdong Fenghua Advanced Tech",
+            matchConfidence: 1,
+            matchType: "exact_provider_part_id",
+            mpn: "RC-02W300JT",
+            package: "0402",
+            providerId: "jlcparts",
+            providerPartKey: "C1091",
+            sourceUrl: "https://lcsc.com/product-detail/Chip-Resistor---Surface-Mount_FH-Guangdong-Fenghua-Advanced-Tech-RC-02W300JT_C1091.html"
+          }
+        ],
+        providerFailures: [
+          {
+            message: "DigiKey did not answer — check credentials.",
+            providerId: "digikey",
+            providerName: "DigiKey"
+          }
+        ]
+      }
     });
   });
 
   try {
     const result = await requestProviderLookup({ query: "C1091" });
 
-    assert.equal(result.length, 1);
-    assert.equal(result[0]?.providerPartKey, "C1091");
-    assert.equal(result[0]?.importAllowed, false);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0]?.providerPartKey, "C1091");
+    assert.equal(result.candidates[0]?.importAllowed, false);
+    assert.equal(result.providerFailures[0]?.providerId, "digikey");
   } finally {
     restoreFetch();
   }

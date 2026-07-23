@@ -7,7 +7,8 @@
  */
 
 import { auth } from "@/auth";
-import { generateInviteCode, resolveTeamInviteView } from "@/lib/team-invite";
+import { computeInviteTokenExpiry, DEFAULT_INVITE_TOKEN_TTL_DAYS, generateInviteCode, resolveTeamInviteView } from "@/lib/team-invite";
+import { createInviteToken, listActiveInviteTokens, revokeInviteToken } from "@/lib/invite-token-store";
 import { createDbPool, organizations, users } from "@ee-library/db";
 import { EmptyState, SectionHeading, SectionPanel } from "@ee-library/ui";
 import { eq } from "drizzle-orm";
@@ -37,6 +38,53 @@ async function setTeamInviteCode(): Promise<void> {
 
   const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   await db.update(organizations).set({ inviteCode: generateInviteCode() }).where(eq(organizations.id, orgId));
+
+  revalidatePath("/team");
+}
+
+/**
+ * Issues one single-use, expiring invite token for the acting user's org. Org id and issuer come from
+ * the session at action time, never from input, so a member can only ever invite into their own team.
+ */
+async function issueSingleUseInvite(): Promise<void> {
+  "use server";
+
+  const session = await auth();
+  const orgId = session?.user?.orgId;
+
+  if (!orgId) {
+    redirect("/sign-in");
+  }
+
+  const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+  await createInviteToken(db, {
+    orgId,
+    createdBy: session?.user?.id ?? null,
+    expiresAt: computeInviteTokenExpiry(new Date()),
+  });
+
+  revalidatePath("/team");
+}
+
+/**
+ * Revokes one still-unused single-use token, strictly scoped to the acting user's org.
+ */
+async function revokeSingleUseInvite(formData: FormData): Promise<void> {
+  "use server";
+
+  const session = await auth();
+  const orgId = session?.user?.orgId;
+
+  if (!orgId) {
+    redirect("/sign-in");
+  }
+
+  const tokenId = typeof formData.get("tokenId") === "string" ? (formData.get("tokenId") as string) : "";
+
+  if (tokenId) {
+    const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+    await revokeInviteToken(db, { tokenId, orgId });
+  }
 
   revalidatePath("/team");
 }
@@ -72,6 +120,7 @@ export default async function TeamPage() {
   }
 
   const view = resolveTeamInviteView(organization);
+  const activeTokens = await listActiveInviteTokens(db, orgId);
   const members = await db
     .select({ id: users.id, email: users.email, role: users.role })
     .from(users)
@@ -116,6 +165,39 @@ export default async function TeamPage() {
             </form>
           </div>
         )}
+      </SectionPanel>
+
+      <SectionPanel
+        description={`Prefer these for one-off invites: each works for a single new account and expires in ${DEFAULT_INVITE_TOKEN_TTL_DAYS} days, so a link that leaks or is over-shared cannot admit extra people. The shared code above still works for bulk onboarding.`}
+        title="Single-use invites"
+      >
+        <div className="team-invite">
+          <form action={issueSingleUseInvite}>
+            <button className="button-link" type="submit">
+              Create single-use invite
+            </button>
+          </form>
+          {activeTokens.length > 0 ? (
+            <ul className="team-invite__token-list">
+              {activeTokens.map((activeToken) => (
+                <li className="team-invite__token" key={activeToken.id}>
+                  <code>{activeToken.token}</code>
+                  <span className="team-invite__hint">
+                    Expires {activeToken.expiresAt.toLocaleDateString()}
+                  </span>
+                  <form action={revokeSingleUseInvite}>
+                    <input name="tokenId" type="hidden" value={activeToken.id} />
+                    <button className="button-link button-link--quiet" type="submit">
+                      Revoke
+                    </button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="team-invite__hint">No active single-use invites. Create one to invite a teammate with a link that works exactly once.</p>
+          )}
+        </div>
       </SectionPanel>
 
       <SectionPanel

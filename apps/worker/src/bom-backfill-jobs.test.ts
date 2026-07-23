@@ -209,7 +209,7 @@ test("backfill worker never claims no_match when a provider errored instead of a
 
   setBomBackfillLookupRunnerForTests(async () => ({
     candidates: [],
-    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey" }]
+    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey", providerName: "DigiKey" }]
   }));
 
   try {
@@ -236,7 +236,7 @@ test("backfill worker still imports when a responding provider agrees despite an
 
   setBomBackfillLookupRunnerForTests(async () => ({
     candidates: [buildCandidate({})],
-    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey" }]
+    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey", providerName: "DigiKey" }]
   }));
   setBomBackfillImportRunnerForTests(async () => buildImportSummary("part-jlcparts-c1091", "C1091"));
 
