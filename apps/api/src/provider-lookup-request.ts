@@ -52,6 +52,36 @@ export function parseProviderLookupRequest(body: unknown): ParsedProviderLookupR
   };
 }
 
+/** providerLookupDisplayNames replaces verbose adapter registry names with the supplier names engineers use. */
+const providerLookupDisplayNames: Record<string, string> = {
+  digikey: "DigiKey",
+  jlcparts: "JLCPCB/LCSC",
+  kicad: "Local KiCad index",
+  "local-catalog": "Local catalog",
+  mouser: "Mouser",
+  octopart: "Octopart/Nexar"
+};
+
+/**
+ * Returns the short user-facing supplier name for one provider adapter, falling back to the registry name.
+ */
+export function formatProviderLookupProviderDisplayName(failure: { providerId: string; providerName: string }): string {
+  return providerLookupDisplayNames[failure.providerId] ?? failure.providerName;
+}
+
+/**
+ * Maps one provider's fan-out failure to a calm per-provider note without leaking provider internals.
+ */
+export function formatProviderLookupProviderFailureMessage(failure: { providerId: string; providerName: string; message: string }): string {
+  const displayName = formatProviderLookupProviderDisplayName(failure);
+
+  if (/(credential|access token|token response|401|403|unauthoriz|forbidden)/iu.test(failure.message)) {
+    return `${displayName} did not answer — check credentials.`;
+  }
+
+  return `${displayName} did not answer — check network access and try again.`;
+}
+
 /**
  * Maps provider lookup failures to calm, user-facing wording without leaking provider internals.
  */
