@@ -312,11 +312,15 @@ function readMetricCandidates(part: MouserPart): NeutralSpec[] {
   });
 }
 
-/** PASSIVE_VALUE_METRICS maps a passive category keyword to its primary electrical metric. */
+/**
+ * PASSIVE_VALUE_METRICS maps a passive category keyword to its primary electrical metric. The value
+ * patterns accept a leading-dot decimal (Mouser writes ".1UF" for 0.1 µF) and are case-insensitive on
+ * the SI prefix + unit ("UF"/"uF" both occur); the shared normalizer scales the captured string.
+ */
 const PASSIVE_VALUE_METRICS: ReadonlyArray<{ categoryHint: RegExp; metricKey: string; unit: MetricUnit; valuePattern: RegExp }> = [
-  { categoryHint: /resistor/iu, metricKey: "resistance", unit: "ohm", valuePattern: /(\d+(?:\.\d+)?\s?[kKmM]?\s?[oO]hms?)/u },
-  { categoryHint: /capacitor/iu, metricKey: "capacitance", unit: "F", valuePattern: /(\d+(?:\.\d+)?\s?[pnuµmμ]?F)\b/u },
-  { categoryHint: /inductor/iu, metricKey: "inductance", unit: "H", valuePattern: /(\d+(?:\.\d+)?\s?[pnuµmμ]?H)\b/u }
+  { categoryHint: /resistor/iu, metricKey: "resistance", unit: "ohm", valuePattern: /((?:\d+(?:\.\d+)?|\.\d+)\s?[kKmM]?\s?[oO]hms?)/u },
+  { categoryHint: /capacitor/iu, metricKey: "capacitance", unit: "F", valuePattern: /((?:\d+(?:\.\d+)?|\.\d+)\s?[pnuµmμ]?F)\b/iu },
+  { categoryHint: /inductor/iu, metricKey: "inductance", unit: "H", valuePattern: /((?:\d+(?:\.\d+)?|\.\d+)\s?[pnuµmμ]?H)\b/iu }
 ];
 
 /**
@@ -367,6 +371,17 @@ function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; speci
 
   if (toleranceMatch?.[0]) {
     specifications.push({ specGroup: "parametric", specKey: "Tolerance", specValue: normalizeOptionalText(toleranceMatch[0]) ?? toleranceMatch[0] });
+  }
+
+  // A capacitor's voltage rating is a primary spec Mouser reliably puts in the description
+  // ("...  .1UF 16V 10% 0603"). It maps to the registry's voltage_rating for the capacitor type.
+  // Scoped to capacitors so we do not guess a "voltage" for parts where a stray "V" means something else.
+  if (valueMetric.metricKey === "capacitance") {
+    const voltageMatch = description.match(/(?<![a-z0-9.])(\d+(?:\.\d+)?|\.\d+)\s?V\b/iu);
+
+    if (voltageMatch?.[0]) {
+      specifications.push({ specGroup: "parametric", specKey: "Voltage Rating", specValue: normalizeOptionalText(voltageMatch[0]) ?? voltageMatch[0] });
+    }
   }
 
   const powerMatch = description.match(/\b\d+\/\d+\s?W\b|\b\d+(?:\.\d+)?\s?W\b/u);
