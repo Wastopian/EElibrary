@@ -54,3 +54,20 @@ test("buildSpecificationRows dedupes repeated labels and builds deterministic id
   assert.equal(packaging?.partId, "part-x");
   assert.equal(packaging?.sourceRecordId, "source-x");
 });
+
+test("parseEngineeringNumber scales attached sub-unit prefixes and leading-dot decimals", () => {
+  const close = (raw: string, unit: Parameters<typeof parseEngineeringNumber>[1], expected: number) => {
+    const value = parseEngineeringNumber(raw, unit) ?? NaN;
+    assert.ok(Math.abs(value - expected) <= Math.abs(expected) * 1e-9, `${raw} -> ${value}, expected ~${expected}`);
+  };
+  // Attached F/H prefixes (the digit->letter seam a leading \b never matched) and leading-dot values.
+  close("1uF", "F", 1e-6);
+  close("100nF", "F", 1e-7);
+  close(".1UF", "F", 1e-7);
+  close("2.2uF", "F", 2.2e-6);
+  close("4.7uH", "H", 4.7e-6);
+  // Attached V/A/Hz forms scale too.
+  close("16V", "V", 16);
+  close("200mA", "A", 0.2);
+  close("64MHz", "Hz", 64_000_000);
+});
