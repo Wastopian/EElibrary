@@ -78,6 +78,13 @@ const POWER_FRACTIONS: Record<string, string> = {
 };
 
 /**
+ * Prevents a value from starting at the trailing digits of a PDF-split decimal such as "0. 5%".
+ * confirmDatasheetParameters collapses all whitespace to one space before matching, so this fixed-width
+ * lookbehind covers both line-break and multi-space extraction artifacts without weakening normal tokens.
+ */
+const NUMERIC_START_BOUNDARY = "(?<![a-z0-9.])(?<!\\.\\s)";
+
+/**
  * Builds the anchored regex matchers for one candidate value.
  */
 function valueMatchers(candidate: DatasheetConfirmationCandidate): RegExp[] {
@@ -114,7 +121,7 @@ function numericMatchers(value: number, unit: string | null): RegExp[] {
 
   const matchers: RegExp[] = [];
   const add = (numberSource: string, prefixSource: string, unitSource: string): void => {
-    matchers.push(new RegExp(`(?<![a-z0-9.])${numberSource}\\s*${prefixSource}\\s*${unitSource}(?![a-z0-9])`, "u"));
+    matchers.push(new RegExp(`${NUMERIC_START_BOUNDARY}${numberSource}\\s*${prefixSource}\\s*${unitSource}(?![a-z0-9])`, "u"));
   };
 
   const mantissa = escapeRegExp(formatNumber(value));
@@ -133,7 +140,7 @@ function numericMatchers(value: number, unit: string | null): RegExp[] {
 
   if (unit === "%") {
     // Allow a leading tolerance sign and an explicit ".0", e.g. "± 1.0 %".
-    matchers.push(new RegExp(`(?<![a-z0-9.])[±+-]?\\s*${mantissa}(?:\\.0+)?\\s*%(?![a-z0-9])`, "u"));
+    matchers.push(new RegExp(`${NUMERIC_START_BOUNDARY}[±+-]?\\s*${mantissa}(?:\\.0+)?\\s*%(?![a-z0-9])`, "u"));
   }
 
   if (unit === "W") {
@@ -141,7 +148,7 @@ function numericMatchers(value: number, unit: string | null): RegExp[] {
 
     if (fraction) {
       const [numerator, denominator] = fraction.split("/");
-      matchers.push(new RegExp(`(?<![a-z0-9.])${numerator}\\s*/\\s*${denominator}\\s*${unitMatcher}(?![a-z0-9])`, "u"));
+      matchers.push(new RegExp(`${NUMERIC_START_BOUNDARY}${numerator}\\s*/\\s*${denominator}\\s*${unitMatcher}(?![a-z0-9])`, "u"));
     }
 
     if (value < 1) {
