@@ -100,6 +100,29 @@ test("mouser provider parses MCU and regulator description specs conservatively"
   ]);
   assert.equal(mcu.metrics.length, 0, "description parsing emits verbatim spec rows, not metrics");
 
+  // RF MCU blurbs often lead with the radio band before the CPU clock. The band must not become Clock Frequency.
+  const rfMcu = parametricRows(
+    "RF Microcontrollers - MCU",
+    "Sub-1 GHz wireless MCU with 64 Kbytes of Flash 8 Kbytes RAM, 48 MHz CPU"
+  );
+
+  assert.deepEqual(rfMcu.rows, [
+    ["Flash Size", "64 Kbytes"],
+    ["RAM Size", "8 Kbytes"],
+    ["Clock Frequency", "48 MHz"]
+  ]);
+
+  const rfBandFirst = parametricRows(
+    "RF Microcontrollers - MCU",
+    "2.4GHz Bluetooth Low Energy MCU, 64 MHz CPU, 512 Kbytes of Flash 64 Kbytes RAM"
+  );
+
+  assert.deepEqual(rfBandFirst.rows, [
+    ["Flash Size", "512 Kbytes"],
+    ["RAM Size", "64 Kbytes"],
+    ["Clock Frequency", "64 MHz"]
+  ]);
+
   const ldo = parametricRows("LDO Voltage Regulators", "LDO Voltage Regulators 200mA nanopower-IQ ( 25 nA) low-dropout");
 
   assert.deepEqual(ldo.rows, [
