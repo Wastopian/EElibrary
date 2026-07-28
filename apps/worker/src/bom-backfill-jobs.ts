@@ -15,6 +15,7 @@ import { enqueueProviderEnrichmentJobsForPart } from "./provider-enrichment-jobs
 import { runProviderPartImport as defaultRunProviderPartImport } from "./provider-part-import";
 import { runProviderPartLookupSettled as defaultRunProviderPartLookupSettled } from "./provider-part-lookup";
 import type { PoolClient } from "pg";
+import { DEFAULT_ORG_ID } from "@ee-library/shared/tenant";
 import type { BomBackfillCandidate, BomBackfillRequestStatus, ProviderLookupCandidateBase } from "@ee-library/shared/types";
 
 /** RunProviderPartLookupSettled keeps the real lookup runner replaceable in focused queue tests. */
@@ -219,11 +220,11 @@ async function importWinningCandidate(claimed: ClaimedBomBackfillRequest, candid
   const existingSource = await databasePool.query<{ part_id: string | null }>(
     `
       SELECT part_id FROM source_records
-      WHERE provider_id = $1 AND provider_part_key = $2 AND part_id IS NOT NULL
+      WHERE provider_id = $1 AND provider_part_key = $2 AND org_id = $3 AND part_id IS NOT NULL
       ORDER BY fetched_at DESC
       LIMIT 1
     `,
-    [candidate.providerId, candidate.providerPartKey]
+    [candidate.providerId, candidate.providerPartKey, claimed.orgId ?? DEFAULT_ORG_ID]
   );
   const existingPartId = existingSource.rows[0]?.part_id ?? null;
 

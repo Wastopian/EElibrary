@@ -1,12 +1,11 @@
 /**
  * File header: Single-use, expiring invite-token persistence over the shared Drizzle pool.
  *
- * The consume path is the security-critical piece: a single conditional UPDATE marks the token spent
- * only if it is still unconsumed, unrevoked, and unexpired, and RETURNs the org. Postgres locks the
- * row for the first writer; a second concurrent redemption re-evaluates its WHERE against the
- * now-consumed row, matches zero rows, and is rejected — so one token admits exactly one account
- * without any application-level locking. Generation, listing, and revocation are always org-scoped by
- * the caller's session org, never by input.
+ * The consume UPDATE is race-free for "one token, one winner": it marks the token spent only if it is
+ * still unconsumed, unrevoked, and unexpired, and RETURNs the org. Callers that also create a user
+ * (sign-up join) MUST run consume + insert inside one transaction via `joinWithInvite` — otherwise a
+ * failed insert permanently burns the token without admitting anyone. Generation, listing, and
+ * revocation are always org-scoped by the caller's session org, never by input.
  */
 
 import { generateInviteToken } from "@/lib/team-invite";

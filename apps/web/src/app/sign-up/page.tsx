@@ -11,8 +11,8 @@ import {
   resolveSignUpNotice
 } from "@/lib/auth-form-state";
 import { buildNewTeamRecords, normalizeTeamName } from "@/lib/sign-up";
-import { buildJoiningUserRecord, normalizeInviteCode } from "@/lib/team-invite";
-import { consumeInviteToken } from "@/lib/invite-token-store";
+import { joinWithInvite } from "@/lib/join-with-invite";
+import { normalizeInviteCode } from "@/lib/team-invite";
 import { createDbPool, organizations, users } from "@ee-library/db";
 import { hashSync } from "bcryptjs";
 import { eq } from "drizzle-orm";
@@ -251,27 +251,17 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string, isJoinM
     if (existingUser) {
       creationError = "account_exists";
     } else if (isJoinMode) {
-      // Teammate invite: try the submitted value as a single-use token first (consumed atomically so
-      // one token admits exactly one account), then fall back to the org's reusable code. Either way
-      // the org id comes from the resolved invite, never from user input, and the joiner is a
-      // full-access admin. The two paths coexist so existing reusable codes keep working.
-      const consumed = await consumeInviteToken(db, { token: joinCode as string, email });
-      const joinOrgId = consumed?.orgId
-        ?? (
-          await db
-            .select({ id: organizations.id })
-            .from(organizations)
-            .where(eq(organizations.inviteCode, joinCode as string))
-            .limit(1)
-        )[0]?.id
-        ?? null;
+      // Teammate invite: try the submitted value as a single-use token first, then fall back to the
+      // org's reusable code. Consume + user insert run in one transaction so a failed insert cannot
+      // burn a single-use token. Org id comes from the resolved invite, never from user input.
+      const joinResult = await joinWithInvite(db, {
+        email,
+        inviteValue: joinCode as string,
+        passwordHash: hashSync(password, BCRYPT_COST)
+      });
 
-      if (!joinOrgId) {
+      if (joinResult === "invite_not_found") {
         creationError = "invite_not_found";
-      } else {
-        await db.insert(users).values(
-          buildJoiningUserRecord({ email, orgId: joinOrgId, passwordHash: hashSync(password, BCRYPT_COST) })
-        );
       }
     } else {
       // Org-on-signup (Increment 3): a new sign-up creates its own organization and the user becomes
