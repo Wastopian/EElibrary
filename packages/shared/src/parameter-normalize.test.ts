@@ -234,3 +234,28 @@ test("parseEngineeringValue parses DigiKey memory sizes including the bare-K 'N 
   assert.equal(numeric("256 Kbytes", FLASH), 256_000);
   assert.equal(numeric("2M x 8", FLASH), 2_000_000);
 });
+
+test("parseEngineeringValue scales attached sub-unit prefixes and leading-dot decimals for F and H", () => {
+  const CAP: CanonicalParameterDef = { label: "Capacitance", metricKeys: [], paramKey: "capacitance", specKeyPatterns: ["c"], unit: "F", valueKind: "numeric" };
+  const IND: CanonicalParameterDef = { label: "Inductance", metricKeys: [], paramKey: "inductance", specKeyPatterns: ["l"], unit: "H", valueKind: "numeric" };
+  const close = (raw: string, def: CanonicalParameterDef, expected: number): void => {
+    const parsed = parseEngineeringValue(raw, def);
+    const value = parsed?.kind === "numeric" ? parsed.value : NaN;
+    assert.ok(Math.abs(value - expected) <= Math.abs(expected) * 1e-9, `${raw} -> ${value}, expected ~${expected}`);
+  };
+
+  // The bug: attached prefixes ("1uF", "100nF") were read raw because a leading \b never fires
+  // across a digit->letter seam. All of these previously mis-scaled.
+  close("1uF", CAP, 1e-6);
+  close("100nF", CAP, 1e-7);
+  close("100pF", CAP, 1e-10);
+  close("2.2uF", CAP, 2.2e-6);
+  // Mouser drops the leading zero on sub-unit values.
+  close(".1uF", CAP, 1e-7);
+  close(".1UF", CAP, 1e-7);
+  // Symbol and spaced forms keep working.
+  close("1µF", CAP, 1e-6);
+  close("10 uF", CAP, 1e-5);
+  close("4.7uH", IND, 4.7e-6);
+  close("10nH", IND, 1e-8);
+});

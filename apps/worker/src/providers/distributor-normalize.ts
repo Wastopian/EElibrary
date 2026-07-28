@@ -581,7 +581,8 @@ function readInventoryStatus(inventoryQuantity: number | null, onOrderQuantity: 
  */
 export function parseEngineeringNumber(value: unknown, unit: MetricUnit): number | null {
   const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-  const match = text.match(/([+-]?\d+(?:\.\d+)?)/u);
+  // Accept leading-dot decimals (".1UF" for 0.1 µF); some distributors drop the leading zero.
+  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))/u);
 
   if (!match?.[1]) {
     return null;
@@ -613,33 +614,40 @@ function readMetricMultiplier(text: string, unit: MetricUnit): number {
     if (/megohms?|megaohms?/iu.test(text) || /M\s?[oO]hms?/u.test(text)) return 1_000_000;
   }
 
+  // F/H/V/A/Hz use (?<![a-z0-9]) plus a \d… form rather than a leading \b: attached provider values
+  // ("100nF", "1uF", "200mA", "64MHz") put a digit directly before the prefix letter, where \b never
+  // fires -- the seam between two word characters is not a boundary -- so the prefix was dropped and
+  // the value read raw (e.g. "1uF" as 1 F).
   if (unit === "F") {
-    if (/\bpf\b/u.test(normalized)) return 1e-12;
-    if (/\bnf\b/u.test(normalized)) return 1e-9;
-    if (/\b(uf|microfarad)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mf|millifarad)\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])pf\b/u.test(normalized) || /\dpf\b/u.test(normalized)) return 1e-12;
+    if (/(?<![a-z0-9])nf\b/u.test(normalized) || /\dnf\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(uf|µf|microfarad)\b/u.test(normalized) || /\d(uf|µf)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])(mf|millifarad)\b/u.test(normalized) || /\dmf\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "H") {
-    if (/\bnh\b/u.test(normalized)) return 1e-9;
-    if (/\b(uh|microhenry)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mh|millihenry)\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])ph\b/u.test(normalized) || /\dph\b/u.test(normalized)) return 1e-12;
+    if (/(?<![a-z0-9])nh\b/u.test(normalized) || /\dnh\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(uh|µh|microhenry)\b/u.test(normalized) || /\d(uh|µh)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])(mh|millihenry)\b/u.test(normalized) || /\dmh\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "V") {
-    if (/\bmv\b/u.test(normalized)) return 1e-3;
-    if (/\bkv\b/u.test(normalized)) return 1_000;
+    if (/(?<![a-z0-9])(uv|µv)\b/u.test(normalized) || /\d(uv|µv)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])mv\b/u.test(normalized) || /\dmv\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])kv\b/u.test(normalized) || /\dkv\b/u.test(normalized)) return 1_000;
   }
 
   if (unit === "A") {
-    if (/\bma\b/u.test(normalized)) return 1e-3;
-    if (/\bua\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])na\b/u.test(normalized) || /\dna\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(ua|µa)\b/u.test(normalized) || /\d(ua|µa)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])ma\b/u.test(normalized) || /\dma\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "Hz") {
-    if (/\bkhz\b/u.test(normalized)) return 1_000;
-    if (/\bmhz\b/u.test(normalized)) return 1_000_000;
-    if (/\bghz\b/u.test(normalized)) return 1_000_000_000;
+    if (/(?<![a-z0-9])khz\b/u.test(normalized) || /\dkhz\b/u.test(normalized)) return 1_000;
+    if (/(?<![a-z0-9])mhz\b/u.test(normalized) || /\dmhz\b/u.test(normalized)) return 1_000_000;
+    if (/(?<![a-z0-9])ghz\b/u.test(normalized) || /\dghz\b/u.test(normalized)) return 1_000_000_000;
   }
 
   return 1;

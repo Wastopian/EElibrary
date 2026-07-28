@@ -378,7 +378,9 @@ function parseNumericValue(text: string, unit: string | null): number | null {
     }
   }
 
-  const match = text.match(/([+-]?\d+(?:\.\d+)?)/u);
+  // Accept leading-dot decimals (".1uF" for 0.1 µF) as well as the usual "0.1"/"64" forms; some
+  // distributors (Mouser passives) drop the leading zero.
+  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))/u);
 
   if (!match?.[1]) {
     return null;
@@ -404,18 +406,21 @@ function readMultiplier(text: string, unit: string | null): number {
     if (/megohms?|megaohms?/iu.test(text) || /M\s?[oO]hms?/u.test(text)) return 1_000_000;
   }
 
+  // F and H use the same (?<![a-z0-9]) + \d… forms as V/A/Hz below: a value like "100nF" or "1uF"
+  // puts a digit directly before the prefix letter, where a leading \b never fires (the exact bug
+  // that left attached capacitor/inductor values unscaled — "1uF" read as 1 F).
   if (unit === "F") {
-    if (/\bpf\b/u.test(normalized)) return 1e-12;
-    if (/\bnf\b/u.test(normalized)) return 1e-9;
-    if (/\b(uf|µf|microfarad)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mf|millifarad)\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])pf\b/u.test(normalized) || /\dpf\b/u.test(normalized)) return 1e-12;
+    if (/(?<![a-z0-9])nf\b/u.test(normalized) || /\dnf\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(uf|µf|microfarad)\b/u.test(normalized) || /\d(uf|µf)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])(mf|millifarad)\b/u.test(normalized) || /\dmf\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "H") {
-    if (/\bph\b/u.test(normalized)) return 1e-12;
-    if (/\bnh\b/u.test(normalized)) return 1e-9;
-    if (/\b(uh|µh|microhenry)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mh|millihenry)\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])ph\b/u.test(normalized) || /\dph\b/u.test(normalized)) return 1e-12;
+    if (/(?<![a-z0-9])nh\b/u.test(normalized) || /\dnh\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(uh|µh|microhenry)\b/u.test(normalized) || /\d(uh|µh)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])(mh|millihenry)\b/u.test(normalized) || /\dmh\b/u.test(normalized)) return 1e-3;
   }
 
   // Prefixes are matched with (?<![a-z0-9]) rather than \b so attached provider forms parse too:
