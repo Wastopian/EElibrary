@@ -55,6 +55,57 @@ Area 1 is the messy-folder/documentation wedge: help engineering teams walk up t
 4. **Revision compare** - Next: compare two mapped documents or revisions and summarize changed connector refs, pins, cables, fixtures, requirements language, and procedure steps without claiming review status.
 5. **Where-used bridge** - _Started 2026-06-16:_ `/where-used` now includes a Project documents target that searches the current project file maps for connector refs, pin numbers, cable ids, fixture ids, signals, revisions, filenames, and clear document types, then links hits back to the owning project's files section. Remaining: fold Area 2 interconnect rows into the same plain search path and add persisted indexing only after live file-map search proves the workflow.
 
+### 0C. Library backfill and bulk import - folder-first onboarding
+
+The adoption chokepoint found in the 2026-07-16 project review: every retention feature (where-used,
+prior-project overlap, past-mistake interrupts) only pays off once a team's existing project history is
+inside EE Library, but today backfilling a library means hand-creating each project, re-uploading BOM
+files the mirror already holds, and importing every missing part one click at a time. A 30-project
+backlog with ~1,500 unseen MPNs is weeks of tedium; teams will import three projects and stop. This
+wedge makes the file mirror the onboarding surface: **drop your project folders in, scan, review the
+exceptions, and the library is populated.**
+
+**Operator bar for everything in this section:** an engineer (or the one server admin) copies existing
+project folders into the mirror as-is — no renaming, no reorganizing, no re-exporting BOMs — and gets
+their library populated through a fluid, folder-first flow: the app finds the folders, finds the parts
+lists inside them, imports the missing parts in bulk, and asks a human only about the genuinely
+ambiguous leftovers. Uncertainty stays visible: low-confidence classifications and ambiguous provider
+candidates queue for review, never auto-confirm. Backfilled data obeys every existing trust boundary —
+imported is never approved, validated, or export-ready.
+
+1. **Batch import of missing BOM parts** - _Landed 2026-07-17:_ after BOM matching, one admin-gated
+   action queues every unmatched exact-MPN row into the org-scoped `bom_backfill_requests` queue
+   (migration 060, RLS per the 055 contract), and the worker daemon drains it on a paced 20s tick:
+   exact provider lookup → direct import through the shared `runProviderPartImport` flow **only when
+   every exact candidate agrees on one part identity** (enrichment chains exactly like one-at-a-time
+   import; the acquisition-jobs queue was deliberately not used because the daemon does not drain it)
+   → disagreement parks as **needs your pick** with candidates preserved → nothing found is an honest
+   **not found**. `BomBackfillPanel` polls progress buckets, survives reloads, links parked rows into
+   the existing catalog import flow, and prompts a match re-run once settled; retryable rows re-queue
+   on a fresh start. See the `IMPLEMENTATION_STATUS.md` row for the full surface. Remaining: none —
+   follow-ons live in items 2 and 3.
+2. **Import the BOM the folder already has** - _Landed 2026-07-18:_ document-map rows classified as
+   parts lists (`.csv`/`.xlsx`) now carry a "Use as BOM import" action. `POST
+   /projects/:id/bom-imports/from-file` reads the file server-side from the mirror
+   (`readProjectBomSourceFile`, same path-traversal guards as the copy action; legacy `.xls` keeps
+   its conversion guidance), auto-creates the import when the MPN column is recognizable from the
+   headers, and otherwise returns an honest `mapping_required` preview for a compact human mapping
+   step — uncertain structure is never guessed into catalog identity. Provenance records the
+   mirror-relative path as the import's source filename. Composes with item 1 for the missing parts.
+   Verified live: auto-map create, cryptic-header mapping fallback, and traversal refusal.
+3. **Whole-library backfill wizard** - _Landed 2026-07-19:_ `/projects` gains "Add projects from your
+   folders": `GET /project-folder-scan` lists mirror-root folders no project claims yet
+   (case-insensitive against each key's folder form) with the classifier's parts-list candidates, and
+   `POST /project-folder-onboard` runs one folder through the whole chain — a **disclosed rename to
+   the project-key form** (needed because keys are uppercase-normalized and Linux team servers are
+   case-sensitive; contents untouched, collisions refused), project creation, item-2 BOM import with
+   auto-mapping, deterministic matching, and item-1 missing-part queueing. The panel adds folders one
+   at a time or all at once with per-folder honest outcomes; an unrecognizable MPN column parks as
+   mapping-required for the project page's inline mapping, and low-confidence classifications are
+   shown with their scores, never auto-confirmed. Verified live: drop two folders → scan → onboard →
+   rename on disk + project + import + match + queued missing part, and the cryptic-header folder
+   parked honestly.
+
 ### 0. Team deployment and operations — current top priority
 
 EE Library today runs only on a single developer workstation: `compose.yaml` starts Postgres, Redis, and MinIO, but `web`, `api`, and `worker` run via `npm run dev`. A shared engineering memory that only one engineer can reach is not yet a team tool. The 2026-06-12 project review ranked this gap above all feature work.
@@ -70,7 +121,7 @@ EE Library today runs only on a single developer workstation: `compose.yaml` sta
 
 These keep onboarding and boundaries honest for contributors and operators.
 
-1. **Periodic README ↔ implementation-status pass** — After any nav or major route change, verify [`README.md`](README.md) “Current Capabilities”, “Still Planned”, and “Current Boundaries” match [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (e.g. `/compare` in nav vs `/tools` absent). _Known drift as of 2026-06-12:_ README has a duplicated “Problems It Solves” section (appears twice), and the “What EE Library Is Not” / “Current Boundaries” copy still says `/tools` must stay out of navigation “until that route exists” — `/tools` shipped (PR #37) and is in the status matrix, so those lines need the post-ship phrasing.
+1. **Periodic README ↔ implementation-status pass** — After any nav or major route change, verify [`README.md`](README.md) “Current Capabilities”, “Still Planned”, and “Current Boundaries” match [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) (e.g. `/compare` in nav vs `/tools` absent). _The 2026-06-12 drift (duplicated “Problems It Solves”, pre-ship `/tools` copy) was fixed; no known drift as of 2026-07-19._
 2. **UI/UX brief vs shipped surfaces** — When adding or changing primary workspaces, update [`docs/UI_UX_BRIEF.md`](docs/UI_UX_BRIEF.md) only where it describes **live** behavior, or call out intentional deltas in the implementation matrix.
 
 ### 2. Core build priorities ([`AGENTS.md`](AGENTS.md) order)

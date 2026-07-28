@@ -58,6 +58,24 @@ test("confirmDatasheetParameters matches SI and unit spellings", () => {
 });
 
 /**
+ * Verifies the MCU/regulator vocabulary confirms against real datasheet spellings: clock in MHz,
+ * memory as "Kbytes"/"KB", and small currents — without confirming a wrong magnitude or unit.
+ */
+test("confirmDatasheetParameters matches frequency, memory-size, and current spellings", () => {
+  const CLOCK: DatasheetConfirmationCandidate = { paramKey: "clock_frequency", unit: "Hz", valueKind: "numeric", valueNumeric: 64_000_000, valueText: null };
+  const FLASH: DatasheetConfirmationCandidate = { paramKey: "flash_size", unit: "B", valueKind: "numeric", valueNumeric: 64_000, valueText: null };
+  const QUIESCENT: DatasheetConfirmationCandidate = { paramKey: "quiescent_current", unit: "A", valueKind: "numeric", valueNumeric: 25e-9, valueText: null };
+
+  assert.equal(confirmDatasheetParameters("frequency up to 64 MHz", [CLOCK]).length, 1, "spaced MHz");
+  assert.equal(confirmDatasheetParameters("64MHz Arm Cortex-M0+", [CLOCK]).length, 1, "attached MHz");
+  assert.equal(confirmDatasheetParameters("up to 64 Kbytes of Flash memory", [FLASH]).length, 1, "spelled-out Kbytes");
+  assert.equal(confirmDatasheetParameters("Flash 64KB", [FLASH]).length, 1, "compact KB");
+  assert.equal(confirmDatasheetParameters("IQ of only 25 nA (typ)", [QUIESCENT]).length, 1, "nanoamp form");
+  assert.deepEqual(confirmDatasheetParameters("32 MHz oscillator, 128 Kbytes flash", [CLOCK, FLASH]), [], "different magnitudes are not confirmed");
+  assert.deepEqual(confirmDatasheetParameters("64 mA output drive", [CLOCK]), [], "the unit must match, not just the number");
+});
+
+/**
  * Verifies the matcher does not false-confirm: a value must appear with its own unit and boundaries.
  */
 test("confirmDatasheetParameters avoids substring, wrong-unit, and in-token false matches", () => {

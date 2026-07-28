@@ -102,6 +102,9 @@ export async function runProviderPartImport(adapterId: string, request: Provider
           recordProviderImportFailure({
             error,
             failedAt: new Date().toISOString(),
+            // Keep failure diagnostics in the same tenant as the attempted import so a non-default
+            // failure cannot overwrite org-default's unscoped source row for the same provider key.
+            orgId,
             providerId: adapter.id,
             providerPartKey: diagnosticProviderPartKey
           }),

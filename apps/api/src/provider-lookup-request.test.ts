@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatProviderLookupFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
+import { formatProviderLookupFailureMessage, formatProviderLookupProviderFailureMessage, parseProviderLookupRequest } from "./provider-lookup-request";
 
 test("parseProviderLookupRequest rejects missing and unsupported lookup values", () => {
   const missingLookup = parseProviderLookupRequest({ query: "" });
@@ -45,4 +45,37 @@ test("formatProviderLookupFailureMessage maps Octopart provider failures without
   assert.match(message, /supported provider catalog/u);
   assert.match(message, /credentials/u);
   assert.doesNotMatch(message, /Forbidden field/u);
+});
+
+test("formatProviderLookupProviderFailureMessage points credential-shaped failures at credentials", () => {
+  const expiredToken = formatProviderLookupProviderFailureMessage({
+    message: "Unable to fetch DigiKey access token (401)",
+    providerId: "digikey",
+    providerName: "DigiKey Product Information API"
+  });
+  const forbidden = formatProviderLookupProviderFailureMessage({
+    message: "Octopart/Nexar GraphQL returned errors: Forbidden field",
+    providerId: "octopart",
+    providerName: "Octopart via Nexar GraphQL"
+  });
+
+  assert.equal(expiredToken, "DigiKey did not answer — check credentials.");
+  assert.equal(forbidden, "Octopart/Nexar did not answer — check credentials.");
+});
+
+test("formatProviderLookupProviderFailureMessage keeps non-credential failures calm without leaking internals", () => {
+  const message = formatProviderLookupProviderFailureMessage({
+    message: "Unable to fetch Mouser response (503)",
+    providerId: "mouser",
+    providerName: "Mouser Search API"
+  });
+  const unknownProvider = formatProviderLookupProviderFailureMessage({
+    message: "socket hang up",
+    providerId: "future-provider",
+    providerName: "Future Provider API"
+  });
+
+  assert.equal(message, "Mouser did not answer — check network access and try again.");
+  assert.doesNotMatch(message, /503/u);
+  assert.equal(unknownProvider, "Future Provider API did not answer — check network access and try again.");
 });

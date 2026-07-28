@@ -100,6 +100,29 @@ test("mouser provider parses MCU and regulator description specs conservatively"
   ]);
   assert.equal(mcu.metrics.length, 0, "description parsing emits verbatim spec rows, not metrics");
 
+  // RF MCU blurbs often lead with the radio band before the CPU clock. The band must not become Clock Frequency.
+  const rfMcu = parametricRows(
+    "RF Microcontrollers - MCU",
+    "Sub-1 GHz wireless MCU with 64 Kbytes of Flash 8 Kbytes RAM, 48 MHz CPU"
+  );
+
+  assert.deepEqual(rfMcu.rows, [
+    ["Flash Size", "64 Kbytes"],
+    ["RAM Size", "8 Kbytes"],
+    ["Clock Frequency", "48 MHz"]
+  ]);
+
+  const rfBandFirst = parametricRows(
+    "RF Microcontrollers - MCU",
+    "2.4GHz Bluetooth Low Energy MCU, 64 MHz CPU, 512 Kbytes of Flash 64 Kbytes RAM"
+  );
+
+  assert.deepEqual(rfBandFirst.rows, [
+    ["Flash Size", "512 Kbytes"],
+    ["RAM Size", "64 Kbytes"],
+    ["Clock Frequency", "64 MHz"]
+  ]);
+
   const ldo = parametricRows("LDO Voltage Regulators", "LDO Voltage Regulators 200mA nanopower-IQ ( 25 nA) low-dropout");
 
   assert.deepEqual(ldo.rows, [
@@ -221,3 +244,26 @@ function buildRawPayload(): RawProviderPayload {
     providerId: "mouser"
   };
 }
+
+/**
+ * Verifies the capacitor passive path against the real Mouser description form ".1UF 16V 10% 0603":
+ * leading-dot + uppercase electrical value normalizes, and the capacitor voltage rating is captured.
+ */
+test("mouser provider parses a capacitor description including leading-dot value and voltage rating", () => {
+  const payload = buildResistorRawPayload();
+  const part = (payload.payload as { part: Record<string, unknown> }).part;
+  part.Category = "Capacitors / Multilayer Ceramic Capacitors MLCC - SMD/SMT";
+  part.Description = "Multilayer Ceramic Capacitors MLCC - SMD/SMT .1UF 16V 10% 0603";
+  part.ManufacturerPartNumber = "GRM188R71C104KA01D";
+
+  const normalized = mouserProviderAdapter.normalizeRawPart(payload);
+  const capacitance = normalized.metrics.find((metric) => metric.metricKey === "capacitance");
+
+  assert.ok(capacitance, "expected a capacitance metric parsed from the description");
+  assert.ok(capacitance.metricValue !== null, "capacitance metric must carry a numeric value");
+  // ".1UF" is 0.1 µF = 1e-7 F; the leading dot and uppercase prefix must both be handled.
+  assert.ok(Math.abs(capacitance.metricValue - 1e-7) <= 1e-16, `capacitance ${capacitance.metricValue} should be ~1e-7 F`);
+
+  const voltage = (normalized.specifications ?? []).find((row) => row.specKey === "Voltage Rating");
+  assert.equal(voltage?.specValue, "16V", "the capacitor voltage rating is captured from the description");
+});
