@@ -246,8 +246,13 @@ export async function processNextProviderEnrichmentJob(): Promise<ProviderEnrich
   }
 }
 
-/** DATASHEET_EXTRACTABLE_PART_TYPES limits heuristic datasheet extraction to passives (clear label:value text). */
-const DATASHEET_EXTRACTABLE_PART_TYPES: ReadonlySet<PartType> = new Set(["resistor", "capacitor", "inductor"]);
+/**
+ * DATASHEET_EXTRACTABLE_PART_TYPES limits datasheet extraction to types with registry parameters.
+ * Confirm-by-search only corroborates values the distributor already reported, so widening a type here
+ * is safe by construction — a part with no reconciled parameters simply confirms nothing. "other" and
+ * "connector" stay out: they carry no electrical registry parameters worth confirming.
+ */
+const DATASHEET_EXTRACTABLE_PART_TYPES: ReadonlySet<PartType> = new Set(["resistor", "capacitor", "inductor", "diode", "mcu", "regulator"]);
 
 /**
  * Enqueues gap-driven enrichment jobs for one part: datasheet capture when evidence is still missing,
@@ -477,8 +482,8 @@ const DATASHEET_PARSE_CONFIDENCE_EMPTY = 0.1;
  * Confirmation is a corroborating source: it searches the datasheet for values the distributor already
  * reports and records the ones it finds at a modest confidence, so it can only raise trust (never
  * override or conflict; see reconcileParameterSources). The job self-ensures the PDF is stored (running
- * capture if needed), so it cannot run before a datasheet exists even if claimed early. Only passive
- * parts are processed; anything else succeeds as a no-op.
+ * capture if needed), so it cannot run before a datasheet exists even if claimed early. Only part types
+ * with registry parameters are processed; anything else succeeds as a no-op.
  */
 async function runDatasheetExtractionJob(
   job: ProviderEnrichmentJob
@@ -503,7 +508,7 @@ async function runDatasheetExtractionJob(
   if (!DATASHEET_EXTRACTABLE_PART_TYPES.has(partType)) {
     return {
       detail: { partType, result: "noop_unsupported_part_type" },
-      message: "Datasheet extraction supports passive parts only; skipping."
+      message: "Datasheet extraction supports part types with registry parameters only; skipping."
     };
   }
 
