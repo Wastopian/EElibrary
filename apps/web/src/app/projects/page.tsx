@@ -6,6 +6,7 @@ import Link from "next/link";
 import React from "react";
 import { EmptyState, SectionHeading, SectionPanel, StatusBadge } from "@ee-library/ui";
 import { ProjectCreatePanel } from "../../components/ProjectCreatePanel";
+import { ProjectFolderScanPanel } from "../../components/ProjectFolderScanPanel";
 import { ProjectsBrowser } from "../../components/ProjectsBrowser";
 import { fetchApiHealth, fetchProjectFleetRisk, fetchProjectListEnvelope, isApiClientError } from "../../lib/api-client";
 import { getSetupStateCopy } from "../../lib/setup-state-copy";
@@ -76,6 +77,20 @@ export default async function ProjectsPage() {
           title={response.projects.length > 0 ? `${response.projects.length} project${response.projects.length === 1 ? "" : "s"}` : "No projects yet"}
         >
           {response.projects.length > 0 ? <ProjectsBrowser projects={response.projects} /> : <ProjectsEmptyState />}
+        </SectionPanel>
+      </section>
+
+      <section className="detail-section" aria-labelledby="project-folder-scan-heading">
+        <SectionHeading
+          id="project-folder-scan-heading"
+          subtitle="Copy old project folders into the project files root, scan, and add them all at once."
+          title="Add projects from your folders"
+        />
+        <SectionPanel
+          description="Each folder becomes a project: its parts list is found and imported, rows are matched, and missing parts are searched at your suppliers in the background. Imported parts start unreviewed — nothing is approved by adding it."
+          title="Scan project folders"
+        >
+          <ProjectFolderScanPanel />
         </SectionPanel>
       </section>
 

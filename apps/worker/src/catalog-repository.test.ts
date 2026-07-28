@@ -161,6 +161,37 @@ test("persistProviderImportFailureRows stores failed import diagnostics", async 
 });
 
 /**
+ * Verifies a non-default org failure writes a namespaced source id and stamps that org — never the
+ * legacy unscoped id that org-default may already own for the same provider key.
+ */
+test("persistProviderImportFailureRows namespaces failure source ids for non-default orgs", async () => {
+  const calls: QueryCall[] = [];
+  const client = {
+    async query(text: string, values?: unknown[]) {
+      calls.push({ text, values });
+      return { rows: [] };
+    }
+  } as unknown as PoolClient;
+
+  await persistProviderImportFailureRows(client, {
+    error: new Error("provider returned 401"),
+    failedAt: "2026-07-26T12:00:00.000Z",
+    orgId: "org-acme",
+    providerId: "digikey",
+    providerPartKey: "STM32G031K8T6"
+  });
+
+  const sourceCall = calls.find((call) => call.text.includes("INSERT INTO source_records"));
+  const orgStamp = calls.find((call) => call.text.includes("UPDATE source_records SET org_id"));
+
+  assert.ok(sourceCall, "expected failed source record upsert");
+  assert.equal(sourceCall.values?.[0], "org-acme__source-digikey-stm32g031k8t6");
+  assert.ok(orgStamp, "expected org stamp on the failure source row");
+  assert.equal(orgStamp.values?.[0], "org-acme");
+  assert.equal(orgStamp.values?.[1], "org-acme__source-digikey-stm32g031k8t6");
+});
+
+/**
  * Verifies supply offering snapshots and price tiers are persisted with source provenance.
  */
 test("persistNormalizedPartRows persists supply offerings and replaces stale price tiers", async () => {

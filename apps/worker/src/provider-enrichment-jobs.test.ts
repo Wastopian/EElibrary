@@ -633,6 +633,96 @@ test("provider enrichment worker confirms distributor values found in the datash
   }
 });
 
+/**
+ * Verifies datasheet extraction now runs for non-passive registry types: an MCU's clock frequency and
+ * flash size are confirmed from real datasheet spellings ("64 MHz", "64 Kbytes of Flash"), a value the
+ * PDF lacks (RAM size) stays unconfirmed, and the distributor remains the winner throughout.
+ */
+test("provider enrichment worker confirms MCU values found in the datasheet", async () => {
+  const pool = createProviderEnrichmentPool();
+  setWorkerRepositoryPoolForTests(pool);
+  const partId = "part-extract-mcu";
+  const timestamp = "2026-07-16T12:00:00.000Z";
+
+  await seedPartAndAcquisition(pool, partId, "acqjob-extract-mcu", "ARM Microcontrollers - MCU");
+  await pool.query(
+    `INSERT INTO assets (
+       id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode, provenance,
+       availability_status, review_status, export_status, asset_status, generation_method, generation_source_asset_id,
+       validation_status, preview_status, asset_state, source_url, source_record_id, last_updated_at
+     ) VALUES (
+       'asset-extract-mcu', $1, 'datasheet', 'pdf', 'datasheets/part-extract-mcu.pdf', 'hash', 'mouser', 'metadata_only', 'trusted_external',
+       'downloaded', 'not_reviewed', 'not_exportable', 'downloaded', NULL, NULL,
+       'not_validated', 'not_available', 'downloaded', 'https://example.test/stm32.pdf', NULL, $2
+     )`,
+    [partId, timestamp]
+  );
+  await pool.query(
+    `INSERT INTO datasheet_revisions (id, part_id, revision_label, parse_confidence, pin_table_status, last_updated_at)
+     VALUES ('dsr-extract-mcu', $1, 'Provider datasheet reference', 0, 'not_available', $2)`,
+    [partId, timestamp]
+  );
+  // Spec rows use the keys the Mouser description parser emits; recompute rebuilds part_parameters
+  // from them, so both the seeds below and the rebuilt rows resolve the same candidates.
+  await pool.query(
+    `INSERT INTO part_specifications (id, part_id, provider_id, source_record_id, spec_key, spec_value, spec_group, last_updated_at, org_id) VALUES
+     ('spec-mcu-clock', $1, 'mouser', NULL, 'Clock Frequency', '64 MHz', 'parametric', $2, 'org-default'),
+     ('spec-mcu-flash', $1, 'mouser', NULL, 'Flash Size', '64 Kbytes', 'parametric', $2, 'org-default'),
+     ('spec-mcu-ram', $1, 'mouser', NULL, 'RAM Size', '8 Kbytes', 'parametric', $2, 'org-default')`,
+    [partId, timestamp]
+  );
+  await pool.query(
+    `INSERT INTO part_parameters (id, part_id, part_type, param_key, value_kind, value_numeric, value_text, unit, is_conflicted, confidence_score, winning_provider_id, sources, last_updated_at, org_id) VALUES
+     ('pp-mcu-clock', $1, 'mcu', 'clock_frequency', 'numeric', 64000000, NULL, 'Hz', FALSE, 0.6, 'mouser', '[{"providerId":"mouser","agreesWithWinner":true}]'::jsonb, $2, 'org-default'),
+     ('pp-mcu-flash', $1, 'mcu', 'flash_size', 'numeric', 64000, NULL, 'B', FALSE, 0.6, 'mouser', '[{"providerId":"mouser","agreesWithWinner":true}]'::jsonb, $2, 'org-default'),
+     ('pp-mcu-ram', $1, 'mcu', 'ram_size', 'numeric', 8000, NULL, 'B', FALSE, 0.6, 'mouser', '[{"providerId":"mouser","agreesWithWinner":true}]'::jsonb, $2, 'org-default')`,
+    [partId, timestamp]
+  );
+  await seedQueuedEnrichmentJob(pool, "enrichjob-extract-mcu", partId, "acqjob-extract-mcu", timestamp, "datasheet_extraction");
+
+  const document = await PDFDocument.create();
+  const page = document.addPage();
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("Arm Cortex-M0+ core running at up to 64MHz. Up to 64 Kbytes of Flash memory.", { font, size: 12, x: 40, y: 700 });
+  const pdfBytes = Buffer.from(await document.save());
+
+  setWorkerStorageClientForTests({
+    backend: "local",
+    exists: async () => true,
+    getDownloadUrl: async () => null,
+    read: async () => pdfBytes,
+    write: async () => {}
+  } as FileStorageClient);
+
+  try {
+    const result = await processNextProviderEnrichmentJob();
+
+    assert.equal(result?.status, "succeeded");
+    assert.equal(result?.jobType, "datasheet_extraction");
+
+    const datasheetParams = await pool.query<{ param_key: string }>(
+      "SELECT param_key FROM part_datasheet_parameters WHERE part_id = $1 ORDER BY param_key",
+      [partId]
+    );
+    assert.deepEqual(datasheetParams.rows.map((row) => row.param_key), ["clock_frequency", "flash_size"], "only PDF-present values are confirmed; RAM size is not");
+
+    const clock = await pool.query<{ winning_provider_id: string; is_conflicted: boolean; sources: unknown }>(
+      "SELECT winning_provider_id, is_conflicted, sources FROM part_parameters WHERE part_id = $1 AND param_key = 'clock_frequency'",
+      [partId]
+    );
+    const sources = typeof clock.rows[0]?.sources === "string" ? JSON.parse(clock.rows[0].sources as string) : clock.rows[0]?.sources;
+    const datasheetSource = Array.isArray(sources) ? sources.find((entry: { providerId: string }) => entry.providerId === "datasheet") : undefined;
+
+    assert.equal(clock.rows[0]?.winning_provider_id, "mouser", "the distributor value stays the winner");
+    assert.equal(clock.rows[0]?.is_conflicted, false);
+    assert.ok(datasheetSource && datasheetSource.agreesWithWinner === true, "the datasheet corroborates the MCU clock");
+  } finally {
+    setWorkerStorageClientForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
 test("datasheet capture resolves the URL from the datasheet asset when raw payload has none", async () => {
   const pool = createProviderEnrichmentPool();
   setWorkerRepositoryPoolForTests(pool);

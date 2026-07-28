@@ -131,9 +131,9 @@ test("backfill worker claims the oldest queued request, imports the agreed candi
 test("backfill worker reuses an existing catalog part without re-importing", async () => {
   const pool = createBomBackfillPool();
   setWorkerRepositoryPoolForTests(pool);
-  await seedPartRow(pool, "part-already-imported");
+  await seedPartRow(pool, "part-already-imported", "org-acme");
   await pool.query(
-    "INSERT INTO source_records (id, provider_id, provider_part_key, part_id, fetched_at) VALUES ('src-1', 'jlcparts', 'C1091', 'part-already-imported', '2026-07-01T00:00:00.000Z')"
+    "INSERT INTO source_records (id, provider_id, provider_part_key, part_id, fetched_at, org_id) VALUES ('src-1', 'jlcparts', 'C1091', 'part-already-imported', '2026-07-01T00:00:00.000Z', 'org-acme')"
   );
   await seedQueuedRequest(pool, "bomfill-existing", "2026-07-16T12:00:00.000Z", "RC0402FR-0710KL", null);
   let importCalled = false;
@@ -153,6 +153,89 @@ test("backfill worker reuses an existing catalog part without re-importing", asy
     assert.deepEqual(result, { mpn: "RC0402FR-0710KL", requestId: "bomfill-existing", status: "imported" });
     assert.equal(importCalled, false, "an existing catalog part short-circuits the provider import");
     assert.equal(settled.rows[0]?.part_id, "part-already-imported");
+  } finally {
+    setBomBackfillLookupRunnerForTests(null);
+    setBomBackfillImportRunnerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("backfill worker retries abandoned searches without stealing active work", async () => {
+  const pool = createBomBackfillPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-recovered");
+  await seedQueuedRequest(pool, "bomfill-abandoned", "2026-07-16T12:00:00.000Z", "RC0402FR-0710KL", null);
+  await seedQueuedRequest(pool, "bomfill-active", "2026-07-16T12:05:00.000Z", "GRM155R71C104KA88D", null);
+  await pool.query(`
+    UPDATE bom_backfill_requests
+    SET
+      request_status = 'searching',
+      started_at = now(),
+      last_updated_at = now() - INTERVAL '20 minutes'
+    WHERE id = 'bomfill-abandoned';
+
+    UPDATE bom_backfill_requests
+    SET
+      request_status = 'searching',
+      started_at = now(),
+      last_updated_at = now()
+    WHERE id = 'bomfill-active';
+  `);
+
+  setBomBackfillLookupRunnerForTests(async () => ({ candidates: [buildCandidate({})], failures: [] }));
+  setBomBackfillImportRunnerForTests(async () => buildImportSummary("part-recovered", "C1091"));
+
+  try {
+    const summary = await processBomBackfillRequests(1, 1);
+    const rows = await pool.query<{ id: string; request_status: string }>(
+      "SELECT id, request_status FROM bom_backfill_requests ORDER BY id"
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, row.request_status]));
+
+    assert.equal(summary.recoveredStaleCount, 1);
+    assert.deepEqual(summary.processed, [
+      { mpn: "RC0402FR-0710KL", requestId: "bomfill-abandoned", status: "imported" }
+    ]);
+    assert.equal(byId.get("bomfill-abandoned"), "imported");
+    assert.equal(byId.get("bomfill-active"), "searching");
+  } finally {
+    setBomBackfillLookupRunnerForTests(null);
+    setBomBackfillImportRunnerForTests(null);
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("backfill worker never reuses another organization's provider source", async () => {
+  const pool = createBomBackfillPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-foreign", "org-default");
+  await seedPartRow(pool, "org-acme__part-jlcparts-c1091", "org-acme");
+  await pool.query(
+    "INSERT INTO source_records (id, provider_id, provider_part_key, part_id, fetched_at, org_id) VALUES ('src-foreign', 'jlcparts', 'C1091', 'part-foreign', '2026-07-01T00:00:00.000Z', 'org-default')"
+  );
+  await seedQueuedRequest(pool, "bomfill-acme", "2026-07-16T12:00:00.000Z", "RC0402FR-0710KL", null);
+  let capturedOrgId: string | undefined;
+  let importCalled = false;
+
+  setBomBackfillLookupRunnerForTests(async () => ({ candidates: [buildCandidate({})], failures: [] }));
+  setBomBackfillImportRunnerForTests(async (_providerId, _request, orgId) => {
+    capturedOrgId = orgId;
+    importCalled = true;
+    return buildImportSummary("org-acme__part-jlcparts-c1091", "C1091");
+  });
+
+  try {
+    const result = await processNextBomBackfillRequest();
+    const settled = await pool.query<{ request_status: string; part_id: string | null }>(
+      "SELECT request_status, part_id FROM bom_backfill_requests WHERE id = 'bomfill-acme'"
+    );
+
+    assert.deepEqual(result, { mpn: "RC0402FR-0710KL", requestId: "bomfill-acme", status: "imported" });
+    assert.equal(importCalled, true, "a foreign source must not short-circuit the tenant-scoped import");
+    assert.equal(capturedOrgId, "org-acme");
+    assert.equal(settled.rows[0]?.part_id, "org-acme__part-jlcparts-c1091");
   } finally {
     setBomBackfillLookupRunnerForTests(null);
     setBomBackfillImportRunnerForTests(null);
@@ -209,7 +292,7 @@ test("backfill worker never claims no_match when a provider errored instead of a
 
   setBomBackfillLookupRunnerForTests(async () => ({
     candidates: [],
-    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey" }]
+    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey", providerName: "DigiKey" }]
   }));
 
   try {
@@ -236,7 +319,7 @@ test("backfill worker still imports when a responding provider agrees despite an
 
   setBomBackfillLookupRunnerForTests(async () => ({
     candidates: [buildCandidate({})],
-    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey" }]
+    failures: [{ message: "Unable to fetch DigiKey response (401)", providerId: "digikey", providerName: "DigiKey" }]
   }));
   setBomBackfillImportRunnerForTests(async () => buildImportSummary("part-jlcparts-c1091", "C1091"));
 
@@ -331,7 +414,8 @@ function createBomBackfillPool(): TestPool {
       provider_id TEXT NOT NULL,
       provider_part_key TEXT NOT NULL,
       part_id TEXT,
-      fetched_at TIMESTAMPTZ NOT NULL
+      fetched_at TIMESTAMPTZ NOT NULL,
+      org_id TEXT DEFAULT 'org-default'
     );
     CREATE TABLE bom_backfill_requests (
       id TEXT PRIMARY KEY,
@@ -410,8 +494,8 @@ function createBomBackfillPool(): TestPool {
 /**
  * Inserts one canonical part row so enrichment enqueues can reference it safely.
  */
-async function seedPartRow(pool: TestPool, partId: string): Promise<void> {
-  await pool.query("INSERT INTO parts (id) VALUES ($1)", [partId]);
+async function seedPartRow(pool: TestPool, partId: string, orgId = "org-default"): Promise<void> {
+  await pool.query("INSERT INTO parts (id, org_id) VALUES ($1, $2)", [partId, orgId]);
 }
 
 /**

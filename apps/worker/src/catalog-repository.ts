@@ -70,6 +70,11 @@ interface ProviderImportFailureInput {
   failedAt: string;
   /** Original failure object from fetch, normalization, or persistence. */
   error: unknown;
+  /**
+   * Tenant that attempted the import. Defaults to org-default for CLI paths; non-default orgs must
+   * pass this so the failure source id is namespaced and does not clobber another tenant's row.
+   */
+  orgId?: string;
 }
 
 /** ReferencedDatasheetCaptureInput carries the minimum official-source evidence needed to attach a referenced datasheet. */
@@ -338,9 +343,13 @@ export async function recordProviderImportFailure(input: ProviderImportFailureIn
  * Persists a failed import source record using an existing transaction-capable client.
  */
 export async function persistProviderImportFailureRows(client: PoolClient, input: ProviderImportFailureInput): Promise<void> {
+  const failureOrgId = input.orgId ?? DEFAULT_ORG_ID;
+  // Mirror successful import id namespacing so a non-default failure cannot UPSERT the legacy
+  // unscoped source id that org-default (or another tenant) already owns.
+  const failureSourceId = scopeEntityId(failureOrgId, buildSourceRecordId(input.providerId, input.providerPartKey));
   const attachedPartId = await persistSourceRecord(client, {
     fetchedAt: input.failedAt,
-    id: buildSourceRecordId(input.providerId, input.providerPartKey),
+    id: failureSourceId,
     importErrorDetails: formatImportError(input.error),
     importStatus: "failed",
     lastUpdatedAt: input.failedAt,
@@ -357,12 +366,12 @@ export async function persistProviderImportFailureRows(client: PoolClient, input
     sourceUrl: input.sourceUrl ?? null
   });
 
-  // Stamp the failure source record's org: from its attached part if any, else the shared default
-  // (a part-less failed import carries no tenant data). Keeps RLS-ready tables free of null org rows.
-  const failureOrgId = attachedPartId ? await readPartOrgId(client, attachedPartId) : DEFAULT_ORG_ID;
+  // Prefer an attached part's org when the failure row reused an existing source that already points
+  // at a part; otherwise stamp the requested tenant so RLS-ready tables stay free of null org rows.
+  const stampedOrgId = attachedPartId ? await readPartOrgId(client, attachedPartId) : failureOrgId;
   await client.query(
     "UPDATE source_records SET org_id = $1 WHERE id = $2 AND org_id IS NULL",
-    [failureOrgId, buildSourceRecordId(input.providerId, input.providerPartKey)]
+    [stampedOrgId, failureSourceId]
   );
 
   if (attachedPartId) {

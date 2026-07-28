@@ -44,6 +44,9 @@ export function confirmDatasheetParameters(text: string, candidates: DatasheetCo
 const UNIT_MATCHERS: Record<string, string> = {
   "%": "%",
   A: "a",
+  // Memory sizes: MCU datasheets spell "64 Kbytes" / "64-KB" / "64KB"; the prefix symbol is matched
+  // separately, so this fragment covers only the unit word itself.
+  B: "(?:b|bytes?)",
   F: "(?:f|farads?)",
   H: "(?:h|henr(?:y|ies))",
   Hz: "(?:hz)",

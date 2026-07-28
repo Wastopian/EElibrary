@@ -20,6 +20,9 @@ import type {
   BomImportMatchResponse,
   ProjectFileBomImportInput,
   ProjectFileBomImportResponse,
+  ProjectFolderOnboardInput,
+  ProjectFolderOnboardReport,
+  ProjectFolderScanResponse,
   BomImportPreviewInput,
   BomImportPreviewResponse,
   BomRevisionCompareResponse,
@@ -142,8 +145,8 @@ import type {
   PartSearchRecord,
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
-  ProviderLookupCandidate,
   ProviderLookupRequestInput,
+  ProviderLookupResponse,
   ProviderImportCreateInput,
   ProviderImportCreateResponse,
   ReviewActionInput,
@@ -730,6 +733,45 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
   }
 
   const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Scans the mirror root for folders no library project claims yet.
+ */
+export async function fetchProjectFolderScan(): Promise<ProjectFolderScanResponse> {
+  const response = await fetch(buildApiUrl("/project-folder-scan"), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder scan");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderScanResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Onboards one scanned folder: disclosed rename, project creation, BOM import, matching, and
+ * missing-part queueing, reported step by step.
+ */
+export async function onboardProjectFolder(input: ProjectFolderOnboardInput): Promise<ProjectFolderOnboardReport> {
+  const response = await fetch(buildApiUrl("/project-folder-onboard"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder onboarding");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderOnboardReport>;
 
   return envelope.data;
 }
@@ -1451,7 +1493,7 @@ export async function requestProviderImport(input: ProviderImportCreateInput): P
 /**
  * Runs an explicit exact-match provider candidate lookup without changing normal catalog search behavior.
  */
-export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupCandidate[]> {
+export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupResponse> {
   const response = await fetch(buildApiUrl("/provider-lookups"), {
     body: JSON.stringify(input),
     cache: "no-store",
@@ -1463,7 +1505,7 @@ export async function requestProviderLookup(input: ProviderLookupRequestInput): 
     throw await buildApiError(response, "Provider lookup");
   }
 
-  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupCandidate[]>;
+  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupResponse>;
 
   return envelope.data;
 }
