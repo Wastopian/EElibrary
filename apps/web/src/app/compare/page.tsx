@@ -20,7 +20,7 @@ import {
   buildCompareParameterRows,
   collectUncoveredCompareMetricKeys,
   detailsToRecords,
-  formatCompareMetricCell,
+  formatUncoveredCompareMetricCell,
   shouldRenderConnectorCompareRows
 } from "../../lib/part-compare";
 import type { CompareCellTone, CompareRow } from "../../lib/part-compare";
@@ -200,9 +200,9 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                     {metricKeys.map((key) => (
                       <tr key={key}>
                         <th scope="row">{formatMetricLabel(key)}</th>
-                        {records.map((record) => (
-                          <td key={record.part.id} className="ui-mono">
-                            {formatCompareMetricCell(record, key)}
+                        {details.map((detail) => (
+                          <td key={detail.record.part.id} className="ui-mono">
+                            {formatUncoveredCompareMetricCell(detail, key)}
                           </td>
                         ))}
                       </tr>
