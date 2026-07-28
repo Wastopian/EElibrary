@@ -237,6 +237,7 @@ test("mouser provider parses a capacitor description including leading-dot value
   const capacitance = normalized.metrics.find((metric) => metric.metricKey === "capacitance");
 
   assert.ok(capacitance, "expected a capacitance metric parsed from the description");
+  assert.ok(capacitance.metricValue !== null, "capacitance metric must carry a numeric value");
   // ".1UF" is 0.1 µF = 1e-7 F; the leading dot and uppercase prefix must both be handled.
   assert.ok(Math.abs(capacitance.metricValue - 1e-7) <= 1e-16, `capacitance ${capacitance.metricValue} should be ~1e-7 F`);
 
