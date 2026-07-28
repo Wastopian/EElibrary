@@ -69,7 +69,9 @@ export const PARAMETER_REGISTRY: Record<PartType, CanonicalParameterDef[]> = {
     { label: "Package", metricKeys: [], paramKey: "package", specKeyPatterns: ["package", "case code", "case"], unit: null, valueKind: "text" }
   ],
   mcu: [
-    { label: "Clock Frequency", metricKeys: ["clock_frequency_max"], paramKey: "clock_frequency", specKeyPatterns: ["clock frequency", "speed", "frequency"], unit: "Hz", valueKind: "numeric" },
+    // DigiKey MCU clock rows use "Speed" (e.g. "64 MHz"). Do not use bare "frequency" — DigiKey RF MCU
+    // labels like "Frequency" / "Operating Frequency" are radio bands (2.4 GHz), not CPU clocks.
+    { label: "Clock Frequency", metricKeys: ["clock_frequency_max"], paramKey: "clock_frequency", specKeyPatterns: ["clock frequency", "clock speed", "cpu speed", "processor speed", "max clock", "speed"], unit: "Hz", valueKind: "numeric" },
     { label: "Flash Size", metricKeys: [], paramKey: "flash_size", specKeyPatterns: ["program memory size", "flash size", "flash"], unit: "B", valueKind: "numeric" },
     { label: "RAM Size", metricKeys: [], paramKey: "ram_size", specKeyPatterns: ["ram size", "data ram", "sram"], unit: "B", valueKind: "numeric" },
     { label: "Supply Voltage", metricKeys: ["supply_voltage"], paramKey: "supply_voltage_range", specKeyPatterns: ["voltage - supply", "supply voltage", "operating voltage"], unit: "V", valueKind: "range" },

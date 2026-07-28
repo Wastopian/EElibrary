@@ -194,7 +194,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           description="Each project has its own folder with subfolders for parts list source files, custom designs, datasheets, and 3D models. The site reads what is on disk."
           title="Folders on the API host"
         >
-          <ProjectFilesPanel files={files} projectId={project.id} />
+          <ProjectFilesPanel files={files} projectId={project.id} revisions={revisions} />
         </SectionPanel>
       </section>
 

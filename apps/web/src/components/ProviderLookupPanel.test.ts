@@ -111,7 +111,7 @@ test("rendered provider lookup panel direct mode imports selected candidates ins
       onQueueAcquisition: () => undefined,
       onRunDirectImport: () => undefined,
       onRunLookup: () => undefined,
-      status: { candidates, kind: "candidates" }
+      status: { candidates, kind: "candidates", providerFailures: [] }
     })
   );
   const succeededHtml = renderToStaticMarkup(
@@ -125,7 +125,7 @@ test("rendered provider lookup panel direct mode imports selected candidates ins
       onQueueAcquisition: () => undefined,
       onRunDirectImport: () => undefined,
       onRunLookup: () => undefined,
-      status: { candidates, kind: "candidates" }
+      status: { candidates, kind: "candidates", providerFailures: [] }
     })
   );
 
@@ -206,7 +206,7 @@ test("rendered provider lookup panel view shows one active acquisition lock unti
       acquisitionState: { candidateKey: "jlcparts:C1091", kind: "creating" },
       onQueueAcquisition: () => undefined,
       onRunLookup: () => undefined,
-      status: { candidates, kind: "candidates" }
+      status: { candidates, kind: "candidates", providerFailures: [] }
     })
   );
   const runningHtml = renderToStaticMarkup(
@@ -214,7 +214,7 @@ test("rendered provider lookup panel view shows one active acquisition lock unti
       acquisitionState: resolveProviderAcquisitionTrackingState("jlcparts:C1091", buildProviderJobDetail("running"), "/?q=RC-02W300JT"),
       onQueueAcquisition: () => undefined,
       onRunLookup: () => undefined,
-      status: { candidates, kind: "candidates" }
+      status: { candidates, kind: "candidates", providerFailures: [] }
     })
   );
   const succeededHtml = renderToStaticMarkup(
@@ -222,7 +222,7 @@ test("rendered provider lookup panel view shows one active acquisition lock unti
       acquisitionState: resolveProviderAcquisitionTrackingState("jlcparts:C1091", buildProviderJobDetail("succeeded", { partId: "part-jlcparts-c1091" }), "/?q=RC-02W300JT"),
       onQueueAcquisition: () => undefined,
       onRunLookup: () => undefined,
-      status: { candidates, kind: "candidates" }
+      status: { candidates, kind: "candidates", providerFailures: [] }
     })
   );
 
@@ -248,7 +248,7 @@ test("rendered provider lookup panel view releases the acquisition lock after fa
       },
       onQueueAcquisition: () => undefined,
       onRunLookup: () => undefined,
-      status: { candidates: [buildProviderCandidate(), buildSecondProviderCandidate()], kind: "candidates" }
+      status: { candidates: [buildProviderCandidate(), buildSecondProviderCandidate()], kind: "candidates", providerFailures: [] }
     })
   );
 
@@ -256,6 +256,61 @@ test("rendered provider lookup panel view releases the acquisition lock after fa
   assert.match(html, /No matching catalog entry was found for that lookup/u);
   assert.equal(countDisabledButtons(html), 0);
 });
+
+test("rendered provider lookup panel lists supplier failure notes next to the candidates that did answer", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(ProviderLookupPanelView, {
+      acquisitionState: { kind: "idle" },
+      onQueueAcquisition: () => undefined,
+      onRunLookup: () => undefined,
+      status: {
+        candidates: [buildProviderCandidate()],
+        kind: "candidates",
+        providerFailures: [buildDigikeyFailure()]
+      }
+    })
+  );
+
+  assert.match(html, new RegExp(importUiCopy.providerLookupProviderFailuresLead, "u"));
+  assert.match(html, /DigiKey did not answer — check credentials\./u);
+  assert.match(html, /C1091/u);
+});
+
+test("rendered provider lookup panel keeps an empty result honest when some suppliers did not answer", () => {
+  const incompleteHtml = renderToStaticMarkup(
+    React.createElement(ProviderLookupPanelView, {
+      acquisitionState: { kind: "idle" },
+      onQueueAcquisition: () => undefined,
+      onRunLookup: () => undefined,
+      status: { kind: "no_candidates", providerFailures: [buildDigikeyFailure()] }
+    })
+  );
+  const completeHtml = renderToStaticMarkup(
+    React.createElement(ProviderLookupPanelView, {
+      acquisitionState: { kind: "idle" },
+      onQueueAcquisition: () => undefined,
+      onRunLookup: () => undefined,
+      status: { kind: "no_candidates", providerFailures: [] }
+    })
+  );
+
+  assert.match(incompleteHtml, new RegExp(importUiCopy.providerLookupNoMatchIncomplete, "u"));
+  assert.doesNotMatch(incompleteHtml, new RegExp(importUiCopy.providerLookupNoMatch, "u"));
+  assert.match(incompleteHtml, /DigiKey did not answer — check credentials\./u);
+  assert.match(completeHtml, new RegExp(importUiCopy.providerLookupNoMatch, "u"));
+  assert.doesNotMatch(completeHtml, new RegExp(importUiCopy.providerLookupProviderFailuresLead, "u"));
+});
+
+/**
+ * Builds one supplier-did-not-answer failure note for honesty-focused panel tests.
+ */
+function buildDigikeyFailure() {
+  return {
+    message: "DigiKey did not answer — check credentials.",
+    providerId: "digikey",
+    providerName: "DigiKey"
+  };
+}
 
 /**
  * Builds one provider-neutral exact-match candidate row for lookup/acquisition tests.

@@ -11,7 +11,8 @@ import {
   resolveSignUpNotice
 } from "@/lib/auth-form-state";
 import { buildNewTeamRecords, normalizeTeamName } from "@/lib/sign-up";
-import { buildJoiningUserRecord, normalizeInviteCode } from "@/lib/team-invite";
+import { joinWithInvite } from "@/lib/join-with-invite";
+import { normalizeInviteCode } from "@/lib/team-invite";
 import { createDbPool, organizations, users } from "@ee-library/db";
 import { hashSync } from "bcryptjs";
 import { eq } from "drizzle-orm";
@@ -250,20 +251,17 @@ async function submitSignUpForm(formData: FormData, callbackUrl: string, isJoinM
     if (existingUser) {
       creationError = "account_exists";
     } else if (isJoinMode) {
-      // Teammate invite (Increment 4): resolve the org by its reusable code and add the user to it as a
-      // full-access admin. No org is created; the org id comes from the resolved invite, never input.
-      const [organization] = await db
-        .select({ id: organizations.id })
-        .from(organizations)
-        .where(eq(organizations.inviteCode, joinCode as string))
-        .limit(1);
+      // Teammate invite: try the submitted value as a single-use token first, then fall back to the
+      // org's reusable code. Consume + user insert run in one transaction so a failed insert cannot
+      // burn a single-use token. Org id comes from the resolved invite, never from user input.
+      const joinResult = await joinWithInvite(db, {
+        email,
+        inviteValue: joinCode as string,
+        passwordHash: hashSync(password, BCRYPT_COST)
+      });
 
-      if (!organization) {
+      if (joinResult === "invite_not_found") {
         creationError = "invite_not_found";
-      } else {
-        await db.insert(users).values(
-          buildJoiningUserRecord({ email, orgId: organization.id, passwordHash: hashSync(password, BCRYPT_COST) })
-        );
       }
     } else {
       // Org-on-signup (Increment 3): a new sign-up creates its own organization and the user becomes
