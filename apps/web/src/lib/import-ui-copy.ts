@@ -44,6 +44,10 @@ export const importUiCopy = {
   providerLookupSearching: "Checking suppliers for this exact part number...",
   /** Shown when supported providers have no exact candidate rows for the lookup. */
   providerLookupNoMatch: "No supplier has this exact part number.",
+  /** Honest no-match wording when at least one supplier did not answer, so the check was incomplete. */
+  providerLookupNoMatchIncomplete: "The suppliers that answered do not have this exact part number. Some suppliers did not answer, so this was not a complete check.",
+  /** Leads the per-supplier failure notes when some suppliers did not answer the lookup. */
+  providerLookupProviderFailuresLead: "Some suppliers did not answer:",
   /** Shown when explicit provider lookup fails before candidates can be listed. */
   providerLookupFailure: "Supplier check did not finish.",
   /** Shown while the selected provider candidate import is starting. */

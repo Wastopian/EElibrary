@@ -927,3 +927,67 @@ test("readProjectBomSourceFile reports not_configured when the mirror is disable
     }
   }
 });
+
+test("scanUnimportedProjectFolders lists unclaimed folders with parts-list candidates and skips claimed ones case-insensitively", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { scanUnimportedProjectFolders } = await import("./project-files");
+    await mkdir(path.join(sandbox.root, "OLD-SENSOR", "docs"), { recursive: true });
+    await writeFile(path.join(sandbox.root, "OLD-SENSOR", "sensor-bom.csv"), "MPN,Qty\nRC0402FR-0710KL,4\n", "utf8");
+    await writeFile(path.join(sandbox.root, "OLD-SENSOR", "docs", "notes.txt"), "bring-up notes", "utf8");
+    await mkdir(path.join(sandbox.root, "my_board 2022"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "demo-pocket-mcu"), { recursive: true });
+    await mkdir(path.join(sandbox.root, ".hidden"), { recursive: true });
+
+    const result = await scanUnimportedProjectFolders(["DEMO-POCKET-MCU"]);
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") {
+      return;
+    }
+
+    const names = result.response.unimportedFolders.map((entry) => entry.folderName);
+    assert.deepEqual([...names].sort(), ["OLD-SENSOR", "my_board 2022"].sort(), "claimed and hidden folders are excluded");
+    assert.equal(result.response.skippedExistingCount, 1);
+
+    const sensor = result.response.unimportedFolders.find((entry) => entry.folderName === "OLD-SENSOR");
+    assert.equal(sensor?.renameTarget, "OLD-SENSOR", "already key-form folders need no rename");
+    assert.equal(sensor?.bestPartsListRelativePath, "sensor-bom.csv");
+    assert.ok((sensor?.partsListCandidates[0]?.confidenceScore ?? 0) > 0.5);
+
+    const board = result.response.unimportedFolders.find((entry) => entry.folderName === "my_board 2022");
+    assert.equal(board?.renameTarget, "MY_BOARD-2022", "rename target is the sanitized normalized key form");
+    assert.equal(board?.bestPartsListRelativePath, null);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("renameFolderForOnboarding renames to key form, no-ops when already there, and refuses collisions and traversal", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { renameFolderForOnboarding } = await import("./project-files");
+    await mkdir(path.join(sandbox.root, "my_board 2022"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "ALREADY-KEYED"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "taken source"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "TAKEN-SOURCE"), { recursive: true });
+
+    const renamed = await renameFolderForOnboarding("my_board 2022");
+    assert.deepEqual(renamed, { renamed: true, renamedTo: "MY_BOARD-2022", status: "ok" });
+    const renamedInfo = await import("node:fs/promises").then((fs) => fs.stat(path.join(sandbox.root, "MY_BOARD-2022")));
+    assert.ok(renamedInfo.isDirectory());
+
+    const noop = await renameFolderForOnboarding("ALREADY-KEYED");
+    assert.deepEqual(noop, { renamed: false, renamedTo: "ALREADY-KEYED", status: "ok" });
+
+    const collision = await renameFolderForOnboarding("taken source");
+    assert.equal(collision.status, "collision");
+
+    const traversal = await renameFolderForOnboarding("../outside");
+    assert.equal(traversal.status, "invalid_source");
+
+    const missing = await renameFolderForOnboarding("never-existed");
+    assert.equal(missing.status, "invalid_source");
+  } finally {
+    await sandbox.restore();
+  }
+});

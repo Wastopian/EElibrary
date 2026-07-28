@@ -67,6 +67,15 @@ interface DigiKeyRawPayload {
   product: DigiKeyProduct;
 }
 
+/**
+ * DigiKeyCategoryNode is DigiKey's category hierarchy: the top node is coarse ("Integrated Circuits
+ * (ICs)") and the specific classification lives at the deepest ChildCategories leaf ("Microcontrollers").
+ */
+interface DigiKeyCategoryNode {
+  Name?: string | null;
+  ChildCategories?: DigiKeyCategoryNode[] | null;
+}
+
 /** DigiKeyProduct is the permissive raw product shape read by the adapter. */
 interface DigiKeyProduct {
   ManufacturerProductNumber?: string | null;
@@ -74,7 +83,7 @@ interface DigiKeyProduct {
   Description?: { ProductDescription?: string | null; DetailedDescription?: string | null } | null;
   DatasheetUrl?: string | null;
   ProductUrl?: string | null;
-  Category?: { Name?: string | null } | null;
+  Category?: DigiKeyCategoryNode | null;
   ProductStatus?: { Status?: string | null } | null;
   QuantityAvailable?: number | string | null;
   Parameters?: Array<{ ParameterText?: string | null; ValueText?: string | null }> | null;
@@ -254,6 +263,33 @@ function hasConfiguredDigiKeyCredentials(): boolean {
 }
 
 /**
+ * Resolves the most specific category name from DigiKey's hierarchy by walking to the deepest
+ * ChildCategories leaf. DigiKey's top node is coarse ("Integrated Circuits (ICs)") and the leaf is
+ * what the part-type classifier needs ("Microcontrollers", "Linear Voltage Regulators", …), so a
+ * part is typed correctly and its parameters normalize. Falls back to the top name, then null.
+ */
+export function resolveLeafCategoryName(category: DigiKeyCategoryNode | null | undefined): string | null {
+  if (!category) {
+    return null;
+  }
+
+  // Guard against a malformed/self-referential payload with a bounded walk down the first child chain.
+  let node: DigiKeyCategoryNode = category;
+
+  for (let depth = 0; depth < 16; depth += 1) {
+    const child = node.ChildCategories?.find((candidate) => normalizeOptionalText(candidate?.Name));
+
+    if (!child) {
+      break;
+    }
+
+    node = child;
+  }
+
+  return normalizeOptionalText(node.Name) ?? normalizeOptionalText(category.Name);
+}
+
+/**
  * Normalizes one raw DigiKey payload into provider-neutral canonical records.
  */
 function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPart {
@@ -277,7 +313,7 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     ?? `${manufacturerName} ${mpn}`;
 
   return assembleNormalizedPart({
-    category: normalizeOptionalText(product.Category?.Name) ?? "Unknown",
+    category: resolveLeafCategoryName(product.Category) ?? "Unknown",
     datasheetUrl: normalizeOptionalText(product.DatasheetUrl),
     description,
     fetchedAt: rawPayload.fetchedAt,

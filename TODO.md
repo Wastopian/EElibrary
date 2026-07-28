@@ -93,13 +93,18 @@ imported is never approved, validated, or export-ready.
    step — uncertain structure is never guessed into catalog identity. Provenance records the
    mirror-relative path as the import's source filename. Composes with item 1 for the missing parts.
    Verified live: auto-map create, cryptic-header mapping fallback, and traversal refusal.
-3. **Whole-library backfill wizard** - A "Scan for unimported projects" action on `/projects`: list
-   mirror-root folders with no matching project, create-project-from-folder (folder name → project key,
-   reusing the `/projects/from-csv` one-shot machinery), auto-detect the best parts-list candidate by
-   classifier confidence, then chain items 2 + 1 across every selected folder with a summary report
-   (projects created, BOMs found / ambiguous / missing, parts imported / needs review). Never
-   auto-confirm a low-confidence column mapping or a 0.64-confidence spreadsheet classification — those
-   rows queue for human review, consistent with never presenting uncertain metadata as certain.
+3. **Whole-library backfill wizard** - _Landed 2026-07-19:_ `/projects` gains "Add projects from your
+   folders": `GET /project-folder-scan` lists mirror-root folders no project claims yet
+   (case-insensitive against each key's folder form) with the classifier's parts-list candidates, and
+   `POST /project-folder-onboard` runs one folder through the whole chain — a **disclosed rename to
+   the project-key form** (needed because keys are uppercase-normalized and Linux team servers are
+   case-sensitive; contents untouched, collisions refused), project creation, item-2 BOM import with
+   auto-mapping, deterministic matching, and item-1 missing-part queueing. The panel adds folders one
+   at a time or all at once with per-folder honest outcomes; an unrecognizable MPN column parks as
+   mapping-required for the project page's inline mapping, and low-confidence classifications are
+   shown with their scores, never auto-confirmed. Verified live: drop two folders → scan → onboard →
+   rename on disk + project + import + match + queued missing part, and the cryptic-header folder
+   parked honestly.
 
 ### 0. Team deployment and operations — current top priority
 

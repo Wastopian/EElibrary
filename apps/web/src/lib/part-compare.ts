@@ -71,10 +71,16 @@ export function collectUncoveredCompareMetricKeys(details: PartDetailResponse[])
 }
 
 /**
- * Formats one metric cell for a record, or an em dash when the metric is absent.
+ * Formats one legacy metric cell, suppressing it when this part's standardized Specifications row
+ * already covers the same value. A compare-wide metric row can remain for another, uncovered part,
+ * so coverage must be applied per cell rather than only when collecting row keys.
  */
-export function formatCompareMetricCell(record: PartSearchRecord, metricKey: string): string {
-  const metric = record.metrics.find((candidate) => candidate.metricKey === metricKey);
+export function formatUncoveredCompareMetricCell(detail: PartDetailResponse, metricKey: string): string {
+  if (collectCoveredMetricKeys(detail.parameters).has(metricKey)) {
+    return "—";
+  }
+
+  const metric = detail.record.metrics.find((candidate) => candidate.metricKey === metricKey);
 
   return metric ? formatMetricValue(metric) : "—";
 }
