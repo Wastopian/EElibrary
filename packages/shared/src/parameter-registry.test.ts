@@ -50,6 +50,20 @@ test("findParamDefForSpecKey maps provider labels to canonical params, most-spec
 });
 
 /**
+ * DigiKey leaf-typed RF MCUs expose radio-band labels ("Frequency", "Operating Frequency") alongside
+ * the real CPU clock row ("Speed"). Bare "frequency" must not map those bands onto clock_frequency, or
+ * a 2.4 GHz radio value is persisted and searchable as the MCU clock.
+ */
+test("MCU clock patterns keep DigiKey Speed and reject RF Frequency labels", () => {
+  assert.equal(findParamDefForSpecKey("mcu", "Speed")?.paramKey, "clock_frequency");
+  assert.equal(findParamDefForSpecKey("mcu", "Clock Frequency")?.paramKey, "clock_frequency");
+  assert.equal(findParamDefForSpecKey("mcu", "Max Clock Frequency")?.paramKey, "clock_frequency");
+  assert.equal(findParamDefForSpecKey("mcu", "CPU Speed")?.paramKey, "clock_frequency");
+  assert.equal(findParamDefForSpecKey("mcu", "Frequency"), null);
+  assert.equal(findParamDefForSpecKey("mcu", "Operating Frequency"), null);
+});
+
+/**
  * Verifies covered-metric-key collection: a parameter hides its own key plus every metricKey its def
  * folds in during recompute, falls back to the global def for unregistered part types, and never
  * covers unrelated keys.

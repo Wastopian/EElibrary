@@ -396,7 +396,8 @@ function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; speci
 /**
  * Reads flash size, RAM size, and clock frequency from an MCU description ("Mainstream Arm Cortex-M0+
  * MCU 64 Kbytes of Flash 8 Kbytes RAM, 64 MHz CPU"). Each value must appear with its unit and its
- * anchor word (Flash / RAM / a frequency unit), so nothing is guessed from bare numbers.
+ * anchor word (Flash / RAM / a frequency unit). When a radio-band GHz figure appears first, prefer the
+ * frequency next to CPU/clock/core so the RF band is never stored as Clock Frequency.
  */
 function readMcuDescriptionSpecs(description: string): NeutralSpecification[] {
   const specifications: NeutralSpecification[] = [];
@@ -412,7 +413,12 @@ function readMcuDescriptionSpecs(description: string): NeutralSpecification[] {
     specifications.push({ specGroup: "parametric", specKey: "RAM Size", specValue: ramMatch[1].trim() });
   }
 
-  const clockMatch = description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu);
+  // Prefer a frequency anchored to CPU/clock/core so RF band copy ("Sub-1 GHz", "2.4GHz") does not
+  // win over the real MCU clock later in the same sentence ("… 48 MHz CPU").
+  const clockMatch =
+    description.match(/(?:cpu|clock|core)\s*[:=]?\s*(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu) ??
+    description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\s*(?:cpu|clock|core)\b/iu) ??
+    description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu);
 
   if (clockMatch?.[1]) {
     specifications.push({ specGroup: "parametric", specKey: "Clock Frequency", specValue: clockMatch[1].trim() });
