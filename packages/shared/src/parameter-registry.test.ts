@@ -50,6 +50,33 @@ test("findParamDefForSpecKey maps provider labels to canonical params, most-spec
 });
 
 /**
+ * Verifies regulator min/max labels stay semantically separate instead of being reconciled as
+ * conflicting sources for one value, while a combined provider range retains both bounds.
+ */
+test("findParamDefForSpecKey preserves regulator voltage bound semantics", () => {
+  assert.equal(findParamDefForSpecKey("regulator", "Voltage - Input (Min)")?.paramKey, "input_voltage_min");
+  assert.equal(findParamDefForSpecKey("regulator", "Voltage - Input (Max)")?.paramKey, "input_voltage_max");
+  assert.equal(findParamDefForSpecKey("regulator", "Voltage - Output (Min/Fixed)")?.paramKey, "output_voltage_min");
+  assert.equal(findParamDefForSpecKey("regulator", "Voltage - Output (Max)")?.paramKey, "output_voltage_max");
+
+  const combinedOutput = findParamDefForSpecKey("regulator", "Voltage - Output (Min/Max)");
+
+  assert.equal(combinedOutput?.paramKey, "output_voltage_range");
+  assert.equal(combinedOutput?.valueKind, "range");
+});
+
+/**
+ * Verifies RAM matching only accepts RAM labels, not the "ram" character sequence inside unrelated
+ * provider fields such as Frame Format or Programmable I/O Type.
+ */
+test("findParamDefForSpecKey does not invent RAM from unrelated MCU labels", () => {
+  assert.equal(findParamDefForSpecKey("mcu", "RAM Size")?.paramKey, "ram_size");
+  assert.equal(findParamDefForSpecKey("mcu", "Data RAM")?.paramKey, "ram_size");
+  assert.equal(findParamDefForSpecKey("mcu", "Frame Format"), null);
+  assert.equal(findParamDefForSpecKey("mcu", "Programmable I/O Type"), null);
+});
+
+/**
  * DigiKey leaf-typed RF MCUs expose radio-band labels ("Frequency", "Operating Frequency") alongside
  * the real CPU clock row ("Speed"). Bare "frequency" must not map those bands onto clock_frequency, or
  * a 2.4 GHz radio value is persisted and searchable as the MCU clock.
@@ -71,12 +98,14 @@ test("MCU clock patterns keep DigiKey Speed and reject RF Frequency labels", () 
 test("collectCoveredMetricKeys covers paramKey plus registry metricKeys and nothing else", () => {
   const covered = collectCoveredMetricKeys([
     { paramKey: "resistance", partType: "resistor" },
-    { paramKey: "voltage_rating", partType: "capacitor" }
+    { paramKey: "voltage_rating", partType: "capacitor" },
+    { paramKey: "supply_voltage_range", partType: "mcu" }
   ]);
 
   assert.ok(covered.has("resistance"), "own key covered");
   assert.ok(covered.has("voltage_rating"), "def metricKey covered");
   assert.ok(covered.has("rated_voltage"), "seed-vocabulary alias covered via def metricKeys");
+  assert.ok(covered.has("supply_voltage"), "MCU range covers the legacy supply-voltage metric");
   assert.equal(covered.has("input_voltage_max"), false, "unrelated metric keys stay uncovered");
 
   // A part type outside the registry still covers via the global def lookup.
