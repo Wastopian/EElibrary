@@ -102,6 +102,17 @@ export function scoreTone(score: number): BadgeTone {
 }
 
 /**
+ * Maps a per-spec parse confidence into a badge tone without alarm language. A moderately confident
+ * parsed value ("56% confidence") is normal for distributor-derived data — it warrants "info", not the
+ * red "danger" scoreTone gives overall part trust, which read as if the part itself were unsafe.
+ */
+export function metricConfidenceTone(score: number): BadgeTone {
+  if (score >= 0.8) return "verified";
+  if (score >= 0.5) return "info";
+  return "review";
+}
+
+/**
  * Maps validation status into badge tone.
  */
 export function validationTone(status: ValidationStatus): BadgeTone {

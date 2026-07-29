@@ -22,6 +22,11 @@ interface StaleSupplyOfferSourceRow {
   provider_part_key: string;
   /** Canonical part id attached to the source row. */
   part_id: string;
+  /**
+   * Tenant that owns the source row. Worker refresh bypasses RLS, so this must be threaded into
+   * `runProviderPartImport` — without it non-default refreshes write under org-default.
+   */
+  org_id: string | null;
   /** Provider URL retained as optional context for the refresh runner. */
   source_url: string | null;
   /** Latest active offer timestamp for ordering and diagnostics. */
@@ -105,7 +110,12 @@ export async function refreshStaleSupplyOfferSnapshots(options: SupplyOfferRefre
     }
 
     try {
-      await runProviderPartImportImpl(source.provider_id, buildProviderRefreshRequest(source));
+      // Thread the source row's org so refresh updates that tenant's namespaced catalog, not org-default.
+      await runProviderPartImportImpl(
+        source.provider_id,
+        buildProviderRefreshRequest(source),
+        source.org_id ?? "org-default"
+      );
       results.push({
         errorMessage: null,
         partId: source.part_id,
@@ -146,6 +156,7 @@ async function readStaleSupplyOfferSources(databasePool: Pool, cutoffAt: string,
           sr.provider_id,
           sr.provider_part_key,
           sr.part_id,
+          sr.org_id,
           sr.source_url,
           MAX(so.last_seen_at) AS last_supply_seen_at
         FROM source_records sr
@@ -153,12 +164,13 @@ async function readStaleSupplyOfferSources(databasePool: Pool, cutoffAt: string,
         WHERE sr.import_status = 'imported'
           AND sr.part_id IS NOT NULL
           AND so.retired_at IS NULL
-        GROUP BY sr.provider_id, sr.provider_part_key, sr.part_id, sr.source_url
+        GROUP BY sr.provider_id, sr.provider_part_key, sr.part_id, sr.org_id, sr.source_url
       )
       SELECT
         provider_id,
         provider_part_key,
         part_id,
+        org_id,
         source_url,
         last_supply_seen_at
       FROM source_freshness

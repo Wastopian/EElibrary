@@ -16,6 +16,7 @@
   "scripts": {
     "acquisition-jobs": "tsx src/index.ts acquisition-jobs",
     "assemble-bundles": "tsx src/index.ts assemble-bundles",
+    "bom-backfill": "tsx src/index.ts bom-backfill",
     "build": "tsc -p tsconfig.json --noEmit",
     "drain-acquisition-jobs": "tsx src/index.ts drain-acquisition-jobs",
     "enqueue-catalog": "tsx src/index.ts enqueue-catalog",

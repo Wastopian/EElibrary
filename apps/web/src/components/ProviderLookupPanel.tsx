@@ -20,7 +20,8 @@ import type {
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
   ProviderImportCreateInput,
-  ProviderLookupCandidate
+  ProviderLookupCandidate,
+  ProviderLookupProviderFailure
 } from "@ee-library/shared/types";
 
 /** ProviderLookupPanelProps carries the no-match lookup text, import mode, and refresh target from catalog surfaces. */
@@ -40,8 +41,8 @@ export type ProviderLookupImportMode = "direct" | "queue";
 type ProviderLookupPanelState =
   | { kind: "idle" }
   | { kind: "searching" }
-  | { kind: "candidates"; candidates: ProviderLookupCandidate[] }
-  | { kind: "no_candidates" }
+  | { kind: "candidates"; candidates: ProviderLookupCandidate[]; providerFailures: ProviderLookupProviderFailure[] }
+  | { kind: "no_candidates"; providerFailures: ProviderLookupProviderFailure[] }
   | { kind: "failed"; message: string };
 
 /** CandidateAcquisitionState keeps the selected provider candidate import state explicit and testable. */
@@ -310,14 +311,14 @@ export function ProviderLookupPanel({
     setAcquisitionState({ kind: "idle" });
 
     try {
-      const candidates = await requestProviderLookup({ query: initialQuery });
+      const { candidates, providerFailures } = await requestProviderLookup({ query: initialQuery });
 
       if (candidates.length === 0) {
-        setStatus({ kind: "no_candidates" });
+        setStatus({ kind: "no_candidates", providerFailures });
         return;
       }
 
-      setStatus({ candidates, kind: "candidates" });
+      setStatus({ candidates, kind: "candidates", providerFailures });
     } catch (error) {
       setStatus({
         kind: "failed",
@@ -441,6 +442,8 @@ export function ProviderLookupPanelView({
     status.kind === "candidates" && activePendingCandidateKey
       ? status.candidates.find((candidate) => buildCandidateKey(candidate) === activePendingCandidateKey) ?? null
       : null;
+  const providerFailures =
+    status.kind === "candidates" || status.kind === "no_candidates" ? status.providerFailures : [];
 
   return (
     <div className="quick-provider-lookup">
@@ -459,7 +462,24 @@ export function ProviderLookupPanelView({
       ) : null}
 
       {status.kind === "no_candidates" ? (
-        <p className="quick-check-empty__note">{importUiCopy.providerLookupNoMatch}</p>
+        <p className="quick-check-empty__note">
+          {status.providerFailures.length > 0
+            ? importUiCopy.providerLookupNoMatchIncomplete
+            : importUiCopy.providerLookupNoMatch}
+        </p>
+      ) : null}
+
+      {providerFailures.length > 0 ? (
+        <div className="quick-check-empty__note">
+          <p>
+            <strong>{importUiCopy.providerLookupProviderFailuresLead}</strong>
+          </p>
+          <ul>
+            {providerFailures.map((failure) => (
+              <li key={failure.providerId}>{failure.message}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       {status.kind === "failed" ? (

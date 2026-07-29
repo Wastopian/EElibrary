@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { getGenerationOptions } from "@ee-library/shared/asset-resolution";
 import { buildSearchPagination, buildSearchQueryTokens, buildSearchTokenAlternates } from "@ee-library/shared/catalog-runtime";
+import { getCanonicalParamDefByKey } from "@ee-library/shared/parameter-registry";
 import { buildBuildableMatingSet } from "@ee-library/shared/connector-intelligence";
 import { derivePartProjection } from "@ee-library/shared/part-readiness";
 import { applyAssetReviewOutcome, applyWorkflowReviewOutcome, getAssetPromotionBlockers, getQualifyingValidationForAsset, promoteAssetToVerifiedForExport } from "@ee-library/shared/review-workflow";
@@ -48,10 +49,16 @@ import type {
   PartEngineeringRecordKind,
   PartEngineeringRecordOutcome,
   PartEngineeringRecordSeverity,
+  ParameterFacet,
   PartMetric,
+  PartParameter,
+  PartParameterSource,
+  PartParameterValueKind,
   PartSearchFilters,
   PartSearchRecord,
   PartSearchSort,
+  PartSpecification,
+  PartSpecificationGroup,
   ProviderAcquisitionJob,
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
@@ -219,6 +226,38 @@ interface DatabaseMetricRow {
   confidence_score: string;
   source_revision_id: string;
   source_record_id: string | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabasePartSpecificationRow is the verbatim specification row shape read from Postgres. */
+interface DatabasePartSpecificationRow {
+  id: string;
+  part_id: string;
+  provider_id: string;
+  source_record_id: string | null;
+  spec_key: string;
+  spec_value: string;
+  spec_group: PartSpecificationGroup | null;
+  last_updated_at: Date | string;
+}
+
+/** DatabasePartParameterRow is the reconciled parameter row shape read from Postgres. */
+interface DatabasePartParameterRow {
+  id: string;
+  part_id: string;
+  part_type: string;
+  param_key: string;
+  value_kind: PartParameterValueKind;
+  value_numeric: string | null;
+  value_min: string | null;
+  value_max: string | null;
+  value_text: string | null;
+  unit: string | null;
+  is_conflicted: boolean;
+  confidence_score: string;
+  winning_provider_id: string | null;
+  winning_source_record_id: string | null;
+  sources: PartParameterSource[] | string | null;
   last_updated_at: Date | string;
 }
 
@@ -667,6 +706,21 @@ interface DatabaseSearchFacetConnectorClassRow {
   facet_count: string;
 }
 
+/** DatabaseSearchFacetNumericParameterRow is one numeric parameter's bounds and part count. */
+interface DatabaseSearchFacetNumericParameterRow {
+  param_key: string;
+  min_v: string | null;
+  max_v: string | null;
+  facet_count: string;
+}
+
+/** DatabaseSearchFacetCategoricalParameterRow is one distinct value bucket for a categorical parameter. */
+interface DatabaseSearchFacetCategoricalParameterRow {
+  param_key: string;
+  value_text: string;
+  facet_count: string;
+}
+
 /** pool is initialized lazily so tests and seed fallback do not require DATABASE_URL. */
 let pool: Pool | null = null;
 
@@ -889,6 +943,61 @@ export async function readPartAcquisitionSummaryFromDatabase(partId: string, opt
     }
 
     return buildNotRecordedPartAcquisitionSummary();
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads verbatim distributor specification rows for one part. Keyed on part_id only, exactly like the
+ * acquisition/metric side reads: the part id is already org-scoped for non-default orgs and the RLS
+ * backstop filters by the acting org, so no explicit org predicate is needed. Returns [] when the
+ * database is not configured (seed fallback supplies its own empty list).
+ */
+export async function readPartSpecificationsFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<PartSpecification[]> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return [];
+  }
+
+  try {
+    const result = await timedCatalogQuery<DatabasePartSpecificationRow>(
+      databasePool,
+      "part_specifications",
+      PART_SPECIFICATION_ROWS_SQL,
+      [partId],
+      options
+    );
+
+    return result.rows.map(mapPartSpecificationRow);
+  } catch (error) {
+    throw toCatalogStoreError(error);
+  }
+}
+
+/**
+ * Reads reconciled, typed parameters for one part. Keyed on part_id only, exactly like the specification
+ * and acquisition side reads: the part id is already org-scoped for non-default orgs and the RLS backstop
+ * filters by the acting org. Returns [] when the database is not configured.
+ */
+export async function readPartParametersFromDatabase(partId: string, options: CatalogReadOptions = {}): Promise<PartParameter[]> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return [];
+  }
+
+  try {
+    const result = await timedCatalogQuery<DatabasePartParameterRow>(
+      databasePool,
+      "part_parameters",
+      PART_PARAMETER_ROWS_SQL,
+      [partId],
+      options
+    );
+
+    return result.rows.map(mapPartParameterRow);
   } catch (error) {
     throw toCatalogStoreError(error);
   }
@@ -2146,7 +2255,7 @@ async function readSearchPartIds(databasePool: Pool, searchFilter: SearchSqlFilt
  */
 async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilter, options: CatalogReadOptions): Promise<SearchFacets> {
   try {
-    const [manufacturerRows, categoryRows, packageRows, lifecycleRows, readinessRows, approvalRows, connectorClassRows, totalRowResult, cadAvailableResult] = await Promise.all([
+    const [manufacturerRows, categoryRows, packageRows, lifecycleRows, readinessRows, approvalRows, connectorClassRows, numericParameterRows, categoricalParameterRows, totalRowResult, cadAvailableResult] = await Promise.all([
       timedCatalogQuery<DatabaseSearchFacetManufacturerRow>(databasePool, "search_facet_manufacturers", buildSearchManufacturerFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetCategoryRow>(databasePool, "search_facet_categories", buildSearchCategoryFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetPackageRow>(databasePool, "search_facet_packages", buildSearchPackageFacetSql(searchFilter.whereSql), searchFilter.params, options),
@@ -2154,6 +2263,8 @@ async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilte
       timedCatalogQuery<DatabaseSearchFacetReadinessRow>(databasePool, "search_facet_readiness", buildSearchReadinessFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetApprovalRow>(databasePool, "search_facet_approval", buildSearchApprovalFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetConnectorClassRow>(databasePool, "search_facet_connector_class", buildSearchConnectorClassFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetNumericParameterRow>(databasePool, "search_facet_parameters_numeric", buildSearchNumericParameterFacetSql(searchFilter.whereSql), searchFilter.params, options),
+      timedCatalogQuery<DatabaseSearchFacetCategoricalParameterRow>(databasePool, "search_facet_parameters_categorical", buildSearchCategoricalParameterFacetSql(searchFilter.whereSql), searchFilter.params, options),
       timedCatalogQuery<DatabaseSearchFacetCountRow>(databasePool, "search_facet_total", buildSearchCountSql(searchFilter), searchFilter.params, options),
       timedCatalogQuery<DatabaseCadAvailableFacetRow>(databasePool, "search_facet_cad_available", buildSearchCadAvailableCountSql(searchFilter.whereSql), searchFilter.params, options)
     ]);
@@ -2202,6 +2313,7 @@ async function readSearchFacets(databasePool: Pool, searchFilter: SearchSqlFilte
     return {
       approvalStatuses: (["approved", "pending_review", "not_requested", "not_applicable"] as const).filter((status) => approvalCounts[status] > 0),
       categories: categoryRows.rows.map((row) => row.category),
+      parameterFacets: buildParameterFacets(numericParameterRows.rows, categoricalParameterRows.rows),
       connectorClasses: (["connector", "accessory", "tooling", "cable", "non_connector"] as const).filter((status) => connectorClassCounts[status] > 0),
       counts: {
         approvalStatuses: approvalCounts,
@@ -2616,8 +2728,9 @@ function collectRelatedPartIds(record: PartSearchRecord): string[] {
 
 /**
  * Converts unknown Postgres/network failures into explicit catalog-store failures.
+ * Exported so sibling stores (e.g. the BOM backfill store) surface the same failure contract.
  */
-function toCatalogStoreError(error: unknown): CatalogStoreError {
+export function toCatalogStoreError(error: unknown): CatalogStoreError {
   if (isSchemaMismatchError(error)) {
     return new CatalogStoreError("schema_mismatch", "Catalog database schema does not match the API query contract.", error);
   }
@@ -3239,6 +3352,67 @@ function mapMetricRow(row: DatabaseMetricRow): PartMetric {
     sourceRecordId: row.source_record_id,
     sourceRevisionId: row.source_revision_id,
     unit: row.unit
+  };
+}
+
+/**
+ * Maps a database row into the shared PartParameter type.
+ */
+function mapPartParameterRow(row: DatabasePartParameterRow): PartParameter {
+  return {
+    confidenceScore: toNumber(row.confidence_score),
+    id: row.id,
+    isConflicted: row.is_conflicted,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    paramKey: row.param_key,
+    partId: row.part_id,
+    partType: row.part_type,
+    sources: parsePartParameterSources(row.sources),
+    unit: row.unit,
+    valueKind: row.value_kind,
+    valueMax: toNullableNumber(row.value_max),
+    valueMin: toNullableNumber(row.value_min),
+    valueNumeric: toNullableNumber(row.value_numeric),
+    valueText: row.value_text,
+    winningProviderId: row.winning_provider_id,
+    winningSourceRecordId: row.winning_source_record_id
+  };
+}
+
+/**
+ * Reads the per-source contributions JSONB, tolerating both parsed arrays and string payloads.
+ */
+function parsePartParameterSources(value: PartParameterSource[] | string | null): PartParameterSource[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    return Array.isArray(parsed) ? (parsed as PartParameterSource[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Maps a database row into the shared PartSpecification type.
+ */
+function mapPartSpecificationRow(row: DatabasePartSpecificationRow): PartSpecification {
+  return {
+    id: row.id,
+    lastUpdatedAt: toIsoTimestamp(row.last_updated_at),
+    partId: row.part_id,
+    providerId: row.provider_id,
+    sourceRecordId: row.source_record_id,
+    specGroup: row.spec_group,
+    specKey: row.spec_key,
+    specValue: row.spec_value
   };
 }
 
@@ -4035,6 +4209,111 @@ function buildSearchConnectorClassFacetSql(whereSql: string): string {
 }
 
 /**
+ * Builds the numeric-parameter facet query: min/max bounds + part count per parameter present in the
+ * current result set. Reuses the active whereSql (and thus searchFilter.params) via the inner subquery,
+ * so it adds no bind parameter of its own. One row per (part, param) via the unique constraint means
+ * count(*) equals the number of parts carrying the parameter.
+ */
+function buildSearchNumericParameterFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      pp.param_key,
+      min(pp.value_numeric)::text AS min_v,
+      max(pp.value_numeric)::text AS max_v,
+      count(*)::text AS facet_count
+    FROM part_parameters pp
+    WHERE pp.value_kind = 'numeric'
+      AND pp.value_numeric IS NOT NULL
+      AND pp.part_id IN (SELECT p.id ${SEARCH_PART_FULL_FROM_SQL} ${whereSql})
+    GROUP BY pp.param_key
+    ORDER BY pp.param_key ASC
+  `;
+}
+
+/**
+ * Builds the categorical-parameter facet query: distinct value buckets with part counts for enum/text
+ * parameters present in the current result set. Same shared-params discipline as the numeric facet.
+ */
+function buildSearchCategoricalParameterFacetSql(whereSql: string): string {
+  return `
+    SELECT
+      pp.param_key,
+      pp.value_text,
+      count(*)::text AS facet_count
+    FROM part_parameters pp
+    WHERE pp.value_kind IN ('enum', 'text')
+      AND pp.value_text IS NOT NULL
+      AND pp.part_id IN (SELECT p.id ${SEARCH_PART_FULL_FROM_SQL} ${whereSql})
+    GROUP BY pp.param_key, pp.value_text
+    ORDER BY pp.param_key ASC, count(*) DESC, pp.value_text ASC
+  `;
+}
+
+/**
+ * Assembles the parameter facet list from the numeric and categorical facet rows.
+ *
+ * Registry-unknown keys are dropped so display always has a label and unit. Numeric facets carry bounds;
+ * categorical facets group their value buckets. partCount for a categorical facet is the sum of its
+ * bucket counts (one row per part per parameter, so buckets partition the parts that have the parameter).
+ */
+function buildParameterFacets(
+  numericRows: DatabaseSearchFacetNumericParameterRow[],
+  categoricalRows: DatabaseSearchFacetCategoricalParameterRow[]
+): ParameterFacet[] {
+  const facets: ParameterFacet[] = [];
+
+  for (const row of numericRows) {
+    const def = getCanonicalParamDefByKey(row.param_key);
+
+    if (!def) {
+      continue;
+    }
+
+    facets.push({
+      kind: "numeric",
+      label: def.label,
+      ...(row.max_v === null ? {} : { max: Number(row.max_v) }),
+      ...(row.min_v === null ? {} : { min: Number(row.min_v) }),
+      paramKey: row.param_key,
+      partCount: Number(row.facet_count),
+      unit: def.unit
+    });
+  }
+
+  const valuesByKey = new Map<string, ParameterFacet["values"]>();
+
+  for (const row of categoricalRows) {
+    if (!getCanonicalParamDefByKey(row.param_key)) {
+      continue;
+    }
+
+    const bucket = valuesByKey.get(row.param_key) ?? [];
+
+    bucket.push({ count: Number(row.facet_count), value: row.value_text });
+    valuesByKey.set(row.param_key, bucket);
+  }
+
+  for (const [paramKey, values] of valuesByKey) {
+    const def = getCanonicalParamDefByKey(paramKey);
+
+    if (!def || !values) {
+      continue;
+    }
+
+    facets.push({
+      kind: "categorical",
+      label: def.label,
+      paramKey,
+      partCount: values.reduce((sum, entry) => sum + entry.count, 0),
+      unit: def.unit,
+      values
+    });
+  }
+
+  return facets;
+}
+
+/**
  * Counts distinct parts that satisfy the same verified CAD predicate used by search filters.
  */
 function buildSearchCadAvailableCountSql(whereSql: string): string {
@@ -4127,6 +4406,7 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
     "lower(COALESCE(datasheet_asset.source_url, ''))",
     filters.datasheetUrl
   );
+  appendParameterFilterClauses(clauses, params, filters.parameters);
 
   if (cadAvailability === "available") {
     clauses.push(`p.id IN (${CAD_READY_PART_IDS_SQL})`);
@@ -4143,6 +4423,64 @@ function buildSearchSqlFilter(filters: PartSearchFilters, cadAvailability: PartS
     queryText,
     whereSql: clauses.length > 0 ? `WHERE ${clauses.join("\n    AND ")}` : ""
   };
+}
+
+/**
+ * Appends non-correlated part-id subquery clauses for typed parameter filters.
+ *
+ * Each parameter constraint becomes `p.id IN (SELECT pp.part_id FROM part_parameters pp WHERE ...)` --
+ * the same non-correlated shape the provider/datasheet filters use so the planner rides
+ * part_parameters_type_key_numeric_idx and search-sql-shape's no-correlated-EXISTS rule holds. The
+ * paramKey is validated against the registry and bound as a parameter (never inlined).
+ */
+function appendParameterFilterClauses(clauses: string[], params: unknown[], parameters: PartSearchFilters["parameters"]): void {
+  if (!parameters || parameters.length === 0) {
+    return;
+  }
+
+  for (const parameter of parameters) {
+    const def = getCanonicalParamDefByKey(parameter.paramKey);
+
+    if (!def) {
+      continue;
+    }
+
+    const predicates: string[] = [];
+
+    params.push(parameter.paramKey);
+    predicates.push(`pp.param_key = $${params.length}`);
+
+    if (def.valueKind === "numeric") {
+      if (typeof parameter.min === "number" && Number.isFinite(parameter.min)) {
+        params.push(parameter.min);
+        predicates.push(`pp.value_numeric >= $${params.length}`);
+      }
+
+      if (typeof parameter.max === "number" && Number.isFinite(parameter.max)) {
+        params.push(parameter.max);
+        predicates.push(`pp.value_numeric <= $${params.length}`);
+      }
+
+      // A parameter with no usable bound would select every part that merely has the parameter, which
+      // is not a filter the caller intends -- skip it.
+      if (predicates.length === 1) {
+        params.pop();
+        continue;
+      }
+    } else {
+      const value = parameter.value?.trim();
+
+      if (!value) {
+        params.pop();
+        continue;
+      }
+
+      params.push(value.toLowerCase());
+      predicates.push(`lower(pp.value_text) = $${params.length}`);
+    }
+
+    clauses.push(`p.id IN (SELECT pp.part_id FROM part_parameters pp WHERE ${predicates.join(" AND ")})`);
+  }
 }
 
 /**
@@ -4360,6 +4698,60 @@ const METRIC_ROWS_SQL = `
   FROM part_metrics
   WHERE ($1::text[] IS NULL OR part_id = ANY($1::text[]))
   ORDER BY metric_key ASC
+`;
+
+/**
+ * PART_SPECIFICATION_ROWS_SQL reads verbatim distributor specification rows for the detail page.
+ * Ordered so grouped display is stable: parametric first, then physical, compliance, commercial.
+ */
+const PART_SPECIFICATION_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    provider_id,
+    source_record_id,
+    spec_key,
+    spec_value,
+    spec_group,
+    last_updated_at
+  FROM part_specifications
+  WHERE part_id = $1
+  ORDER BY
+    provider_id ASC,
+    CASE spec_group
+      WHEN 'parametric' THEN 0
+      WHEN 'physical' THEN 1
+      WHEN 'compliance' THEN 2
+      WHEN 'commercial' THEN 3
+      ELSE 4
+    END,
+    spec_key ASC
+`;
+
+/**
+ * PART_PARAMETER_ROWS_SQL reads reconciled, typed parameters for the detail page, ordered by key.
+ */
+const PART_PARAMETER_ROWS_SQL = `
+  SELECT
+    id,
+    part_id,
+    part_type,
+    param_key,
+    value_kind,
+    value_numeric,
+    value_min,
+    value_max,
+    value_text,
+    unit,
+    is_conflicted,
+    confidence_score,
+    winning_provider_id,
+    winning_source_record_id,
+    sources,
+    last_updated_at
+  FROM part_parameters
+  WHERE part_id = $1
+  ORDER BY param_key ASC
 `;
 
 /** ASSET_ROWS_SQL reads asset registry records. */

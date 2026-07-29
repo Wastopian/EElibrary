@@ -17,9 +17,10 @@ import {
   buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
-  collectCompareMetricKeys,
+  buildCompareParameterRows,
+  collectUncoveredCompareMetricKeys,
   detailsToRecords,
-  formatCompareMetricCell,
+  formatUncoveredCompareMetricCell,
   shouldRenderConnectorCompareRows
 } from "../../lib/part-compare";
 import type { CompareCellTone, CompareRow } from "../../lib/part-compare";
@@ -54,7 +55,10 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
   const details = compareState.status === "ready" ? compareState.details : [];
 
   const records = detailsToRecords(details);
-  const metricKeys = collectCompareMetricKeys(records);
+  const parameterRows = buildCompareParameterRows(details);
+  // Only metrics the Specifications matrix does not already cover keep a row; a covered metric would
+  // repeat the same value under a second heading.
+  const metricKeys = collectUncoveredCompareMetricKeys(details);
   const assetClassRows = buildCompareAssetClassRows(records);
   const assetTrustRows = buildCompareAssetTrustRows(records);
   const assetPreviewRows = buildCompareAssetPreviewRows(records);
@@ -166,10 +170,20 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
             </div>
           </SectionPanel>
 
-          <SectionPanel description="Specs use the same units as the part page. Confidence is shown per metric — high confidence on one number does not mean the whole part is verified." title="Specs">
-            {metricKeys.length === 0 ? (
-              <EmptyState body="None of these parts have spec data yet." title="No shared specs" />
+          <SectionPanel description="Standardized specs combined across distributors and shown in the same units for every part. A “sources disagree” mark means the distributors reported different values — confirm against the datasheet." title="Specifications">
+            {parameterRows.length === 0 ? (
+              <EmptyState body="None of these parts have standardized specifications yet. Importing them from a distributor fills this in." title="No shared specifications" />
             ) : (
+              <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={parameterRows} />
+            )}
+          </SectionPanel>
+
+          {/*
+            Extra measured specs the Specifications matrix above does not cover. When everything is
+            covered, the section disappears rather than repeating values under a second heading.
+          */}
+          {metricKeys.length > 0 ? (
+            <SectionPanel description="Extra measured specs not yet part of the Specifications table above. Values use the same units as the part page." title="Other measured specs">
               <div className="admin-table-wrap compare-table-wrap">
                 <table className="admin-table compare-table compare-table--metrics">
                   <thead>
@@ -186,9 +200,9 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                     {metricKeys.map((key) => (
                       <tr key={key}>
                         <th scope="row">{formatMetricLabel(key)}</th>
-                        {records.map((record) => (
-                          <td key={record.part.id} className="ui-mono">
-                            {formatCompareMetricCell(record, key)}
+                        {details.map((detail) => (
+                          <td key={detail.record.part.id} className="ui-mono">
+                            {formatUncoveredCompareMetricCell(detail, key)}
                           </td>
                         ))}
                       </tr>
@@ -196,8 +210,8 @@ export default async function ComparePage({ searchParams }: ComparePageProps) {
                   </tbody>
                 </table>
               </div>
-            )}
-          </SectionPanel>
+            </SectionPanel>
+          ) : null}
 
           <SectionPanel description="Where each CAD file type stands for each part. A stored file is not the same as a verified file." title="CAD file status">
             <CompareCellTable headers={records.map((record) => record.part.mpn)} rows={assetClassRows} />

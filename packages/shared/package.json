@@ -30,6 +30,10 @@
       "types": "./src/catalog-runtime.ts",
       "default": "./src/catalog-runtime.ts"
     },
+    "./datasheet-extract": {
+      "types": "./src/datasheet-extract.ts",
+      "default": "./src/datasheet-extract.ts"
+    },
     "./circuit-block-readiness": {
       "types": "./src/circuit-block-readiness.ts",
       "default": "./src/circuit-block-readiness.ts"
@@ -77,6 +81,18 @@
     "./tenant": {
       "types": "./src/tenant.ts",
       "default": "./src/tenant.ts"
+    },
+    "./part-type": {
+      "types": "./src/part-type.ts",
+      "default": "./src/part-type.ts"
+    },
+    "./parameter-registry": {
+      "types": "./src/parameter-registry.ts",
+      "default": "./src/parameter-registry.ts"
+    },
+    "./parameter-normalize": {
+      "types": "./src/parameter-normalize.ts",
+      "default": "./src/parameter-normalize.ts"
     }
   },
   "scripts": {

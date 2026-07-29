@@ -3,7 +3,19 @@
  */
 
 import { deriveAssetState, withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
-import type { Asset, AssetType, DatasheetRevision, FileFormat, InventoryStatus, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
+import type {
+  Asset,
+  AssetType,
+  DatasheetRevision,
+  FileFormat,
+  InventoryStatus,
+  LifecycleStatus,
+  MetricUnit,
+  PartMetric,
+  PartSpecification,
+  PartSpecificationGroup,
+  SourceExtractionSignal
+} from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak } from "../provider-adapters";
 
 /** NeutralPriceBreak is one provider-agnostic price tier before persistence ids exist. */
@@ -58,6 +70,16 @@ export interface NeutralSpec {
   rawValue: string | number | null;
 }
 
+/** NeutralSpecification is one verbatim provider label/value pair kept for display. */
+export interface NeutralSpecification {
+  /** Provider label kept word for word. */
+  specKey: string;
+  /** Provider value kept word for word, never unit-converted. */
+  specValue: string;
+  /** Display bucket for stable ordering on the part page. */
+  specGroup: PartSpecificationGroup;
+}
+
 /** AssembleNormalizedPartInput carries provider-neutral fields ready for canonical assembly. */
 export interface AssembleNormalizedPartInput {
   /** Provider adapter id used for provenance and deterministic ids. */
@@ -86,6 +108,8 @@ export interface AssembleNormalizedPartInput {
   datasheetUrl: string | null;
   /** Structured metric candidates. */
   metrics: NeutralSpec[];
+  /** Verbatim provider specification rows kept for display without unit conversion. */
+  specifications?: NeutralSpecification[];
   /** Commercial snapshots. */
   supplyOfferings: NeutralSupplyOffering[];
   /** Provenance source URL. */
@@ -156,6 +180,7 @@ export function assembleNormalizedPart(input: AssembleNormalizedPartInput): Norm
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    specifications: buildSpecificationRows(input.providerId, input.providerPartKey, partId, sourceRecordId, lastUpdatedAt, input.specifications ?? []),
     supplyOfferings: buildSupplyOfferings(input, partId, sourceRecordId, providerSlug, providerPartSlug),
     validationRecords: [],
     sourceRecord: {
@@ -385,6 +410,62 @@ function buildMetrics(
 }
 
 /**
+ * Builds verbatim, deduplicated specification rows with deterministic ids.
+ *
+ * Providers repeat labels (a live Mouser payload carried three "Packaging" attributes), and two
+ * distinct labels can slugify identically; both would break the deterministic id and the
+ * (part_id, provider_id, spec_key) uniqueness backstop. Rows are therefore keyed by slug: the
+ * first-seen verbatim label wins and later values for the same slug are appended with " / ".
+ * Exported because the jlcparts adapter builds its normalized part literal directly instead of
+ * going through assembleNormalizedPart.
+ */
+export function buildSpecificationRows(
+  providerId: string,
+  providerPartKey: string,
+  partId: string,
+  sourceRecordId: string,
+  lastUpdatedAt: string,
+  specifications: NeutralSpecification[]
+): PartSpecification[] {
+  const providerSlug = slugify(providerId);
+  const providerPartSlug = slugify(providerPartKey);
+  const rowsBySlug = new Map<string, PartSpecification>();
+
+  for (const specification of specifications) {
+    const specKey = normalizeOptionalText(specification.specKey);
+    const specValue = normalizeOptionalText(specification.specValue);
+
+    if (!specKey || !specValue) {
+      continue;
+    }
+
+    const keySlug = slugify(specKey);
+    const existing = rowsBySlug.get(keySlug);
+
+    if (existing) {
+      if (!existing.specValue.split(" / ").includes(specValue)) {
+        existing.specValue = `${existing.specValue} / ${specValue}`;
+      }
+
+      continue;
+    }
+
+    rowsBySlug.set(keySlug, {
+      id: `spec-${providerSlug}-${providerPartSlug}-${keySlug}`,
+      lastUpdatedAt,
+      partId,
+      providerId,
+      sourceRecordId,
+      specGroup: specification.specGroup,
+      specKey,
+      specValue
+    });
+  }
+
+  return [...rowsBySlug.values()];
+}
+
+/**
  * Builds source-linked commercial snapshots without treating them as live stock truth.
  */
 function buildSupplyOfferings(
@@ -500,7 +581,8 @@ function readInventoryStatus(inventoryQuantity: number | null, onOrderQuantity: 
  */
 export function parseEngineeringNumber(value: unknown, unit: MetricUnit): number | null {
   const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-  const match = text.match(/([+-]?\d+(?:\.\d+)?)/u);
+  // Accept leading-dot decimals (".1UF" for 0.1 µF); some distributors drop the leading zero.
+  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))/u);
 
   if (!match?.[1]) {
     return null;
@@ -522,38 +604,50 @@ function readMetricMultiplier(text: string, unit: MetricUnit): number {
   const normalized = text.trim().toLowerCase();
 
   if (unit === "ohm") {
-    if (/\b(mohm|m ohm|milliohm|milli-ohm)\b/iu.test(text)) return 0.001;
-    if (/\b(kohm|k ohm|kiloohm)\b/u.test(normalized)) return 1_000;
-    if (/\b(mohm|m ohm)\b/iu.test(text) || /\b(megohm|megaohm)\b/iu.test(text)) return 1_000_000;
+    // A lone "m"/"M" next to Ohm is ambiguous: lowercase m is milli, uppercase M is mega. Match the
+    // prefix letter directly against "ohm" (case-sensitive on the letter, case-insensitive on the
+    // "ohm" suffix) so plural and attached provider forms parse -- "10 mOhms", "MOhms", "10kOhms" --
+    // where a word boundary would fail on the trailing "s" or the digit-letter seam. Spelled-out
+    // prefixes (milliohm, megohm) are unambiguous and stay case-insensitive. Bare "Ohms" stays 1x.
+    if (/milliohms?|milli-ohms?/iu.test(text) || /m\s?[oO]hms?/u.test(text)) return 0.001;
+    if (/kiloohms?/iu.test(text) || /[kK]\s?[oO]hms?/u.test(text)) return 1_000;
+    if (/megohms?|megaohms?/iu.test(text) || /M\s?[oO]hms?/u.test(text)) return 1_000_000;
   }
 
+  // F/H/V/A/Hz use (?<![a-z0-9]) plus a \d… form rather than a leading \b: attached provider values
+  // ("100nF", "1uF", "200mA", "64MHz") put a digit directly before the prefix letter, where \b never
+  // fires -- the seam between two word characters is not a boundary -- so the prefix was dropped and
+  // the value read raw (e.g. "1uF" as 1 F).
   if (unit === "F") {
-    if (/\bpf\b/u.test(normalized)) return 1e-12;
-    if (/\bnf\b/u.test(normalized)) return 1e-9;
-    if (/\b(uf|microfarad)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mf|millifarad)\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])pf\b/u.test(normalized) || /\dpf\b/u.test(normalized)) return 1e-12;
+    if (/(?<![a-z0-9])nf\b/u.test(normalized) || /\dnf\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(uf|µf|microfarad)\b/u.test(normalized) || /\d(uf|µf)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])(mf|millifarad)\b/u.test(normalized) || /\dmf\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "H") {
-    if (/\bnh\b/u.test(normalized)) return 1e-9;
-    if (/\b(uh|microhenry)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mh|millihenry)\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])ph\b/u.test(normalized) || /\dph\b/u.test(normalized)) return 1e-12;
+    if (/(?<![a-z0-9])nh\b/u.test(normalized) || /\dnh\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(uh|µh|microhenry)\b/u.test(normalized) || /\d(uh|µh)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])(mh|millihenry)\b/u.test(normalized) || /\dmh\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "V") {
-    if (/\bmv\b/u.test(normalized)) return 1e-3;
-    if (/\bkv\b/u.test(normalized)) return 1_000;
+    if (/(?<![a-z0-9])(uv|µv)\b/u.test(normalized) || /\d(uv|µv)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])mv\b/u.test(normalized) || /\dmv\b/u.test(normalized)) return 1e-3;
+    if (/(?<![a-z0-9])kv\b/u.test(normalized) || /\dkv\b/u.test(normalized)) return 1_000;
   }
 
   if (unit === "A") {
-    if (/\bma\b/u.test(normalized)) return 1e-3;
-    if (/\bua\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])na\b/u.test(normalized) || /\dna\b/u.test(normalized)) return 1e-9;
+    if (/(?<![a-z0-9])(ua|µa)\b/u.test(normalized) || /\d(ua|µa)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])ma\b/u.test(normalized) || /\dma\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "Hz") {
-    if (/\bkhz\b/u.test(normalized)) return 1_000;
-    if (/\bmhz\b/u.test(normalized)) return 1_000_000;
-    if (/\bghz\b/u.test(normalized)) return 1_000_000_000;
+    if (/(?<![a-z0-9])khz\b/u.test(normalized) || /\dkhz\b/u.test(normalized)) return 1_000;
+    if (/(?<![a-z0-9])mhz\b/u.test(normalized) || /\dmhz\b/u.test(normalized)) return 1_000_000;
+    if (/(?<![a-z0-9])ghz\b/u.test(normalized) || /\dghz\b/u.test(normalized)) return 1_000_000_000;
   }
 
   return 1;

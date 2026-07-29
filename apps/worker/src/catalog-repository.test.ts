@@ -161,6 +161,37 @@ test("persistProviderImportFailureRows stores failed import diagnostics", async 
 });
 
 /**
+ * Verifies a non-default org failure writes a namespaced source id and stamps that org — never the
+ * legacy unscoped id that org-default may already own for the same provider key.
+ */
+test("persistProviderImportFailureRows namespaces failure source ids for non-default orgs", async () => {
+  const calls: QueryCall[] = [];
+  const client = {
+    async query(text: string, values?: unknown[]) {
+      calls.push({ text, values });
+      return { rows: [] };
+    }
+  } as unknown as PoolClient;
+
+  await persistProviderImportFailureRows(client, {
+    error: new Error("provider returned 401"),
+    failedAt: "2026-07-26T12:00:00.000Z",
+    orgId: "org-acme",
+    providerId: "digikey",
+    providerPartKey: "STM32G031K8T6"
+  });
+
+  const sourceCall = calls.find((call) => call.text.includes("INSERT INTO source_records"));
+  const orgStamp = calls.find((call) => call.text.includes("UPDATE source_records SET org_id"));
+
+  assert.ok(sourceCall, "expected failed source record upsert");
+  assert.equal(sourceCall.values?.[0], "org-acme__source-digikey-stm32g031k8t6");
+  assert.ok(orgStamp, "expected org stamp on the failure source row");
+  assert.equal(orgStamp.values?.[0], "org-acme");
+  assert.equal(orgStamp.values?.[1], "org-acme__source-digikey-stm32g031k8t6");
+});
+
+/**
  * Verifies supply offering snapshots and price tiers are persisted with source provenance.
  */
 test("persistNormalizedPartRows persists supply offerings and replaces stale price tiers", async () => {
@@ -492,6 +523,178 @@ test("persistNormalizedPartRows namespaces ids per org so a shared provider part
 
     const acmeCount = await client.query<{ count: number | string }>("SELECT COUNT(*) AS count FROM parts WHERE id = $1", [acmePartId]);
     assert.equal(Number(acmeCount.rows[0]?.count), 1, "same-org re-ingest refreshes in place, no duplicate");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows derives reconciled parameters from a resistor's specifications", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Resistance", specValue: "10 kOhms" },
+      { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" },
+      { specGroup: "parametric", specKey: "Power", specValue: "1/10W" },
+      { specGroup: "parametric", specKey: "Package", specValue: "0603" }
+    ]));
+
+    const rows = await client.query<{ param_key: string; part_type: string; value_numeric: string | null; value_text: string | null; unit: string | null; is_conflicted: boolean }>(
+      "SELECT param_key, part_type, value_numeric, value_text, unit, is_conflicted FROM part_parameters WHERE part_id = $1 ORDER BY param_key",
+      ["part-repeat-c1"]
+    );
+    const byKey = new Map(rows.rows.map((row) => [row.param_key, row]));
+
+    assert.equal(rows.rows.every((row) => row.part_type === "resistor"), true, "resistor category classifies as resistor");
+    assert.equal(Number(byKey.get("resistance")?.value_numeric), 10_000, "10 kOhms normalizes to 10000 ohm");
+    assert.equal(byKey.get("resistance")?.unit, "ohm");
+    assert.equal(Number(byKey.get("tolerance")?.value_numeric), 1);
+    assert.equal(Number(byKey.get("power_rating")?.value_numeric), 0.1, "1/10W normalizes to 0.1 W");
+    assert.equal(byKey.get("package")?.value_text, "0603");
+    assert.equal(rows.rows.every((row) => row.is_conflicted === false), true, "a single source never conflicts");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows derives a parameter from a corroborating metric when no spec row exists", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    // A passive whose resistance is only captured as a normalized metric (e.g. parsed from a
+    // description string), with no verbatim "Resistance" spec row, must still surface a resistance
+    // parameter sourced from that metric.
+    const normalizedPart = buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+    ]);
+    normalizedPart.metrics = [
+      {
+        confidenceScore: 0.56,
+        id: "metric-repeat-provider-c1-resistance-1",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        maxValue: null,
+        metricKey: "resistance",
+        metricValue: 10_000,
+        minValue: null,
+        partId: normalizedPart.part.id,
+        sourceRecordId: normalizedPart.sourceRecord.id,
+        sourceRevisionId: "dsr-repeat-provider-c1",
+        unit: "ohm"
+      }
+    ];
+
+    await persistNormalizedPartRows(client, normalizedPart);
+
+    const row = await client.query<{ value_numeric: string | null; unit: string | null; winning_provider_id: string | null }>(
+      "SELECT value_numeric, unit, winning_provider_id FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+
+    assert.equal(Number(row.rows[0]?.value_numeric), 10_000, "resistance derives from the metric");
+    assert.equal(row.rows[0]?.unit, "ohm");
+    assert.equal(row.rows[0]?.winning_provider_id, "repeat-provider", "provenance resolves from the metric's source record");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows removes metrics that disappear from a provider re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const firstImport = buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+    ]);
+    firstImport.metrics = [
+      {
+        confidenceScore: 0.56,
+        id: "metric-repeat-provider-c1-resistance-1",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        maxValue: null,
+        metricKey: "resistance",
+        metricValue: 10_000,
+        minValue: null,
+        partId: firstImport.part.id,
+        sourceRecordId: firstImport.sourceRecord.id,
+        sourceRevisionId: "dsr-repeat-provider-c1",
+        unit: "ohm"
+      }
+    ];
+
+    await persistNormalizedPartRows(client, firstImport);
+    await persistNormalizedPartRows(
+      client,
+      buildResistorImportWithSpecs("2026-04-13T00:00:00.000Z", [
+        { specGroup: "parametric", specKey: "Tolerance", specValue: "±1%" }
+      ])
+    );
+
+    const metric = await client.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM part_metrics WHERE part_id = $1 AND metric_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+    const parameter = await client.query<{ count: number | string }>(
+      "SELECT COUNT(*) AS count FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["part-repeat-c1", "resistance"]
+    );
+
+    assert.equal(Number(metric.rows[0]?.count), 0, "the latest source snapshot removes its stale metric");
+    assert.equal(Number(parameter.rows[0]?.count), 0, "the stale metric cannot remain searchable as a parameter");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows flags a conflict when two spec labels disagree on one parameter", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    // Two distinct provider labels both map to voltage_rating; divergent values must flag a conflict and
+    // keep both contributions in sources.
+    await persistNormalizedPartRows(client, buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Voltage Rating", specValue: "50V" },
+      { specGroup: "parametric", specKey: "Overload Voltage (Max)", specValue: "75V" }
+    ]));
+
+    const row = await client.query<{ is_conflicted: boolean; sources: unknown }>(
+      "SELECT is_conflicted, sources FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["part-repeat-c1", "voltage_rating"]
+    );
+    const sources = typeof row.rows[0]?.sources === "string" ? JSON.parse(row.rows[0].sources as string) : row.rows[0]?.sources;
+
+    assert.equal(row.rows[0]?.is_conflicted, true, "50V vs 75V is a conflict");
+    assert.equal(Array.isArray(sources) ? sources.length : 0, 2, "both contributions are recorded");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows scopes and stamps derived parameters for a non-default org", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildResistorImportWithSpecs("2026-04-12T00:00:00.000Z", [
+      { specGroup: "parametric", specKey: "Resistance", specValue: "10 kOhms" }
+    ]), "org-acme");
+
+    const row = await client.query<{ id: string; org_id: string | null; value_numeric: string | null }>(
+      "SELECT id, org_id, value_numeric FROM part_parameters WHERE part_id = $1 AND param_key = $2",
+      ["org-acme__part-repeat-c1", "resistance"]
+    );
+
+    assert.equal(row.rows[0]?.id, "param-org-acme__part-repeat-c1-resistance", "param id derives from the scoped part id");
+    assert.equal(row.rows[0]?.org_id, "org-acme", "the derived parameter inherits the part's org");
+    assert.equal(Number(row.rows[0]?.value_numeric), 10_000);
   } finally {
     client.release();
     await pool.end();
@@ -867,6 +1070,30 @@ function buildMinimalImportPart(
       sourceLastSeenAt: lastUpdatedAt,
       sourceUrl: "https://example.test/c1"
     }
+  };
+}
+
+/**
+ * Builds a minimal resistor import carrying the given verbatim specifications, for parameter tests.
+ */
+function buildResistorImportWithSpecs(
+  lastUpdatedAt: string,
+  specs: Array<{ specKey: string; specValue: string; specGroup: "parametric" | "compliance" | "commercial" | "physical" }>
+): NormalizedProviderPart {
+  const base = buildMinimalImportPart(lastUpdatedAt, 0.7);
+
+  return {
+    ...base,
+    specifications: specs.map((spec, index) => ({
+      id: `spec-repeat-provider-c1-${index + 1}`,
+      lastUpdatedAt,
+      partId: base.part.id,
+      providerId: base.sourceRecord.providerId,
+      sourceRecordId: base.sourceRecord.id,
+      specGroup: spec.specGroup,
+      specKey: spec.specKey,
+      specValue: spec.specValue
+    }))
   };
 }
 
@@ -1268,6 +1495,9 @@ function createMinimalImportPool(): TestPool {
     CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE datasheet_revisions (id TEXT PRIMARY KEY, part_id TEXT, revision_label TEXT, revision_date DATE, page_count INTEGER, file_asset_id TEXT, parse_confidence NUMERIC, pin_table_status TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE part_metrics (id TEXT PRIMARY KEY, part_id TEXT, metric_key TEXT, metric_value NUMERIC, unit TEXT, min_value NUMERIC, max_value NUMERIC, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE part_specifications (id TEXT PRIMARY KEY, part_id TEXT, provider_id TEXT, source_record_id TEXT, spec_key TEXT, spec_value TEXT, spec_group TEXT, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, provider_id, spec_key));
+    CREATE TABLE part_parameters (id TEXT PRIMARY KEY, part_id TEXT, part_type TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, is_conflicted BOOLEAN, confidence_score NUMERIC, winning_provider_id TEXT, winning_source_record_id TEXT, sources JSONB, last_updated_at TIMESTAMPTZ, UNIQUE (part_id, param_key));
+    CREATE TABLE part_datasheet_parameters (id TEXT PRIMARY KEY, part_id TEXT, param_key TEXT, value_kind TEXT, value_numeric NUMERIC, value_min NUMERIC, value_max NUMERIC, value_text TEXT, unit TEXT, confidence_score NUMERIC, datasheet_revision_id TEXT, extracted_at TIMESTAMPTZ, UNIQUE (part_id, param_key));
     CREATE TABLE source_extraction_signals (id TEXT PRIMARY KEY, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
     CREATE TABLE mate_relations (id TEXT PRIMARY KEY, part_id TEXT, mate_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
     CREATE TABLE accessory_requirements (id TEXT PRIMARY KEY, part_id TEXT, accessory_part_id TEXT, relationship_type TEXT, compatibility_status TEXT, evidence_kind TEXT, confidence_score NUMERIC, source_revision_id TEXT, source_record_id TEXT, notes TEXT);
@@ -1294,6 +1524,9 @@ function createMinimalImportPool(): TestPool {
     ALTER TABLE assets ADD COLUMN org_id TEXT;
     ALTER TABLE datasheet_revisions ADD COLUMN org_id TEXT;
     ALTER TABLE part_metrics ADD COLUMN org_id TEXT;
+    ALTER TABLE part_specifications ADD COLUMN org_id TEXT;
+    ALTER TABLE part_parameters ADD COLUMN org_id TEXT;
+    ALTER TABLE part_datasheet_parameters ADD COLUMN org_id TEXT;
     ALTER TABLE source_extraction_signals ADD COLUMN org_id TEXT;
     ALTER TABLE mate_relations ADD COLUMN org_id TEXT;
     ALTER TABLE accessory_requirements ADD COLUMN org_id TEXT;

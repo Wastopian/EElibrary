@@ -8,7 +8,8 @@ import { DEFAULT_HEARTBEAT_INTERVAL_MS, emitHeartbeat, resolveWorkerId, shutdown
 import { assertDatabaseReady, listProviderImportDiagnostics, listWorkerOperationalDiagnostics, recomputeReadinessForAllParts, replayLocalCatalogCrossPartRelations } from "./catalog-repository";
 import { generateDraftAssetsFromDatabase } from "./draft-generation";
 import { bulkEnqueueProviderAcquisitionJobs, processProviderAcquisitionJobs } from "./provider-acquisition-jobs";
-import { processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
+import { processBomBackfillRequests } from "./bom-backfill-jobs";
+import { enqueueProviderEnrichmentJobsForPart, processProviderEnrichmentJobs } from "./provider-enrichment-jobs";
 import { processPendingExportBundleAssembly } from "./export-bundle-assembly";
 import { getWorkerStorageClient } from "./file-storage";
 import { buildThreeDPreviewConverterFromEnv, processPendingThreeDPreviewJobs, setThreeDPreviewConverter } from "./three-d-preview";
@@ -111,6 +112,20 @@ async function ingestProviderPart(adapterId: string, request: ProviderPartReques
     const summary = await runProviderPartImport(adapterId, request);
 
     console.log(JSON.stringify(summary, null, 2));
+
+    // The CLI persists directly (no acquisition job), so enqueue enrichment here — matching what the API
+    // acquisition-success path does — so datasheet capture/extraction run on the next enrichment pass.
+    // Enqueue is best-effort: a failure here must not fail an otherwise-successful import.
+    try {
+      await enqueueProviderEnrichmentJobsForPart({
+        partId: summary.partId,
+        requestedAt: new Date().toISOString(),
+        requestedBy: "cli:ingest",
+        sourceAcquisitionJobId: null
+      });
+    } catch (enqueueError) {
+      console.error(`worker.ingest_provider_part: enrichment enqueue failed (import still succeeded): ${String(enqueueError)}`);
+    }
   } catch (error) {
     logWorkerFailure("worker.ingest_provider_part", error, timings);
     throw error;
@@ -202,6 +217,7 @@ function buildUsageLines(): string[] {
     "npm run imports -w @ee-library/worker -- [failed]",
     "npm run operations -w @ee-library/worker -- [limit]",
     "npm run acquisition-jobs -w @ee-library/worker -- [limit]",
+    "npm run bom-backfill -w @ee-library/worker -- [limit]",
     "npm run enrichment-jobs -w @ee-library/worker -- [limit]",
     "npm run assemble-bundles -w @ee-library/worker -- [limit]",
     "npm run generate-three-d-previews -w @ee-library/worker -- [limit]",
@@ -312,6 +328,30 @@ async function processQueuedProviderAcquisitionJobs(limitValue?: string): Promis
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
   } catch (error) {
     logWorkerFailure("worker.process_provider_acquisition_jobs", error, timings);
+    throw error;
+  }
+}
+
+/**
+ * Processes queued BOM backfill requests: exact provider lookup, then import or an honest park.
+ */
+async function processQueuedBomBackfillRequests(limitValue?: string): Promise<void> {
+  const limit = limitValue ? Number(limitValue) : 10;
+  const timings: WorkerTiming[] = [];
+
+  try {
+    await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
+
+    const summary = await timeWorkerOperation(
+      "worker.process_bom_backfill_requests",
+      () => processBomBackfillRequests(Number.isFinite(limit) ? limit : 10),
+      timings,
+      (value) => `${value.processed.length} requests`
+    );
+
+    console.log(JSON.stringify({ ...summary, timings }, null, 2));
+  } catch (error) {
+    logWorkerFailure("worker.process_bom_backfill_requests", error, timings);
     throw error;
   }
 }
@@ -662,6 +702,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "bom-backfill") {
+    await processQueuedBomBackfillRequests(process.argv[3]);
+    return;
+  }
+
   if (command === "assemble-bundles") {
     await assembleExportBundles(process.argv[3]);
     return;
@@ -799,6 +844,23 @@ const DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS = 20_000;
 /** DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT bounds document reads per daemon tick. */
 const DEFAULT_PROJECT_DOCUMENT_EXTRACTION_BATCH_LIMIT = 3;
 
+/** DEFAULT_PROVIDER_ENRICHMENT_INTERVAL_MS paces datasheet capture/extraction so imports enrich automatically. */
+const DEFAULT_PROVIDER_ENRICHMENT_INTERVAL_MS = 30_000;
+
+/** DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT bounds enrichment jobs (each fetches a PDF) per daemon tick. */
+const DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT = 5;
+
+/**
+ * DEFAULT_BOM_BACKFILL_INTERVAL_MS paces the missing-part backfill queue. Each request fans an
+ * exact lookup out to every configured provider and may run a full import, so the tick plus the
+ * low in-pass concurrency keeps a 1,500-MPN library backfill inside free-tier provider rate
+ * limits while still clearing roughly a BOM's worth of rows per minute.
+ */
+const DEFAULT_BOM_BACKFILL_INTERVAL_MS = 20_000;
+
+/** DEFAULT_BOM_BACKFILL_BATCH_LIMIT bounds backfill requests (each may fetch + import) per daemon tick. */
+const DEFAULT_BOM_BACKFILL_BATCH_LIMIT = 10;
+
 /**
  * Runs the worker daemon: emits a heartbeat on a periodic interval until SIGINT/SIGTERM, drains
  * pending export-bundle asset-byte assemblies, and refreshes stale active supply-offer snapshots.
@@ -842,6 +904,14 @@ async function runDaemon(): Promise<void> {
     void safeProcessProjectDocumentExtractions();
   }, DEFAULT_PROJECT_DOCUMENT_EXTRACTION_INTERVAL_MS);
 
+  const providerEnrichmentInterval = setInterval(() => {
+    void safeProcessProviderEnrichmentJobs();
+  }, DEFAULT_PROVIDER_ENRICHMENT_INTERVAL_MS);
+
+  const bomBackfillInterval = setInterval(() => {
+    void safeProcessBomBackfillRequests();
+  }, DEFAULT_BOM_BACKFILL_INTERVAL_MS);
+
   // Run one assembly pass right after startup so a bundle queued while the daemon was offline does
   // not have to wait a full interval before the worker picks it up.
   void safeProcessPendingExportBundleAssembly();
@@ -849,6 +919,8 @@ async function runDaemon(): Promise<void> {
   void safeProcessPendingThreeDPreviews();
   void safeRunAssetValidations();
   void safeProcessProjectDocumentExtractions();
+  void safeProcessProviderEnrichmentJobs();
+  void safeProcessBomBackfillRequests();
 
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -858,6 +930,8 @@ async function runDaemon(): Promise<void> {
       clearInterval(threeDPreviewInterval);
       clearInterval(assetValidationInterval);
       clearInterval(projectDocumentExtractionInterval);
+      clearInterval(providerEnrichmentInterval);
+      clearInterval(bomBackfillInterval);
       resolve();
     };
     process.once("SIGINT", stop);
@@ -893,6 +967,79 @@ async function safeProcessProjectDocumentExtractions(): Promise<void> {
     );
   } catch (error) {
     console.error("Project document extraction tick failed.", error instanceof Error ? error.message : error);
+  }
+}
+
+/** enrichmentTickRunning guards against overlapping enrichment ticks, since each job may fetch a PDF. */
+let enrichmentTickRunning = false;
+
+/**
+ * Processes queued provider enrichment jobs (datasheet capture + confirm-by-search extraction) without
+ * crashing the daemon on one bad job or a slow PDF fetch. Skips re-entry so a slow batch (each job can
+ * fetch a datasheet) does not pile up overlapping runs when the interval fires again.
+ */
+async function safeProcessProviderEnrichmentJobs(): Promise<void> {
+  if (enrichmentTickRunning) {
+    return;
+  }
+
+  enrichmentTickRunning = true;
+
+  try {
+    const summary = await processProviderEnrichmentJobs(DEFAULT_PROVIDER_ENRICHMENT_BATCH_LIMIT);
+
+    if (summary.processed.length === 0) {
+      return;
+    }
+
+    const succeeded = summary.processed.filter((row) => row.status === "succeeded").length;
+    const failed = summary.processed.filter((row) => row.status === "failed").length;
+    console.log(`Worker daemon: processed ${succeeded} enrichment job${succeeded === 1 ? "" : "s"}` + (failed > 0 ? `, ${failed} failed` : "") + ".");
+  } catch (error) {
+    console.error("Provider enrichment tick failed.", error instanceof Error ? error.message : error);
+  } finally {
+    enrichmentTickRunning = false;
+  }
+}
+
+/** bomBackfillTickRunning guards against overlapping backfill ticks, since each request may fetch and import. */
+let bomBackfillTickRunning = false;
+
+/**
+ * Processes queued BOM backfill requests without crashing the daemon on one bad lookup or import.
+ * Skips re-entry so a slow provider batch does not pile up overlapping runs when the interval
+ * fires again — the pacing is the point: it keeps library-scale backfills polite to providers.
+ */
+async function safeProcessBomBackfillRequests(): Promise<void> {
+  if (bomBackfillTickRunning) {
+    return;
+  }
+
+  bomBackfillTickRunning = true;
+
+  try {
+    const summary = await processBomBackfillRequests(DEFAULT_BOM_BACKFILL_BATCH_LIMIT);
+
+    if (summary.processed.length === 0 && summary.recoveredStaleCount === 0) {
+      return;
+    }
+
+    const imported = summary.processed.filter((row) => row.status === "imported").length;
+    const parked = summary.processed.filter((row) => row.status === "needs_choice" || row.status === "no_match").length;
+    const failed = summary.processed.filter((row) => row.status === "failed").length;
+    console.log(
+      `Worker daemon: backfilled ${imported} missing part${imported === 1 ? "" : "s"}` +
+        (parked > 0 ? `, ${parked} parked for review` : "") +
+        (failed > 0 ? `, ${failed} failed` : "") +
+        (summary.recoveredStaleCount > 0
+          ? `, ${summary.recoveredStaleCount} abandoned search${summary.recoveredStaleCount === 1 ? "" : "es"} retried`
+          : "") +
+        "."
+    );
+  } catch (error) {
+    console.error("BOM backfill tick failed.", error instanceof Error ? error.message : error);
+  } finally {
+    bomBackfillTickRunning = false;
   }
 }
 

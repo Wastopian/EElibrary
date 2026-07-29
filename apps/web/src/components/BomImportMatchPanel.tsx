@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import React, { useCallback, useState } from "react";
 import { StatusBadge } from "@ee-library/ui";
 import { isApiClientError, matchBomImportRows } from "../lib/api-client";
+import { BomBackfillPanel } from "./BomBackfillPanel";
 import type { BomImportMatchResponse, BomLineImportCandidate } from "@ee-library/shared/types";
 
 /** BomImportMatchPanelProps identifies the import to match from the project detail table. */
@@ -56,6 +57,10 @@ export function BomImportMatchPanel({ bomImportId, projectId }: BomImportMatchPa
         {status.kind === "matching" ? "Matching..." : "Match rows"}
       </button>
       <BomMatchStatusMessage projectId={projectId} status={status} />
+      <BomBackfillPanel
+        bomImportId={bomImportId}
+        unmatchedCandidateCount={status.kind === "success" ? status.response.importCandidates.length : 0}
+      />
     </div>
   );
 }

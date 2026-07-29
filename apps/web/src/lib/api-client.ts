@@ -15,7 +15,14 @@ import type {
   BomImportCreateResponse,
   BomImportDiagnosticsResponse,
   BomImportLinesResponse,
+  BomBackfillStartResponse,
+  BomBackfillStatusResponse,
   BomImportMatchResponse,
+  ProjectFileBomImportInput,
+  ProjectFileBomImportResponse,
+  ProjectFolderOnboardInput,
+  ProjectFolderOnboardReport,
+  ProjectFolderScanResponse,
   BomImportPreviewInput,
   BomImportPreviewResponse,
   BomRevisionCompareResponse,
@@ -138,8 +145,8 @@ import type {
   PartSearchRecord,
   ProviderAcquisitionJobCreateInput,
   ProviderAcquisitionJobDetailResponse,
-  ProviderLookupCandidate,
   ProviderLookupRequestInput,
+  ProviderLookupResponse,
   ProviderImportCreateInput,
   ProviderImportCreateResponse,
   ReviewActionInput,
@@ -226,6 +233,7 @@ export async function fetchSearchFacetsEnvelope(filters: PartSearchFilters = {})
   appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
   appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
   appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
+  appendParameterSearchParams(searchParams, filters.parameters);
   const query = searchParams.toString();
 
   return fetchApi<ApiEnvelope<SearchFacets>>(`/parts/facets${query ? `?${query}` : ""}`);
@@ -258,6 +266,7 @@ export async function fetchPartSearchEnvelope(filters: PartSearchFilters): Promi
   appendSearchParam(searchParams, "readinessStatus", filters.readinessStatus);
   appendSearchParam(searchParams, "approvalStatus", filters.approvalStatus);
   appendSearchParam(searchParams, "connectorClass", filters.connectorClass);
+  appendParameterSearchParams(searchParams, filters.parameters);
   appendSearchParam(searchParams, "page", filters.page && filters.page > 1 ? filters.page.toString() : undefined);
   appendSearchParam(searchParams, "pageSize", filters.pageSize && filters.pageSize !== 20 ? filters.pageSize.toString() : undefined);
   appendSearchParam(searchParams, "sort", filters.sort && filters.sort !== "mpn_asc" ? filters.sort : undefined);
@@ -724,6 +733,108 @@ export async function matchBomImportRows(bomImportId: string): Promise<BomImport
   }
 
   const envelope = (await response.json()) as ApiEnvelope<BomImportMatchResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Scans the mirror root for folders no library project claims yet.
+ */
+export async function fetchProjectFolderScan(): Promise<ProjectFolderScanResponse> {
+  const response = await fetch(buildApiUrl("/project-folder-scan"), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder scan");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderScanResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Onboards one scanned folder: disclosed rename, project creation, BOM import, matching, and
+ * missing-part queueing, reported step by step.
+ */
+export async function onboardProjectFolder(input: ProjectFolderOnboardInput): Promise<ProjectFolderOnboardReport> {
+  const response = await fetch(buildApiUrl("/project-folder-onboard"), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project folder onboarding");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFolderOnboardReport>;
+
+  return envelope.data;
+}
+
+/**
+ * Imports a parts-list file the project folder already has: the server reads the mirror file,
+ * suggests a column mapping, and either creates the import or asks for a confirmed mapping.
+ */
+export async function importProjectFileAsBom(projectId: string, input: ProjectFileBomImportInput): Promise<ProjectFileBomImportResponse> {
+  const response = await fetch(buildApiUrl(`/projects/${encodeURIComponent(projectId)}/bom-imports/from-file`), {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Project-file BOM import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<ProjectFileBomImportResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Queues every missing part of one matched BOM import for background supplier import.
+ */
+export async function startBomBackfill(bomImportId: string): Promise<BomBackfillStartResponse> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/backfill`), {
+    body: JSON.stringify({}),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Missing-part import");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomBackfillStartResponse>;
+
+  return envelope.data;
+}
+
+/**
+ * Fetches the progress of one BOM import's queued missing-part imports, or null when none exist.
+ */
+export async function fetchBomBackfillStatus(bomImportId: string): Promise<BomBackfillStatusResponse | null> {
+  const response = await fetch(buildApiUrl(`/bom-imports/${encodeURIComponent(bomImportId)}/backfill`), {
+    cache: "no-store",
+    headers: await getAuthHeaders()
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildApiError(response, "Missing-part import status");
+  }
+
+  const envelope = (await response.json()) as ApiEnvelope<BomBackfillStatusResponse>;
 
   return envelope.data;
 }
@@ -1382,7 +1493,7 @@ export async function requestProviderImport(input: ProviderImportCreateInput): P
 /**
  * Runs an explicit exact-match provider candidate lookup without changing normal catalog search behavior.
  */
-export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupCandidate[]> {
+export async function requestProviderLookup(input: ProviderLookupRequestInput): Promise<ProviderLookupResponse> {
   const response = await fetch(buildApiUrl("/provider-lookups"), {
     body: JSON.stringify(input),
     cache: "no-store",
@@ -1394,7 +1505,7 @@ export async function requestProviderLookup(input: ProviderLookupRequestInput): 
     throw await buildApiError(response, "Provider lookup");
   }
 
-  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupCandidate[]>;
+  const envelope = (await response.json()) as ApiEnvelope<ProviderLookupResponse>;
 
   return envelope.data;
 }
@@ -2357,5 +2468,25 @@ export function getApiBaseUrl(): string {
 function appendSearchParam(searchParams: URLSearchParams, key: string, value: string | undefined): void {
   if (value && value.trim()) {
     searchParams.set(key, value);
+  }
+}
+
+/**
+ * Appends typed parameter filters as stable `pmin_<key>` / `pmax_<key>` / `pval_<key>` query params so
+ * the API's readSearchFilters can reconstruct them.
+ */
+function appendParameterSearchParams(searchParams: URLSearchParams, parameters: PartSearchFilters["parameters"]): void {
+  for (const parameter of parameters ?? []) {
+    if (typeof parameter.min === "number" && Number.isFinite(parameter.min)) {
+      searchParams.set(`pmin_${parameter.paramKey}`, String(parameter.min));
+    }
+
+    if (typeof parameter.max === "number" && Number.isFinite(parameter.max)) {
+      searchParams.set(`pmax_${parameter.paramKey}`, String(parameter.max));
+    }
+
+    if (parameter.value && parameter.value.trim()) {
+      searchParams.set(`pval_${parameter.paramKey}`, parameter.value);
+    }
   }
 }

@@ -4,15 +4,15 @@
 
 import { runProviderPartImport as defaultRunProviderPartImport, type ImportResultSummary, type ProviderPartRequest } from "@ee-library/worker/provider-part-import";
 
-type RunProviderPartImport = (adapterId: string, request: ProviderPartRequest) => Promise<ImportResultSummary>;
+type RunProviderPartImport = (adapterId: string, request: ProviderPartRequest, orgId: string) => Promise<ImportResultSummary>;
 
 let runProviderPartImportImpl: RunProviderPartImport = defaultRunProviderPartImport;
 
 /**
  * Runs one provider import using the shared worker implementation or a test override.
  */
-export function runProviderPartImport(adapterId: string, request: ProviderPartRequest): Promise<ImportResultSummary> {
-  return runProviderPartImportImpl(adapterId, request);
+export function runProviderPartImport(adapterId: string, request: ProviderPartRequest, orgId: string): Promise<ImportResultSummary> {
+  return runProviderPartImportImpl(adapterId, request, orgId);
 }
 
 /**

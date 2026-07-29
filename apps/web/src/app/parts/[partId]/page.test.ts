@@ -12,7 +12,7 @@ import {
   buildUnavailablePartEnrichmentSummary
 } from "../../../../../api/src/detail-response";
 import PartDetailPage from "./page";
-import type { Asset, DocumentRevisionListResponse, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
+import type { Asset, DocumentRevisionListResponse, PartParameter, PartSupplyOffersResponse, PartWhereUsedResponse } from "@ee-library/shared/types";
 
 /**
  * Verifies the detail page renders V3-style readiness record truth without whole-part approval claims.
@@ -70,6 +70,189 @@ test("part detail renders readiness record summary from detail response", async 
     assert.doesNotMatch(html, /approved part/u);
   } finally {
     restoreFetch();
+  }
+});
+
+/**
+ * Verifies the Distributor details panel renders verbatim provider rows with a source label, and
+ * falls back to guidance that re-importing fills the section when no rows are stored.
+ */
+test("part detail renders distributor specification rows and an empty state when none exist", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed part detail record");
+
+  const specifications = [
+    {
+      id: "spec-mouser-x-tolerance",
+      lastUpdatedAt: "2026-05-16T00:00:00.000Z",
+      partId: record.part.id,
+      providerId: "mouser",
+      sourceRecordId: "source-x",
+      specGroup: "parametric" as const,
+      specKey: "Tolerance",
+      specValue: "1%"
+    }
+  ];
+
+  const restoreWithSpecs = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, undefined, undefined, specifications),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Distributor details");
+
+    assert.match(panel, /Exactly what each distributor reports/u);
+    assert.match(panel, /Tolerance/u);
+    assert.match(panel, /1%/u);
+    assert.match(panel, /Mouser/u);
+    assert.doesNotMatch(panel, /No distributor details are stored/u);
+  } finally {
+    restoreWithSpecs();
+  }
+
+  const restoreEmpty = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Distributor details");
+
+    assert.match(panel, /No distributor details are stored for this part yet/u);
+  } finally {
+    restoreEmpty();
+  }
+});
+
+/**
+ * Verifies the Specifications panel renders reconciled, typed parameter rows, marks conflicts, and
+ * falls back to an empty state when no parameters are derived.
+ */
+test("part detail renders reconciled specification rows and flags source conflicts", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-tps7a02dbvr");
+
+  assert.ok(record, "expected seed part detail record");
+
+  const parameters = [
+    buildParameter({
+      id: "param-a",
+      isConflicted: false,
+      paramKey: "resistance",
+      sources: [
+        { agreesWithWinner: true, confidence: 0.6, providerId: "mouser", rawSpecKey: "Resistance", rawValue: "10 kOhms", sourceRecordId: "source-a", valueMax: null, valueMin: null, valueNumeric: 10_000, valueText: null },
+        { agreesWithWinner: true, confidence: 0.5, providerId: "datasheet", rawSpecKey: "Resistance", rawValue: "10000", sourceRecordId: null, valueMax: null, valueMin: null, valueNumeric: 10_000, valueText: null }
+      ],
+      unit: "ohm",
+      valueNumeric: 10_000,
+      winningProviderId: "mouser"
+    }),
+    buildParameter({ id: "param-b", isConflicted: true, paramKey: "voltage_rating", unit: "V", valueNumeric: 50, winningProviderId: "digikey" })
+  ];
+
+  const restoreWithParams = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, undefined, undefined, [], parameters),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Specifications");
+
+    assert.match(panel, /Key specs combined across distributors/u);
+    assert.match(panel, /Resistance/u);
+    assert.match(panel, /10 kΩ/u, "numeric values render in engineering notation, not raw base units");
+    assert.match(panel, /confirmed by datasheet/u, "a corroborating datasheet source is surfaced on the row");
+    assert.match(panel, /Voltage Rating/u);
+    assert.match(panel, /sources disagree/u);
+  } finally {
+    restoreWithParams();
+  }
+
+  const restoreEmpty = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Specifications");
+
+    assert.match(panel, /No standardized specifications are derived for this part yet/u);
+  } finally {
+    restoreEmpty();
+  }
+});
+
+/**
+ * Verifies the Key metrics panel de-duplicates against Specifications: metrics covered by reconciled
+ * parameters (via paramKey or registry metricKeys) hide the panel entirely, while uncovered metrics
+ * keep it with calm confidence tones (info, never danger) for moderately confident parsed values.
+ */
+test("part detail hides Key metrics when Specifications covers every metric", async () => {
+  const records = getAllPartRecords();
+  const record = records.find((candidate) => candidate.part.id === "part-grm188r71c104ka01d");
+
+  assert.ok(record, "expected seed capacitor record");
+  assert.ok(record.metrics.some((metric) => metric.metricKey === "rated_voltage"), "seed capacitor carries the rated_voltage metric");
+
+  // Capacitance and voltage_rating parameters cover both seed metrics (capacitance directly,
+  // rated_voltage via the registry metricKeys alias) -> the Key metrics panel disappears.
+  const parameters = [
+    buildParameter({ id: "param-cap", paramKey: "capacitance", partId: record.part.id, partType: "capacitor", unit: "F", valueNumeric: 100e-9 }),
+    buildParameter({ id: "param-vr", paramKey: "voltage_rating", partId: record.part.id, partType: "capacitor", unit: "V", valueNumeric: 16 })
+  ];
+
+  const restoreCovered = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records, undefined, undefined, [], parameters),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+
+    assert.equal(html.includes("<h2>Key metrics</h2>"), false, "a fully covered Key metrics panel is not rendered");
+    const specPanel = extractPanelHtml(html, "Specifications");
+    assert.match(specPanel, /Capacitance/u);
+    assert.match(specPanel, /100 nF/u);
+  } finally {
+    restoreCovered();
+  }
+
+  // Without parameters nothing is covered: the panel stays, and a 76%-confidence parsed value gets
+  // the info tone rather than an alarming danger badge.
+  const restoreUncovered = mockFetch(() =>
+    jsonResponse({
+      data: buildPartDetailResponse(record, records),
+      source: "database"
+    })
+  );
+
+  try {
+    const html = renderToStaticMarkup(await PartDetailPage({ params: Promise.resolve({ partId: record.part.id }) }));
+    const panel = extractPanelHtml(html, "Key metrics");
+
+    assert.match(panel, /Capacitance/u);
+    assert.match(panel, /76% confidence/u);
+    assert.match(panel, /ui-badge--info/u);
+    assert.doesNotMatch(panel, /ui-badge--danger/u, "spec confidence badges never use the danger tone");
+  } finally {
+    restoreUncovered();
   }
 });
 
@@ -674,6 +857,31 @@ test("part detail keeps no-history and seed-fallback acquisition states explicit
 /**
  * Replaces global fetch for detail, where-used, document-control, and supply-offer API calls.
  */
+/**
+ * Builds a reconciled PartParameter with numeric defaults for detail-page tests.
+ */
+function buildParameter(overrides: Partial<PartParameter>): PartParameter {
+  return {
+    confidenceScore: 0.6,
+    id: "param-x",
+    isConflicted: false,
+    lastUpdatedAt: "2026-07-09T00:00:00.000Z",
+    paramKey: "resistance",
+    partId: "part-tps7a02dbvr",
+    partType: "resistor",
+    sources: [],
+    unit: "ohm",
+    valueKind: "numeric",
+    valueMax: null,
+    valueMin: null,
+    valueNumeric: 10_000,
+    valueText: null,
+    winningProviderId: "mouser",
+    winningSourceRecordId: null,
+    ...overrides
+  };
+}
+
 function mockFetch(
   handler: (url: URL) => Response,
   whereUsedHandler?: (url: URL) => Response,

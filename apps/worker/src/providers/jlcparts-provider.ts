@@ -8,6 +8,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
+import { buildSpecificationRows, type NeutralSpecification } from "./distributor-normalize";
 
 /** JLC_PARTS_PROVIDER_ID is the canonical worker-only provider identifier. */
 const JLC_PARTS_PROVIDER_ID = "jlcparts";
@@ -493,6 +494,14 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     promotionAudits: [],
     reviewRecords: [],
     similarPartRelations: [],
+    specifications: buildSpecificationRows(
+      JLC_PARTS_PROVIDER_ID,
+      component.lcsc,
+      partId,
+      sourceRecordId,
+      lastUpdatedAt,
+      buildNeutralSpecifications(component.attributes)
+    ),
     supplyOfferings: buildSupplyOfferings(component, partId, sourceRecordId, lastUpdatedAt),
     validationRecords: [],
     sourceRecord: {
@@ -775,6 +784,26 @@ function buildMetrics(component: JlcPartsComponent, partId: string, datasheetRev
     sourceRevisionId: datasheetRevisionId,
     unit: metric.unit
   }));
+}
+
+/**
+ * Builds verbatim specification rows from every structured provider attribute.
+ *
+ * Unlike buildMetrics, which keeps only the numeric metrics this slice supports, this preserves the
+ * full attribute set (tolerance, temperature coefficient, ratings, and so on) for display.
+ */
+function buildNeutralSpecifications(attributes: Record<string, JlcPartsAttribute>): NeutralSpecification[] {
+  return Object.entries(attributes).flatMap<NeutralSpecification>(([attributeName, attribute]) => {
+    const specKey = attributeName.trim();
+    const primaryValue = readPrimaryAttributeValue(attribute);
+    const specValue = typeof primaryValue === "number" && Number.isFinite(primaryValue)
+      ? String(primaryValue)
+      : typeof primaryValue === "string" && primaryValue.trim().length > 0
+        ? primaryValue.trim()
+        : null;
+
+    return specKey && specValue ? [{ specGroup: "parametric", specKey, specValue }] : [];
+  });
 }
 
 /**

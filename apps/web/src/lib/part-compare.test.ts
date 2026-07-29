@@ -12,12 +12,16 @@ import {
   buildCompareAssetPreviewRows,
   buildCompareAssetTrustRows,
   buildCompareConnectorRows,
+  buildCompareParameterRows,
+  collectCompareParameterKeys,
   collectCompareMetricKeys,
-  formatCompareMetricCell,
+  collectUncoveredCompareMetricKeys,
+  formatUncoveredCompareMetricCell,
   shouldRenderConnectorCompareRows
 } from "./part-compare";
+import type { PartDetailResponse, PartParameter } from "@ee-library/shared/types";
 
-function stubMetric(key: string): PartMetric {
+function stubMetric(key: string, overrides: Partial<PartMetric> = {}): PartMetric {
   return {
     confidenceScore: 1,
     id: `m-${key}`,
@@ -29,7 +33,8 @@ function stubMetric(key: string): PartMetric {
     partId: "p",
     sourceRecordId: null,
     sourceRevisionId: "sr",
-    unit: "V"
+    unit: "V",
+    ...overrides
   };
 }
 
@@ -48,9 +53,106 @@ test("collectCompareMetricKeys unions keys across records", () => {
   assert.equal(keys.length, 2);
 });
 
-test("formatCompareMetricCell returns dash when metric missing", () => {
-  const record = stubRecord([stubMetric("supply_voltage_max")]);
-  assert.equal(formatCompareMetricCell(record, "missing_key"), "—");
+test("formatUncoveredCompareMetricCell returns dash when metric missing", () => {
+  const detail = stubDetail("p1", [], [stubMetric("supply_voltage_max")]);
+  assert.equal(formatUncoveredCompareMetricCell(detail, "missing_key"), "—");
+});
+
+function stubParameter(partId: string, paramKey: string, overrides: Partial<PartParameter> = {}): PartParameter {
+  return {
+    confidenceScore: 0.6,
+    id: `pp-${partId}-${paramKey}`,
+    isConflicted: false,
+    lastUpdatedAt: "2026-07-09T00:00:00.000Z",
+    paramKey,
+    partId,
+    partType: "resistor",
+    sources: [],
+    unit: "ohm",
+    valueKind: "numeric",
+    valueMax: null,
+    valueMin: null,
+    valueNumeric: 10_000,
+    valueText: null,
+    winningProviderId: "mouser",
+    winningSourceRecordId: null,
+    ...overrides
+  };
+}
+
+function stubDetail(partId: string, parameters: PartParameter[], metrics: PartMetric[] = []): PartDetailResponse {
+  return { parameters, record: { metrics, part: { id: partId } } } as PartDetailResponse;
+}
+
+test("collectCompareParameterKeys unions parameter keys across details", () => {
+  const keys = collectCompareParameterKeys([
+    stubDetail("p1", [stubParameter("p1", "resistance"), stubParameter("p1", "tolerance", { unit: "%" })]),
+    stubDetail("p2", [stubParameter("p2", "resistance")])
+  ]);
+
+  assert.ok(keys.includes("resistance") && keys.includes("tolerance"));
+  assert.equal(keys.length, 2);
+});
+
+/**
+ * Verifies metric de-duplication against the Specifications matrix: a metric key disappears only when
+ * every part that has the metric also has a covering reconciled parameter, and survives while any part
+ * still relies on it as its only display of the value.
+ */
+test("collectUncoveredCompareMetricKeys drops covered metrics but keeps a part's only display", () => {
+  // Both parts have the resistance metric and a covering resistance parameter -> dropped; the
+  // unregistered supply_voltage metric has no covering parameter anywhere -> kept.
+  const fullyCovered = collectUncoveredCompareMetricKeys([
+    stubDetail("p1", [stubParameter("p1", "resistance")], [stubMetric("resistance"), stubMetric("supply_voltage")]),
+    stubDetail("p2", [stubParameter("p2", "resistance")], [stubMetric("resistance")])
+  ]);
+
+  assert.deepEqual(fullyCovered, ["supply_voltage"]);
+
+  // p2 has the metric but no covering parameter -> the row must stay for p2's sake.
+  const partiallyCovered = collectUncoveredCompareMetricKeys([
+    stubDetail("p1", [stubParameter("p1", "resistance")], [stubMetric("resistance")]),
+    stubDetail("p2", [], [stubMetric("resistance")])
+  ]);
+
+  assert.deepEqual(partiallyCovered, ["resistance"]);
+});
+
+test("formatUncoveredCompareMetricCell hides covered values in a row retained for another part", () => {
+  const legacyResistance = stubMetric("resistance", { metricValue: 5_600, unit: "ohm" });
+  const covered = stubDetail("p1", [stubParameter("p1", "resistance")], [legacyResistance]);
+  const uncovered = stubDetail("p2", [], [legacyResistance]);
+
+  assert.equal(formatUncoveredCompareMetricCell(covered, "resistance"), "—");
+  assert.equal(formatUncoveredCompareMetricCell(uncovered, "resistance"), "5.6 kΩ");
+});
+
+test("buildCompareParameterRows renders typed values, an em dash when absent, and a conflict marker", () => {
+  const rows = buildCompareParameterRows([
+    stubDetail("p1", [stubParameter("p1", "resistance", { valueNumeric: 10_000 })]),
+    stubDetail("p2", [stubParameter("p2", "resistance", { valueNumeric: 4_700, isConflicted: true })])
+  ]);
+
+  const resistanceRow = rows.find((row) => row.rowKey === "parameter:resistance");
+
+  assert.ok(resistanceRow, "expected a resistance row");
+  assert.equal(resistanceRow.label, "Resistance");
+  assert.equal(resistanceRow.values[0]?.text, "10 kΩ");
+  assert.equal(resistanceRow.values[0]?.tone, "info");
+  assert.equal(resistanceRow.values[1]?.text, "4.7 kΩ · sources disagree");
+  assert.equal(resistanceRow.values[1]?.tone, "review");
+});
+
+test("buildCompareParameterRows shows an em dash when a part lacks the parameter", () => {
+  const rows = buildCompareParameterRows([
+    stubDetail("p1", [stubParameter("p1", "resistance")]),
+    stubDetail("p2", [])
+  ]);
+
+  const resistanceRow = rows.find((row) => row.rowKey === "parameter:resistance");
+
+  assert.equal(resistanceRow?.values[1]?.text, "—");
+  assert.equal(resistanceRow?.values[1]?.tone, "neutral");
 });
 
 /**

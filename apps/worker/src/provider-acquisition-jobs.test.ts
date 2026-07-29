@@ -259,6 +259,8 @@ function createProviderAcquisitionPool(): TestPool {
   db.public.none(`
     CREATE TABLE parts (
       id TEXT PRIMARY KEY,
+      category TEXT NOT NULL DEFAULT '',
+      connector_family_id TEXT,
       org_id TEXT DEFAULT 'org-default'
     );
     CREATE TABLE provider_acquisition_jobs (

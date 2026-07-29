@@ -907,3 +907,183 @@ test("saveProjectFile keeps writes inside the sandboxed project root", async () 
     await sandbox.restore();
   }
 });
+
+test("readProjectBomSourceFile reads csv text and xlsx base64 with mirror-relative provenance", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { readProjectBomSourceFile } = await import("./project-files");
+    const projectRoot = path.join(sandbox.root, "demo-project");
+    await mkdir(path.join(projectRoot, "parts-list"), { recursive: true });
+    const csvBody = "MPN,Qty\r\nRC0402FR-0710KL,4\r\n";
+    await writeFile(path.join(projectRoot, "parts-list", "main.csv"), csvBody, "utf8");
+    const xlsxBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01, 0x02, 0x03]);
+    await writeFile(path.join(projectRoot, "parts-list", "alt.xlsx"), xlsxBytes);
+
+    const project = { id: "proj-1", orgId: "org-default", projectKey: "demo-project" };
+    const csvResult = await readProjectBomSourceFile(project, "parts-list/main.csv");
+    assert.equal(csvResult.status, "ok");
+    if (csvResult.status === "ok") {
+      assert.equal(csvResult.response.sourceFormat, "csv");
+      assert.equal(csvResult.response.rawContent, csvBody);
+      assert.equal(csvResult.response.sourceFilename, "parts-list/main.csv");
+    }
+
+    const xlsxResult = await readProjectBomSourceFile(project, "parts-list/alt.xlsx");
+    assert.equal(xlsxResult.status, "ok");
+    if (xlsxResult.status === "ok") {
+      assert.equal(xlsxResult.response.sourceFormat, "xlsx");
+      assert.equal(xlsxResult.response.rawContent, xlsxBytes.toString("base64"));
+    }
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("readProjectBomSourceFile refuses traversal, legacy formats, and reports missing files honestly", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { readProjectBomSourceFile } = await import("./project-files");
+    const projectRoot = path.join(sandbox.root, "demo-project");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(path.join(sandbox.root, "outside.csv"), "MPN\nX\n", "utf8");
+    const project = { id: "proj-1", orgId: "org-default", projectKey: "demo-project" };
+
+    const traversal = await readProjectBomSourceFile(project, "../outside.csv");
+    assert.equal(traversal.status, "invalid_source");
+
+    const legacy = await readProjectBomSourceFile(project, "old-bom.xls");
+    assert.equal(legacy.status, "unsupported");
+    if (legacy.status === "unsupported") {
+      assert.match(legacy.message, /\.xlsx/u);
+    }
+
+    const wrongType = await readProjectBomSourceFile(project, "notes/readme.pdf");
+    assert.equal(wrongType.status, "unsupported");
+
+    const missing = await readProjectBomSourceFile(project, "parts-list/not-there.csv");
+    assert.equal(missing.status, "not_found");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("readProjectBomSourceFile reports not_configured when the mirror is disabled", async () => {
+  const previous = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  try {
+    process.env.EE_LIBRARY_PROJECT_FILES_ROOT = "off";
+    const { readProjectBomSourceFile } = await import("./project-files");
+    const result = await readProjectBomSourceFile({ id: "proj-1", orgId: "org-default", projectKey: "demo-project" }, "parts-list/main.csv");
+    assert.equal(result.status, "not_configured");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+    } else {
+      process.env.EE_LIBRARY_PROJECT_FILES_ROOT = previous;
+    }
+  }
+});
+
+test("scanUnimportedProjectFolders lists unclaimed folders with parts-list candidates and skips claimed ones case-insensitively", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { scanUnimportedProjectFolders } = await import("./project-files");
+    await mkdir(path.join(sandbox.root, "OLD-SENSOR", "docs"), { recursive: true });
+    await writeFile(path.join(sandbox.root, "OLD-SENSOR", "sensor-bom.csv"), "MPN,Qty\nRC0402FR-0710KL,4\n", "utf8");
+    await writeFile(path.join(sandbox.root, "OLD-SENSOR", "docs", "notes.txt"), "bring-up notes", "utf8");
+    await mkdir(path.join(sandbox.root, "my_board 2022"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "demo-pocket-mcu"), { recursive: true });
+    await mkdir(path.join(sandbox.root, ".hidden"), { recursive: true });
+
+    const result = await scanUnimportedProjectFolders(["DEMO-POCKET-MCU"], "org-default");
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") {
+      return;
+    }
+
+    const names = result.response.unimportedFolders.map((entry) => entry.folderName);
+    assert.deepEqual([...names].sort(), ["OLD-SENSOR", "my_board 2022"].sort(), "claimed and hidden folders are excluded");
+    assert.equal(result.response.skippedExistingCount, 1);
+
+    const sensor = result.response.unimportedFolders.find((entry) => entry.folderName === "OLD-SENSOR");
+    assert.equal(sensor?.renameTarget, "OLD-SENSOR", "already key-form folders need no rename");
+    assert.equal(sensor?.bestPartsListRelativePath, "sensor-bom.csv");
+    assert.ok((sensor?.partsListCandidates[0]?.confidenceScore ?? 0) > 0.5);
+
+    const board = result.response.unimportedFolders.find((entry) => entry.folderName === "my_board 2022");
+    assert.equal(board?.renameTarget, "MY_BOARD-2022", "rename target is the sanitized normalized key form");
+    assert.equal(board?.bestPartsListRelativePath, null);
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("renameFolderForOnboarding renames to key form, no-ops when already there, and refuses collisions and traversal", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { renameFolderForOnboarding } = await import("./project-files");
+    await mkdir(path.join(sandbox.root, "my_board 2022"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "ALREADY-KEYED"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "taken source"), { recursive: true });
+    await mkdir(path.join(sandbox.root, "TAKEN-SOURCE"), { recursive: true });
+
+    const renamed = await renameFolderForOnboarding("my_board 2022", "org-default");
+    assert.deepEqual(renamed, { renamed: true, renamedTo: "MY_BOARD-2022", status: "ok" });
+    const renamedInfo = await import("node:fs/promises").then((fs) => fs.stat(path.join(sandbox.root, "MY_BOARD-2022")));
+    assert.ok(renamedInfo.isDirectory());
+
+    const noop = await renameFolderForOnboarding("ALREADY-KEYED", "org-default");
+    assert.deepEqual(noop, { renamed: false, renamedTo: "ALREADY-KEYED", status: "ok" });
+
+    const collision = await renameFolderForOnboarding("taken source", "org-default");
+    assert.equal(collision.status, "collision");
+
+    const traversal = await renameFolderForOnboarding("../outside", "org-default");
+    assert.equal(traversal.status, "invalid_source");
+
+    const missing = await renameFolderForOnboarding("never-existed", "org-default");
+    assert.equal(missing.status, "invalid_source");
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("wizard scan and rename are scoped to the acting org's tenant mirror folder", async () => {
+  const sandbox = await withSandboxRoot();
+  try {
+    const { scanUnimportedProjectFolders, renameFolderForOnboarding } = await import("./project-files");
+
+    // A non-default org drops a folder; it must live under the hidden per-tenant namespace, and a
+    // different org's scan must never see it.
+    const orgAFolder = path.join(sandbox.root, ".ee-library-tenants", "org-a", "legacy sensor");
+    await mkdir(path.join(orgAFolder, "parts-list"), { recursive: true });
+    await writeFile(path.join(orgAFolder, "parts-list", "bom.csv"), "MPN,Qty\nRC0402FR-0710KL,4\n", "utf8");
+
+    const orgAScan = await scanUnimportedProjectFolders([], "org-a");
+    assert.equal(orgAScan.status, "ok");
+    if (orgAScan.status === "ok") {
+      assert.deepEqual(orgAScan.response.unimportedFolders.map((entry) => entry.folderName), ["legacy sensor"]);
+    }
+
+    // Org B (also non-default) sees nothing — its own tenant folder is empty/absent.
+    const orgBScan = await scanUnimportedProjectFolders([], "org-b");
+    assert.equal(orgBScan.status, "ok");
+    if (orgBScan.status === "ok") {
+      assert.deepEqual(orgBScan.response.unimportedFolders, []);
+    }
+
+    // The default org (scanning the bare root) never sees the hidden tenant namespace either.
+    const defaultScan = await scanUnimportedProjectFolders([], "org-default");
+    assert.equal(defaultScan.status, "ok");
+    if (defaultScan.status === "ok") {
+      assert.deepEqual(defaultScan.response.unimportedFolders, []);
+    }
+
+    // The rename happens inside org A's tenant folder, not the bare root.
+    const renamed = await renameFolderForOnboarding("legacy sensor", "org-a");
+    assert.deepEqual(renamed, { renamed: true, renamedTo: "LEGACY-SENSOR", status: "ok" });
+    const renamedInfo = await import("node:fs/promises").then((fs) => fs.stat(path.join(sandbox.root, ".ee-library-tenants", "org-a", "LEGACY-SENSOR")));
+    assert.ok(renamedInfo.isDirectory());
+  } finally {
+    await sandbox.restore();
+  }
+});

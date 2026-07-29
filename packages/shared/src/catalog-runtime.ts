@@ -3,6 +3,8 @@
  */
 
 import { isValidatedDownloadableAsset } from "./asset-state";
+import { formatEngineeringValue } from "./parameter-normalize";
+import { getCanonicalParamDefByKey } from "./parameter-registry";
 import type {
   Asset,
   AssetAvailabilityStatus,
@@ -14,6 +16,7 @@ import type {
   ExportAvailability,
   LifecycleStatus,
   PartMetric,
+  PartParameter,
   PartApprovalStatus,
   PartSearchFilters,
   PartReadinessStatus,
@@ -85,6 +88,9 @@ export function getSearchFacetsFromRecords(records: PartSearchRecord[]): SearchF
     categories: Array.from(new Set(records.map((record) => record.part.category))).sort(),
     connectorClasses: (["connector", "accessory", "tooling", "cable", "non_connector"] as const).filter((status) => connectorClassCounts[status] > 0),
     lifecycleStatuses: (["active", "not_recommended", "obsolete", "unknown"] as const).filter((status) => lifecycleCounts[status] > 0),
+    // Seed records carry no reconciled parameters (those are DB-derived), so parametric filtering is a
+    // DB-only capability; the empty list means the UI never renders parametric controls in seed mode.
+    parameterFacets: [],
     manufacturers: uniqueBy(records.map((record) => record.manufacturer), (manufacturer) => manufacturer.id).sort((left, right) => left.name.localeCompare(right.name)),
     packages: uniqueBy(records.map((record) => record.package), (partPackage) => partPackage.id).sort((left, right) => left.packageName.localeCompare(right.packageName)),
     readinessStatuses: (["ready_for_export_review", "needs_attention", "blocked", "unknown"] as const).filter((status) => readinessCounts[status] > 0),
@@ -127,6 +133,8 @@ export function filterPartRecords(records: PartSearchRecord[], filters: PartSear
     const hasReadinessStatusMatch = filters.readinessStatus ? record.readinessSummary.status === filters.readinessStatus : true;
     const hasApprovalStatusMatch = filters.approvalStatus ? record.approval.status === filters.approvalStatus : true;
     const hasConnectorClassMatch = filters.connectorClass ? record.readinessSummary.connectorClass === filters.connectorClass : true;
+    // filters.parameters is intentionally not evaluated here: seed records carry no reconciled
+    // parameters, so parametric filtering is DB-only (the UI hides the controls in seed mode).
 
     return (
       hasQueryMatch &&
@@ -247,22 +255,75 @@ export function formatMetricLabel(metricKey: string): string {
  */
 export function formatMetricValue(metric: PartMetric): string {
   if (metric.metricValue !== null) {
-    return `${formatMetricNumber(metric.metricValue)} ${metric.unit}`;
+    return formatEngineeringValue(metric.metricValue, metric.unit);
   }
 
   if (metric.minValue !== null && metric.maxValue !== null) {
-    return `${formatMetricNumber(metric.minValue)}-${formatMetricNumber(metric.maxValue)} ${metric.unit}`;
+    return `${formatEngineeringValue(metric.minValue, metric.unit)} to ${formatEngineeringValue(metric.maxValue, metric.unit)}`;
   }
 
   if (metric.minValue !== null) {
-    return `>= ${formatMetricNumber(metric.minValue)} ${metric.unit}`;
+    return `≥ ${formatEngineeringValue(metric.minValue, metric.unit)}`;
   }
 
   if (metric.maxValue !== null) {
-    return `<= ${formatMetricNumber(metric.maxValue)} ${metric.unit}`;
+    return `≤ ${formatEngineeringValue(metric.maxValue, metric.unit)}`;
   }
 
   return `Unknown ${metric.unit}`;
+}
+
+/**
+ * Formats a canonical parameter key into a readable label, preferring the registry's curated label
+ * ("RAM Size", "DC Resistance") over mechanical title-casing of the key ("Ram Size", "Dc Resistance").
+ */
+export function formatParameterLabel(paramKey: string): string {
+  return getCanonicalParamDefByKey(paramKey)?.label ?? formatMetricLabel(paramKey);
+}
+
+/**
+ * Formats a canonical unit string for display, expanding non-obvious codes.
+ */
+export function formatParameterUnit(unit: string | null): string {
+  if (unit === null) {
+    return "";
+  }
+
+  if (unit === "ppm_per_c") {
+    return "ppm/°C";
+  }
+
+  if (unit === "deg C") {
+    return "°C";
+  }
+
+  if (unit === "ohm") {
+    return "Ω";
+  }
+
+  return unit;
+}
+
+/**
+ * Formats a normalized parameter value in its canonical unit for dense engineering tables.
+ */
+export function formatParameterValue(parameter: PartParameter): string {
+  const unit = formatParameterUnit(parameter.unit);
+  const suffix = unit.length > 0 ? ` ${unit}` : "";
+
+  if (parameter.valueKind === "numeric" && parameter.valueNumeric !== null) {
+    return formatEngineeringValue(parameter.valueNumeric, parameter.unit);
+  }
+
+  if (parameter.valueKind === "range" && parameter.valueMin !== null && parameter.valueMax !== null) {
+    return `${formatMetricNumber(parameter.valueMin)} to ${formatMetricNumber(parameter.valueMax)}${suffix}`;
+  }
+
+  if (parameter.valueText !== null && parameter.valueText.length > 0) {
+    return parameter.valueText;
+  }
+
+  return "Unknown";
 }
 
 /**

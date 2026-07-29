@@ -631,8 +631,9 @@ function mapProviderAcquisitionJobRow(row: DatabaseProviderAcquisitionJobRow): P
 
 /**
  * Converts worker/import failures into stable queue codes plus calm user-facing failure copy.
+ * Exported so the BOM backfill queue reports provider failures with the same codes and wording.
  */
-function mapProviderAcquisitionFailure(error: unknown): { code: string; message: string; rawError: string } {
+export function mapProviderAcquisitionFailure(error: unknown): { code: string; message: string; rawError: string } {
   const rawError = formatUnknownError(error);
 
   if (error instanceof Error) {

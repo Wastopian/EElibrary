@@ -5,7 +5,8 @@
 
 import { resolveAssetClassSummaries } from "@ee-library/shared/asset-resolution";
 import { getAssetReviewStatus } from "@ee-library/shared/review-workflow";
-import { formatMetricLabel, formatMetricValue } from "@ee-library/shared/catalog-runtime";
+import { formatMetricLabel, formatMetricValue, formatParameterLabel, formatParameterValue } from "@ee-library/shared/catalog-runtime";
+import { collectCoveredMetricKeys } from "@ee-library/shared/parameter-registry";
 import { assetTrustStageTone, formatAssetTrustStageLabel } from "./detail-view-model";
 import { getAssetPreviewState } from "../components/AssetInlinePreview";
 import type { AssetPreviewState } from "../components/AssetInlinePreview";
@@ -51,10 +52,35 @@ export function collectCompareMetricKeys(records: PartSearchRecord[]): string[] 
 }
 
 /**
- * Formats one metric cell for a record, or an em dash when the metric is absent.
+ * Collects the metric keys the Specs section still needs after the Specifications matrix: a key is
+ * dropped only when every compared part that has the metric also has a reconciled parameter covering
+ * it (so no part's only display of a value is lost), and kept as long as any part still relies on it.
  */
-export function formatCompareMetricCell(record: PartSearchRecord, metricKey: string): string {
-  const metric = record.metrics.find((candidate) => candidate.metricKey === metricKey);
+export function collectUncoveredCompareMetricKeys(details: PartDetailResponse[]): string[] {
+  const coveredByPart = new Map(
+    details.map((detail) => [detail.record.part.id, collectCoveredMetricKeys(detail.parameters)])
+  );
+
+  return collectCompareMetricKeys(detailsToRecords(details)).filter((metricKey) =>
+    details.some(
+      (detail) =>
+        detail.record.metrics.some((metric) => metric.metricKey === metricKey)
+        && !coveredByPart.get(detail.record.part.id)?.has(metricKey)
+    )
+  );
+}
+
+/**
+ * Formats one legacy metric cell, suppressing it when this part's standardized Specifications row
+ * already covers the same value. A compare-wide metric row can remain for another, uncovered part,
+ * so coverage must be applied per cell rather than only when collecting row keys.
+ */
+export function formatUncoveredCompareMetricCell(detail: PartDetailResponse, metricKey: string): string {
+  if (collectCoveredMetricKeys(detail.parameters).has(metricKey)) {
+    return "—";
+  }
+
+  const metric = detail.record.metrics.find((candidate) => candidate.metricKey === metricKey);
 
   return metric ? formatMetricValue(metric) : "—";
 }
@@ -64,6 +90,48 @@ export function formatCompareMetricCell(record: PartSearchRecord, metricKey: str
  */
 export function detailsToRecords(details: PartDetailResponse[]): PartSearchRecord[] {
   return details.map((detail) => detail.record);
+}
+
+/**
+ * Collects sorted normalized-parameter keys present on any compared part.
+ *
+ * Reads `detail.parameters` (the reconciled part_parameters), which the compare loader already fetches
+ * per part and which `detailsToRecords` drops -- so no extra request is needed.
+ */
+export function collectCompareParameterKeys(details: PartDetailResponse[]): string[] {
+  const keys = new Set<string>();
+
+  for (const detail of details) {
+    for (const parameter of detail.parameters) {
+      keys.add(parameter.paramKey);
+    }
+  }
+
+  return [...keys].sort((first, second) => formatParameterLabel(first).localeCompare(formatParameterLabel(second)));
+}
+
+/**
+ * Builds the normalized-parameter matrix rows: one row per parameter key, one cell per part with the
+ * typed value in canonical units, an em dash when absent, and a conflict marker when sources disagree.
+ */
+export function buildCompareParameterRows(details: PartDetailResponse[]): CompareRow[] {
+  return collectCompareParameterKeys(details).map<CompareRow>((paramKey) => ({
+    label: formatParameterLabel(paramKey),
+    rowKey: `parameter:${paramKey}`,
+    values: details.map<CompareCellValue>((detail) => {
+      const parameter = detail.parameters.find((candidate) => candidate.paramKey === paramKey);
+
+      if (!parameter) {
+        return { partId: detail.record.part.id, text: "—", tone: "neutral" };
+      }
+
+      return {
+        partId: detail.record.part.id,
+        text: `${formatParameterValue(parameter)}${parameter.isConflicted ? " · sources disagree" : ""}`,
+        tone: parameter.isConflicted ? "review" : "info"
+      };
+    })
+  }));
 }
 
 const ASSET_CLASS_LABELS: Record<AssetType, string> = {
