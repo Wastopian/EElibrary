@@ -77,6 +77,7 @@ export interface ProjectDocumentExtractionProcessingSummary {
 /** DatabaseProjectDocumentExtractionJob is the minimum claimed queue row. */
 interface DatabaseProjectDocumentExtractionJob {
   id: string;
+  org_id: string | null;
   project_id: string;
   project_key: string;
   relative_path: string;
@@ -230,7 +231,7 @@ async function runProjectDocumentExtractionJob(
   job: DatabaseProjectDocumentExtractionJob,
   onProgress: (progress: ProjectDocumentExtractionProgress) => Promise<void>
 ): Promise<ProjectDocumentExtractionOutput> {
-  const absolutePath = resolveProjectDocumentPath(job.project_key, job.relative_path);
+    const absolutePath = resolveProjectDocumentPath(job.org_id, job.project_key, job.relative_path);
   const fileInfo = await stat(absolutePath).catch(() => null);
 
   if (!fileInfo?.isFile()) {
@@ -518,6 +519,7 @@ async function claimNextProjectDocumentExtractionJob(): Promise<DatabaseProjectD
           AND extraction_status = 'queued'
         RETURNING
           id,
+          org_id,
           project_id,
           project_key,
           relative_path,
@@ -563,6 +565,7 @@ function buildQueuedProjectDocumentExtractionSelect(includeSkipLocked: boolean):
   return `
     SELECT
       id,
+      org_id,
       project_id,
       project_key,
       relative_path,
@@ -834,11 +837,20 @@ function compareNumberedOfficePaths(left: string, right: string): number {
   return leftNumber - rightNumber || left.localeCompare(right);
 }
 
+/** DEFAULT_ORG_ID keeps existing single-tenant mirrors at their historic root/<projectKey> path. */
+const DEFAULT_ORG_ID = "org-default";
+
+/** TENANT_PROJECT_FILES_FOLDER mirrors the API-side tenant namespace. */
+const TENANT_PROJECT_FILES_FOLDER = ".ee-library-tenants";
+
 /** Resolves one queued source path inside the configured shared project mirror. */
-function resolveProjectDocumentPath(projectKey: string, relativePath: string): string {
+function resolveProjectDocumentPath(orgId: string | null, projectKey: string, relativePath: string): string {
   const root = resolveProjectFilesRoot();
   const safeProjectKey = sanitizeProjectKey(projectKey);
-  const projectRoot = path.resolve(root, safeProjectKey);
+  const projectRoot =
+    !orgId || orgId === DEFAULT_ORG_ID
+      ? path.resolve(root, safeProjectKey)
+      : path.resolve(root, TENANT_PROJECT_FILES_FOLDER, sanitizeProjectKey(orgId), safeProjectKey);
   const candidate = path.resolve(projectRoot, relativePath.replace(/\//gu, path.sep));
   const relative = path.relative(projectRoot, candidate);
 

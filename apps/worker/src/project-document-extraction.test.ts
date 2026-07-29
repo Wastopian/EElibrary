@@ -290,6 +290,45 @@ test("worker processes a mixed real-file batch and records honest recovery state
   }
 });
 
+test("worker reads non-default org documents from the tenant-scoped mirror", async () => {
+  const databasePool = createWorkerExtractionPool();
+  const fixtureRoot = await createFixtureRoot();
+  const projectKey = "SHARED";
+  const orgId = "org-b";
+  const projectRoot = resolveTestProjectRoot(fixtureRoot, projectKey, orgId);
+  const previousRoot = process.env.EE_LIBRARY_PROJECT_FILES_ROOT;
+  process.env.EE_LIBRARY_PROJECT_FILES_ROOT = fixtureRoot;
+  setWorkerRepositoryPoolForTests(databasePool);
+
+  try {
+    await mkdir(path.join(projectRoot, "incoming"), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, "incoming", "procedure.docx"),
+      await buildMinimalDocx(["Org B scoped extraction text."])
+    );
+    await queueWorkerExtraction(databasePool, fixtureRoot, projectKey, {
+      format: "docx",
+      id: "tenant-docx",
+      orgId,
+      relativePath: "incoming/procedure.docx"
+    });
+
+    const summary = await processProjectDocumentExtractionJobs(1);
+    const row = await databasePool.query<{ extracted_text: string | null; extraction_status: string }>(
+      "SELECT extraction_status, extracted_text FROM project_document_extractions WHERE id = 'tenant-docx'"
+    );
+
+    assert.equal(summary.processed[0]?.status, "succeeded");
+    assert.equal(row.rows[0]?.extraction_status, "succeeded");
+    assert.match(row.rows[0]?.extracted_text ?? "", /Org B scoped extraction text/u);
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await databasePool.end();
+    restoreProjectFilesRoot(previousRoot);
+    await removeFixtureRoot(fixtureRoot);
+  }
+});
+
 test("worker bounds concurrent readers and cannot overwrite a newer queued fingerprint", async () => {
   const databasePool = createWorkerExtractionPool();
   const fixtureRoot = await createFixtureRoot();
@@ -598,6 +637,7 @@ function createWorkerExtractionPool(onQuery?: (sql: string) => void): Pool {
   db.public.none(`
     CREATE TABLE project_document_extractions (
       id TEXT PRIMARY KEY,
+      org_id TEXT DEFAULT 'org-default',
       project_id TEXT NOT NULL,
       project_key TEXT NOT NULL,
       relative_path TEXT NOT NULL,
@@ -676,14 +716,14 @@ async function queueWorkerExtraction(
     fingerprintOverride?: string;
     format: ProjectDocumentExtractionFormat;
     id: string;
+    orgId?: string;
     relativePath: string;
     sourceModifiedAt?: string | null;
     sourceSizeBytes?: number;
   }
 ): Promise<void> {
   const sourcePath = path.resolve(
-    fixtureRoot,
-    projectKey,
+    resolveTestProjectRoot(fixtureRoot, projectKey, input.orgId),
     input.relativePath.replace(/\//gu, path.sep)
   );
   const sourceInfo = await stat(sourcePath).catch(() => null);
@@ -704,6 +744,7 @@ async function queueWorkerExtraction(
     `
       INSERT INTO project_document_extractions (
         id,
+        org_id,
         project_id,
         project_key,
         relative_path,
@@ -717,10 +758,11 @@ async function queueWorkerExtraction(
         progress_percent,
         progress_message
       )
-      VALUES ($1, 'project-worker-test', $2, $3, $4, $5, $6, $7, $8, $9, 'queued', 0, 'Waiting for the document reader.')
+      VALUES ($1, $2, 'project-worker-test', $3, $4, $5, $6, $7, $8, $9, $10, 'queued', 0, 'Waiting for the document reader.')
     `,
     [
       input.id,
+      input.orgId ?? "org-default",
       projectKey,
       input.relativePath,
       path.basename(input.relativePath),
@@ -731,6 +773,13 @@ async function queueWorkerExtraction(
       sourceModifiedAt
     ]
   );
+}
+
+/** Resolves a test fixture root the same way the API and worker resolve project mirrors. */
+function resolveTestProjectRoot(fixtureRoot: string, projectKey: string, orgId = "org-default"): string {
+  return orgId === "org-default"
+    ? path.join(fixtureRoot, projectKey)
+    : path.join(fixtureRoot, ".ee-library-tenants", orgId, projectKey);
 }
 
 /** Waits until the worker has claimed the expected bounded concurrent wave. */

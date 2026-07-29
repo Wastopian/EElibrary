@@ -14,6 +14,7 @@ import { BomCsvParseError, buildBomImportPreview, hasMappedHeader } from "@ee-li
 import { startBomBackfillForBomImport } from "./bom-backfill-store";
 import { createBomImportInDatabase, createProjectInDatabase, matchBomImportRowsInDatabase } from "./project-memory-store";
 import { readProjectBomSourceFile, renameFolderForOnboarding } from "./project-files";
+import { requireRequestOrgId } from "./request-context";
 import type { ProjectFolderOnboardInput, ProjectFolderOnboardReport } from "@ee-library/shared/types";
 
 /** OnboardProjectFolderResult reports one onboarding run or the explicit setup states. */
@@ -33,6 +34,8 @@ export async function onboardProjectFolder(input: ProjectFolderOnboardInput, act
     return { code: "MISSING_FOLDER", message: "Choose one scanned folder to add.", status: "invalid" };
   }
 
+  // The acting org scopes both the on-disk mirror folder (rename/read) and the created project.
+  const orgId = requireRequestOrgId();
   const revisionLabel = input.revisionLabel?.trim() || "A";
   const report: ProjectFolderOnboardReport = {
     backfillQueuedCount: null,
@@ -48,7 +51,7 @@ export async function onboardProjectFolder(input: ProjectFolderOnboardInput, act
   };
 
   // Step 1: the disclosed rename, so the project key resolves to this folder everywhere.
-  const renameResult = await renameFolderForOnboarding(folderName);
+  const renameResult = await renameFolderForOnboarding(folderName, orgId);
 
   if (renameResult.status === "not_configured") {
     return { status: "not_configured" };
@@ -87,7 +90,7 @@ export async function onboardProjectFolder(input: ProjectFolderOnboardInput, act
     return { report, status: "done" };
   }
 
-  const source = await readProjectBomSourceFile({ id: project.id, projectKey: project.projectKey }, report.partsListRelativePath);
+  const source = await readProjectBomSourceFile({ id: project.id, orgId, projectKey: project.projectKey }, report.partsListRelativePath);
 
   if (source.status !== "ok") {
     report.bomOutcome = "failed";

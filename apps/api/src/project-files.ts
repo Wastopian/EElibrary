@@ -10,9 +10,9 @@
  *   2. The default `<user-home>/EE-Library/projects` location (per the operator's
  *      preference for keeping shared assets outside the source tree).
  *
- * Path safety: project keys are sanitized before they are joined to the root and the
- * resolved per-project path is asserted to live inside the root. This refuses path
- * traversal regardless of how a project key was persisted upstream.
+ * Path safety: tenant ids and project keys are sanitized before they are joined to the
+ * root and the resolved per-project path is asserted to live inside the root. This refuses
+ * path traversal regardless of how identifiers were persisted upstream.
  */
 
 import { copyFile, mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
@@ -105,9 +105,17 @@ export const MAX_PROJECT_FILE_BYTES = 25 * 1024 * 1024;
 export interface ProjectFilesProjectInput {
   /** Database id used for the response payload. */
   id: string;
+  /** Tenant id used to namespace project keys that are only unique within an organization. */
+  orgId: string;
   /** Project key used as the on-disk folder name (after sanitization). */
   projectKey: string;
 }
+
+/** DEFAULT_ORG_ID keeps existing single-tenant mirrors at their historic root/<projectKey> path. */
+const DEFAULT_ORG_ID = "org-default";
+
+/** TENANT_PROJECT_FILES_FOLDER avoids collisions with sanitized legacy project keys. */
+const TENANT_PROJECT_FILES_FOLDER = ".ee-library-tenants";
 
 /**
  * Returns the absolute project file mirror root, or null when explicitly disabled.
@@ -157,7 +165,7 @@ export async function buildProjectFilesResponse(project: ProjectFilesProjectInpu
     };
   }
 
-  const projectRoot = resolveProjectRoot(root, safeKey);
+  const projectRoot = resolveProjectRoot(root, project);
 
   try {
     await ensureProjectFolderTree(projectRoot);
@@ -203,11 +211,12 @@ export async function searchProjectDocumentsForWhereUsed(
   readExtractions?: (
     projectId: string,
     searchValues: string[]
-  ) => Promise<ProjectDocumentExtractionRecordInput[]>
+  ) => Promise<ProjectDocumentExtractionRecordInput[]>,
+  orgId?: string
 ): Promise<WhereUsedDocumentHitRecord[]> {
   const root = getProjectFilesRoot();
   const needle = buildProjectDocumentSearchNeedle(query);
-  if (!root || !needle) {
+  if (!root || !needle || !orgId) {
     return [];
   }
 
@@ -219,8 +228,11 @@ export async function searchProjectDocumentsForWhereUsed(
     }
 
     try {
-      const safeKey = sanitizeProjectKey(project.projectKey);
-      const projectRoot = resolveProjectRoot(root, safeKey);
+      const projectRoot = resolveProjectRoot(root, {
+        id: project.id,
+        orgId,
+        projectKey: project.projectKey
+      });
       await ensureProjectFolderTree(projectRoot);
       const rawDocumentMap = await buildProjectDocumentMap(projectRoot);
       const extractionRecords = readExtractions
@@ -294,11 +306,25 @@ export function sanitizeProjectKey(rawKey: string): string {
 }
 
 /**
- * Resolves and asserts that `<root>/<key>` stays inside `<root>`. Throws if a malformed
- * key would escape the root, even after sanitization.
+ * Sanitizes an organization id into a safe directory segment.
  */
-function resolveProjectRoot(root: string, sanitizedKey: string): string {
-  const candidate = path.resolve(root, sanitizedKey);
+function sanitizeProjectOrgId(rawOrgId: string): string {
+  return sanitizeProjectKey(rawOrgId);
+}
+
+/**
+ * Resolves and asserts that the per-project mirror stays inside `<root>`.
+ *
+ * The default org keeps the legacy `<root>/<projectKey>` path so existing single-tenant
+ * folders do not disappear. Every other org lives under a hidden namespace that sanitized
+ * project keys cannot produce, preventing collisions with legacy project folders.
+ */
+function resolveProjectRoot(root: string, project: ProjectFilesProjectInput): string {
+  const safeKey = sanitizeProjectKey(project.projectKey);
+  const candidate =
+    project.orgId === DEFAULT_ORG_ID
+      ? path.resolve(root, safeKey)
+      : path.resolve(root, TENANT_PROJECT_FILES_FOLDER, sanitizeProjectOrgId(project.orgId), safeKey);
   const normalizedRoot = path.resolve(root);
   const relative = path.relative(normalizedRoot, candidate);
 
@@ -307,6 +333,18 @@ function resolveProjectRoot(root: string, sanitizedKey: string): string {
   }
 
   return candidate;
+}
+
+/**
+ * Resolves the mirror folder an org's project folders live directly under: the configured root for
+ * the default (single-tenant) org, and the hidden per-tenant namespace for every other org. The
+ * folder-backfill wizard scans, renames, and onboards folders relative to this, so a teammate in a
+ * non-default org sees and acts on only their own team's dropped folders — never another tenant's.
+ */
+function resolveOrgMirrorRoot(root: string, orgId: string): string {
+  return orgId === DEFAULT_ORG_ID
+    ? path.resolve(root)
+    : path.resolve(root, TENANT_PROJECT_FILES_FOLDER, sanitizeProjectOrgId(orgId));
 }
 
 /**
@@ -2191,8 +2229,7 @@ export async function copyProjectDocumentToSuggestedFolder(
   }
 
   try {
-    const safeKey = sanitizeProjectKey(project.projectKey);
-    const projectRoot = resolveProjectRoot(root, safeKey);
+    const projectRoot = resolveProjectRoot(root, project);
     await ensureProjectFolderTree(projectRoot);
 
     const documentMap = await buildProjectDocumentMap(projectRoot);
@@ -2328,8 +2365,7 @@ export async function saveProjectFile(
   }
 
   try {
-    const safeKey = sanitizeProjectKey(project.projectKey);
-    const projectRoot = resolveProjectRoot(root, safeKey);
+    const projectRoot = resolveProjectRoot(root, project);
     const categoryRoot = path.join(projectRoot, folder.folderName);
     await mkdir(categoryRoot, { recursive: true });
 
@@ -2426,20 +2462,22 @@ export type ScanUnimportedProjectFoldersResult =
  * case-insensitive against the folder each project key resolves to, so a case-variant drop never
  * onboards a duplicate. The scan reads only — it never creates, renames, or reorganizes anything.
  */
-export async function scanUnimportedProjectFolders(existingProjectKeys: string[]): Promise<ScanUnimportedProjectFoldersResult> {
+export async function scanUnimportedProjectFolders(existingProjectKeys: string[], orgId: string): Promise<ScanUnimportedProjectFoldersResult> {
   const root = getProjectFilesRoot();
   if (!root) {
     return { status: "not_configured" };
   }
 
+  // Scan only the acting org's mirror folder so one team never sees or onboards another team's drops.
+  const orgRoot = resolveOrgMirrorRoot(root, orgId);
   const claimedFolderNames = new Set(existingProjectKeys.map((key) => sanitizeProjectKey(key).toUpperCase()));
   let entries: Dirent[] = [];
 
   try {
-    entries = await readdir(root, { withFileTypes: true });
+    entries = await readdir(orgRoot, { withFileTypes: true });
   } catch (error) {
     if (isMissingFileError(error)) {
-      return { response: { rootPath: root, skippedExistingCount: 0, truncated: false, unimportedFolders: [] }, status: "ok" };
+      return { response: { rootPath: orgRoot, skippedExistingCount: 0, truncated: false, unimportedFolders: [] }, status: "ok" };
     }
 
     throw error;
@@ -2454,7 +2492,7 @@ export async function scanUnimportedProjectFolders(existingProjectKeys: string[]
   const unimportedFolders: ProjectFolderScanEntry[] = [];
 
   for (const folderName of scannedNames) {
-    const folderPath = path.join(root, folderName);
+    const folderPath = path.join(orgRoot, folderName);
     const documentMap = await buildProjectDocumentMap(folderPath);
     const partsListCandidates = documentMap.documents
       .filter((entry) => entry.documentType === "parts_list")
@@ -2481,7 +2519,7 @@ export async function scanUnimportedProjectFolders(existingProjectKeys: string[]
 
   return {
     response: {
-      rootPath: root,
+      rootPath: orgRoot,
       skippedExistingCount: folderNames.length - unimportedNames.length,
       truncated: unimportedNames.length > scannedNames.length,
       unimportedFolders
@@ -2521,19 +2559,21 @@ export type RenameFolderForOnboardingResult =
  * disclosed in the wizard, changes no file contents, and refuses honestly when the target name is
  * already taken by a different folder.
  */
-export async function renameFolderForOnboarding(folderName: string): Promise<RenameFolderForOnboardingResult> {
+export async function renameFolderForOnboarding(folderName: string, orgId: string): Promise<RenameFolderForOnboardingResult> {
   const root = getProjectFilesRoot();
   if (!root) {
     return { status: "not_configured" };
   }
 
+  // Rename only inside the acting org's mirror folder so one team can never touch another's folders.
+  const orgRoot = resolveOrgMirrorRoot(root, orgId);
   const trimmed = folderName.trim();
   if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
     return { message: "Choose one folder directly under the project files root.", status: "invalid_source" };
   }
 
-  const sourcePath = path.resolve(root, trimmed);
-  if (!isPathInside(root, sourcePath)) {
+  const sourcePath = path.resolve(orgRoot, trimmed);
+  if (!isPathInside(orgRoot, sourcePath)) {
     return { message: "That folder is outside the project files root.", status: "invalid_source" };
   }
 
@@ -2559,8 +2599,8 @@ export async function renameFolderForOnboarding(folderName: string): Promise<Ren
     return { renamed: false, renamedTo, status: "ok" };
   }
 
-  const targetPath = path.resolve(root, renamedTo);
-  if (!isPathInside(root, targetPath)) {
+  const targetPath = path.resolve(orgRoot, renamedTo);
+  if (!isPathInside(orgRoot, targetPath)) {
     return { message: "The renamed folder path escaped the project files root.", status: "invalid_source" };
   }
 
@@ -2636,8 +2676,7 @@ export async function readProjectBomSourceFile(
   }
 
   try {
-    const safeKey = sanitizeProjectKey(project.projectKey);
-    const projectRoot = resolveProjectRoot(root, safeKey);
+    const projectRoot = resolveProjectRoot(root, project);
     const absolutePath = resolveProjectRelativePath(projectRoot, relativePath);
     const info = await stat(absolutePath);
 
