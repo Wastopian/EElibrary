@@ -133,6 +133,57 @@ test("admin workspace renders review, promotion, import, validation, and audit s
 });
 
 /**
+ * Verifies dense issue operations remain reachable after the first 20 action rows.
+ */
+test("admin issue workflow table paginates action rows beyond dense display cap", async () => {
+  const records = buildPagedIssueWorkflowRecords(25);
+  const restoreFetch = mockFetch((url) => {
+    if (url.pathname === "/health") {
+      return jsonResponse({
+        dependencies: {
+          database: "connected",
+          objectStorage: "connected_phase_0",
+          queue: "connected_phase_0"
+        },
+        service: "api",
+        status: "ok"
+      });
+    }
+
+    if (url.pathname === "/audit-events") {
+      return jsonResponse(buildAuditEventEnvelope());
+    }
+
+    return jsonResponse({
+      data: records,
+      source: "database",
+      warnings: []
+    });
+  });
+
+  try {
+    const firstPageHtml = await renderAdminPage();
+
+    assert.match(firstPageHtml, /Showing 1-20 of 25 issue workflow items/u);
+    assert.match(firstPageHtml, /PAGED-020/u);
+    assert.doesNotMatch(firstPageHtml, /PAGED-021/u);
+    assert.match(firstPageHtml, /Next issue page/u);
+    assert.match(firstPageHtml, /href="\/admin\?issuePage=2#issue-ops-heading"/u);
+
+    const secondPageHtml = await renderAdminPage({ issuePage: "2" });
+
+    assert.match(secondPageHtml, /Showing 21-25 of 25 issue workflow items/u);
+    assert.match(secondPageHtml, /PAGED-021/u);
+    assert.match(secondPageHtml, /PAGED-025/u);
+    assert.doesNotMatch(secondPageHtml, /PAGED-020/u);
+    assert.match(secondPageHtml, /Previous issue page/u);
+    assert.match(secondPageHtml, /Last issue page/u);
+  } finally {
+    restoreFetch();
+  }
+});
+
+/**
  * Verifies lifecycle and source-conflict queues render from DB-backed API records, not only seeded catalog fixtures.
  */
 test("admin workspace renders lifecycle and source-conflict queues from DB-backed records", async () => {
@@ -211,8 +262,10 @@ test("admin workspace renders lifecycle and source-conflict queues from DB-backe
   }
 });
 
-async function renderAdminPage(): Promise<string> {
-  return renderToStaticMarkup(await AdminPage({}));
+type AdminPageTestSearchParams = NonNullable<Parameters<typeof AdminPage>[0]["searchParams"]> extends Promise<infer Params> ? Params : never;
+
+async function renderAdminPage(searchParams: AdminPageTestSearchParams = {}): Promise<string> {
+  return renderToStaticMarkup(await AdminPage({ searchParams: Promise.resolve(searchParams) }));
 }
 
 function mockFetch(handler: (url: URL) => Response): () => void {
@@ -376,6 +429,48 @@ function buildAdminFixtureRecords(): PartSearchRecord[] {
   });
 
   return records;
+}
+
+/**
+ * Builds records with one sorted issue each so issue-workflow paging can be tested without DB setup.
+ */
+function buildPagedIssueWorkflowRecords(count: number): PartSearchRecord[] {
+  const template = structuredClone(getAllPartRecords()[0]) as PartSearchRecord;
+
+  return Array.from({ length: count }, (_, index) => {
+    const itemNumber = index + 1;
+    const itemLabel = String(itemNumber).padStart(3, "0");
+    const record = structuredClone(template) as PartSearchRecord;
+    const partId = `part-paged-${itemLabel}`;
+    const updatedAt = new Date(Date.UTC(2026, 3, 20, 12, count - itemNumber, 0)).toISOString();
+
+    record.part.id = partId;
+    record.part.mpn = `PAGED-${itemLabel}`;
+    record.part.lifecycleStatus = "not_recommended";
+    record.part.lastUpdatedAt = updatedAt;
+    record.manufacturer.name = `Paged Manufacturer ${itemLabel}`;
+    record.assets = [];
+    record.riskFlags = [];
+    record.sourceReconciliation = null;
+    record.issues = [
+      {
+        assignedTo: null,
+        code: "lifecycle_risk",
+        detail: `Paged issue detail ${itemLabel}.`,
+        id: `issue-paged-${itemLabel}`,
+        lastUpdatedAt: updatedAt,
+        partId,
+        resolutionNotes: null,
+        resolvedAt: null,
+        severity: "warning",
+        source: "admin_paging_fixture",
+        status: "open",
+        summary: `Paged issue summary ${itemLabel}.`
+      }
+    ];
+
+    return record;
+  });
 }
 
 /**
