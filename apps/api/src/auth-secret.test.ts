@@ -17,10 +17,21 @@ const SHORT_SECRET = "too-short";
  * Mints an HS256 token signed against any string secret, including weak/empty ones, so the
  * test can prove that the verifier refuses to accept them when AUTH_SECRET is unset or short.
  */
-async function mintTokenWithSecret(secret: string, role: "admin" | "user" = "admin"): Promise<string> {
+async function mintTokenWithSecret(
+  secret: string,
+  role: "admin" | "user" = "admin",
+  orgId: string | null = "org-default"
+): Promise<string> {
   const key = new TextEncoder().encode(secret);
+  // orgId is a required claim now; include it by default. Pass null to mint a legacy token that
+  // omits it, which the verifier must reject.
+  const claims: Record<string, unknown> = { sub: "attacker", role };
 
-  return await new SignJWT({ sub: "attacker", role })
+  if (orgId !== null) {
+    claims.orgId = orgId;
+  }
+
+  return await new SignJWT(claims)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("1h")
@@ -126,13 +137,12 @@ test("verifyBearerToken exposes the orgId tenant claim when present", async () =
   });
 });
 
-test("verifyBearerToken defaults orgId to the shared org when the claim is absent (non-breaking foundation)", async () => {
+test("verifyBearerToken rejects a token that omits the orgId tenant claim (fail closed)", async () => {
   await withEnv({ AUTH_SECRET: STRONG_SECRET, NODE_ENV: "production", EE_LIBRARY_ALLOW_TEST_AUTH: undefined }, async () => {
-    const valid = await mintTokenWithSecret(STRONG_SECRET, "user"); // signs { sub, role } with no orgId
-    const result = await verifyBearerToken(`Bearer ${valid}`);
+    const noOrg = await mintTokenWithSecret(STRONG_SECRET, "user", null); // signs { sub, role } with no orgId
+    const result = await verifyBearerToken(`Bearer ${noOrg}`);
 
-    assert.ok(result, "expected a session for a valid token");
-    assert.equal(result.orgId, "org-default", "a token without an orgId claim defaults to the shared org");
+    assert.equal(result, null, "a token without a tenant claim must be refused, never treated as the shared org");
   });
 });
 

@@ -280,7 +280,7 @@ test("GET /parts/:partId/assets/:assetId/download authorizes gated admin overrid
   setDocumentControlPoolForTests(createGatedDocumentPoolStub());
   setStorageClientForTests(createStorageClientStub("local-storage-enabled"));
 
-  const token = await new SignJWT({ role: "admin" })
+  const token = await new SignJWT({ role: "admin", orgId: "org-default" })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject("admin-1")
     .setIssuedAt()
