@@ -70,12 +70,19 @@ function getSharedPool(): Pool | null {
     return sharedPool;
   }
 
-  if (!process.env.DATABASE_URL) {
+  // Prefer the dedicated least-privilege application role when a team server provisions one
+  // (scripts/setup-app-role.mjs), so the request path connects as a non-owner role that holds only
+  // scoped DML. Fall back to DATABASE_URL (the owner) when unset — local dev, CI, and single-tenant
+  // deploys are unchanged. This connection never sets app.rls_bypass; every request binds
+  // app.current_org, so RLS scopes it to the acting tenant.
+  const connectionString = process.env.EE_LIBRARY_APP_DATABASE_URL ?? process.env.DATABASE_URL;
+
+  if (!connectionString) {
     return null;
   }
 
   sharedPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
     max: readPoolSize()
   });
 

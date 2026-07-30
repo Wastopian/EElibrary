@@ -105,3 +105,22 @@ Moving to a new machine is the same procedure: set up the new server through "Fi
 - **New accounts require the team invite code** from `.env.team` (`EE_LIBRARY_SIGNUP_INVITE_CODE`). To change the code, edit that value and run `docker compose -f compose.team.yaml up -d` again. Clearing the value entirely allows open sign-up — only do that on a network you fully trust.
 - Only the web app is reachable on the network. The database and the internal API are private to the Docker stack.
 - `.env.team` holds the server's secrets. Don't commit it, don't email it, and keep `backups/` as protected as the server itself — backups contain the whole library.
+
+## Optional hardening — run the API as a least-privilege database role
+
+By default every service connects to Postgres as the owner role. Row-level security already scopes each web request to the signed-in team, but for defense-in-depth you can make the API connect as a dedicated **non-owner** role that holds only `SELECT/INSERT/UPDATE/DELETE` — no `DROP`, no ownership, no schema changes. Migrations, seeds, and the background worker keep the owner role. Do this once, after the stack has run its first migration:
+
+1. In `.env.team`, set `EE_LIBRARY_APP_DB_PASSWORD` to a strong value.
+2. Provision the role and its grants (idempotent — safe to re-run after upgrades):
+
+```bash
+docker compose -f compose.team.yaml run --rm migrate npm run setup:app-role
+```
+
+3. In `.env.team`, set `EE_LIBRARY_APP_DATABASE_URL` to `postgres://ee_library_app:<the password from step 1>@postgres:5432/ee_library`, then restart the API:
+
+```bash
+docker compose -f compose.team.yaml up -d
+```
+
+The API now connects as `ee_library_app`. If you ever remove `EE_LIBRARY_APP_DATABASE_URL`, the API falls back to the owner role with no other change. Re-run step 2 after any upgrade that adds new tables, so the role keeps access to them (future tables are granted automatically, but re-running is harmless and confirms it).
