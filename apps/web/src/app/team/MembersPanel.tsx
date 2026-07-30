@@ -19,16 +19,18 @@ export interface TeamMember {
   role: string;
 }
 
-/** MembersPanelProps carries the org's member rows and the acting user's id. */
+/** MembersPanelProps carries the org's member rows and whether the viewer may administer. */
 interface MembersPanelProps {
   members: TeamMember[];
   actingUserId: string;
+  /** When false, password reset and role toggles are hidden (read-only viewers). */
+  canAdminister: boolean;
 }
 
 /**
  * Renders the member list; each row can be password-reset by the (admin) viewer after a confirm.
  */
-export function MembersPanel({ members, actingUserId }: MembersPanelProps): React.ReactElement {
+export function MembersPanel({ members, actingUserId, canAdminister }: MembersPanelProps): React.ReactElement {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [result, setResult] = useState<ResetMemberPasswordResult | null>(null);
   const [roleResult, setRoleResult] = useState<SetMemberRoleResult | null>(null);
@@ -83,7 +85,7 @@ export function MembersPanel({ members, actingUserId }: MembersPanelProps): Reac
           <tr>
             <th>Email</th>
             <th>Role</th>
-            <th>Password</th>
+            {canAdminister ? <th>Password</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -95,7 +97,7 @@ export function MembersPanel({ members, actingUserId }: MembersPanelProps): Reac
               </td>
               <td>
                 <span>{ROLE_LABELS[member.role === "admin" ? "admin" : "user"]}</span>
-                {member.id === actingUserId ? null : (
+                {canAdminister && member.id !== actingUserId ? (
                   <div className="team-members__role-action">
                     {member.role === "admin" ? (
                       <button className="link-button" disabled={isPending} onClick={() => onSetRole(member.id, "user")} type="button">
@@ -107,36 +109,40 @@ export function MembersPanel({ members, actingUserId }: MembersPanelProps): Reac
                       </button>
                     )}
                   </div>
-                )}
+                ) : null}
               </td>
-              <td>
-                {member.id === actingUserId ? (
-                  <a className="button-link button-link--quiet" href="/account">
-                    Change on your Account page
-                  </a>
-                ) : confirmingId === member.id ? (
-                  <span className="team-members__confirm">
-                    <button className="link-button" disabled={isPending} onClick={() => onReset(member.id)} type="button">
-                      {isPending ? "Resetting…" : `Yes, reset ${member.email}`}
+              {canAdminister ? (
+                <td>
+                  {member.id === actingUserId ? (
+                    <a className="button-link button-link--quiet" href="/account">
+                      Change on your Account page
+                    </a>
+                  ) : confirmingId === member.id ? (
+                    <span className="team-members__confirm">
+                      <button className="link-button" disabled={isPending} onClick={() => onReset(member.id)} type="button">
+                        {isPending ? "Resetting…" : `Yes, reset ${member.email}`}
+                      </button>
+                      <button className="link-button" disabled={isPending} onClick={() => setConfirmingId(null)} type="button">
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button className="link-button" onClick={() => { setResult(null); setConfirmingId(member.id); }} type="button">
+                      Reset password
                     </button>
-                    <button className="link-button" disabled={isPending} onClick={() => setConfirmingId(null)} type="button">
-                      Cancel
-                    </button>
-                  </span>
-                ) : (
-                  <button className="link-button" onClick={() => { setResult(null); setConfirmingId(member.id); }} type="button">
-                    Reset password
-                  </button>
-                )}
-              </td>
+                  )}
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
       </table>
-      <p className="form-hint">
-        Resetting gives the teammate a temporary password you hand to them directly. Their current password stops
-        working immediately, and they should change the temporary one on their Account page after signing in.
-      </p>
+      {canAdminister ? (
+        <p className="form-hint">
+          Resetting gives the teammate a temporary password you hand to them directly. Their current password stops
+          working immediately, and they should change the temporary one on their Account page after signing in.
+        </p>
+      ) : null}
     </div>
   );
 }

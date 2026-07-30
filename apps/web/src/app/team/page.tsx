@@ -3,12 +3,15 @@
  *
  * Per-org teammate invites (Increment 4): a member shares this code and a teammate enters it at sign-up
  * (`/sign-up?join=1`) to join the team as a full-access admin. The code is a shared secret, so
- * regenerating it invalidates the previous one.
+ * regenerating it invalidates the previous one. Mint/rotate/revoke and revealing the code are
+ * admin-only: joins create admins, so a read-only member minting or sharing an invite would escalate.
  */
 
 import { auth } from "@/auth";
 import { computeInviteTokenExpiry, DEFAULT_INVITE_TOKEN_TTL_DAYS, generateInviteCode, resolveTeamInviteView } from "@/lib/team-invite";
 import { createInviteToken, listActiveInviteTokens, revokeInviteToken } from "@/lib/invite-token-store";
+import { readLiveSessionRole } from "@/lib/live-session-role";
+import { canAdministerTeam } from "@/lib/team-roles";
 import { createDbPool, organizations, users } from "@ee-library/db";
 import { EmptyState, SectionHeading, SectionPanel } from "@ee-library/ui";
 import { eq } from "drizzle-orm";
@@ -24,16 +27,23 @@ const DEFAULT_DATABASE_URL = "postgres://ee_library:ee_library@localhost:5432/ee
 /**
  * Sets a fresh invite code on the acting user's organization. Handles both first-time generation and
  * regeneration. The org id is read from the session at action time — never from form input — so a member
- * can only ever rotate their own team's code.
+ * can only ever rotate their own team's code. Admin-only: the reusable code admits full-access admins.
  */
 async function setTeamInviteCode(): Promise<void> {
   "use server";
 
   const session = await auth();
   const orgId = session?.user?.orgId;
+  const userId = session?.user?.id;
 
-  if (!orgId) {
+  if (!orgId || !userId) {
     redirect("/sign-in");
+  }
+
+  const live = await readLiveSessionRole(userId);
+
+  if (!live || live.orgId !== orgId || !canAdministerTeam(live.role)) {
+    return;
   }
 
   const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
@@ -45,21 +55,29 @@ async function setTeamInviteCode(): Promise<void> {
 /**
  * Issues one single-use, expiring invite token for the acting user's org. Org id and issuer come from
  * the session at action time, never from input, so a member can only ever invite into their own team.
+ * Admin-only: each token admits one full-access admin.
  */
 async function issueSingleUseInvite(): Promise<void> {
   "use server";
 
   const session = await auth();
   const orgId = session?.user?.orgId;
+  const userId = session?.user?.id;
 
-  if (!orgId) {
+  if (!orgId || !userId) {
     redirect("/sign-in");
+  }
+
+  const live = await readLiveSessionRole(userId);
+
+  if (!live || live.orgId !== orgId || !canAdministerTeam(live.role)) {
+    return;
   }
 
   const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   await createInviteToken(db, {
     orgId,
-    createdBy: session?.user?.id ?? null,
+    createdBy: userId,
     expiresAt: computeInviteTokenExpiry(new Date()),
   });
 
@@ -67,16 +85,23 @@ async function issueSingleUseInvite(): Promise<void> {
 }
 
 /**
- * Revokes one still-unused single-use token, strictly scoped to the acting user's org.
+ * Revokes one still-unused single-use token, strictly scoped to the acting user's org. Admin-only.
  */
 async function revokeSingleUseInvite(formData: FormData): Promise<void> {
   "use server";
 
   const session = await auth();
   const orgId = session?.user?.orgId;
+  const userId = session?.user?.id;
 
-  if (!orgId) {
+  if (!orgId || !userId) {
     redirect("/sign-in");
+  }
+
+  const live = await readLiveSessionRole(userId);
+
+  if (!live || live.orgId !== orgId || !canAdministerTeam(live.role)) {
+    return;
   }
 
   const tokenId = typeof formData.get("tokenId") === "string" ? (formData.get("tokenId") as string) : "";
@@ -95,12 +120,15 @@ async function revokeSingleUseInvite(formData: FormData): Promise<void> {
 export default async function TeamPage() {
   const session = await auth();
   const orgId = session?.user?.orgId;
+  const userId = session?.user?.id;
 
-  if (!orgId) {
+  if (!orgId || !userId) {
     redirect("/sign-in");
   }
 
   const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+  const live = await readLiveSessionRole(userId, db);
+  const isAdmin = live !== null && live.orgId === orgId && canAdministerTeam(live.role);
   const [organization] = await db
     .select({ inviteCode: organizations.inviteCode, name: organizations.name })
     .from(organizations)
@@ -120,7 +148,7 @@ export default async function TeamPage() {
   }
 
   const view = resolveTeamInviteView(organization);
-  const activeTokens = await listActiveInviteTokens(db, orgId);
+  const activeTokens = isAdmin ? await listActiveInviteTokens(db, orgId) : [];
   const members = await db
     .select({ id: users.id, email: users.email, role: users.role })
     .from(users)
@@ -130,81 +158,96 @@ export default async function TeamPage() {
   return (
     <main className="workspace-page team-page">
       <SectionHeading id="team" subtitle={view.teamName} title="Team" />
-      <SectionPanel
-        description="Share one code with a teammate. They enter it at sign-up to join your team and see its shared parts, projects, and files."
-        title="Invite teammates"
-      >
-        {view.inviteCode ? (
-          <div className="team-invite">
-            <p>
-              Teammates join <strong>{view.teamName}</strong> by choosing <em>Join a team</em> at sign-up and entering:
-            </p>
-            <p className="team-invite__code">
-              <code>{view.inviteCode}</code>
-            </p>
-            <div className="team-invite__actions">
-              <CopyInviteCode inviteCode={view.inviteCode} />
-              <form action={setTeamInviteCode}>
-                <button className="button-link button-link--quiet" type="submit">
-                  Regenerate code
-                </button>
-              </form>
-            </div>
-            <p className="team-invite__hint">
-              New teammates join as full-access members. Regenerating makes the current code stop working, so only
-              people you share the new code with can join.
-            </p>
-          </div>
-        ) : (
-          <div className="team-invite">
-            <p>Your team does not have an invite code yet. Generate one to invite a teammate.</p>
-            <form action={setTeamInviteCode}>
-              <button className="button-link" type="submit">
-                Generate invite code
-              </button>
-            </form>
-          </div>
-        )}
-      </SectionPanel>
-
-      <SectionPanel
-        description={`Prefer these for one-off invites: each works for a single new account and expires in ${DEFAULT_INVITE_TOKEN_TTL_DAYS} days, so a link that leaks or is over-shared cannot admit extra people. The shared code above still works for bulk onboarding.`}
-        title="Single-use invites"
-      >
-        <div className="team-invite">
-          <form action={issueSingleUseInvite}>
-            <button className="button-link" type="submit">
-              Create single-use invite
-            </button>
-          </form>
-          {activeTokens.length > 0 ? (
-            <ul className="team-invite__token-list">
-              {activeTokens.map((activeToken) => (
-                <li className="team-invite__token" key={activeToken.id}>
-                  <code>{activeToken.token}</code>
-                  <span className="team-invite__hint">
-                    Expires {activeToken.expiresAt.toLocaleDateString()}
-                  </span>
-                  <form action={revokeSingleUseInvite}>
-                    <input name="tokenId" type="hidden" value={activeToken.id} />
+      {isAdmin ? (
+        <>
+          <SectionPanel
+            description="Share one code with a teammate. They enter it at sign-up to join your team and see its shared parts, projects, and files."
+            title="Invite teammates"
+          >
+            {view.inviteCode ? (
+              <div className="team-invite">
+                <p>
+                  Teammates join <strong>{view.teamName}</strong> by choosing <em>Join a team</em> at sign-up and entering:
+                </p>
+                <p className="team-invite__code">
+                  <code>{view.inviteCode}</code>
+                </p>
+                <div className="team-invite__actions">
+                  <CopyInviteCode inviteCode={view.inviteCode} />
+                  <form action={setTeamInviteCode}>
                     <button className="button-link button-link--quiet" type="submit">
-                      Revoke
+                      Regenerate code
                     </button>
                   </form>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="team-invite__hint">No active single-use invites. Create one to invite a teammate with a link that works exactly once.</p>
-          )}
-        </div>
-      </SectionPanel>
+                </div>
+                <p className="team-invite__hint">
+                  New teammates join as full-access members. Regenerating makes the current code stop working, so only
+                  people you share the new code with can join.
+                </p>
+              </div>
+            ) : (
+              <div className="team-invite">
+                <p>Your team does not have an invite code yet. Generate one to invite a teammate.</p>
+                <form action={setTeamInviteCode}>
+                  <button className="button-link" type="submit">
+                    Generate invite code
+                  </button>
+                </form>
+              </div>
+            )}
+          </SectionPanel>
+
+          <SectionPanel
+            description={`Prefer these for one-off invites: each works for a single new account and expires in ${DEFAULT_INVITE_TOKEN_TTL_DAYS} days, so a link that leaks or is over-shared cannot admit extra people. The shared code above still works for bulk onboarding.`}
+            title="Single-use invites"
+          >
+            <div className="team-invite">
+              <form action={issueSingleUseInvite}>
+                <button className="button-link" type="submit">
+                  Create single-use invite
+                </button>
+              </form>
+              {activeTokens.length > 0 ? (
+                <ul className="team-invite__token-list">
+                  {activeTokens.map((activeToken) => (
+                    <li className="team-invite__token" key={activeToken.id}>
+                      <code>{activeToken.token}</code>
+                      <span className="team-invite__hint">
+                        Expires {activeToken.expiresAt.toLocaleDateString()}
+                      </span>
+                      <form action={revokeSingleUseInvite}>
+                        <input name="tokenId" type="hidden" value={activeToken.id} />
+                        <button className="button-link button-link--quiet" type="submit">
+                          Revoke
+                        </button>
+                      </form>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="team-invite__hint">No active single-use invites. Create one to invite a teammate with a link that works exactly once.</p>
+              )}
+            </div>
+          </SectionPanel>
+        </>
+      ) : (
+        <SectionPanel
+          description="Only a team admin can share invite codes or create single-use invites. Ask an admin if you need to bring someone onto the team."
+          title="Invite teammates"
+        >
+          <p className="team-invite__hint">Your account is read-only on this team, so invite tools stay with the admins.</p>
+        </SectionPanel>
+      )}
 
       <SectionPanel
-        description="Who belongs to this team. If a teammate forgets their password, reset it here and hand them the temporary one directly."
+        description={
+          isAdmin
+            ? "Who belongs to this team. If a teammate forgets their password, reset it here and hand them the temporary one directly."
+            : "Who belongs to this team. Password resets and role changes are limited to team admins."
+        }
         title="Members"
       >
-        <MembersPanel actingUserId={session?.user?.id ?? ""} members={members} />
+        <MembersPanel actingUserId={userId} canAdminister={isAdmin} members={members} />
       </SectionPanel>
     </main>
   );
