@@ -286,7 +286,7 @@ function createProviderAcquisitionPool(): TestPool {
  * Creates a real HS256 bearer token so admin-only route behavior can be tested without shortcuts.
  */
 async function createBearerToken(secret: string, role: "admin" | "user"): Promise<string> {
-  const jwt = await new SignJWT({ role })
+  const jwt = await new SignJWT({ role, orgId: "org-default" })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(`test-${role}`)
     .sign(new TextEncoder().encode(secret));

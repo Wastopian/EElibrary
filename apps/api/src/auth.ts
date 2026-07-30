@@ -96,12 +96,18 @@ export async function verifyBearerToken(
       return null;
     }
 
-    // Tenant claim: honor it when present; default to the shared org otherwise. A later
-    // enforcement step will require it once every mint path guarantees it.
+    // Tenant claim: required, fail closed. Every legitimate mint path (the web /api/token route and
+    // middleware, both fed by NextAuth callbacks that default orgId to the shared org) always emits a
+    // non-empty orgId, so a token without one is a misconfigured script or a forgery attempt — reject
+    // it rather than silently acting as the shared org. The test-auth path supplies its own org and
+    // never reaches this verifier.
     const rawOrgId = payload["orgId"];
-    const orgId = typeof rawOrgId === "string" && rawOrgId.length > 0 ? rawOrgId : DEFAULT_ORG_ID;
 
-    return { orgId, role, sub: payload.sub };
+    if (typeof rawOrgId !== "string" || rawOrgId.length === 0) {
+      return null;
+    }
+
+    return { orgId: rawOrgId, role, sub: payload.sub };
   } catch {
     return null;
   }

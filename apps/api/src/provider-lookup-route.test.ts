@@ -222,7 +222,7 @@ function createConnectedPoolStub(): Pool {
  * Creates a real HS256 bearer token so optional-session lookup can verify admin access without test-only auth bypasses.
  */
 async function createBearerToken(secret: string, role: "admin" | "user"): Promise<string> {
-  const jwt = await new SignJWT({ role })
+  const jwt = await new SignJWT({ role, orgId: "org-default" })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(`test-${role}`)
     .sign(new TextEncoder().encode(secret));
