@@ -11,7 +11,8 @@
 
 import { auth } from "@/auth";
 import { generateTemporaryPassword } from "@/lib/account";
-import { parseTeamRole, resolveRoleChange, type TeamRole } from "@/lib/team-roles";
+import { readLiveSessionRole } from "@/lib/live-session-role";
+import { canAdministerTeam, parseTeamRole, resolveRoleChange, type TeamRole } from "@/lib/team-roles";
 import { createDbPool, users } from "@ee-library/db";
 import { hashSync } from "bcryptjs";
 import { and, eq } from "drizzle-orm";
@@ -39,11 +40,14 @@ export async function resetMemberPasswordAction(memberId: string): Promise<Reset
     return { status: "failed", message: "Your session has expired. Sign in again, then retry." };
   }
 
-  if (session.user.role !== "admin") {
-    return { status: "failed", message: "Only a team admin can reset a teammate's password." };
-  }
-
   try {
+    // Prefer the live users.role row over the JWT claim — demotion must take effect without a re-login.
+    const live = await readLiveSessionRole(session.user.id);
+
+    if (!live || live.orgId !== session.user.orgId || !canAdministerTeam(live.role)) {
+      return { status: "failed", message: "Only a team admin can reset a teammate's password." };
+    }
+
     const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
     const [target] = await db
       .select({ email: users.email, orgId: users.orgId })
@@ -53,7 +57,7 @@ export async function resetMemberPasswordAction(memberId: string): Promise<Reset
 
     // Same failure shape whether the id is unknown or belongs to another team: the org boundary
     // must not be probeable from here.
-    if (!target || (target.orgId ?? "org-default") !== session.user.orgId) {
+    if (!target || (target.orgId ?? "org-default") !== live.orgId) {
       return { status: "failed", message: "That person is not a member of your team." };
     }
 
@@ -83,10 +87,6 @@ export async function setMemberRoleAction(memberId: string, nextRoleValue: strin
     return { status: "failed", message: "Your session has expired. Sign in again, then retry." };
   }
 
-  if (session.user.role !== "admin") {
-    return { status: "failed", message: "Only a team admin can change a teammate's role." };
-  }
-
   const nextRole = parseTeamRole(nextRoleValue);
 
   if (!nextRole) {
@@ -94,8 +94,15 @@ export async function setMemberRoleAction(memberId: string, nextRoleValue: strin
   }
 
   try {
+    // Prefer the live users.role row over the JWT claim — demotion must take effect without a re-login.
+    const live = await readLiveSessionRole(session.user.id);
+
+    if (!live || live.orgId !== session.user.orgId || !canAdministerTeam(live.role)) {
+      return { status: "failed", message: "Only a team admin can change a teammate's role." };
+    }
+
     const db = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
-    const orgId = session.user.orgId;
+    const orgId = live.orgId;
     const [target] = await db
       .select({ email: users.email, orgId: users.orgId, role: users.role })
       .from(users)
