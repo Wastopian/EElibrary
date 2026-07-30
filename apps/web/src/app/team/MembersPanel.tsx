@@ -9,7 +9,8 @@
  */
 
 import React, { useState, useTransition } from "react";
-import { resetMemberPasswordAction, type ResetMemberPasswordResult } from "./actions";
+import { resetMemberPasswordAction, setMemberRoleAction, type ResetMemberPasswordResult, type SetMemberRoleResult } from "./actions";
+import { ROLE_LABELS, type TeamRole } from "@/lib/team-roles";
 
 /** TeamMember is the row shape the server page passes down (no hashes, ids only for actions). */
 export interface TeamMember {
@@ -30,6 +31,7 @@ interface MembersPanelProps {
 export function MembersPanel({ members, actingUserId }: MembersPanelProps): React.ReactElement {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [result, setResult] = useState<ResetMemberPasswordResult | null>(null);
+  const [roleResult, setRoleResult] = useState<SetMemberRoleResult | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const onReset = (memberId: string) => {
@@ -37,6 +39,12 @@ export function MembersPanel({ members, actingUserId }: MembersPanelProps): Reac
       const outcome = await resetMemberPasswordAction(memberId);
       setResult(outcome);
       setConfirmingId(null);
+    });
+  };
+
+  const onSetRole = (memberId: string, nextRole: TeamRole) => {
+    startTransition(async () => {
+      setRoleResult(await setMemberRoleAction(memberId, nextRole));
     });
   };
 
@@ -58,6 +66,17 @@ export function MembersPanel({ members, actingUserId }: MembersPanelProps): Reac
           <p>{result.message}</p>
         </div>
       ) : null}
+      {roleResult?.status === "updated" ? (
+        <div className="auth-feedback auth-feedback--success" role="status">
+          <strong>{roleResult.email} is now {ROLE_LABELS[roleResult.role]}</strong>
+        </div>
+      ) : null}
+      {roleResult?.status === "failed" ? (
+        <div className="auth-feedback auth-feedback--error" role="alert">
+          <strong>Role change failed</strong>
+          <p>{roleResult.message}</p>
+        </div>
+      ) : null}
 
       <table className="data-table">
         <thead>
@@ -74,7 +93,22 @@ export function MembersPanel({ members, actingUserId }: MembersPanelProps): Reac
                 {member.email}
                 {member.id === actingUserId ? <span className="text-muted"> (you)</span> : null}
               </td>
-              <td>{member.role === "admin" ? "Admin" : "User"}</td>
+              <td>
+                <span>{ROLE_LABELS[member.role === "admin" ? "admin" : "user"]}</span>
+                {member.id === actingUserId ? null : (
+                  <div className="team-members__role-action">
+                    {member.role === "admin" ? (
+                      <button className="link-button" disabled={isPending} onClick={() => onSetRole(member.id, "user")} type="button">
+                        Make read-only
+                      </button>
+                    ) : (
+                      <button className="link-button" disabled={isPending} onClick={() => onSetRole(member.id, "admin")} type="button">
+                        Make admin
+                      </button>
+                    )}
+                  </div>
+                )}
+              </td>
               <td>
                 {member.id === actingUserId ? (
                   <a className="button-link button-link--quiet" href="/account">
