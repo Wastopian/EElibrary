@@ -89,7 +89,15 @@ export interface ProviderAcquisitionJobProcessingResult {
 export interface ProviderAcquisitionProcessingSummary {
   /** One result per claimed job in processing order. */
   processed: ProviderAcquisitionJobProcessingResult[];
+  /** Number of abandoned running jobs returned to the queue before this batch. */
+  recoveredStaleCount: number;
 }
+
+/** Running jobs older than this threshold are treated as abandoned worker work. */
+const STALE_PROVIDER_ACQUISITION_MS = 15 * 60 * 1000;
+
+/** Heartbeat writes keep long provider imports from looking abandoned. */
+const PROVIDER_ACQUISITION_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 /** SUB_BATCH_SIZE is the maximum rows per parameterized INSERT to stay well within pg limits. */
 const SUB_BATCH_SIZE = 100;
@@ -224,6 +232,7 @@ export async function processProviderAcquisitionJobs(limit = 20, concurrency = 5
   const processed: ProviderAcquisitionJobProcessingResult[] = [];
   const boundedLimit = Math.max(1, Math.min(limit, 100));
   const boundedConcurrency = Math.max(1, Math.min(concurrency, 20));
+  const recoveredStaleCount = await recoverStaleProviderAcquisitionJobs();
   let exhausted = false;
 
   while (!exhausted && processed.length < boundedLimit) {
@@ -242,7 +251,7 @@ export async function processProviderAcquisitionJobs(limit = 20, concurrency = 5
     }
   }
 
-  return { processed };
+  return { processed, recoveredStaleCount };
 }
 
 /**
@@ -254,6 +263,8 @@ export async function processNextProviderAcquisitionJob(): Promise<ProviderAcqui
   if (!claimedJob) {
     return null;
   }
+
+  const stopHeartbeat = startProviderAcquisitionHeartbeat(claimedJob.id);
 
   try {
     const summary = await runProviderPartImportImpl(
@@ -302,7 +313,82 @@ export async function processNextProviderAcquisitionJob(): Promise<ProviderAcqui
       providerPartKey: claimedJob.providerPartKey,
       status: "failed"
     };
+  } finally {
+    stopHeartbeat();
   }
+}
+
+/**
+ * Returns abandoned running jobs to the queue after a worker crash or forced restart.
+ *
+ * Active jobs refresh `last_updated_at` through a heartbeat, so only work with no live
+ * worker for the full stale interval is retried. Without this reclaim, a stuck `running` row
+ * permanently occupies the global active unique index for that provider part key.
+ */
+async function recoverStaleProviderAcquisitionJobs(): Promise<number> {
+  const staleBefore = new Date(Date.now() - STALE_PROVIDER_ACQUISITION_MS).toISOString();
+  const result = await getWorkerDatabasePool().query(
+    `
+      UPDATE provider_acquisition_jobs
+      SET
+        job_status = 'queued',
+        requested_at = now(),
+        started_at = NULL,
+        completed_at = NULL,
+        error_code = NULL,
+        error_message = NULL,
+        last_updated_at = now()
+      WHERE job_status = 'running'
+        AND last_updated_at < $1
+      RETURNING id
+    `,
+    [staleBefore]
+  );
+
+  return result.rowCount ?? 0;
+}
+
+/** Starts a low-frequency liveness heartbeat and returns an idempotent stop function. */
+function startProviderAcquisitionHeartbeat(jobId: string): () => void {
+  let stopped = false;
+  let writeInFlight = false;
+  const timer = setInterval(() => {
+    if (writeInFlight) {
+      return;
+    }
+
+    writeInFlight = true;
+    void touchProviderAcquisitionHeartbeat(jobId)
+      .catch(() => {
+        // A later heartbeat or terminal write can recover from a transient heartbeat error.
+      })
+      .finally(() => {
+        writeInFlight = false;
+      });
+  }, PROVIDER_ACQUISITION_HEARTBEAT_INTERVAL_MS);
+  timer.unref();
+
+  return () => {
+    if (stopped) {
+      return;
+    }
+
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/** Refreshes only the liveness timestamp for a job that is still running. */
+async function touchProviderAcquisitionHeartbeat(jobId: string): Promise<void> {
+  await getWorkerDatabasePool().query(
+    `
+      UPDATE provider_acquisition_jobs
+      SET last_updated_at = now()
+      WHERE id = $1
+        AND job_status = 'running'
+    `,
+    [jobId]
+  );
 }
 
 /**
