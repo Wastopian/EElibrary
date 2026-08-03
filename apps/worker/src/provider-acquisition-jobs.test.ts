@@ -244,7 +244,58 @@ test("provider acquisition worker no-ops cleanly when no queued jobs exist", asy
 
     assert.equal(nextJob, null);
     assert.deepEqual(summary.processed, []);
+    assert.equal(summary.recoveredStaleCount, 0);
   } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+test("provider acquisition worker retries abandoned running work without stealing fresh work", async () => {
+  const pool = createProviderAcquisitionPool();
+  setWorkerRepositoryPoolForTests(pool);
+  await seedPartRow(pool, "part-abandoned");
+  await seedQueuedJob(pool, "acqjob-abandoned", "2026-04-24T12:00:00.000Z", "C1091", "RC-02W300JT");
+  await seedQueuedJob(pool, "acqjob-active", "2026-04-24T12:01:00.000Z", "C2040", "RC-03W100JT");
+  await pool.query(`
+    UPDATE provider_acquisition_jobs
+    SET
+      job_status = 'running',
+      started_at = now(),
+      last_updated_at = now() - INTERVAL '20 minutes'
+    WHERE id = 'acqjob-abandoned';
+
+    UPDATE provider_acquisition_jobs
+    SET
+      job_status = 'running',
+      started_at = now(),
+      last_updated_at = now()
+    WHERE id = 'acqjob-active';
+  `);
+
+  setProviderAcquisitionImportRunnerForTests(async (_providerId, request) => {
+    return buildImportSummary("part-abandoned", request.providerPartId ?? "C1091");
+  });
+
+  try {
+    const summary = await processProviderAcquisitionJobs(1);
+    const rows = await pool.query<{ id: string; job_status: string }>(
+      "SELECT id, job_status FROM provider_acquisition_jobs ORDER BY id"
+    );
+    const events = await pool.query<{ event_type: string }>(
+      "SELECT event_type FROM provider_acquisition_job_events WHERE job_id = 'acqjob-abandoned' ORDER BY created_at ASC"
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, row.job_status]));
+
+    assert.equal(summary.recoveredStaleCount, 1);
+    assert.equal(summary.processed.length, 1);
+    assert.equal(summary.processed[0]?.jobId, "acqjob-abandoned");
+    assert.equal(summary.processed[0]?.status, "succeeded");
+    assert.equal(byId.get("acqjob-abandoned"), "succeeded");
+    assert.equal(byId.get("acqjob-active"), "running");
+    assert.deepEqual(events.rows.map((row) => row.event_type), ["queued", "running", "succeeded"]);
+  } finally {
+    setProviderAcquisitionImportRunnerForTests(null);
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
   }
