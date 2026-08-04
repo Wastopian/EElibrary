@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
-import { listWorkerOperationalDiagnostics, persistNormalizedPartRows, persistProviderImportFailureRows, setWorkerRepositoryPoolForTests } from "./catalog-repository";
+import { listWorkerOperationalDiagnostics, persistNormalizedPart, persistNormalizedPartRows, persistProviderImportFailureRows, readSourceRecordImportStatus, setWorkerRepositoryPoolForTests } from "./catalog-repository";
 import type { Pool, PoolClient } from "pg";
 import type { NormalizedProviderPart } from "./provider-adapters";
 
@@ -189,6 +189,55 @@ test("persistProviderImportFailureRows namespaces failure source ids for non-def
   assert.ok(orgStamp, "expected org stamp on the failure source row");
   assert.equal(orgStamp.values?.[0], "org-acme");
   assert.equal(orgStamp.values?.[1], "org-acme__source-digikey-stm32g031k8t6");
+});
+
+/**
+ * Non-default imports persist scoped part ids. The outer persist helper must return that scoped id
+ * so acquisition/BOM/API callers never link the adapter's unscoped legacy key (which may FK to
+ * org-default's part or fail entirely).
+ */
+test("persistNormalizedPart returns the org-scoped part id for non-default orgs", async () => {
+  const pool = createMinimalImportPool();
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    const partId = await persistNormalizedPart(buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6), "org-acme");
+    assert.equal(partId, "org-acme__part-repeat-c1");
+
+    const defaultPartId = await persistNormalizedPart(buildMinimalImportPart("2026-04-12T01:00:00.000Z", 0.7), "org-default");
+    assert.equal(defaultPartId, "part-repeat-c1", "org-default keeps the legacy unprefixed id");
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Prior-status lookup must use the same namespaced source id as persist; otherwise a non-default
+ * refresh reads org-default's row (or misses its own) and reports the wrong import outcome.
+ */
+test("readSourceRecordImportStatus scopes the source id to the requesting org", async () => {
+  const queries: QueryCall[] = [];
+  const pool = {
+    async query(text: string, values?: unknown[]) {
+      queries.push({ text, values });
+      return { rows: [{ import_status: "imported" }] };
+    }
+  } as unknown as Pool;
+
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    const status = await readSourceRecordImportStatus("digikey", "STM32G031K8T6", "org-acme");
+    assert.equal(status, "imported");
+    assert.equal(queries[0]?.values?.[0], "org-acme__source-digikey-stm32g031k8t6");
+
+    queries.length = 0;
+    await readSourceRecordImportStatus("digikey", "STM32G031K8T6", "org-default");
+    assert.equal(queries[0]?.values?.[0], "source-digikey-stm32g031k8t6");
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+  }
 });
 
 /**
