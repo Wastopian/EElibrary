@@ -917,8 +917,8 @@ export async function captureReferencedDatasheetEvidenceForPart(
 }
 
 /** Reads the org that owns a part, defaulting to the shared org when the part is missing/unstamped. */
-async function readPartOrgId(client: PoolClient, partId: string): Promise<string> {
-  const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+async function readPartOrgId(queryable: Pick<Pool, "query">, partId: string): Promise<string> {
+  const result = await queryable.query<{ org_id: string | null }>("SELECT org_id FROM parts WHERE id = $1 LIMIT 1", [partId]);
   return result.rows[0]?.org_id ?? DEFAULT_ORG_ID;
 }
 
@@ -2007,6 +2007,33 @@ export async function stampDatasheetExtractionOrgIds(client: PoolClient, partId:
   const orgId = await readPartOrgId(client, partId);
 
   for (const table of ["part_datasheet_parameters", "part_parameters"]) {
+    // Table names are hardcoded constants, not user input.
+    await client.query(`UPDATE ${table} SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
+  }
+}
+
+/**
+ * Stamps org_id on daemon-written asset_validation_records from the part's org.
+ *
+ * Footprint/symbol/3D validation jobs write outside the import path, so stampPartChildOrgIds never
+ * sees the new rows. FORCE RLS compares org_id to app.current_org, and NULL never matches — the API
+ * then hides the qualifying evidence and promote-for-export stays blocked after a successful review.
+ */
+export async function stampAssetValidationOrgIds(queryable: Pick<Pool, "query">, partId: string): Promise<void> {
+  const orgId = await readPartOrgId(queryable, partId);
+  await queryable.query(`UPDATE asset_validation_records SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
+}
+
+/**
+ * Stamps org_id on draft-generation assets and workflows from the part's org.
+ *
+ * `generate:drafts` persists outside the import path. Without this stamp, FORCE RLS hides the draft
+ * assets and generation_workflows from the API, so engineers never see the generated CAD to review.
+ */
+export async function stampDraftGenerationOrgIds(client: PoolClient, partId: string): Promise<void> {
+  const orgId = await readPartOrgId(client, partId);
+
+  for (const table of ["assets", "generation_workflows"] as const) {
     // Table names are hardcoded constants, not user input.
     await client.query(`UPDATE ${table} SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
   }
