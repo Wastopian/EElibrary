@@ -389,8 +389,9 @@ test("processThreeDGeometryValidations persists evidence rows without moving tru
       validation_status: string;
       validation_type: string;
       validator: string;
+      org_id: string | null;
     }>(
-      `SELECT id, asset_id, validation_status, validation_type, validator
+      `SELECT id, asset_id, validation_status, validation_type, validator, org_id
          FROM asset_validation_records
          WHERE validation_type = 'three_d_geometry'
          ORDER BY id ASC`
@@ -399,6 +400,7 @@ test("processThreeDGeometryValidations persists evidence rows without moving tru
     for (const row of records.rows) {
       assert.equal(row.validation_type, "three_d_geometry");
       assert.equal(row.validator, "generated:step_integrity_v1");
+      assert.equal(row.org_id, "org-acme", `${row.id} must inherit the part org for RLS visibility`);
     }
     assert.equal(records.rows.find((row) => row.asset_id === "asset-3d-pass")?.id, "validation:three_d_geometry:asset-3d-pass");
 
@@ -451,8 +453,9 @@ test("processFootprintGeometryValidations persists one validation row and never 
       validation_status: string;
       validation_type: string;
       validator: string;
+      org_id: string | null;
     }>(
-      `SELECT id, asset_id, validation_status, validation_type, validator
+      `SELECT id, asset_id, validation_status, validation_type, validator, org_id
          FROM asset_validation_records
          ORDER BY id ASC`
     );
@@ -462,14 +465,16 @@ test("processFootprintGeometryValidations persists one validation row and never 
       asset_id: "asset-fp-pass",
       validation_status: "verified",
       validation_type: "footprint_geometry",
-      validator: "generated:footprint_geometry_v1"
+      validator: "generated:footprint_geometry_v1",
+      org_id: "org-acme"
     });
     assert.deepEqual(records.rows.find((row) => row.asset_id === "asset-fp-fail"), {
       id: "validation:footprint_geometry:asset-fp-fail",
       asset_id: "asset-fp-fail",
       validation_status: "failed",
       validation_type: "footprint_geometry",
-      validator: "generated:footprint_geometry_v1"
+      validator: "generated:footprint_geometry_v1",
+      org_id: "org-acme"
     });
 
     // Re-running must upsert into the same row -- historical evidence stays one row per
@@ -564,8 +569,9 @@ test("processSymbolPinCountValidations persists evidence rows without moving tru
       validation_status: string;
       validation_type: string;
       validator: string;
+      org_id: string | null;
     }>(
-      `SELECT id, asset_id, validation_status, validation_type, validator
+      `SELECT id, asset_id, validation_status, validation_type, validator, org_id
          FROM asset_validation_records
          ORDER BY id ASC`
     );
@@ -573,6 +579,7 @@ test("processSymbolPinCountValidations persists evidence rows without moving tru
     for (const row of records.rows) {
       assert.equal(row.validation_type, "symbol_pin_mapping");
       assert.equal(row.validator, "generated:symbol_pin_mapping_v1");
+      assert.equal(row.org_id, "org-acme", `${row.id} must inherit the part org for RLS visibility`);
     }
 
     const assetRows = await pool.query<{
@@ -654,7 +661,8 @@ function createValidationPool(): TestPool {
       category TEXT NOT NULL,
       lifecycle_status TEXT NOT NULL,
       package_id TEXT,
-      trust_score NUMERIC NOT NULL
+      trust_score NUMERIC NOT NULL,
+      org_id TEXT
     );
     CREATE TABLE assets (
       id TEXT PRIMARY KEY,
@@ -705,7 +713,8 @@ function createValidationPool(): TestPool {
       validation_notes TEXT,
       validated_at TIMESTAMPTZ NOT NULL,
       validator TEXT NOT NULL,
-      last_updated_at TIMESTAMPTZ NOT NULL
+      last_updated_at TIMESTAMPTZ NOT NULL,
+      org_id TEXT
     );
 
     INSERT INTO manufacturers (id, name, aliases, website) VALUES
@@ -714,13 +723,13 @@ function createValidationPool(): TestPool {
     INSERT INTO packages (id, package_name, pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm) VALUES
       ('pkg-2pin-3x3', 'SOT-23', 2, 1.27, 3, 3, 1.5);
 
-    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score) VALUES
-      ('part-fp-pass', 'FP-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
-      ('part-fp-fail', 'FP-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
-      ('part-sym-pass', 'SYM-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
-      ('part-sym-fail', 'SYM-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
-      ('part-3d-pass', '3D-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5),
-      ('part-3d-fail', '3D-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5);
+    INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, trust_score, org_id) VALUES
+      ('part-fp-pass', 'FP-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5, 'org-acme'),
+      ('part-fp-fail', 'FP-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5, 'org-acme'),
+      ('part-sym-pass', 'SYM-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5, 'org-acme'),
+      ('part-sym-fail', 'SYM-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5, 'org-acme'),
+      ('part-3d-pass', '3D-PASS', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5, 'org-acme'),
+      ('part-3d-fail', '3D-FAIL', 'mfr-test', 'IC', 'active', 'pkg-2pin-3x3', 0.5, 'org-acme');
 
     INSERT INTO assets (
       id, part_id, asset_type, file_format, storage_key, file_hash, provider_id, license_mode, provenance,

@@ -40,12 +40,13 @@ test("generateDraftAssetsForPendingRequests creates review-required footprint an
         file_hash: string;
         generation_method: string;
         id: string;
+        org_id: string | null;
         provenance: string;
         review_status: string;
         storage_key: string;
         validation_status: string;
-      }>("SELECT id, asset_type, file_format, storage_key, file_hash, provenance, availability_status, review_status, export_status, validation_status, generation_method FROM assets ORDER BY id ASC");
-      const workflows = await verifyClient.query<{ generation_status: string; id: string; output_asset_id: string; target_asset_type: string }>("SELECT id, target_asset_type, generation_status, output_asset_id FROM generation_workflows ORDER BY id ASC");
+      }>("SELECT id, asset_type, file_format, storage_key, file_hash, provenance, availability_status, review_status, export_status, validation_status, generation_method, org_id FROM assets ORDER BY id ASC");
+      const workflows = await verifyClient.query<{ generation_status: string; id: string; org_id: string | null; output_asset_id: string; target_asset_type: string }>("SELECT id, target_asset_type, generation_status, output_asset_id, org_id FROM generation_workflows ORDER BY id ASC");
       const requests = await verifyClient.query<{ id: string; request_status: string; workflow_id: string }>("SELECT id, request_status, workflow_id FROM generation_requests ORDER BY id ASC");
 
       assert.equal(summary.processed, 2);
@@ -61,6 +62,7 @@ test("generateDraftAssetsForPendingRequests creates review-required footprint an
       assert.ok(assets.rows.every((asset) => asset.availability_status === "downloaded"));
       assert.ok(assets.rows.every((asset) => asset.file_hash.startsWith("sha256:")));
       assert.ok(assets.rows.every((asset) => asset.storage_key.startsWith("generated/drafts/")));
+      assert.ok(assets.rows.every((asset) => asset.org_id === "org-acme"), "draft assets must inherit the part org for RLS visibility");
       assert.deepEqual(
         workflows.rows.map((workflow) => [workflow.target_asset_type, workflow.generation_status, workflow.output_asset_id]),
         [
@@ -68,6 +70,7 @@ test("generateDraftAssetsForPendingRequests creates review-required footprint an
           ["symbol", "review_required", "asset-draft-part-symbol-symbol"]
         ]
       );
+      assert.ok(workflows.rows.every((workflow) => workflow.org_id === "org-acme"), "draft workflows must inherit the part org for RLS visibility");
       assert.deepEqual(
         requests.rows.map((request) => [request.id, request.request_status, request.workflow_id]),
         [
@@ -144,11 +147,11 @@ function createDraftGenerationPool(): TestPool {
   db.public.none(`
     CREATE TABLE manufacturers (id TEXT PRIMARY KEY, name TEXT, aliases TEXT[], website TEXT);
     CREATE TABLE packages (id TEXT PRIMARY KEY, package_name TEXT, pin_count INTEGER, pitch_mm NUMERIC, body_length_mm NUMERIC, body_width_mm NUMERIC, body_height_mm NUMERIC);
-    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE parts (id TEXT PRIMARY KEY, mpn TEXT, manufacturer_id TEXT, category TEXT, lifecycle_status TEXT, package_id TEXT, connector_family_id TEXT, trust_score NUMERIC, last_updated_at TIMESTAMPTZ, org_id TEXT);
     CREATE TABLE source_records (id TEXT PRIMARY KEY, provider_id TEXT, provider_part_key TEXT, part_id TEXT, source_url TEXT, fetched_at TIMESTAMPTZ, raw_payload JSONB, normalized_at TIMESTAMPTZ, source_last_seen_at TIMESTAMPTZ, source_last_imported_at TIMESTAMPTZ, import_status TEXT, import_error_details TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ);
+    CREATE TABLE assets (id TEXT PRIMARY KEY, part_id TEXT, asset_type TEXT, file_format TEXT, storage_key TEXT, file_hash TEXT, provider_id TEXT, license_mode TEXT, provenance TEXT, availability_status TEXT, review_status TEXT, export_status TEXT, asset_status TEXT, generation_method TEXT, generation_source_asset_id TEXT, validation_status TEXT, preview_status TEXT, preview_artifact_storage_key TEXT, preview_artifact_format TEXT, preview_artifact_generated_at TIMESTAMPTZ, preview_artifact_source TEXT, asset_state TEXT, source_url TEXT, source_record_id TEXT, last_updated_at TIMESTAMPTZ, org_id TEXT);
     CREATE TABLE source_extraction_signals (id TEXT PRIMARY KEY, part_id TEXT, source_record_id TEXT, datasheet_revision_id TEXT, asset_id TEXT, signal_type TEXT, extraction_status TEXT, confidence_score NUMERIC, extraction_source TEXT, notes TEXT, last_updated_at TIMESTAMPTZ);
-    CREATE TABLE generation_workflows (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, generation_status TEXT, confidence_score NUMERIC, output_asset_id TEXT);
+    CREATE TABLE generation_workflows (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, generation_status TEXT, confidence_score NUMERIC, output_asset_id TEXT, org_id TEXT);
     CREATE TABLE generation_requests (id TEXT PRIMARY KEY, part_id TEXT, target_asset_type TEXT, source_datasheet_revision_id TEXT, source_asset_id TEXT, request_status TEXT, requested_at TIMESTAMPTZ, requested_by TEXT, workflow_id TEXT, last_updated_at TIMESTAMPTZ);
   `);
 
@@ -229,8 +232,8 @@ async function seedPartRows(client: PoolClient, input: SeedPartInput): Promise<v
   );
   await client.query(
     `
-      INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, connector_family_id, trust_score, last_updated_at)
-      VALUES ($1, $2, 'mfr-test', 'Integrated Circuits', 'active', $3, NULL, 0.7, '2026-04-15T00:00:00.000Z')
+      INSERT INTO parts (id, mpn, manufacturer_id, category, lifecycle_status, package_id, connector_family_id, trust_score, last_updated_at, org_id)
+      VALUES ($1, $2, 'mfr-test', 'Integrated Circuits', 'active', $3, NULL, 0.7, '2026-04-15T00:00:00.000Z', 'org-acme')
     `,
     [input.id, input.mpn, input.packageId]
   );
