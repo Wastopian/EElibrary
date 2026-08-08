@@ -387,7 +387,8 @@ test("GET /storage/:encodedKey returns 404 when the file does not exist in local
   process.env.NODE_ENV = "test";
   process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   process.env.STORAGE_LOCAL_PATH = tmpdir();
-  setCatalogStorePoolForTests(createEmptyPoolStub());
+  // Ownership passes for the acting org, then the filesystem miss becomes FILE_NOT_FOUND.
+  setCatalogStorePoolForTests(createStorageOwnershipPoolStub(true));
 
   try {
     const { handleRequest } = await import("./index");
@@ -418,7 +419,7 @@ test("GET /storage/:encodedKey streams a real file with correct headers", async 
   process.env.NODE_ENV = "test";
   process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   process.env.STORAGE_LOCAL_PATH = tempDir;
-  setCatalogStorePoolForTests(createEmptyPoolStub());
+  setCatalogStorePoolForTests(createStorageOwnershipPoolStub(true));
 
   try {
     const { handleRequest } = await import("./index");
@@ -452,7 +453,7 @@ test("GET /storage/:encodedKey serves a PDF with inline Content-Disposition", as
   process.env.NODE_ENV = "test";
   process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
   process.env.STORAGE_LOCAL_PATH = tempDir;
-  setCatalogStorePoolForTests(createEmptyPoolStub());
+  setCatalogStorePoolForTests(createStorageOwnershipPoolStub(true));
 
   try {
     const { handleRequest } = await import("./index");
@@ -462,6 +463,77 @@ test("GET /storage/:encodedKey serves a PDF with inline Content-Disposition", as
     assert.equal(result.headers["Content-Type"], "application/pdf");
     assert.match(result.headers["Content-Disposition"] ?? "", /^inline$/u);
     assert.equal(result.body, pdfContent);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
+    restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
+  }
+});
+
+test("GET /storage/:encodedKey returns 404 when no org-owned row references the key", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-serve-foreign-"));
+  const foreignKey = "datasheets/org-acme__part-secret.pdf";
+  await mkdir(join(tempDir, "datasheets"), { recursive: true });
+  await writeFile(join(tempDir, "datasheets", "org-acme__part-secret.pdf"), "%PDF-1.4 foreign tenant", "utf8");
+
+  process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
+  // Test auth acts as org-default; empty ownership rows simulate a foreign-tenant key.
+  setCatalogStorePoolForTests(createStorageOwnershipPoolStub(false));
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGetStreaming(`/storage/${encodeURIComponent(foreignKey)}`, handleRequest);
+
+    assert.equal(result.statusCode, 404);
+    assert.match(result.body, /FILE_NOT_FOUND/u);
+    assert.doesNotMatch(result.body, /foreign tenant/u);
+  } finally {
+    setCatalogStorePoolForTests(null);
+    restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
+    if (previousStoragePath === undefined) {
+      delete process.env.STORAGE_LOCAL_PATH;
+    } else {
+      process.env.STORAGE_LOCAL_PATH = previousStoragePath;
+    }
+    restoreEnv(previousNodeEnv);
+    await rm(tempDir, { recursive: true });
+  }
+});
+
+test("GET /storage/:encodedKey returns 503 when ownership cannot be verified without a database", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousAllowTestAuth = process.env.EE_LIBRARY_ALLOW_TEST_AUTH;
+  const previousStoragePath = process.env.STORAGE_LOCAL_PATH;
+  const tempDir = await mkdtemp(join(tmpdir(), "ee-serve-nodb-"));
+  await writeFile(join(tempDir, "orphan.step"), "should-not-stream", "utf8");
+
+  process.env.NODE_ENV = "test";
+  process.env.EE_LIBRARY_ALLOW_TEST_AUTH = "1";
+  process.env.STORAGE_LOCAL_PATH = tempDir;
+  // Simulate the request-db facade throwing when no Postgres URL is wired.
+  setCatalogStorePoolForTests({
+    query: async () => {
+      throw new Error("request_db_not_configured");
+    }
+  } as unknown as Pool);
+
+  try {
+    const { handleRequest } = await import("./index");
+    const result = await invokeApiGet("/storage/orphan.step", handleRequest);
+
+    assert.equal(result.statusCode, 503);
+    assert.equal(result.body.error.code, "DB_NOT_CONFIGURED");
   } finally {
     setCatalogStorePoolForTests(null);
     restoreOptionalEnv("EE_LIBRARY_ALLOW_TEST_AUTH", previousAllowTestAuth);
@@ -506,6 +578,22 @@ function createAssetPoolStub(row: AssetPoolRow): Pool {
 function createEmptyPoolStub(): Pool {
   return {
     query: async () => ({ rows: [], rowCount: 0 })
+  } as unknown as Pool;
+}
+
+/**
+ * Creates a pool stub for raw `/storage/:key` ownership checks.
+ * Matching on the `storage_key_ownership` CTE keeps this independent of other catalog queries.
+ */
+function createStorageOwnershipPoolStub(owned: boolean): Pool {
+  return {
+    query: async (sql: unknown) => {
+      if (typeof sql === "string" && sql.includes("storage_key_ownership")) {
+        return { rows: owned ? [{ owned: 1 }] : [], rowCount: owned ? 1 : 0 };
+      }
+
+      return { rows: [], rowCount: 0 };
+    }
   } as unknown as Pool;
 }
 

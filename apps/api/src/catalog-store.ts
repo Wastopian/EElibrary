@@ -1199,6 +1199,81 @@ export async function readAssetPreviewArtifactDownloadTargetFromDatabase(
   }
 }
 
+/** StorageKeyOwnershipResult is the fail-closed verdict for raw `/storage/:key` downloads. */
+export type StorageKeyOwnershipResult =
+  | { status: "owned" }
+  | { status: "not_found" }
+  | { status: "not_configured" };
+
+/**
+ * Returns whether the acting tenant owns a storage key referenced by an org-scoped row.
+ *
+ * Raw `GET /storage/:key` is key-addressed local IO with no inherent tenant boundary. Asset and
+ * preview download routes already authorize via id lookup under the request org; export-bundle and
+ * other UI links still hit `/storage/:key` directly. This check fails closed when the database is
+ * unavailable, the request has no org, or no owned row references the key — so an admin in org A
+ * cannot stream org B's datasheet/CAD/bundle bytes by guessing or learning a foreign key.
+ */
+export async function readStorageKeyOwnershipFromDatabase(storageKey: string): Promise<StorageKeyOwnershipResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const orgId = getRequestOrgId();
+
+  if (!orgId) {
+    return { status: "not_found" };
+  }
+
+  try {
+    const result = await databasePool.query<{ owned: number }>(
+      `
+        WITH storage_key_ownership AS (
+          SELECT 1 AS owned
+          FROM assets
+          WHERE org_id = $2
+            AND (storage_key = $1 OR preview_artifact_storage_key = $1)
+          UNION ALL
+          SELECT 1 AS owned
+          FROM export_bundles
+          WHERE org_id = $2
+            AND (
+              storage_key = $1
+              OR archive_storage_key = $1
+              OR signature_storage_key = $1
+            )
+          UNION ALL
+          SELECT 1 AS owned
+          FROM bom_imports
+          WHERE org_id = $2
+            AND storage_key = $1
+          UNION ALL
+          SELECT 1 AS owned
+          FROM evidence_attachments
+          WHERE org_id = $2
+            AND storage_key = $1
+        )
+        SELECT 1 AS owned
+        FROM storage_key_ownership
+        LIMIT 1
+      `,
+      [storageKey, orgId]
+    );
+
+    return result.rows[0] ? { status: "owned" } : { status: "not_found" };
+  } catch (error) {
+    // During HTTP requests getDatabasePool() returns the request-db facade even when no Postgres
+    // URL is configured; the first query then throws. Fail closed instead of streaming orphan bytes.
+    if (error instanceof Error && error.message === "request_db_not_configured") {
+      return { status: "not_configured" };
+    }
+
+    throw toCatalogStoreError(error);
+  }
+}
+
 /**
  * Creates or reuses one active provider acquisition job without broadening normal catalog search.
  */
