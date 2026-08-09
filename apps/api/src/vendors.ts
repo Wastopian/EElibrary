@@ -4,16 +4,20 @@
  * Persists institutional supplier knowledge (PCB fabs, sheet metal shops, machinists,
  * finishers, assembly houses, distributors) outside the database so engineers can also
  * drop notes and reference files into operating-system folders. Each vendor lives in
- * `<root>/<category>/<slug>/` with a tiny `vendor.json` metadata file plus two
+ * `<orgRoot>/<category>/<slug>/` with a tiny `vendor.json` metadata file plus two
  * subfolders: `notes/` for Markdown decisions and `files/` for uploaded reference docs.
  *
- * The root resolves in this order:
+ * The configured filesystem root resolves in this order:
  *   1. The `EE_LIBRARY_VENDOR_NOTES_ROOT` environment variable (absolute or relative).
  *   2. The default `<user-home>/EE-Library/vendors` location, parallel to the project
  *      file mirror.
  *
+ * Multi-tenant layout mirrors project files: the default org keeps the legacy
+ * `<root>/<category>/<slug>/` path, while every other org lives under
+ * `<root>/.ee-library-tenants/<orgId>/…` so supplier notes never leak across tenants.
+ *
  * Path safety: vendor slugs are derived from names, sanitized, and the resolved per-
- * vendor path is asserted to live inside the configured root before any read or write.
+ * vendor path is asserted to live inside the org mirror root before any read or write.
  */
 
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -72,6 +76,16 @@ const VENDOR_NAME_MAX_LENGTH = 120;
 
 /** VENDOR_SUMMARY_MAX_LENGTH bounds free-text vendor one-liners. */
 const VENDOR_SUMMARY_MAX_LENGTH = 240;
+
+/** DEFAULT_ORG_ID keeps existing single-tenant mirrors at their historic `<root>/…` path. */
+const DEFAULT_ORG_ID = "org-default";
+
+/**
+ * TENANT_VENDOR_NOTES_FOLDER namespaces non-default orgs under a hidden segment that
+ * sanitized category folder names cannot produce, preventing collisions with legacy
+ * vendor trees.
+ */
+const TENANT_VENDOR_NOTES_FOLDER = ".ee-library-tenants";
 
 /**
  * Returns the absolute vendor notes root, or null when explicitly disabled.
@@ -135,12 +149,48 @@ export function slugifyVendorName(rawName: string): string | null {
 }
 
 /**
- * BuildVendorListResponse walks every category folder, reads the per-vendor metadata,
- * and returns a sorted list of summaries. Missing or malformed metadata files are
- * surfaced as fallback records using the folder name so engineers can audit drift on
+ * Resolves the on-disk root one org's vendor category folders live under.
+ *
+ * The default org keeps the legacy `<root>/…` layout so existing single-tenant folders
+ * do not disappear. Every other org lives under a hidden namespace that sanitized
+ * category folder names cannot produce, preventing collisions with legacy vendor trees.
+ */
+export function resolveVendorOrgRoot(root: string, orgId: string): string {
+  const candidate =
+    orgId === DEFAULT_ORG_ID
+      ? path.resolve(root)
+      : path.resolve(root, TENANT_VENDOR_NOTES_FOLDER, sanitizeVendorOrgId(orgId));
+  const normalizedRoot = path.resolve(root);
+  const relative = path.relative(normalizedRoot, candidate);
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Resolved vendor org folder escapes the configured root: ${candidate}`);
+  }
+
+  return candidate;
+}
+
+/**
+ * Sanitizes an organization id into a safe directory segment.
+ */
+function sanitizeVendorOrgId(rawOrgId: string): string {
+  const trimmed = rawOrgId.trim();
+  const filtered = trimmed
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-.]+/, "")
+    .replace(/[-.]+$/, "");
+
+  return filtered.length > 0 ? filtered : "org";
+}
+
+/**
+ * BuildVendorListResponse walks every category folder for one org, reads the per-vendor
+ * metadata, and returns a sorted list of summaries. Missing or malformed metadata files
+ * are surfaced as fallback records using the folder name so engineers can audit drift on
  * disk without losing visibility.
  */
-export async function buildVendorListResponse(): Promise<VendorListResponse> {
+export async function buildVendorListResponse(orgId: string): Promise<VendorListResponse> {
   const root = getVendorNotesRoot();
 
   if (!root) {
@@ -152,19 +202,31 @@ export async function buildVendorListResponse(): Promise<VendorListResponse> {
     };
   }
 
+  let orgRoot: string;
   try {
-    await ensureVendorRoot(root);
+    orgRoot = resolveVendorOrgRoot(root, orgId);
+  } catch (error) {
+    return {
+      availability: "error",
+      rootPath: null,
+      vendors: [],
+      message: error instanceof Error ? error.message : "Vendor notes mirror is unavailable."
+    };
+  }
+
+  try {
+    await ensureVendorRoot(orgRoot);
     const summaries: VendorSummary[] = [];
 
     for (const definition of VENDOR_CATEGORY_DEFINITIONS) {
-      const categoryRoot = path.join(root, definition.folderName);
+      const categoryRoot = path.join(orgRoot, definition.folderName);
       const dirEntries = await safeReadDir(categoryRoot);
 
       for (const entry of dirEntries) {
         if (!entry.isDirectory()) {
           continue;
         }
-        const summary = await readVendorSummary(root, definition.category, entry.name);
+        const summary = await readVendorSummary(orgRoot, definition.category, entry.name);
         if (summary) {
           summaries.push(summary);
         }
@@ -175,14 +237,14 @@ export async function buildVendorListResponse(): Promise<VendorListResponse> {
 
     return {
       availability: "configured",
-      rootPath: root,
+      rootPath: orgRoot,
       vendors: summaries,
       message: null
     };
   } catch (error) {
     return {
       availability: "error",
-      rootPath: root,
+      rootPath: orgRoot,
       vendors: [],
       message: error instanceof Error ? error.message : "Vendor notes mirror is unavailable."
     };
@@ -194,7 +256,7 @@ export async function buildVendorListResponse(): Promise<VendorListResponse> {
  * Returns availability=`configured` with `vendor: null` when the slug does not exist so
  * the UI can render a calm 404 instead of confusing "files unavailable" copy.
  */
-export async function buildVendorDetailResponse(slug: string): Promise<VendorDetailResponse> {
+export async function buildVendorDetailResponse(orgId: string, slug: string): Promise<VendorDetailResponse> {
   const root = getVendorNotesRoot();
 
   if (!root) {
@@ -210,12 +272,28 @@ export async function buildVendorDetailResponse(slug: string): Promise<VendorDet
     };
   }
 
+  let orgRoot: string;
   try {
-    const located = await locateVendorBySlug(root, slug);
+    orgRoot = resolveVendorOrgRoot(root, orgId);
+  } catch (error) {
+    return {
+      availability: "error",
+      rootPath: null,
+      vendor: null,
+      notes: [],
+      files: [],
+      notesPath: null,
+      filesPath: null,
+      message: error instanceof Error ? error.message : "Vendor notes mirror is unavailable."
+    };
+  }
+
+  try {
+    const located = await locateVendorBySlug(orgRoot, slug);
     if (!located) {
       return {
         availability: "configured",
-        rootPath: root,
+        rootPath: orgRoot,
         vendor: null,
         notes: [],
         files: [],
@@ -240,7 +318,7 @@ export async function buildVendorDetailResponse(slug: string): Promise<VendorDet
 
     return {
       availability: "configured",
-      rootPath: root,
+      rootPath: orgRoot,
       vendor,
       notes,
       files,
@@ -251,7 +329,7 @@ export async function buildVendorDetailResponse(slug: string): Promise<VendorDet
   } catch (error) {
     return {
       availability: "error",
-      rootPath: root,
+      rootPath: orgRoot,
       vendor: null,
       notes: [],
       files: [],
@@ -281,7 +359,7 @@ export type CreateVendorResult =
  * its `notes/` and `files/` subfolders exist. Slug collisions return `conflict` so the
  * engineer can decide whether to rename or open the existing record.
  */
-export async function createVendor(input: VendorCreateInput): Promise<CreateVendorResult> {
+export async function createVendor(orgId: string, input: VendorCreateInput): Promise<CreateVendorResult> {
   const root = getVendorNotesRoot();
   if (!root) {
     return { status: "not_configured" };
@@ -315,9 +393,10 @@ export async function createVendor(input: VendorCreateInput): Promise<CreateVend
   }
 
   try {
-    await ensureVendorRoot(root);
+    const orgRoot = resolveVendorOrgRoot(root, orgId);
+    await ensureVendorRoot(orgRoot);
 
-    const existing = await locateVendorBySlug(root, slug);
+    const existing = await locateVendorBySlug(orgRoot, slug);
     if (existing) {
       return { status: "conflict", message: `A vendor already exists at /vendors/${slug}.` };
     }
@@ -327,8 +406,8 @@ export async function createVendor(input: VendorCreateInput): Promise<CreateVend
       return { status: "invalid_category" };
     }
 
-    const vendorRoot = path.join(root, definition.folderName, slug);
-    if (!isPathInside(root, vendorRoot)) {
+    const vendorRoot = path.join(orgRoot, definition.folderName, slug);
+    if (!isPathInside(orgRoot, vendorRoot)) {
       return { status: "error", message: "Resolved vendor folder escaped the configured root." };
     }
 
@@ -385,6 +464,7 @@ export type SaveVendorFileResult =
  * never silently overwritten.
  */
 export async function saveVendorFile(
+  orgId: string,
   slug: string,
   section: VendorFolderSection,
   input: VendorFileUploadInput
@@ -423,7 +503,8 @@ export async function saveVendorFile(
   }
 
   try {
-    const located = await locateVendorBySlug(root, slug);
+    const orgRoot = resolveVendorOrgRoot(root, orgId);
+    const located = await locateVendorBySlug(orgRoot, slug);
     if (!located) {
       return { status: "not_found" };
     }
@@ -476,14 +557,14 @@ async function ensureVendorRoot(root: string): Promise<void> {
  * Reads `vendor.json` for one folder under one category and returns a populated summary.
  * Folders without metadata are surfaced as fallback records so engineers can see drift.
  */
-async function readVendorSummary(root: string, category: VendorCategory, folderName: string): Promise<VendorSummary | null> {
+async function readVendorSummary(orgRoot: string, category: VendorCategory, folderName: string): Promise<VendorSummary | null> {
   const definition = VENDOR_CATEGORY_DEFINITIONS.find((entry) => entry.category === category);
   if (!definition) {
     return null;
   }
 
   const slug = folderName;
-  const vendorRoot = path.join(root, definition.folderName, folderName);
+  const vendorRoot = path.join(orgRoot, definition.folderName, folderName);
   const metadataPath = path.join(vendorRoot, VENDOR_METADATA_FILENAME);
 
   let vendor: Vendor;
@@ -512,19 +593,19 @@ async function readVendorSummary(root: string, category: VendorCategory, folderN
 }
 
 /**
- * Locates a vendor record by slug across every category folder. Returns the metadata
- * record alongside the absolute path so callers can read or write further structure
- * without duplicating filesystem scans.
+ * Locates a vendor record by slug across every category folder under one org mirror.
+ * Returns the metadata record alongside the absolute path so callers can read or write
+ * further structure without duplicating filesystem scans.
  */
-async function locateVendorBySlug(root: string, rawSlug: string): Promise<{ vendor: Vendor; absolutePath: string } | null> {
+async function locateVendorBySlug(orgRoot: string, rawSlug: string): Promise<{ vendor: Vendor; absolutePath: string } | null> {
   const slug = rawSlug.trim().toLowerCase();
   if (!slug) {
     return null;
   }
 
   for (const definition of VENDOR_CATEGORY_DEFINITIONS) {
-    const candidate = path.join(root, definition.folderName, slug);
-    if (!isPathInside(root, candidate)) {
+    const candidate = path.join(orgRoot, definition.folderName, slug);
+    if (!isPathInside(orgRoot, candidate)) {
       continue;
     }
     const metadataPath = path.join(candidate, VENDOR_METADATA_FILENAME);

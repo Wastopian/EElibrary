@@ -2,8 +2,8 @@
  * File header: Tests vendor notes service against a sandboxed temp directory.
  *
  * Each test sets `EE_LIBRARY_VENDOR_NOTES_ROOT` to a unique temp folder so we can
- * verify create, list, detail, slugification, and upload behavior without touching the
- * operator's home directory.
+ * verify create, list, detail, slugification, upload, and per-org isolation without
+ * touching the operator's home directory.
  */
 
 import test from "node:test";
@@ -19,10 +19,14 @@ import {
   getVendorNotesRoot,
   resolveVendorCategory,
   resolveVendorFolderSection,
+  resolveVendorOrgRoot,
   saveVendorFile,
   slugifyVendorName,
   VENDOR_CATEGORY_DEFINITIONS
 } from "./vendors";
+
+/** DEFAULT_ORG keeps legacy single-tenant paths at `<root>/<category>/<slug>/`. */
+const DEFAULT_ORG = "org-default";
 
 /**
  * Creates a unique sandbox root for one test and points the env var at it.
@@ -60,6 +64,15 @@ test("getVendorNotesRoot uses the default folder for empty values and off disabl
       process.env.EE_LIBRARY_VENDOR_NOTES_ROOT = previous;
     }
   }
+});
+
+test("resolveVendorOrgRoot keeps org-default at the legacy root and namespaces other orgs", () => {
+  const root = path.join(tmpdir(), "ee-vendor-org-root");
+  assert.equal(resolveVendorOrgRoot(root, DEFAULT_ORG), path.resolve(root));
+  assert.equal(
+    resolveVendorOrgRoot(root, "org-acme"),
+    path.resolve(root, ".ee-library-tenants", "org-acme")
+  );
 });
 
 test("VENDOR_CATEGORY_DEFINITIONS includes the seven canonical categories", () => {
@@ -104,7 +117,7 @@ test("buildVendorListResponse returns not_configured when env var is off", async
   process.env.EE_LIBRARY_VENDOR_NOTES_ROOT = "off";
 
   try {
-    const response = await buildVendorListResponse();
+    const response = await buildVendorListResponse(DEFAULT_ORG);
     assert.equal(response.availability, "not_configured");
     assert.deepEqual(response.vendors, []);
     assert.equal(response.rootPath, null);
@@ -121,7 +134,7 @@ test("createVendor writes vendor.json plus notes and files folders inside the sa
   const sandbox = await withSandboxRoot();
 
   try {
-    const result = await createVendor({
+    const result = await createVendor(DEFAULT_ORG, {
       name: "JLCPCB",
       category: "pcb_fab",
       summary: "Low-cost prototype 1-4 layer."
@@ -147,10 +160,10 @@ test("createVendor refuses duplicate slugs across the same category", async () =
   const sandbox = await withSandboxRoot();
 
   try {
-    const first = await createVendor({ name: "Acme", category: "machining" });
+    const first = await createVendor(DEFAULT_ORG, { name: "Acme", category: "machining" });
     assert.equal(first.status, "ok");
 
-    const second = await createVendor({ name: "ACME", category: "machining" });
+    const second = await createVendor(DEFAULT_ORG, { name: "ACME", category: "machining" });
     assert.equal(second.status, "conflict");
   } finally {
     await sandbox.restore();
@@ -161,13 +174,13 @@ test("createVendor rejects empty names and invalid categories", async () => {
   const sandbox = await withSandboxRoot();
 
   try {
-    const blank = await createVendor({ name: "   ", category: "pcb_fab" });
+    const blank = await createVendor(DEFAULT_ORG, { name: "   ", category: "pcb_fab" });
     assert.equal(blank.status, "invalid_name");
 
-    const symbols = await createVendor({ name: "***", category: "pcb_fab" });
+    const symbols = await createVendor(DEFAULT_ORG, { name: "***", category: "pcb_fab" });
     assert.equal(symbols.status, "invalid_name");
 
-    const badCategory = await createVendor({ name: "Acme", category: "ghost" as never });
+    const badCategory = await createVendor(DEFAULT_ORG, { name: "Acme", category: "ghost" as never });
     assert.equal(badCategory.status, "invalid_category");
   } finally {
     await sandbox.restore();
@@ -178,8 +191,8 @@ test("buildVendorListResponse returns created vendors with note/file counts", as
   const sandbox = await withSandboxRoot();
 
   try {
-    await createVendor({ name: "Sanmina", category: "electronics_assembly", summary: "Premium EMS." });
-    const ack = await createVendor({ name: "Acme Sheet", category: "sheet_metal" });
+    await createVendor(DEFAULT_ORG, { name: "Sanmina", category: "electronics_assembly", summary: "Premium EMS." });
+    const ack = await createVendor(DEFAULT_ORG, { name: "Acme Sheet", category: "sheet_metal" });
     assert.equal(ack.status, "ok");
     if (ack.status !== "ok") return;
 
@@ -191,7 +204,7 @@ test("buildVendorListResponse returns created vendors with note/file counts", as
     await mkdir(sheetFiles, { recursive: true });
     await writeFile(path.join(sheetFiles, "capability.pdf"), "%PDF-1.4");
 
-    const response = await buildVendorListResponse();
+    const response = await buildVendorListResponse(DEFAULT_ORG);
     assert.equal(response.availability, "configured");
     assert.equal(response.vendors.length, 2);
 
@@ -211,7 +224,7 @@ test("buildVendorDetailResponse returns vendor null when slug does not exist", a
   const sandbox = await withSandboxRoot();
 
   try {
-    const response = await buildVendorDetailResponse("does-not-exist");
+    const response = await buildVendorDetailResponse(DEFAULT_ORG, "does-not-exist");
     assert.equal(response.availability, "configured");
     assert.equal(response.vendor, null);
     assert.deepEqual(response.notes, []);
@@ -229,12 +242,12 @@ test("metadata-less vendor folders can be opened and receive uploads", async () 
     await mkdir(path.join(vendorRoot, "notes"), { recursive: true });
     await mkdir(path.join(vendorRoot, "files"), { recursive: true });
 
-    const detail = await buildVendorDetailResponse("legacy-shop");
+    const detail = await buildVendorDetailResponse(DEFAULT_ORG, "legacy-shop");
     assert.equal(detail.availability, "configured");
     assert.equal(detail.vendor?.slug, "legacy-shop");
     assert.equal(detail.vendor?.category, "machining");
 
-    const written = await saveVendorFile("legacy-shop", "notes", {
+    const written = await saveVendorFile(DEFAULT_ORG, "legacy-shop", "notes", {
       filename: "first note.md",
       content: "Legacy folder was imported from shared drive."
     });
@@ -252,11 +265,11 @@ test("buildVendorDetailResponse returns notes and files for an existing vendor",
   const sandbox = await withSandboxRoot();
 
   try {
-    const created = await createVendor({ name: "Anodyne", category: "finishing" });
+    const created = await createVendor(DEFAULT_ORG, { name: "Anodyne", category: "finishing" });
     assert.equal(created.status, "ok");
     if (created.status !== "ok") return;
 
-    const detail = await buildVendorDetailResponse("anodyne");
+    const detail = await buildVendorDetailResponse(DEFAULT_ORG, "anodyne");
     assert.equal(detail.availability, "configured");
     assert.ok(detail.vendor);
     assert.equal(detail.vendor.slug, "anodyne");
@@ -273,10 +286,10 @@ test("saveVendorFile writes UTF-8 notes and updates the vendor metadata timestam
   const sandbox = await withSandboxRoot();
 
   try {
-    const created = await createVendor({ name: "JLCPCB", category: "pcb_fab" });
+    const created = await createVendor(DEFAULT_ORG, { name: "JLCPCB", category: "pcb_fab" });
     assert.equal(created.status, "ok");
 
-    const written = await saveVendorFile("jlcpcb", "notes", {
+    const written = await saveVendorFile(DEFAULT_ORG, "jlcpcb", "notes", {
       filename: "Lead time observations.md",
       content: "# Lead times\n\n5 business days standard for HASL 4-layer."
     });
@@ -300,10 +313,10 @@ test("saveVendorFile writes base64 binary content to the files folder", async ()
   const sandbox = await withSandboxRoot();
 
   try {
-    const created = await createVendor({ name: "Acme", category: "machining" });
+    const created = await createVendor(DEFAULT_ORG, { name: "Acme", category: "machining" });
     assert.equal(created.status, "ok");
 
-    const result = await saveVendorFile("acme", "files", {
+    const result = await saveVendorFile(DEFAULT_ORG, "acme", "files", {
       filename: "capability.pdf",
       contentBase64: Buffer.from("%PDF-1.4 demo", "utf8").toString("base64")
     });
@@ -322,7 +335,7 @@ test("saveVendorFile returns not_found for unknown vendors", async () => {
   const sandbox = await withSandboxRoot();
 
   try {
-    const result = await saveVendorFile("ghost", "notes", { filename: "x.md", content: "x" });
+    const result = await saveVendorFile(DEFAULT_ORG, "ghost", "notes", { filename: "x.md", content: "x" });
     assert.equal(result.status, "not_found");
   } finally {
     await sandbox.restore();
@@ -333,8 +346,8 @@ test("saveVendorFile rejects unsupported sections", async () => {
   const sandbox = await withSandboxRoot();
 
   try {
-    await createVendor({ name: "Acme", category: "machining" });
-    const result = await saveVendorFile("acme", "evidence" as never, { filename: "x.md", content: "x" });
+    await createVendor(DEFAULT_ORG, { name: "Acme", category: "machining" });
+    const result = await saveVendorFile(DEFAULT_ORG, "acme", "evidence" as never, { filename: "x.md", content: "x" });
     assert.equal(result.status, "invalid_section");
   } finally {
     await sandbox.restore();
@@ -345,8 +358,8 @@ test("saveVendorFile keeps writes inside the vendor folder even with traversal-p
   const sandbox = await withSandboxRoot();
 
   try {
-    await createVendor({ name: "Acme", category: "machining" });
-    const result = await saveVendorFile("acme", "files", {
+    await createVendor(DEFAULT_ORG, { name: "Acme", category: "machining" });
+    const result = await saveVendorFile(DEFAULT_ORG, "acme", "files", {
       filename: "../../escape.pdf",
       content: "x"
     });
@@ -356,6 +369,83 @@ test("saveVendorFile keeps writes inside the vendor folder even with traversal-p
     assert.equal(result.entry.name, "escape.pdf");
     assert.ok(result.absolutePath.startsWith(sandbox.root));
     assert.ok(result.absolutePath.includes(path.join("acme", "files")));
+  } finally {
+    await sandbox.restore();
+  }
+});
+
+test("non-default org vendor notes are isolated from org-default and sibling tenants", async () => {
+  const sandbox = await withSandboxRoot();
+
+  try {
+    const acmeCreate = await createVendor("org-acme", {
+      name: "Acme Fab",
+      category: "pcb_fab",
+      summary: "Confidential Acme process notes."
+    });
+    assert.equal(acmeCreate.status, "ok");
+
+    const acmeUpload = await saveVendorFile("org-acme", "acme-fab", "notes", {
+      filename: "nda-pricing.md",
+      content: "Do not share outside Acme."
+    });
+    assert.equal(acmeUpload.status, "ok");
+    if (acmeUpload.status !== "ok") return;
+    assert.ok(acmeUpload.absolutePath.includes(path.join(".ee-library-tenants", "org-acme")));
+
+    const defaultList = await buildVendorListResponse(DEFAULT_ORG);
+    assert.equal(defaultList.availability, "configured");
+    assert.equal(defaultList.vendors.length, 0);
+
+    const defaultDetail = await buildVendorDetailResponse(DEFAULT_ORG, "acme-fab");
+    assert.equal(defaultDetail.vendor, null);
+
+    const betaList = await buildVendorListResponse("org-beta");
+    assert.equal(betaList.vendors.length, 0);
+    const betaDetail = await buildVendorDetailResponse("org-beta", "acme-fab");
+    assert.equal(betaDetail.vendor, null);
+
+    const acmeList = await buildVendorListResponse("org-acme");
+    assert.equal(acmeList.vendors.length, 1);
+    assert.equal(acmeList.vendors[0]?.vendor.slug, "acme-fab");
+    assert.equal(acmeList.vendors[0]?.noteCount, 1);
+    assert.ok(acmeList.rootPath?.endsWith(path.join(".ee-library-tenants", "org-acme")));
+
+    const sameSlugDefault = await createVendor(DEFAULT_ORG, {
+      name: "Acme Fab",
+      category: "pcb_fab",
+      summary: "Default-org shop with the same display name."
+    });
+    assert.equal(sameSlugDefault.status, "ok");
+    const defaultMetadata = path.join(sandbox.root, "pcb-fab", "acme-fab", "vendor.json");
+    const acmeMetadata = path.join(
+      sandbox.root,
+      ".ee-library-tenants",
+      "org-acme",
+      "pcb-fab",
+      "acme-fab",
+      "vendor.json"
+    );
+    assert.equal(
+      (JSON.parse(await readFile(defaultMetadata, "utf8")) as { summary: string }).summary,
+      "Default-org shop with the same display name."
+    );
+    assert.equal(
+      (JSON.parse(await readFile(acmeMetadata, "utf8")) as { summary: string }).summary,
+      "Confidential Acme process notes."
+    );
+
+    const foreignUpload = await saveVendorFile(DEFAULT_ORG, "acme-fab", "notes", {
+      filename: "should-not-touch-acme.md",
+      content: "Written under org-default."
+    });
+    assert.equal(foreignUpload.status, "ok");
+    if (foreignUpload.status !== "ok") return;
+    assert.ok(!foreignUpload.absolutePath.includes(".ee-library-tenants"));
+
+    const acmeDetailAfter = await buildVendorDetailResponse("org-acme", "acme-fab");
+    assert.equal(acmeDetailAfter.notes.length, 1);
+    assert.equal(acmeDetailAfter.notes[0]?.name, "nda-pricing.md");
   } finally {
     await sandbox.restore();
   }
