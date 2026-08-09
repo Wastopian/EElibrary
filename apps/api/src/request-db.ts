@@ -25,7 +25,7 @@
  *
  * The audit log intentionally does NOT use this facade: its flush runs in the request `finally`,
  * including after failures when this transaction has already aborted, so it keeps a dedicated pool
- * (audit_events has no org_id and no policy).
+ * (audit_events stores org_id for app-layer read filtering but has no RLS policy).
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";

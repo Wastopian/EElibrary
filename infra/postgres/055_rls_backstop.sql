@@ -22,8 +22,8 @@
 -- Excluded on purpose:
 --   * users, organizations -- the web app must read them BEFORE a tenant is known (sign-in, sign-up,
 --     invite lookup); auth is the chicken-and-egg exception.
---   * audit_events -- org-agnostic operational log written on its own pool, including after failed
---     requests when the request transaction has already aborted.
+--   * audit_events -- written on its own pool (including after failed/rolled-back requests) so it stays
+--     outside RLS; org_id is stored and filtered in application reads (see 062_audit_events_org_id.sql).
 --   * Reference taxonomies (manufacturers, packages, connector_families, connector_family_conflicts)
 --     -- global by design, no org_id.
 

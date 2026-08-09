@@ -865,7 +865,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   if (request.method === "GET" && auditEventsMatch) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleAuditEventsRead(response, url);
+    await handleAuditEventsRead(response, url, session.orgId);
     return;
   }
 
@@ -1202,17 +1202,18 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
 
 /**
  * Handles admin-only audit event reads for security review.
+ * Always scoped to the caller's org so one tenant cannot read another's timeline.
  * Optional filters (actorId / action / targetType / targetId / outcome / time window)
  * narrow the timeline so the admin can do per-actor or per-entity audit queries.
  */
-async function handleAuditEventsRead(response: ServerResponse, url: URL): Promise<void> {
+async function handleAuditEventsRead(response: ServerResponse, url: URL, orgId: string): Promise<void> {
   try {
     const limit = readAuditEventLimit(url.searchParams.get("limit"));
     const filters = readAuditEventFilters(url.searchParams);
     const result = await timeRouteOperation(
       response,
       "audit-events-read",
-      () => readAuditEventsFromDatabase(limit, filters),
+      () => readAuditEventsFromDatabase(orgId, limit, filters),
       (value) => value.status
     );
 
@@ -6366,6 +6367,7 @@ async function flushRequestAuditEvent(request: IncomingMessage, response: Server
       metadata: buildAuditMetadata(url, operation),
       method,
       operation,
+      orgId: session?.orgId ?? null,
       outcome: classifyAuditOutcome(statusCode),
       path: url.pathname,
       requestId: context.requestId,
