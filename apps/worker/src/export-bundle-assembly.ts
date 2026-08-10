@@ -140,17 +140,75 @@ export async function recoverStaleExportBundleAssemblies(
 /**
  * Claims up to `limit` pending bundles into `assembling` using SKIP LOCKED so concurrent workers
  * never copy the same deterministic archive path. Falls back without SKIP LOCKED for pg-mem tests.
+ * Claims one row at a time (matching acquisition/enrichment) so the SELECT FOR UPDATE path stays
+ * portable across Postgres and pg-mem.
  */
 async function claimPendingExportBundles(limit: number): Promise<PendingExportBundleRow[]> {
+  const claimed: PendingExportBundleRow[] = [];
+  const boundedLimit = Math.max(1, limit);
+
+  for (let index = 0; index < boundedLimit; index += 1) {
+    const next = await claimNextPendingExportBundle();
+    if (!next) {
+      break;
+    }
+    claimed.push(next);
+  }
+
+  return claimed;
+}
+
+/**
+ * Claims the oldest pending bundle into `assembling` inside one transaction, or returns null when
+ * the queue is empty.
+ */
+async function claimNextPendingExportBundle(): Promise<PendingExportBundleRow | null> {
   const databasePool = getWorkerDatabasePool();
   const client = await databasePool.connect();
   const startedAt = new Date().toISOString();
 
   try {
     await client.query("BEGIN");
-    const claimed = await selectAndClaimPendingExportBundles(client, limit, startedAt);
+    const selected = await selectNextPendingExportBundle(client);
+    const selectedRow = selected.rows[0];
+
+    if (!selectedRow) {
+      await client.query("COMMIT");
+      return null;
+    }
+
+    const updated = await client.query<{
+      id: string;
+      project_id: string;
+      manifest: unknown;
+      assembly_attempt_count: number | string;
+    }>(
+      `
+        UPDATE export_bundles
+           SET assembly_status = 'assembling',
+               assembly_started_at = $2::timestamptz,
+               assembly_error = NULL
+         WHERE id = $1
+           AND assembly_status = 'pending'
+        RETURNING id, project_id, manifest, assembly_attempt_count
+      `,
+      [selectedRow.id, startedAt]
+    );
+    const claimedRow = updated.rows[0];
+
+    if (!claimedRow) {
+      await client.query("ROLLBACK");
+      throw new Error(`Pending export bundle ${selectedRow.id} disappeared before it could be marked assembling.`);
+    }
+
     await client.query("COMMIT");
-    return claimed;
+
+    return {
+      assembly_attempt_count: Number(claimedRow.assembly_attempt_count ?? 0),
+      id: claimedRow.id,
+      manifest: claimedRow.manifest as ExportBundleManifest,
+      project_id: claimedRow.project_id
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -160,65 +218,34 @@ async function claimPendingExportBundles(limit: number): Promise<PendingExportBu
 }
 
 /**
- * Selects pending rows and flips them to `assembling` inside the open transaction.
+ * Selects the oldest pending bundle using SKIP LOCKED in PostgreSQL and a narrow fallback in pg-mem tests.
  */
-async function selectAndClaimPendingExportBundles(
-  client: PoolClient,
-  limit: number,
-  startedAt: string
-): Promise<PendingExportBundleRow[]> {
+async function selectNextPendingExportBundle(
+  client: PoolClient
+): Promise<{ rows: Array<{ id: string }> }> {
   try {
-    return await claimPendingExportBundlesWithSkipLocked(client, limit, startedAt, true);
+    return await client.query<{ id: string }>(buildPendingExportBundleSelect(true));
   } catch (error) {
     if (!isSkipLockedUnsupportedError(error)) {
       throw error;
     }
 
-    return claimPendingExportBundlesWithSkipLocked(client, limit, startedAt, false);
+    return client.query<{ id: string }>(buildPendingExportBundleSelect(false));
   }
 }
 
 /**
- * Claims pending bundles, optionally with SKIP LOCKED for production Postgres.
+ * Builds the oldest-pending claim query, keeping the production SKIP LOCKED clause isolated from the pg-mem fallback path.
  */
-async function claimPendingExportBundlesWithSkipLocked(
-  client: PoolClient,
-  limit: number,
-  startedAt: string,
-  includeSkipLocked: boolean
-): Promise<PendingExportBundleRow[]> {
-  const result = await client.query<{
-    id: string;
-    project_id: string;
-    manifest: unknown;
-    assembly_attempt_count: number | string;
-  }>(
-    `
-      WITH claimed AS (
-        SELECT id
-          FROM export_bundles
-         WHERE assembly_status = 'pending'
-         ORDER BY created_at ASC
-         LIMIT $1
-         FOR UPDATE${includeSkipLocked ? " SKIP LOCKED" : ""}
-      )
-      UPDATE export_bundles eb
-         SET assembly_status = 'assembling',
-             assembly_started_at = $2::timestamptz,
-             assembly_error = NULL
-        FROM claimed
-       WHERE eb.id = claimed.id
-      RETURNING eb.id, eb.project_id, eb.manifest, eb.assembly_attempt_count
-    `,
-    [limit, startedAt]
-  );
-
-  return result.rows.map((row) => ({
-    assembly_attempt_count: Number(row.assembly_attempt_count ?? 0),
-    id: row.id,
-    manifest: row.manifest as ExportBundleManifest,
-    project_id: row.project_id
-  }));
+function buildPendingExportBundleSelect(includeSkipLocked: boolean): string {
+  return `
+    SELECT id
+      FROM export_bundles
+     WHERE assembly_status = 'pending'
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1
+     FOR UPDATE${includeSkipLocked ? " SKIP LOCKED" : ""}
+  `;
 }
 
 /**
@@ -288,6 +315,9 @@ async function persistExportBundleAssemblyOutcome(
 
   return (result.rowCount ?? 0) > 0;
 }
+
+/**
+ * Builds the deterministic storage prefix used to copy one bundle's verified asset bytes.
  *
  * Keeps the per-bundle path stable across regenerations of the same bundle id so the on-disk
  * layout is predictable for an archive download follow-on later.
