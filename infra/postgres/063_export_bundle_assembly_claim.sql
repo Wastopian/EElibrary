@@ -1,4 +1,4 @@
--- 062_export_bundle_assembly_claim: Claim pending export-bundle assembly before copying bytes.
+-- 063_export_bundle_assembly_claim: Claim pending export-bundle assembly before copying bytes.
 --
 -- Pending rows were selected without claiming, so overlapping daemon ticks / CLI runs could
 -- assemble the same bundle concurrently against the deterministic bundle.tar.gz path. Terminal
