@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   BUNDLE_AUTO_REFRESH_INTERVAL_MS,
   buildBundleAssemblyTelemetryMessage,
+  canDownloadExportBundleArchive,
   describeBundleAssemblyStatus,
   describeSignatureStatus,
   describeVerificationReason,
@@ -142,12 +143,48 @@ test("buildBundleAssemblyTelemetryMessage falls back to asset id when bundle pat
 test("describeBundleAssemblyStatus maps every status to a plain English label", () => {
   assert.equal(describeBundleAssemblyStatus("not_required"), "Not required");
   assert.equal(describeBundleAssemblyStatus("pending"), "Assembling");
+  assert.equal(describeBundleAssemblyStatus("assembling"), "Assembling");
   assert.equal(describeBundleAssemblyStatus("assembled"), "Assembled");
   assert.equal(describeBundleAssemblyStatus("assembly_failed"), "Assembly failed");
 });
 
 /**
- * Verifies the auto-refresh helper polls only while a bundle is still in `pending` assembly.
+ * Archive download must require both an assembled claim and a present file. A truncated archive
+ * left by an overlapping writer must not be offered while status is still pending/assembling/failed.
+ */
+test("canDownloadExportBundleArchive dual-gates on assembled status and file availability", () => {
+  assert.equal(
+    canDownloadExportBundleArchive(
+      buildStubBundle({ assemblyStatus: "assembled", archiveAvailability: "available", archiveStorageKey: "export-bundles/p/b/bundle.tar.gz" })
+    ),
+    true
+  );
+  assert.equal(
+    canDownloadExportBundleArchive(
+      buildStubBundle({ assemblyStatus: "pending", archiveAvailability: "available", archiveStorageKey: "export-bundles/p/b/bundle.tar.gz" })
+    ),
+    false
+  );
+  assert.equal(
+    canDownloadExportBundleArchive(
+      buildStubBundle({ assemblyStatus: "assembling", archiveAvailability: "available", archiveStorageKey: "export-bundles/p/b/bundle.tar.gz" })
+    ),
+    false
+  );
+  assert.equal(
+    canDownloadExportBundleArchive(
+      buildStubBundle({ assemblyStatus: "assembly_failed", archiveAvailability: "available", archiveStorageKey: "export-bundles/p/b/bundle.tar.gz" })
+    ),
+    false
+  );
+  assert.equal(
+    canDownloadExportBundleArchive(buildStubBundle({ assemblyStatus: "assembled", archiveAvailability: "file_missing" })),
+    false
+  );
+});
+
+/**
+ * Verifies the auto-refresh helper polls while a bundle is still in `pending` or `assembling`.
  *
  * Terminal states (`assembled`, `assembly_failed`) and `not_required` must not trigger refreshes.
  * Otherwise an idle panel would burn a network request every few seconds for nothing.
@@ -157,6 +194,7 @@ test("shouldAutoRefreshBundleAssembly polls only when a bundle is still pending"
   const assembledBundle = buildStubBundle({ assemblyStatus: "assembled" });
   const failedBundle = buildStubBundle({ assemblyStatus: "assembly_failed" });
   const pendingBundle = buildStubBundle({ assemblyStatus: "pending" });
+  const assemblingBundle = buildStubBundle({ assemblyStatus: "assembling" });
 
   assert.equal(shouldAutoRefreshBundleAssembly([]), false);
   assert.equal(shouldAutoRefreshBundleAssembly([idleBundle]), false);
@@ -164,7 +202,8 @@ test("shouldAutoRefreshBundleAssembly polls only when a bundle is still pending"
   assert.equal(shouldAutoRefreshBundleAssembly([failedBundle]), false);
   assert.equal(shouldAutoRefreshBundleAssembly([assembledBundle, failedBundle, idleBundle]), false);
   assert.equal(shouldAutoRefreshBundleAssembly([pendingBundle]), true);
-  // Mixed list with at least one pending bundle must keep polling so the daemon's progress shows.
+  assert.equal(shouldAutoRefreshBundleAssembly([assemblingBundle]), true);
+  // Mixed list with at least one in-flight bundle must keep polling so the daemon's progress shows.
   assert.equal(shouldAutoRefreshBundleAssembly([assembledBundle, pendingBundle, failedBundle]), true);
 });
 

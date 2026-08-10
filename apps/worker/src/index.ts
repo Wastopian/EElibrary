@@ -1043,17 +1043,27 @@ async function safeProcessBomBackfillRequests(): Promise<void> {
   }
 }
 
+/** bundleAssemblyTickRunning guards against overlapping assembly ticks on the same daemon. */
+let bundleAssemblyTickRunning = false;
+
 /**
  * Processes pending export bundle assemblies without throwing so a transient DB or storage error
  * never crashes the daemon. Logs a one-line summary only when there was actual work to surface so
- * an idle daemon stays quiet.
+ * an idle daemon stays quiet. Skips re-entry so a slow archive build cannot overlap the next tick
+ * and race the same deterministic `bundle.tar.gz` path.
  */
 async function safeProcessPendingExportBundleAssembly(): Promise<void> {
+  if (bundleAssemblyTickRunning) {
+    return;
+  }
+
+  bundleAssemblyTickRunning = true;
+
   try {
     const storage = getWorkerStorageClient();
     const summary = await processPendingExportBundleAssembly(DEFAULT_BUNDLE_ASSEMBLY_BATCH_LIMIT, storage);
 
-    if (summary.processed.length === 0) {
+    if (summary.processed.length === 0 && summary.recoveredStaleCount === 0) {
       return;
     }
 
@@ -1061,10 +1071,15 @@ async function safeProcessPendingExportBundleAssembly(): Promise<void> {
     const assembled = summary.processed.length - failed;
     console.log(
       `Worker daemon: assembled ${assembled} bundle${assembled === 1 ? "" : "s"}` +
-        (failed > 0 ? `, ${failed} failed (see assembly_error JSONB)` : "")
+        (failed > 0 ? `, ${failed} failed (see assembly_error JSONB)` : "") +
+        (summary.recoveredStaleCount > 0
+          ? `, ${summary.recoveredStaleCount} abandoned assembl${summary.recoveredStaleCount === 1 ? "y" : "ies"} retried`
+          : "")
     );
   } catch (error) {
     console.error("Bundle assembly tick failed.", error instanceof Error ? error.message : error);
+  } finally {
+    bundleAssemblyTickRunning = false;
   }
 }
 

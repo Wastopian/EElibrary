@@ -4284,7 +4284,7 @@ export interface ExportBundleManifest {
 export type ExportBundleFileAvailability = "manifest_only" | "available" | "file_missing";
 
 /**
- * ExportBundleAssemblyStatus distinguishes the four honest states of worker-side asset-byte assembly.
+ * ExportBundleAssemblyStatus distinguishes the honest states of worker-side asset-byte assembly.
  *
  * Assembly is separate from the synchronous manifest archive write. The manifest is recorded by the
  * API at bundle creation; asset bytes (per-included-asset payloads) are copied into deterministic
@@ -4293,10 +4293,16 @@ export type ExportBundleFileAvailability = "manifest_only" | "available" | "file
  *
  * - `not_required` — bundle had zero included assets, so no asset-byte work is queued.
  * - `pending` — bundle is waiting for the worker to copy each included asset's bytes.
+ * - `assembling` — a worker has claimed the row and is copying bytes / writing the archive.
  * - `assembled` — every included asset's bytes were copied to the per-bundle storage prefix.
  * - `assembly_failed` — assembly stopped on a specific asset; see `assemblyError` for telemetry.
  */
-export type ExportBundleAssemblyStatus = "not_required" | "pending" | "assembled" | "assembly_failed";
+export type ExportBundleAssemblyStatus =
+  | "not_required"
+  | "pending"
+  | "assembling"
+  | "assembled"
+  | "assembly_failed";
 
 /**
  * ExportBundleAssemblyErrorPhase identifies which step of the asset-byte assembly failed.

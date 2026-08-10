@@ -8656,7 +8656,13 @@ export async function verifyExportBundleInDatabase(
  * legacy rows persisted before migration 031.
  */
 function normalizeExportBundleAssemblyStatus(raw: string | null): ExportBundleAssemblyStatus {
-  if (raw === "pending" || raw === "assembled" || raw === "assembly_failed" || raw === "not_required") {
+  if (
+    raw === "pending" ||
+    raw === "assembling" ||
+    raw === "assembled" ||
+    raw === "assembly_failed" ||
+    raw === "not_required"
+  ) {
     return raw;
   }
 
