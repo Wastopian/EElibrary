@@ -1157,6 +1157,11 @@ async function persistManufacturer(client: PoolClient, manufacturer: Manufacture
  * Upserts one normalized package row.
  */
 async function persistPackage(client: PoolClient, partPackage: Package): Promise<void> {
+  // Packages are shared taxonomy rows (id is provider + package name). Provider adapters often
+  // emit null for pin/body fields when a given part's payload is sparse. Blind UPSERT would wipe
+  // richer values written by an earlier import of the same package and break footprint validation
+  // for every part pointing at that row — keep existing non-null measurements when the incoming
+  // snapshot omits them.
   await client.query(
     `
       INSERT INTO packages (
@@ -1171,11 +1176,11 @@ async function persistPackage(client: PoolClient, partPackage: Package): Promise
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (id) DO UPDATE SET
         package_name = EXCLUDED.package_name,
-        pin_count = EXCLUDED.pin_count,
-        pitch_mm = EXCLUDED.pitch_mm,
-        body_length_mm = EXCLUDED.body_length_mm,
-        body_width_mm = EXCLUDED.body_width_mm,
-        body_height_mm = EXCLUDED.body_height_mm
+        pin_count = COALESCE(EXCLUDED.pin_count, packages.pin_count),
+        pitch_mm = COALESCE(EXCLUDED.pitch_mm, packages.pitch_mm),
+        body_length_mm = COALESCE(EXCLUDED.body_length_mm, packages.body_length_mm),
+        body_width_mm = COALESCE(EXCLUDED.body_width_mm, packages.body_width_mm),
+        body_height_mm = COALESCE(EXCLUDED.body_height_mm, packages.body_height_mm)
     `,
     [
       partPackage.id,
@@ -1548,6 +1553,11 @@ function isEmbeddableFileFormat(fileFormat: Asset["fileFormat"]): boolean {
  * Upserts one datasheet revision row.
  */
 async function persistDatasheetRevision(client: PoolClient, datasheetRevision: DatasheetRevision): Promise<void> {
+  // Provider import stubs always emit parse_confidence = 0 (and pin_table_status =
+  // not_available). Enrichment later raises confidence via
+  // updateDatasheetRevisionParseConfidence. A supply-offer refresh / re-import must not
+  // clobber that enrichment result with the stub, or the UI silently drops to 0% while
+  // datasheet-confirmed parameters remain.
   await client.query(
     `
       INSERT INTO datasheet_revisions (
@@ -1567,10 +1577,19 @@ async function persistDatasheetRevision(client: PoolClient, datasheetRevision: D
         part_id = EXCLUDED.part_id,
         revision_label = EXCLUDED.revision_label,
         revision_date = EXCLUDED.revision_date,
-        page_count = EXCLUDED.page_count,
-        file_asset_id = EXCLUDED.file_asset_id,
-        parse_confidence = EXCLUDED.parse_confidence,
-        pin_table_status = EXCLUDED.pin_table_status,
+        page_count = COALESCE(EXCLUDED.page_count, datasheet_revisions.page_count),
+        file_asset_id = COALESCE(EXCLUDED.file_asset_id, datasheet_revisions.file_asset_id),
+        parse_confidence = CASE
+          WHEN EXCLUDED.parse_confidence = 0 AND datasheet_revisions.parse_confidence > 0
+            THEN datasheet_revisions.parse_confidence
+          ELSE EXCLUDED.parse_confidence
+        END,
+        pin_table_status = CASE
+          WHEN EXCLUDED.pin_table_status = 'not_available'
+            AND datasheet_revisions.pin_table_status <> 'not_available'
+            THEN datasheet_revisions.pin_table_status
+          ELSE EXCLUDED.pin_table_status
+        END,
         source_record_id = EXCLUDED.source_record_id,
         last_updated_at = EXCLUDED.last_updated_at
     `,

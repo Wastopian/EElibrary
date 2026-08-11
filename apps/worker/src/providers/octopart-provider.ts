@@ -1075,6 +1075,13 @@ function readPinCount(part: OctopartPart, packageName: string): number | null {
     return parsedSpec;
   }
 
+  // Prefer trailing `-<pins>` / ` <pins>` (SOT-23-5 → 5) before the first embedded number
+  // so body-size digits like "23" do not overwrite the real pin count on shared package rows.
+  const trailing = packageName.match(/(?:-|\s)(\d{1,3})$/u);
+  if (trailing?.[1]) {
+    return Number(trailing[1]);
+  }
+
   const match = packageName.match(/(?:^|[-\s])(\d{1,3})(?:$|[^\d])/u);
 
   return match?.[1] ? Number(match[1]) : null;
