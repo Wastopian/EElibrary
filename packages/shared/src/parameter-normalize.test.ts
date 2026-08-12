@@ -259,3 +259,22 @@ test("parseEngineeringValue scales attached sub-unit prefixes and leading-dot de
   close("4.7uH", IND, 4.7e-6);
   close("10nH", IND, 1e-8);
 });
+
+/**
+ * Verifies scientific notation from structured numeric attributes (JLC String(1e-7) → "1e-7") is not
+ * truncated to the mantissa. Without this, recomputePartParameters would treat a 100 nF JLC capacitor
+ * as 1 F when reconciling the verbatim spec row.
+ */
+test("parseEngineeringValue preserves scientific-notation exponents", () => {
+  const close = (raw: string, def: CanonicalParameterDef, expected: number): void => {
+    const parsed = parseEngineeringValue(raw, def);
+    const value = parsed?.kind === "numeric" ? parsed.value : NaN;
+    assert.ok(Math.abs(value - expected) <= Math.abs(expected) * 1e-9, `${raw} -> ${value}, expected ~${expected}`);
+  };
+
+  close("1e-7", CAPACITANCE, 1e-7);
+  close("1E-7", CAPACITANCE, 1e-7);
+  close("4.7e-6", CAPACITANCE, 4.7e-6);
+  close(String(1e-7), CAPACITANCE, 1e-7);
+  close(String(100e-12), CAPACITANCE, 100e-12);
+});
