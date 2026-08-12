@@ -60,6 +60,32 @@ test("octopart provider normalizes Nexar part metadata and seller offers", () =>
 });
 
 /**
+ * Verifies attached SI forms in Nexar displayValue scale correctly. Octopart emits metrics only (no
+ * part_specifications), so these values become the sole source for searchable part_parameters —
+ * a leading-\b parser previously stored "100nF" as 100 F and "10kOhm" as 10 Ω.
+ */
+test("octopart provider scales attached SI prefixes in metric display values", () => {
+  const normalized = octopartProviderAdapter.normalizeRawPart(
+    buildRawPayload({
+      specs: [
+        buildSpec("case_package", "Package / Case", "0402"),
+        buildSpec("capacitance", "Capacitance", "100nF"),
+        buildSpec("resistance", "Resistance", "10kOhm"),
+        buildSpec("frequency", "Frequency", "25MHz"),
+        buildSpec("output_current", "Output Current", "200mA")
+      ]
+    })
+  );
+
+  const byKey = Object.fromEntries(normalized.metrics.map((metric) => [metric.metricKey, metric.metricValue]));
+
+  assert.ok(Math.abs((byKey.capacitance ?? NaN) - 1e-7) <= 1e-18, `capacitance ${byKey.capacitance}`);
+  assert.equal(byKey.resistance, 10_000);
+  assert.equal(byKey.frequency, 25_000_000);
+  assert.ok(Math.abs((byKey.current_rating ?? NaN) - 0.2) <= 1e-12, `current_rating ${byKey.current_rating}`);
+});
+
+/**
  * Verifies optional exact provider lookup skips Octopart when credentials are absent.
  */
 test("octopart provider lookup returns no candidates when credentials are not configured", async () => {
@@ -174,12 +200,12 @@ test("octopart provider fetchRawPart obtains a Nexar token from client credentia
 /**
  * Builds a raw provider payload using a compact Nexar response fixture.
  */
-function buildRawPayload(): RawProviderPayload {
+function buildRawPayload(overrides: { specs?: ReturnType<typeof buildSpec>[] } = {}): RawProviderPayload {
   return {
     fetchedAt: "2026-05-12T12:00:00.000Z",
     payload: {
       hits: 1,
-      part: buildNexarPart(),
+      part: buildNexarPart(overrides),
       request: {
         manufacturerName: "Texas Instruments",
         mode: "mpn",
@@ -195,7 +221,7 @@ function buildRawPayload(): RawProviderPayload {
 /**
  * Builds the compact raw Nexar part fixture used by tests.
  */
-function buildNexarPart() {
+function buildNexarPart(overrides: { specs?: ReturnType<typeof buildSpec>[] } = {}) {
   return {
     bestDatasheet: {
       name: "SN74S74N datasheet",
@@ -259,7 +285,7 @@ function buildNexarPart() {
       }
     ],
     shortDescription: "Dual D-type positive-edge-triggered flip-flops.",
-    specs: [
+    specs: overrides.specs ?? [
       buildSpec("case_package", "Package / Case", "SOIC-14"),
       buildSpec("lifecycle_status", "Lifecycle Status", "Active"),
       buildSpec("resistance", "Resistance", "10 kOhm"),
