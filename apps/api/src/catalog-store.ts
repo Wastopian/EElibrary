@@ -2957,6 +2957,9 @@ async function refreshPartProjectionInDatabase(databasePool: Pool, partId: strin
 
 /**
  * Persists one refreshed part-level readiness projection from the current joined record view.
+ *
+ * Human approval decisions (non-system decided_by) are preserved so review/promote/issue
+ * refreshes cannot wipe FUNC16 batch sign-off.
  */
 async function persistPartProjectionRows(client: PoolClient, record: PartSearchRecord): Promise<void> {
   const projection = derivePartProjection({
@@ -3031,13 +3034,41 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (part_id) DO UPDATE SET
-        approval_status = EXCLUDED.approval_status,
-        summary = EXCLUDED.summary,
-        detail = EXCLUDED.detail,
-        evidence = EXCLUDED.evidence,
-        decided_by = EXCLUDED.decided_by,
-        decided_at = EXCLUDED.decided_at,
-        last_updated_at = EXCLUDED.last_updated_at
+        approval_status = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.approval_status
+          ELSE EXCLUDED.approval_status
+        END,
+        summary = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.summary
+          ELSE EXCLUDED.summary
+        END,
+        detail = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.detail
+          ELSE EXCLUDED.detail
+        END,
+        evidence = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.evidence
+          ELSE EXCLUDED.evidence
+        END,
+        decided_by = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.decided_by
+          ELSE EXCLUDED.decided_by
+        END,
+        decided_at = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.decided_at
+          ELSE EXCLUDED.decided_at
+        END,
+        last_updated_at = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.last_updated_at
+          ELSE EXCLUDED.last_updated_at
+        END
     `,
     [
       projection.approval.partId,
