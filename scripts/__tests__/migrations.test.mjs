@@ -126,3 +126,12 @@ test("discoverMigrations includes the supply offerings migration", async () => {
     `expected a *_supply_offerings.sql migration in ${files.join(", ")}`
   );
 });
+
+test("discoverMigrations includes the acquisition jobs org unique index migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("acquisition_jobs_org_unique.sql")),
+    `expected a *_acquisition_jobs_org_unique.sql migration in ${files.join(", ")}`
+  );
+});

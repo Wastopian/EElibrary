@@ -2435,6 +2435,8 @@ function getDatabasePool(): Pool | null {
 
 /**
  * Reads the id of an active queued/running acquisition job for one provider part key when it already exists.
+ * The lookup is org-scoped: a global (provider, part-key) unique index used to make a second tenant's
+ * insert fail while RLS hid the first tenant's row, so duplicate recovery returned nothing.
  */
 async function findActiveProviderAcquisitionJobId(client: PoolClient, providerId: string, providerPartKey: string): Promise<string | null> {
   const result = await client.query<{ id: string }>(
@@ -2443,11 +2445,12 @@ async function findActiveProviderAcquisitionJobId(client: PoolClient, providerId
       FROM provider_acquisition_jobs
       WHERE provider_id = $1
         AND provider_part_key = $2
+        AND org_id = $3
         AND job_status IN ('queued', 'running')
       ORDER BY CASE job_status WHEN 'running' THEN 0 ELSE 1 END ASC, requested_at ASC, id ASC
       LIMIT 1
     `,
-    [providerId, providerPartKey]
+    [providerId, providerPartKey, requireRequestOrgId()]
   );
 
   return result.rows[0]?.id ?? null;
@@ -2467,11 +2470,12 @@ async function readActiveProviderAcquisitionJobDetailByProviderKey(
       FROM provider_acquisition_jobs
       WHERE provider_id = $1
         AND provider_part_key = $2
+        AND org_id = $3
         AND job_status IN ('queued', 'running')
       ORDER BY CASE job_status WHEN 'running' THEN 0 ELSE 1 END ASC, requested_at ASC, id ASC
       LIMIT 1
     `,
-    [providerId, providerPartKey]
+    [providerId, providerPartKey, requireRequestOrgId()]
   );
   const activeJobId = result.rows[0]?.id ?? null;
 

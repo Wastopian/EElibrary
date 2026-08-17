@@ -10,7 +10,7 @@ import {
   setCatalogStorePoolForTests,
   setProviderAcquisitionJobBeforeInsertHookForTests
 } from "./catalog-store";
-import { enterRequestContextForTests } from "./request-context";
+import { enterRequestContextForTests, runWithRequestContext } from "./request-context";
 import type { Pool } from "pg";
 import type { ProviderAcquisitionJobCreateInput } from "@ee-library/shared/types";
 
@@ -114,6 +114,48 @@ test("createProviderAcquisitionJobInDatabase returns one active job when a concu
   }
 });
 
+test("createProviderAcquisitionJobInDatabase lets a second org queue the same provider part", async () => {
+  const pool = createProviderAcquisitionPool();
+  setCatalogStorePoolForTests(pool);
+
+  try {
+    const defaultResult = await runWithRequestContext("org-default", () =>
+      createProviderAcquisitionJobInDatabase(buildProviderAcquisitionInput(), "default-admin", "2026-08-17T11:00:00.000Z")
+    );
+    const acmeResult = await runWithRequestContext("org-acme", () =>
+      createProviderAcquisitionJobInDatabase(buildProviderAcquisitionInput(), "acme-admin", "2026-08-17T11:00:01.000Z")
+    );
+    const sameOrgRepeat = await runWithRequestContext("org-acme", () =>
+      createProviderAcquisitionJobInDatabase(buildProviderAcquisitionInput(), "acme-admin", "2026-08-17T11:00:02.000Z")
+    );
+    const jobRows = await pool.query<{ id: string; org_id: string }>(
+      "SELECT id, org_id FROM provider_acquisition_jobs ORDER BY requested_at ASC, id ASC"
+    );
+
+    assert.equal(defaultResult.status, "created");
+    assert.equal(acmeResult.status, "created");
+    assert.equal(sameOrgRepeat.status, "created");
+    if (defaultResult.status !== "created" || acmeResult.status !== "created" || sameOrgRepeat.status !== "created") {
+      throw new Error("expected created acquisition jobs");
+    }
+
+    assert.equal(defaultResult.response.job.orgId, "org-default");
+    assert.equal(acmeResult.response.job.orgId, "org-acme");
+    assert.notEqual(defaultResult.response.job.id, acmeResult.response.job.id);
+    assert.equal(sameOrgRepeat.response.job.id, acmeResult.response.job.id, "same-org duplicate still reuses the active job");
+    assert.deepEqual(
+      jobRows.rows,
+      [
+        { id: defaultResult.response.job.id, org_id: "org-default" },
+        { id: acmeResult.response.job.id, org_id: "org-acme" }
+      ]
+    );
+  } finally {
+    setCatalogStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
 /**
  * Builds one exact-match provider candidate input for provider acquisition store tests.
  */
@@ -163,8 +205,8 @@ function createProviderAcquisitionPool(): TestPool {
       org_id TEXT DEFAULT 'org-default',
       last_updated_at TIMESTAMPTZ NOT NULL
     );
-    CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_provider_part
-      ON provider_acquisition_jobs (provider_id, provider_part_key)
+    CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_org_provider_part
+      ON provider_acquisition_jobs (org_id, provider_id, provider_part_key)
       WHERE job_status IN ('queued', 'running');
     CREATE TABLE provider_acquisition_job_events (
       id TEXT PRIMARY KEY,
