@@ -7,7 +7,6 @@ import test from "node:test";
 import { newDb } from "pg-mem";
 import { setWorkerRepositoryPoolForTests } from "./catalog-repository";
 import {
-  bulkEnqueueProviderAcquisitionJobs,
   processNextProviderAcquisitionJob,
   processProviderAcquisitionJobs,
   setProviderAcquisitionImportRunnerForTests
@@ -251,32 +250,20 @@ test("provider acquisition worker no-ops cleanly when no queued jobs exist", asy
   }
 });
 
-test("bulk catalog enqueue ignores other tenants' source records and active jobs", async () => {
+test("active acquisition unique index allows the same provider part in two orgs", async () => {
   const pool = createProviderAcquisitionPool();
-  setWorkerRepositoryPoolForTests(pool);
-  await pool.query(
-    "INSERT INTO source_records (id, provider_id, provider_part_key, part_id, fetched_at, org_id) VALUES ('src-acme', 'jlcparts', 'C1091', 'org-acme__part-jlcparts-c1091', '2026-08-17T00:00:00.000Z', 'org-acme')"
-  );
-  await seedQueuedJob(pool, "acqjob-acme-c1091", "2026-08-17T11:00:00.000Z", "C1091", "RC-02W300JT", "org-acme");
+  await seedQueuedJob(pool, "acqjob-default-c1091", "2026-08-17T11:00:00.000Z", "C1091", "RC-02W300JT", "org-default");
+  await seedQueuedJob(pool, "acqjob-acme-c1091", "2026-08-17T11:00:01.000Z", "C1091", "RC-02W300JT", "org-acme");
 
   try {
-    const summary = await bulkEnqueueProviderAcquisitionJobs(
-      "jlcparts",
-      (async function* () {
-        yield [{ mpn: "RC-02W300JT", providerPartId: "C1091" }];
-      })(),
-      "system:bulk_catalog_enqueue"
+    const rows = await pool.query<{ id: string; org_id: string }>(
+      "SELECT id, org_id FROM provider_acquisition_jobs WHERE provider_part_key = 'C1091' ORDER BY org_id ASC"
     );
-    const defaultJobs = await pool.query<{ id: string; org_id: string }>(
-      "SELECT id, org_id FROM provider_acquisition_jobs WHERE org_id = 'org-default' AND provider_part_key = 'C1091'"
-    );
-
-    assert.equal(summary.totalEnqueued, 1);
-    assert.equal(summary.totalSkipped, 0);
-    assert.equal(defaultJobs.rows.length, 1);
-    assert.equal(defaultJobs.rows[0]?.org_id, "org-default");
+    assert.deepEqual(rows.rows, [
+      { id: "acqjob-acme-c1091", org_id: "org-acme" },
+      { id: "acqjob-default-c1091", org_id: "org-default" }
+    ]);
   } finally {
-    setWorkerRepositoryPoolForTests(null);
     await pool.end();
   }
 });
@@ -348,17 +335,10 @@ function createProviderAcquisitionPool(): TestPool {
       detail JSONB,
       created_at TIMESTAMPTZ NOT NULL
     );
-    CREATE TABLE source_records (
-      id TEXT PRIMARY KEY,
-      provider_id TEXT NOT NULL,
-      provider_part_key TEXT NOT NULL,
-      part_id TEXT,
-      fetched_at TIMESTAMPTZ,
-      org_id TEXT DEFAULT 'org-default'
-    );
     CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_org_provider_part
       ON provider_acquisition_jobs (org_id, provider_id, provider_part_key)
       WHERE job_status IN ('queued', 'running');
+    CREATE TABLE assets (
       id TEXT PRIMARY KEY,
       part_id TEXT NOT NULL,
       asset_type TEXT NOT NULL,

@@ -195,12 +195,12 @@ function buildBulkInsertQuery(
         SELECT 1 FROM source_records sr
         WHERE sr.provider_id = $1
           AND sr.provider_part_key = c.provider_part_key
-          AND COALESCE(sr.org_id, '${DEFAULT_ORG_ID}') = '${DEFAULT_ORG_ID}'
+          AND (sr.org_id = '${DEFAULT_ORG_ID}' OR sr.org_id IS NULL)
       ) AND NOT EXISTS (
         SELECT 1 FROM provider_acquisition_jobs paj
         WHERE paj.provider_id = $1
           AND paj.provider_part_key = c.provider_part_key
-          AND COALESCE(paj.org_id, '${DEFAULT_ORG_ID}') = '${DEFAULT_ORG_ID}'
+          AND (paj.org_id = '${DEFAULT_ORG_ID}' OR paj.org_id IS NULL)
           AND paj.job_status IN ('queued', 'running', 'succeeded')
       )
     `,
