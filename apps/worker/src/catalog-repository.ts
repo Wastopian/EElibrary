@@ -2859,6 +2859,9 @@ async function refreshStoredPartProjectionRows(client: PoolClient, partId: strin
   });
 
   await writePartProjectionRows(client, partId, projection);
+  // Projection INSERTs omit org_id (same pattern as other catalog children). Stamp here so
+  // sibling refreshes — not just the imported part — keep issues and risk flags visible under RLS.
+  await stampPartChildOrgIds(client, partId);
 }
 
 /**
@@ -3035,22 +3038,28 @@ async function refreshStoredConnectorFamilyConflictRows(client: PoolClient, part
 
 /**
  * Reads every part id whose duplicate-candidate projection could change after one canonical part write.
+ * Scoped to the imported part's org: MPN+package matches in other tenants must not refresh this
+ * tenant's readiness, approvals, issues, or risk flags (worker pool bypasses RLS).
  */
 async function readAffectedProjectionPartIds(
   client: PoolClient,
   part: Part,
   previousPartIdentity: { mpn: string; packageId: string } | null
 ): Promise<string[]> {
+  const orgId = await readPartOrgId(client, part.id);
   const result = await client.query<{ id: string }>(
     `
       SELECT id
       FROM parts
-      WHERE id = $1
-        OR (lower(mpn) = lower($2) AND package_id = $3)
-        OR ($4::text IS NOT NULL AND $5::text IS NOT NULL AND lower(mpn) = lower($4) AND package_id = $5)
+      WHERE org_id = $6
+        AND (
+          id = $1
+          OR (lower(mpn) = lower($2) AND package_id = $3)
+          OR ($4::text IS NOT NULL AND $5::text IS NOT NULL AND lower(mpn) = lower($4) AND package_id = $5)
+        )
       ORDER BY id ASC
     `,
-    [part.id, part.mpn, part.packageId, previousPartIdentity?.mpn ?? null, previousPartIdentity?.packageId ?? null]
+    [part.id, part.mpn, part.packageId, previousPartIdentity?.mpn ?? null, previousPartIdentity?.packageId ?? null, orgId]
   );
 
   return Array.from(new Set(result.rows.map((row) => row.id)));
@@ -3616,6 +3625,7 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
         FROM parts p
         JOIN parts candidate
           ON candidate.id <> p.id
+          AND candidate.org_id = p.org_id
           AND lower(candidate.mpn) = lower(p.mpn)
           AND candidate.package_id = p.package_id
         JOIN manufacturers duplicate_manufacturer ON duplicate_manufacturer.id = candidate.manufacturer_id

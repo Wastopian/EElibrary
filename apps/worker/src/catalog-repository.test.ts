@@ -529,6 +529,77 @@ test("persistNormalizedPartRows namespaces ids per org so a shared provider part
   }
 });
 
+/**
+ * Two tenants importing the same MPN+package must not treat each other as duplicate-candidate
+ * siblings. The worker bypasses RLS, so an unscoped MPN+package lookup would refresh the other
+ * org's projection: wipe risk-flag org_id (rows vanish under RLS) and write a duplicate warning
+ * that names the foreign part id.
+ */
+test("persistNormalizedPartRows does not treat another org's matching MPN+package as a duplicate", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(
+      client,
+      buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6, "not_recommended"),
+      "org-acme"
+    );
+
+    const acmePartId = "org-acme__part-repeat-c1";
+    const acmeRiskBefore = await client.query<{ org_id: string | null; risk_code: string }>(
+      "SELECT org_id, risk_code FROM part_risk_flags WHERE part_id = $1 ORDER BY risk_code ASC",
+      [acmePartId]
+    );
+    assert.equal(
+      acmeRiskBefore.rows.some((row) => row.risk_code === "lifecycle_not_active"),
+      true,
+      "org-acme should have a lifecycle risk flag before the other org imports"
+    );
+    assert.equal(
+      acmeRiskBefore.rows.every((row) => row.org_id === "org-acme"),
+      true,
+      "org-acme risk flags should be stamped before the other org imports"
+    );
+
+    await persistNormalizedPartRows(
+      client,
+      buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.7, "not_recommended"),
+      "org-other"
+    );
+
+    const otherPartId = "org-other__part-repeat-c1";
+    const acmeDuplicates = await client.query<{ issue_code: string; detail: string }>(
+      "SELECT issue_code, detail FROM part_issues WHERE part_id = $1 AND issue_code = 'duplicate_candidate'",
+      [acmePartId]
+    );
+    const otherDuplicates = await client.query<{ issue_code: string; detail: string }>(
+      "SELECT issue_code, detail FROM part_issues WHERE part_id = $1 AND issue_code = 'duplicate_candidate'",
+      [otherPartId]
+    );
+    const acmeRiskAfter = await client.query<{ org_id: string | null; risk_code: string }>(
+      "SELECT org_id, risk_code FROM part_risk_flags WHERE part_id = $1 ORDER BY risk_code ASC",
+      [acmePartId]
+    );
+
+    assert.equal(acmeDuplicates.rows.length, 0, "org-acme must not gain a duplicate_candidate from org-other's import");
+    assert.equal(otherDuplicates.rows.length, 0, "org-other must not treat org-acme's part as a duplicate");
+    assert.equal(
+      acmeRiskAfter.rows.some((row) => row.risk_code === "lifecycle_not_active"),
+      true,
+      "org-acme lifecycle risk flag must survive the other org's import"
+    );
+    assert.equal(
+      acmeRiskAfter.rows.every((row) => row.org_id === "org-acme"),
+      true,
+      "org-acme risk flags must keep org_id so RLS still exposes them"
+    );
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 test("persistNormalizedPartRows derives reconciled parameters from a resistor's specifications", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
@@ -1600,6 +1671,15 @@ test("persistNormalizedPartRows creates duplicate_candidate issues for parts sha
 
     assert.equal(issuesA.rows.length, 1, "part-dup-a should have a duplicate_candidate issue after part-dup-b import");
     assert.equal(issuesB.rows.length, 1, "part-dup-b should have a duplicate_candidate issue");
+
+    const stampedA = await client.query<{ org_id: string | null }>(
+      "SELECT org_id FROM part_issues WHERE part_id = 'part-dup-a' AND issue_code = 'duplicate_candidate'"
+    );
+    assert.equal(
+      stampedA.rows[0]?.org_id,
+      "org-default",
+      "sibling projection refresh must stamp org_id on the earlier part's new duplicate issue"
+    );
   } finally {
     client.release();
     await pool.end();

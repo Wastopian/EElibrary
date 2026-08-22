@@ -5026,7 +5026,9 @@ const PART_ISSUE_ROWS_SQL = `
   ORDER BY severity ASC, summary ASC, id ASC
 `;
 
-/** PART_DUPLICATE_CANDIDATE_ROWS_SQL reads DB-backed duplicate candidates from canonical part rows. */
+/** PART_DUPLICATE_CANDIDATE_ROWS_SQL reads DB-backed duplicate candidates from canonical part rows.
+ * Candidate matches are same-org only so another tenant's copy of the same MPN+package is not a duplicate.
+ */
 const PART_DUPLICATE_CANDIDATE_ROWS_SQL = `
   SELECT
     (
@@ -5056,6 +5058,7 @@ const PART_DUPLICATE_CANDIDATE_ROWS_SQL = `
   FROM parts p
   JOIN parts candidate
     ON candidate.id <> p.id
+    AND candidate.org_id = p.org_id
     AND lower(candidate.mpn) = lower(p.mpn)
     AND candidate.package_id = p.package_id
   JOIN manufacturers duplicate_manufacturer ON duplicate_manufacturer.id = candidate.manufacturer_id
