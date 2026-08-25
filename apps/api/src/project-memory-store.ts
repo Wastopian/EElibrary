@@ -11216,10 +11216,12 @@ export async function applyApprovalBatchInDatabase(
         continue;
       }
 
+      // org_id is required on the INSERT tuple: FORCE RLS WITH CHECK is applied to every
+      // proposed insert row, including ON CONFLICT UPDATE, so a null org_id 500s the batch.
       await client.query(
         `
-          INSERT INTO part_approvals (part_id, approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          INSERT INTO part_approvals (part_id, approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at, org_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)
           ON CONFLICT (part_id) DO UPDATE SET
             approval_status = EXCLUDED.approval_status,
             summary = EXCLUDED.summary,
@@ -11229,7 +11231,7 @@ export async function applyApprovalBatchInDatabase(
             decided_at = EXCLUDED.decided_at,
             last_updated_at = EXCLUDED.last_updated_at
         `,
-        [partId, targetStatus, summary, detail, evidence, decidedBy, now]
+        [partId, targetStatus, summary, detail, evidence, decidedBy, now, requireRequestOrgId()]
       );
 
       appliedCount += 1;
