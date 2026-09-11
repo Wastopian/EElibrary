@@ -14,7 +14,7 @@ import { parseConnectorSetIntentText, resolveConnectorSetIntent } from "@ee-libr
 import { parseBareEngineeringNumber } from "@ee-library/shared/parameter-normalize";
 import { getCanonicalParamDefByKey, listCanonicalParameterKeys } from "@ee-library/shared/parameter-registry";
 import { resolveStorageKey } from "@ee-library/shared/file-storage";
-import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartParametersFromDatabase, readPartSearchFacetsFromDatabase, readPartSpecificationsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
+import { CatalogStoreError, createGenerationRequestInDatabase, createProviderAcquisitionJobInDatabase, createReviewInDatabase, getCatalogStoreStatus, promoteAssetForExportInDatabase, readAssetDownloadTargetFromDatabase, readAssetPreviewArtifactDownloadTargetFromDatabase, readCatalogRecordsFromDatabase, readConnectorIntentRecordsFromDatabase, readPartAcquisitionSummaryFromDatabase, readPartDetailRecordsFromDatabase, readPartEnrichmentSummaryFromDatabase, readPartParametersFromDatabase, readPartSearchFacetsFromDatabase, readPartSpecificationsFromDatabase, readPartSearchRecordsFromDatabase, readProviderAcquisitionJobInDatabase, readStorageKeyOwnershipFromDatabase, updatePartIssueWorkflowInDatabase, updateSourceReconciliationInDatabase } from "./catalog-store";
 import { resolveCatalogRecords, resolveCatalogSearchFacets, resolveCatalogSearchRecords } from "./catalog-resolver";
 import { buildPartDetailResponse, buildUnavailablePartAcquisitionSummary, buildUnavailablePartEnrichmentSummary } from "./detail-response";
 import { parseProviderAcquisitionJobCreateRequest } from "./provider-acquisition-request";
@@ -1047,7 +1047,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   if (storageServeMatch?.[1]) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleStorageFileServe(request, response, storageServeMatch[1]);
+    await handleRawStorageFileServe(request, response, storageServeMatch[1]);
     return;
   }
 
@@ -5044,9 +5044,63 @@ function escapeHtml(value: string): string {
 }
 
 /**
+ * Authorizes a raw `GET /storage/:key` download for the acting tenant, then streams the file.
+ *
+ * Unlike id-based asset/preview routes (which look up an org-scoped row before calling
+ * {@link handleStorageFileServe}), export-bundle and other UI links address storage by key alone.
+ * Without this gate an admin who learns a foreign key — including deterministic datasheet paths
+ * derived from audit-leaked part ids — could stream another tenant's bytes.
+ */
+async function handleRawStorageFileServe(request: IncomingMessage | null, response: ServerResponse, rawEncodedKey: string): Promise<void> {
+  const storageKey = decodeURIComponent(rawEncodedKey);
+  const localBasePath = process.env["STORAGE_LOCAL_PATH"] ?? "./storage";
+
+  // Keep path-traversal failures as 400 before the ownership oracle so attackers cannot probe
+  // whether a traversal-shaped key happens to exist as a stored object name.
+  if (!resolveStorageKey(localBasePath, storageKey)) {
+    sendDownloadFailure(request, response, 400, "INVALID_STORAGE_KEY", "The storage key is invalid.");
+    return;
+  }
+
+  try {
+    const ownership = await timeRouteOperation(
+      response,
+      "storage-key-ownership-read",
+      () => readStorageKeyOwnershipFromDatabase(storageKey),
+      (value) => value.status
+    );
+
+    if (ownership.status === "not_configured") {
+      sendDownloadFailure(
+        request,
+        response,
+        503,
+        "DB_NOT_CONFIGURED",
+        "Storage downloads require a configured database so file ownership can be verified."
+      );
+      return;
+    }
+
+    if (ownership.status !== "owned") {
+      // Same shape as a missing file: do not reveal that the bytes exist for another tenant.
+      sendDownloadFailure(request, response, 404, "FILE_NOT_FOUND", "The requested storage file was not found.");
+      return;
+    }
+  } catch (error) {
+    sendCatalogStoreError(response, error);
+    return;
+  }
+
+  await handleStorageFileServe(request, response, rawEncodedKey);
+}
+
+/**
  * Streams a stored asset file from local storage after validating the key against path traversal.
  * `request` carries the caller's Accept header so a person who clicked a link gets a readable
  * failure page; pass null from programmatic serve paths (e.g. the 3D viewer artifact fetch).
+ *
+ * Callers must already authorize the download (org-scoped asset/preview lookup, or
+ * {@link handleRawStorageFileServe} ownership). This helper only validates the path and streams bytes.
  */
 async function handleStorageFileServe(request: IncomingMessage | null, response: ServerResponse, rawEncodedKey: string): Promise<void> {
   const storageKey = decodeURIComponent(rawEncodedKey);
