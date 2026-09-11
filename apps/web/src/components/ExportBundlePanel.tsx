@@ -19,15 +19,27 @@ import type { ExportBundle, ExportBundleAssemblyStatus, ExportBundleFormat, Expo
 export const BUNDLE_AUTO_REFRESH_INTERVAL_MS = 8_000;
 
 /**
- * Returns true when at least one bundle row is still in `pending` assembly and therefore the
- * panel should keep polling the API for updates. Pulled out of the component so the polling rule
- * can be exercised in unit tests without a DOM.
+ * Returns true when at least one bundle row is still in `pending` or `assembling` and therefore
+ * the panel should keep polling the API for updates. Pulled out of the component so the polling
+ * rule can be exercised in unit tests without a DOM.
  *
  * `not_required` bundles never poll (no work to do); `assembled` and `assembly_failed` are
- * terminal states and also do not poll. Only `pending` rows trigger refreshes.
+ * terminal states and also do not poll. In-flight (`pending` / `assembling`) rows trigger refreshes.
  */
 export function shouldAutoRefreshBundleAssembly(bundles: readonly ExportBundle[]): boolean {
-  return bundles.some((bundle) => bundle.assemblyStatus === "pending");
+  return bundles.some(
+    (bundle) => bundle.assemblyStatus === "pending" || bundle.assemblyStatus === "assembling"
+  );
+}
+
+/**
+ * Archive downloads are only honest once the worker has marked the claim `assembled` and the
+ * storage probe still finds the `.tar.gz`. File existence alone is not enough: overlapping
+ * writers can leave a truncated archive at the deterministic path while assembly is still
+ * in flight or has failed.
+ */
+export function canDownloadExportBundleArchive(bundle: ExportBundle): boolean {
+  return bundle.assemblyStatus === "assembled" && bundle.archiveAvailability === "available";
 }
 
 /** ExportBundlePanelProps scopes bundle generation to one project. */
@@ -235,7 +247,9 @@ export function ExportBundlePanel({ bundles, projectId, revisions }: ExportBundl
 function BundleHistoryRow({ bundle }: { bundle: ExportBundle }): React.ReactElement {
   const [showManifest, setShowManifest] = useState(false);
   const manifestDownloadUrl = bundle.fileAvailability === "available" ? buildExportBundleDownloadUrl(bundle.storageKey) : null;
-  const archiveDownloadUrl = bundle.archiveAvailability === "available" ? buildExportBundleDownloadUrl(bundle.archiveStorageKey) : null;
+  const archiveDownloadUrl = canDownloadExportBundleArchive(bundle)
+    ? buildExportBundleDownloadUrl(bundle.archiveStorageKey)
+    : null;
   const inlineWarnings = collectInlineBundleWarnings(bundle);
 
   return (
@@ -351,7 +365,7 @@ function BundleAssemblyCell({ bundle }: { bundle: ExportBundle }): React.ReactEl
  * quiet during normal operation.
  */
 export function buildBundleAssemblyTelemetryMessage(bundle: ExportBundle): string | null {
-  if (bundle.assemblyStatus === "pending") {
+  if (bundle.assemblyStatus === "pending" || bundle.assemblyStatus === "assembling") {
     return `Worker is copying ${bundle.includedAssetCount} verified asset${bundle.includedAssetCount === 1 ? "" : "s"} into per-bundle storage.`;
   }
 
@@ -378,6 +392,7 @@ export function describeBundleAssemblyStatus(status: ExportBundleAssemblyStatus)
     case "assembled":
       return "Assembled";
     case "pending":
+    case "assembling":
       return "Assembling";
     case "assembly_failed":
       return "Assembly failed";
@@ -394,6 +409,7 @@ function assemblyStatusTone(status: ExportBundleAssemblyStatus): BadgeTone {
     case "assembled":
       return "verified";
     case "pending":
+    case "assembling":
       return "review";
     case "assembly_failed":
       return "danger";
@@ -488,11 +504,11 @@ function BundleAvailabilityCell({
 }): React.ReactElement {
   return (
     <div className="bundle-download-cell">
-      {bundle.archiveAvailability === "available" && archiveDownloadUrl ? (
+      {archiveDownloadUrl ? (
         <a className="link-button" href={archiveDownloadUrl} download>
           Download archive (.tar.gz)
         </a>
-      ) : bundle.archiveAvailability === "file_missing" ? (
+      ) : bundle.assemblyStatus === "assembled" && bundle.archiveAvailability === "file_missing" ? (
         <span
           className="text-warning"
           title="Assembled archive is no longer present in storage. Regenerate the bundle to restore the archive."

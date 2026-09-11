@@ -10,6 +10,7 @@
  */
 
 import { createHash, createPrivateKey, createPublicKey, sign as cryptoSign, type KeyObject } from "node:crypto";
+import type { PoolClient } from "pg";
 import { getWorkerDatabasePool } from "./catalog-repository";
 import { buildUstarTarBuffer, gzipBufferDeterministic, type TarFileEntry } from "./tar-archive";
 import type {
@@ -56,9 +57,263 @@ export interface AssembledExportBundleResult {
   signatureSignedAt: string | null;
 }
 
-/** ExportBundleAssemblySummary is the batch outcome surface for the worker CLI. */
+/**
+ * Reads up to `limit` pending bundles, claims each into `assembling` before copying bytes, and
+ * persists the per-bundle status transition with structured failure telemetry on errors.
+ *
+ * Claiming is required because archive paths are deterministic (`bundle.tar.gz`). Two overlapping
+ * workers that both select `pending` would race the same storage keys and could overwrite a
+ * successful terminal row with a later failure (or leave a truncated archive that the UI still
+ * advertised via file-existence alone).
+ */
+export async function processPendingExportBundleAssembly(
+  limit: number,
+  storage: FileStorageClient
+): Promise<ExportBundleAssemblySummary> {
+  // Read the signing key once per batch so a misconfigured PEM raises a single error during
+  // worker startup rather than re-parsing per bundle. Returns null when no key is configured so
+  // the assembly path stays `unsigned` by default -- the operator must explicitly opt in.
+  const signingKey = readBundleSigningKeyMaterial();
+
+  const recoveredStaleCount = await recoverStaleExportBundleAssemblies();
+  const claimedRows = await claimPendingExportBundles(Math.max(1, limit));
+  const processed: AssembledExportBundleResult[] = [];
+
+  for (const bundle of claimedRows) {
+    const outcome = await assembleSingleExportBundle(storage, bundle, { signingKey });
+    const completedAt = new Date();
+    const persisted = await persistExportBundleAssemblyOutcome(bundle.id, outcome, completedAt);
+
+    // A lost claim (another worker reclaimed a stale assembling row, or the row was otherwise
+    // moved) must not report success/failure to the batch summary as if this worker owned the
+    // terminal write — the live owner will publish the truthful outcome.
+    if (!persisted) {
+      continue;
+    }
+
+    processed.push(outcome);
+  }
+
+  return { processed, recoveredStaleCount };
+}
+
+/** STALE_EXPORT_BUNDLE_ASSEMBLY_MS requeues abandoned `assembling` claims after a worker crash. */
+const STALE_EXPORT_BUNDLE_ASSEMBLY_MS = 30 * 60 * 1000;
+
+/**
+ * ExportBundleAssemblySummary is the batch outcome surface for the worker CLI and daemon.
+ * `recoveredStaleCount` is the number of abandoned in-flight claims returned to `pending`.
+ */
 export interface ExportBundleAssemblySummary {
   processed: AssembledExportBundleResult[];
+  recoveredStaleCount: number;
+}
+
+/**
+ * Returns abandoned `assembling` rows to `pending` so a crashed worker cannot leave bundles stuck
+ * forever. Active claims refresh `assembly_started_at` only at claim time; the stale window is
+ * therefore sized for worst-case archive builds rather than a heartbeat cadence.
+ */
+export async function recoverStaleExportBundleAssemblies(
+  staleAfterMs: number = STALE_EXPORT_BUNDLE_ASSEMBLY_MS
+): Promise<number> {
+  const staleBefore = new Date(Date.now() - Math.max(1, staleAfterMs)).toISOString();
+  const result = await getWorkerDatabasePool().query(
+    `
+      UPDATE export_bundles
+      SET
+        assembly_status = 'pending',
+        assembly_started_at = NULL
+      WHERE assembly_status = 'assembling'
+        AND (
+          assembly_started_at IS NULL
+          OR assembly_started_at < $1
+        )
+      RETURNING id
+    `,
+    [staleBefore]
+  );
+
+  return result.rowCount ?? 0;
+}
+
+/**
+ * Claims up to `limit` pending bundles into `assembling` using SKIP LOCKED so concurrent workers
+ * never copy the same deterministic archive path. Falls back without SKIP LOCKED for pg-mem tests.
+ * Claims one row at a time (matching acquisition/enrichment) so the SELECT FOR UPDATE path stays
+ * portable across Postgres and pg-mem.
+ */
+async function claimPendingExportBundles(limit: number): Promise<PendingExportBundleRow[]> {
+  const claimed: PendingExportBundleRow[] = [];
+  const boundedLimit = Math.max(1, limit);
+
+  for (let index = 0; index < boundedLimit; index += 1) {
+    const next = await claimNextPendingExportBundle();
+    if (!next) {
+      break;
+    }
+    claimed.push(next);
+  }
+
+  return claimed;
+}
+
+/**
+ * Claims the oldest pending bundle into `assembling` inside one transaction, or returns null when
+ * the queue is empty.
+ */
+async function claimNextPendingExportBundle(): Promise<PendingExportBundleRow | null> {
+  const databasePool = getWorkerDatabasePool();
+  const client = await databasePool.connect();
+  const startedAt = new Date().toISOString();
+
+  try {
+    await client.query("BEGIN");
+    const selected = await selectNextPendingExportBundle(client);
+    const selectedRow = selected.rows[0];
+
+    if (!selectedRow) {
+      await client.query("COMMIT");
+      return null;
+    }
+
+    const updated = await client.query<{
+      id: string;
+      project_id: string;
+      manifest: unknown;
+      assembly_attempt_count: number | string;
+    }>(
+      `
+        UPDATE export_bundles
+           SET assembly_status = 'assembling',
+               assembly_started_at = $2::timestamptz,
+               assembly_error = NULL
+         WHERE id = $1
+           AND assembly_status = 'pending'
+        RETURNING id, project_id, manifest, assembly_attempt_count
+      `,
+      [selectedRow.id, startedAt]
+    );
+    const claimedRow = updated.rows[0];
+
+    if (!claimedRow) {
+      await client.query("ROLLBACK");
+      throw new Error(`Pending export bundle ${selectedRow.id} disappeared before it could be marked assembling.`);
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      assembly_attempt_count: Number(claimedRow.assembly_attempt_count ?? 0),
+      id: claimedRow.id,
+      manifest: claimedRow.manifest as ExportBundleManifest,
+      project_id: claimedRow.project_id
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Selects the oldest pending bundle using SKIP LOCKED in PostgreSQL and a narrow fallback in pg-mem tests.
+ */
+async function selectNextPendingExportBundle(
+  client: PoolClient
+): Promise<{ rows: Array<{ id: string }> }> {
+  try {
+    return await client.query<{ id: string }>(buildPendingExportBundleSelect(true));
+  } catch (error) {
+    if (!isSkipLockedUnsupportedError(error)) {
+      throw error;
+    }
+
+    return client.query<{ id: string }>(buildPendingExportBundleSelect(false));
+  }
+}
+
+/**
+ * Builds the oldest-pending claim query, keeping the production SKIP LOCKED clause isolated from the pg-mem fallback path.
+ */
+function buildPendingExportBundleSelect(includeSkipLocked: boolean): string {
+  return `
+    SELECT id
+      FROM export_bundles
+     WHERE assembly_status = 'pending'
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1
+     FOR UPDATE${includeSkipLocked ? " SKIP LOCKED" : ""}
+  `;
+}
+
+/**
+ * Detects the pg-mem planner limitation around SKIP LOCKED so the fallback stays narrow and explicit.
+ */
+function isSkipLockedUnsupportedError(error: unknown): boolean {
+  return error instanceof Error && /skip locked/u.test(error.message);
+}
+
+/**
+ * Persists one assembly outcome only when this worker still owns the `assembling` claim.
+ * Returns false when the claim was lost so callers can omit a stale outcome from the summary.
+ */
+async function persistExportBundleAssemblyOutcome(
+  bundleId: string,
+  outcome: AssembledExportBundleResult,
+  completedAt: Date
+): Promise<boolean> {
+  const databasePool = getWorkerDatabasePool();
+
+  if (outcome.status === "assembled") {
+    const result = await databasePool.query(
+      `UPDATE export_bundles
+          SET assembly_status = 'assembled',
+              assembly_error = NULL,
+              assembly_completed_at = $2,
+              assembly_started_at = NULL,
+              assembly_attempt_count = assembly_attempt_count + 1,
+              archive_storage_key = $3,
+              archive_sha256 = $4,
+              manifest_sha256 = $5,
+              signature_status = $6,
+              signature_algorithm = $7,
+              signature_public_key_fingerprint = $8,
+              signature_storage_key = $9,
+              signature_signed_at = $10
+        WHERE id = $1
+          AND assembly_status = 'assembling'`,
+      [
+        bundleId,
+        completedAt,
+        outcome.archiveStorageKey,
+        outcome.archiveSha256,
+        outcome.manifestSha256,
+        outcome.signatureStatus,
+        outcome.signatureAlgorithm,
+        outcome.signaturePublicKeyFingerprint,
+        outcome.signatureStorageKey,
+        outcome.signatureSignedAt
+      ]
+    );
+
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  const result = await databasePool.query(
+    `UPDATE export_bundles
+        SET assembly_status = 'assembly_failed',
+            assembly_error = $2::jsonb,
+            assembly_completed_at = $3,
+            assembly_started_at = NULL,
+            assembly_attempt_count = assembly_attempt_count + 1
+      WHERE id = $1
+        AND assembly_status = 'assembling'`,
+    [bundleId, JSON.stringify(outcome.failure), completedAt]
+  );
+
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -477,91 +732,3 @@ async function writeAssetBytes(storage: FileStorageClient, destinationStorageKey
   }
 }
 
-/**
- * Reads up to `limit` pending bundles, copies each bundle's verified asset bytes via storage, and
- * persists the per-bundle status transition with structured failure telemetry on errors.
- */
-export async function processPendingExportBundleAssembly(
-  limit: number,
-  storage: FileStorageClient
-): Promise<ExportBundleAssemblySummary> {
-  const databasePool = getWorkerDatabasePool();
-
-  // Read the signing key once per batch so a misconfigured PEM raises a single error during
-  // worker startup rather than re-parsing per bundle. Returns null when no key is configured so
-  // the assembly path stays `unsigned` by default -- the operator must explicitly opt in.
-  const signingKey = readBundleSigningKeyMaterial();
-
-  const pendingRows = await databasePool.query<{
-    id: string;
-    project_id: string;
-    manifest: unknown;
-    assembly_attempt_count: number | string;
-  }>(
-    `SELECT id, project_id, manifest, assembly_attempt_count
-       FROM export_bundles
-       WHERE assembly_status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT $1`,
-    [Math.max(1, limit)]
-  );
-
-  const processed: AssembledExportBundleResult[] = [];
-
-  for (const row of pendingRows.rows) {
-    const bundle: PendingExportBundleRow = {
-      assembly_attempt_count: Number(row.assembly_attempt_count ?? 0),
-      id: row.id,
-      manifest: row.manifest as ExportBundleManifest,
-      project_id: row.project_id
-    };
-
-    const outcome = await assembleSingleExportBundle(storage, bundle, { signingKey });
-    const completedAt = new Date();
-
-    if (outcome.status === "assembled") {
-      await databasePool.query(
-        `UPDATE export_bundles
-            SET assembly_status = 'assembled',
-                assembly_error = NULL,
-                assembly_completed_at = $2,
-                assembly_attempt_count = assembly_attempt_count + 1,
-                archive_storage_key = $3,
-                archive_sha256 = $4,
-                manifest_sha256 = $5,
-                signature_status = $6,
-                signature_algorithm = $7,
-                signature_public_key_fingerprint = $8,
-                signature_storage_key = $9,
-                signature_signed_at = $10
-          WHERE id = $1`,
-        [
-          bundle.id,
-          completedAt,
-          outcome.archiveStorageKey,
-          outcome.archiveSha256,
-          outcome.manifestSha256,
-          outcome.signatureStatus,
-          outcome.signatureAlgorithm,
-          outcome.signaturePublicKeyFingerprint,
-          outcome.signatureStorageKey,
-          outcome.signatureSignedAt
-        ]
-      );
-    } else {
-      await databasePool.query(
-        `UPDATE export_bundles
-            SET assembly_status = 'assembly_failed',
-                assembly_error = $2::jsonb,
-                assembly_completed_at = $3,
-                assembly_attempt_count = assembly_attempt_count + 1
-          WHERE id = $1`,
-        [bundle.id, JSON.stringify(outcome.failure), completedAt]
-      );
-    }
-
-    processed.push(outcome);
-  }
-
-  return { processed };
-}
