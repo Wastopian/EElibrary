@@ -109,6 +109,15 @@ test("discoverMigrations includes the audit events migration", async () => {
   );
 });
 
+test("discoverMigrations includes the audit events org_id migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("audit_events_org_id.sql")),
+    `expected a *_audit_events_org_id.sql migration in ${files.join(", ")}`
+  );
+});
+
 test("discoverMigrations includes the document control migration", async () => {
   const files = await discoverMigrations();
 

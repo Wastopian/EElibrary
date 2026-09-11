@@ -29,6 +29,7 @@ test("audit log store writes and reads safe user action events", async () => {
       metadata: { operation: "api-project-update", queryKeys: ["tab"] },
       method: "PATCH",
       operation: "api-project-update",
+      orgId: "org-default",
       outcome: "succeeded",
       path: "/projects/project-alpha",
       requestId: "request-audit-store",
@@ -41,7 +42,7 @@ test("audit log store writes and reads safe user action events", async () => {
 
     assert.equal(created.status, "created");
 
-    const events = await readAuditEventsFromDatabase(10);
+    const events = await readAuditEventsFromDatabase("org-default", 10);
     assert.equal(events.status, "available");
     if (events.status !== "available") return;
     assert.equal(events.response.state, "available");
@@ -76,12 +77,18 @@ test("audit middleware records denied admin write attempts", async () => {
     assert.equal(result.statusCode, 401);
     assert.equal(result.headers["X-EE-Request-Id"], "audit-route-denied-1");
 
-    const rows = await pool.query<{ action: string; actor_id: string | null; outcome: string; status_code: number; target_type: string }>(
-      "SELECT action, actor_id, outcome, status_code, target_type FROM audit_events"
-    );
+    const rows = await pool.query<{
+      action: string;
+      actor_id: string | null;
+      org_id: string | null;
+      outcome: string;
+      status_code: number;
+      target_type: string;
+    }>("SELECT action, actor_id, org_id, outcome, status_code, target_type FROM audit_events");
     assert.equal(rows.rows.length, 1);
     assert.equal(rows.rows[0]?.action, "project.create");
     assert.equal(rows.rows[0]?.actor_id, null);
+    assert.equal(rows.rows[0]?.org_id, null, "unauthenticated denials leave org_id null (fail closed on read)");
     assert.equal(rows.rows[0]?.outcome, "denied");
     assert.equal(Number(rows.rows[0]?.status_code), 401);
     assert.equal(rows.rows[0]?.target_type, "project");
@@ -155,6 +162,7 @@ test("audit log store filters reads by target_type and target_id", async () => {
       metadata: {},
       method: "PATCH",
       operation: "api-project-update",
+      orgId: "org-default",
       outcome: "succeeded",
       path: "/projects/project-alpha",
       requestId: "req-1",
@@ -171,6 +179,7 @@ test("audit log store filters reads by target_type and target_id", async () => {
       metadata: {},
       method: "POST",
       operation: "api-asset-promote",
+      orgId: "org-default",
       outcome: "succeeded",
       path: "/parts/part-7/promotions",
       requestId: "req-2",
@@ -181,7 +190,10 @@ test("audit log store filters reads by target_type and target_id", async () => {
       userAgentHash: null
     });
 
-    const projectOnly = await readAuditEventsFromDatabase(10, { targetType: "project", targetId: "project-alpha" });
+    const projectOnly = await readAuditEventsFromDatabase("org-default", 10, {
+      targetType: "project",
+      targetId: "project-alpha"
+    });
     assert.equal(projectOnly.status, "available");
     if (projectOnly.status !== "available") return;
     assert.equal(projectOnly.response.events.length, 1);
@@ -208,6 +220,7 @@ test("audit log store filters reads by outcome", async () => {
       metadata: {},
       method: "POST",
       operation: "api-project-create",
+      orgId: "org-default",
       outcome: "denied",
       path: "/projects",
       requestId: "req-d",
@@ -224,6 +237,7 @@ test("audit log store filters reads by outcome", async () => {
       metadata: {},
       method: "POST",
       operation: "api-project-create",
+      orgId: "org-default",
       outcome: "succeeded",
       path: "/projects",
       requestId: "req-s",
@@ -234,16 +248,106 @@ test("audit log store filters reads by outcome", async () => {
       userAgentHash: null
     });
 
-    const denied = await readAuditEventsFromDatabase(10, { outcome: "denied" });
+    const denied = await readAuditEventsFromDatabase("org-default", 10, { outcome: "denied" });
     assert.equal(denied.status, "available");
     if (denied.status !== "available") return;
     assert.equal(denied.response.events.length, 1);
     assert.equal(denied.response.events[0]?.outcome, "denied");
 
-    const all = await readAuditEventsFromDatabase(10);
+    const all = await readAuditEventsFromDatabase("org-default", 10);
     assert.equal(all.status, "available");
     if (all.status !== "available") return;
     assert.equal(all.response.events.length, 2);
+  } finally {
+    setAuditLogPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies one tenant's admin read cannot see another tenant's audit rows (paths / target ids).
+ */
+test("audit log store scopes reads to the request org and hides foreign tenant events", async () => {
+  const pool = createAuditLogPool();
+  setAuditLogPoolForTests(pool);
+
+  try {
+    await createAuditEventInDatabase({
+      action: "part.asset.download",
+      actorId: "acme-admin",
+      actorRole: "admin",
+      metadata: {},
+      method: "GET",
+      operation: "api-part-asset-download",
+      orgId: "org-acme",
+      outcome: "succeeded",
+      path: "/parts/org-acme__part-secret/assets/asset-1/download",
+      requestId: "req-acme",
+      requestIpHash: null,
+      statusCode: 200,
+      targetId: "asset-1",
+      targetType: "asset",
+      userAgentHash: null
+    });
+    await createAuditEventInDatabase({
+      action: "project.update",
+      actorId: "default-admin",
+      actorRole: "admin",
+      metadata: {},
+      method: "PATCH",
+      operation: "api-project-update",
+      orgId: "org-default",
+      outcome: "succeeded",
+      path: "/projects/project-alpha",
+      requestId: "req-default",
+      requestIpHash: null,
+      statusCode: 200,
+      targetId: "project-alpha",
+      targetType: "project",
+      userAgentHash: null
+    });
+    await createAuditEventInDatabase({
+      action: "project.create",
+      actorId: null,
+      actorRole: null,
+      metadata: {},
+      method: "POST",
+      operation: "api-project-create",
+      orgId: null,
+      outcome: "denied",
+      path: "/projects",
+      requestId: "req-anon",
+      requestIpHash: null,
+      statusCode: 401,
+      targetId: null,
+      targetType: "project",
+      userAgentHash: null
+    });
+
+    const defaultView = await readAuditEventsFromDatabase("org-default", 20);
+    assert.equal(defaultView.status, "available");
+    if (defaultView.status !== "available") return;
+    assert.equal(defaultView.response.events.length, 1);
+    assert.equal(defaultView.response.events[0]?.targetId, "project-alpha");
+    assert.equal(
+      defaultView.response.events.some((event) => event.path.includes("org-acme")),
+      false,
+      "org-default admin must not see org-acme paths or target ids"
+    );
+
+    const acmeView = await readAuditEventsFromDatabase("org-acme", 20);
+    assert.equal(acmeView.status, "available");
+    if (acmeView.status !== "available") return;
+    assert.equal(acmeView.response.events.length, 1);
+    assert.equal(acmeView.response.events[0]?.path, "/parts/org-acme__part-secret/assets/asset-1/download");
+
+    const foreignTarget = await readAuditEventsFromDatabase("org-default", 20, {
+      targetType: "asset",
+      targetId: "asset-1"
+    });
+    assert.equal(foreignTarget.status, "available");
+    if (foreignTarget.status !== "available") return;
+    assert.equal(foreignTarget.response.events.length, 0, "target filters must not pierce org scope");
   } finally {
     setAuditLogPoolForTests(null);
     await pool.end();
@@ -260,6 +364,7 @@ function createAuditLogPool(): TestPool {
       id TEXT PRIMARY KEY,
       request_id TEXT NOT NULL,
       occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      org_id TEXT,
       actor_id TEXT,
       actor_role TEXT,
       action TEXT NOT NULL,

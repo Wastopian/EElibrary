@@ -21,6 +21,8 @@ export const AUDIT_EVENT_BOUNDARY_COPY =
 /** AuditEventCreateInput is the safe route/action context accepted by the audit writer. */
 export interface AuditEventCreateInput {
   requestId: string;
+  /** Acting tenant from the request session; null for unauthenticated denials. */
+  orgId: string | null;
   actorId: string | null;
   actorRole: AuditActorRole | null;
   action: string;
@@ -78,6 +80,7 @@ export async function createAuditEventInDatabase(input: AuditEventCreateInput): 
           id,
           request_id,
           occurred_at,
+          org_id,
           actor_id,
           actor_role,
           action,
@@ -92,12 +95,13 @@ export async function createAuditEventInDatabase(input: AuditEventCreateInput): 
           user_agent_hash,
           metadata
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb)
       `,
       [
         eventId,
         input.requestId,
         new Date(),
+        input.orgId,
         input.actorId,
         input.actorRole,
         input.action,
@@ -137,18 +141,23 @@ export interface AuditEventListFilters {
 
 /**
  * Reads recent audit events for the admin workspace and the per-entity history
- * strips on detail pages. `limit` stays the first argument so existing callers
- * keep working; `filters` is optional and narrows the result set on the server.
+ * strips on detail pages. Always scoped to `orgId` so one tenant cannot read
+ * another tenant's actions, paths, or target ids. `filters` further narrows
+ * within that tenant.
  */
-export async function readAuditEventsFromDatabase(limit: number, filters: AuditEventListFilters = {}): Promise<AuditEventReadResult> {
+export async function readAuditEventsFromDatabase(
+  orgId: string,
+  limit: number,
+  filters: AuditEventListFilters = {}
+): Promise<AuditEventReadResult> {
   const databasePool = getAuditLogDatabasePool();
 
   if (!databasePool) {
     return { status: "not_configured" };
   }
 
-  const conditions: string[] = [];
-  const values: unknown[] = [];
+  const values: unknown[] = [orgId];
+  const conditions: string[] = [`org_id = $1`];
 
   if (filters.actorId) {
     values.push(filters.actorId);
@@ -179,7 +188,7 @@ export async function readAuditEventsFromDatabase(limit: number, filters: AuditE
     conditions.push(`occurred_at <= $${values.length}`);
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
   const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
   values.push(boundedLimit);
 
@@ -275,8 +284,8 @@ function mapAuditEventRow(row: DatabaseAuditEventRow): AuditEvent {
  *
  * Intentionally NOT the request-scoped tenant facade (request-db.ts): the audit flush runs in the
  * request `finally`, including after failures when the request transaction has already aborted, and an
- * audit row must never be lost to a rolled-back request. audit_events carries no org_id and has no RLS
- * policy, so writes on this dedicated pool always succeed.
+ * audit row must never be lost to a rolled-back request. audit_events is still outside RLS (writes on
+ * this dedicated pool always succeed) but stores org_id so reads can filter by the request tenant.
  */
 function getAuditLogDatabasePool(): Pool | null {
   if (auditLogPoolOverride !== undefined) {

@@ -473,7 +473,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   if (request.method === "POST" && url.pathname === "/vendors") {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleVendorCreate(request, response);
+    await handleVendorCreate(request, response, session.orgId);
     return;
   }
 
@@ -483,6 +483,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
     await handleVendorFileUpload(
       request,
       response,
+      session.orgId,
       decodeURIComponent(vendorFileUploadMatch[1]),
       decodeURIComponent(vendorFileUploadMatch[2])
     );
@@ -865,7 +866,7 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   if (request.method === "GET" && auditEventsMatch) {
     const session = await requireAdmin(request);
     if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
-    await handleAuditEventsRead(response, url);
+    await handleAuditEventsRead(response, url, session.orgId);
     return;
   }
 
@@ -1000,12 +1001,16 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
   }
 
   if (request.method === "GET" && url.pathname === "/vendors") {
-    await handleVendorListRead(response);
+    const session = await requireAuth(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleVendorListRead(response, session.orgId);
     return;
   }
 
   if (request.method === "GET" && vendorDetailMatch?.[1]) {
-    await handleVendorDetailRead(response, decodeURIComponent(vendorDetailMatch[1]));
+    const session = await requireAuth(request);
+    if (isAuthError(session)) { sendJson(response, session.statusCode, { error: { code: session.code, message: session.message } }); return; }
+    await handleVendorDetailRead(response, session.orgId, decodeURIComponent(vendorDetailMatch[1]));
     return;
   }
 
@@ -1202,17 +1207,18 @@ async function handleRequestImpl(request: IncomingMessage, response: ServerRespo
 
 /**
  * Handles admin-only audit event reads for security review.
+ * Always scoped to the caller's org so one tenant cannot read another's timeline.
  * Optional filters (actorId / action / targetType / targetId / outcome / time window)
  * narrow the timeline so the admin can do per-actor or per-entity audit queries.
  */
-async function handleAuditEventsRead(response: ServerResponse, url: URL): Promise<void> {
+async function handleAuditEventsRead(response: ServerResponse, url: URL, orgId: string): Promise<void> {
   try {
     const limit = readAuditEventLimit(url.searchParams.get("limit"));
     const filters = readAuditEventFilters(url.searchParams);
     const result = await timeRouteOperation(
       response,
       "audit-events-read",
-      () => readAuditEventsFromDatabase(limit, filters),
+      () => readAuditEventsFromDatabase(orgId, limit, filters),
       (value) => value.status
     );
 
@@ -2894,14 +2900,15 @@ async function handleProjectFileUpload(
 /**
  * Handles vendor notebook reads. Returns the catalog envelope shape so the web client
  * treats reachability errors consistently. The vendor mirror lives entirely on disk so
- * no DB lookup is required here; reachability is reported via `availability`.
+ * no DB lookup is required here; reachability is reported via `availability`. Reads are
+ * scoped to the caller's org so one tenant cannot list another team's supplier notes.
  */
-async function handleVendorListRead(response: ServerResponse): Promise<void> {
+async function handleVendorListRead(response: ServerResponse, orgId: string): Promise<void> {
   try {
     const result = await timeRouteOperation(
       response,
       "vendor-list",
-      () => buildVendorListResponse(),
+      () => buildVendorListResponse(orgId),
       (value) => `${value.availability}:${value.vendors.length}`
     );
     sendCatalogJson(response, result, "database");
@@ -2913,13 +2920,14 @@ async function handleVendorListRead(response: ServerResponse): Promise<void> {
 /**
  * Handles read-only vendor detail requests. The service returns vendor=null inside the
  * configured envelope when the slug is unknown, which the UI maps to a calm 404 panel.
+ * Lookup is org-scoped so a foreign tenant slug resolves as missing.
  */
-async function handleVendorDetailRead(response: ServerResponse, slug: string): Promise<void> {
+async function handleVendorDetailRead(response: ServerResponse, orgId: string, slug: string): Promise<void> {
   try {
     const result = await timeRouteOperation(
       response,
       "vendor-detail",
-      () => buildVendorDetailResponse(slug),
+      () => buildVendorDetailResponse(orgId, slug),
       (value) => `${value.availability}:${value.vendor ? "found" : "missing"}`
     );
     sendCatalogJson(response, result, "database");
@@ -2931,9 +2939,10 @@ async function handleVendorDetailRead(response: ServerResponse, slug: string): P
 /**
  * Handles vendor record creation. Requests must include a name and a supported category.
  * The service rejects empty names, oversized summaries, and slug collisions with typed
- * results so the route returns precise 4xx codes.
+ * results so the route returns precise 4xx codes. Writes land under the caller's org
+ * mirror so slug collisions are per-tenant.
  */
-async function handleVendorCreate(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleVendorCreate(request: IncomingMessage, response: ServerResponse, orgId: string): Promise<void> {
   const body = await readJsonBody<VendorCreateInput>(request);
   if (!body || typeof body.name !== "string" || typeof body.category !== "string") {
     sendJson(response, 400, {
@@ -2949,7 +2958,7 @@ async function handleVendorCreate(request: IncomingMessage, response: ServerResp
     const result = await timeRouteOperation(
       response,
       "vendor-create",
-      () => createVendor(body),
+      () => createVendor(orgId, body),
       (value) => value.status
     );
 
@@ -3006,6 +3015,7 @@ async function handleVendorCreate(request: IncomingMessage, response: ServerResp
 async function handleVendorFileUpload(
   request: IncomingMessage,
   response: ServerResponse,
+  orgId: string,
   slug: string,
   rawSection: string
 ): Promise<void> {
@@ -3035,7 +3045,7 @@ async function handleVendorFileUpload(
     const result = await timeRouteOperation(
       response,
       "vendor-file-upload",
-      () => saveVendorFile(slug, section, body),
+      () => saveVendorFile(orgId, slug, section, body),
       (value) => value.status
     );
 
@@ -6420,6 +6430,7 @@ async function flushRequestAuditEvent(request: IncomingMessage, response: Server
       metadata: buildAuditMetadata(url, operation),
       method,
       operation,
+      orgId: session?.orgId ?? null,
       outcome: classifyAuditOutcome(statusCode),
       path: url.pathname,
       requestId: context.requestId,
