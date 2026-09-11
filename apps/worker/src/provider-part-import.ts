@@ -3,12 +3,12 @@
  */
 
 import { performance } from "node:perf_hooks";
+import type { ProviderImportOutcome, SourceImportStatus } from "@ee-library/shared/types";
 import { providerAdapters } from "./provider-adapters";
 import { assertDatabaseReady, persistNormalizedPart, readSourceRecordImportStatus, recordProviderImportFailure } from "./catalog-repository";
 import type { ProviderAdapter, ProviderPartRequest } from "./provider-adapters";
 
 export type { ProviderPartRequest } from "./provider-adapters";
-import type { ProviderImportOutcome, SourceImportStatus } from "@ee-library/shared/types";
 
 /** ImportResultSummary is the concise operational result for one provider request. */
 export interface ImportResultSummary {
@@ -18,7 +18,7 @@ export interface ImportResultSummary {
   requestedLookup: string;
   /** Provider source key that was persisted. */
   providerPartKey: string;
-  /** Canonical part id that was updated. */
+  /** Canonical part id that was updated (org-scoped for non-default tenants). */
   partId: string;
   /** Import outcome persisted to source_records. */
   importStatus: SourceImportStatus;
@@ -74,18 +74,25 @@ export async function runProviderPartImport(adapterId: string, request: Provider
 
     const previousImportStatus = await timeWorkerOperation(
       "repository.read_prior_source_status",
-      () => readSourceRecordImportStatus(adapter.id, normalizedPart.sourceRecord.providerPartKey),
+      () => readSourceRecordImportStatus(adapter.id, normalizedPart.sourceRecord.providerPartKey, orgId),
       timings,
       (status) => status ?? "none"
     );
 
-    await timeWorkerOperation("repository.persist_normalized_part", () => persistNormalizedPart(normalizedPart, orgId), timings, () => normalizedPart.part.id);
+    // persistNormalizedPart namespaces ids for non-default orgs; the summary must return that
+    // persisted id so acquisition/BOM/API callers do not link the unscoped legacy key.
+    const persistedPartId = await timeWorkerOperation(
+      "repository.persist_normalized_part",
+      () => persistNormalizedPart(normalizedPart, orgId),
+      timings,
+      (partId) => partId
+    );
 
     return {
       durationMs: roundDuration(performance.now() - startedAt),
       importStatus: normalizedPart.sourceRecord.importStatus,
       outcome: previousImportStatus ? "refreshed_existing" : "new_import",
-      partId: normalizedPart.part.id,
+      partId: persistedPartId,
       previousImportStatus,
       providerId: adapter.id,
       providerPartKey: normalizedPart.sourceRecord.providerPartKey,

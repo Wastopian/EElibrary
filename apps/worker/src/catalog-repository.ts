@@ -307,10 +307,16 @@ export async function replayLocalCatalogCrossPartRelations(adapter: ProviderAdap
 
 /**
  * Persists a normalized provider part into canonical Postgres tables.
+ *
+ * Returns the org-scoped part id that was actually written. Callers must use this id (not the
+ * adapter's pre-namespace id) when linking acquisition jobs, enrichment, BOM lines, or API
+ * responses — otherwise non-default tenants point at the legacy unscoped id that may belong to
+ * org-default or may not exist at all.
  */
-export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<void> {
+export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<string> {
   const databasePool = getDatabasePool();
   const client = await databasePool.connect();
+  const persistedPartId = scopeEntityId(orgId, normalizedPart.part.id);
 
   try {
     await client.query("BEGIN");
@@ -323,6 +329,8 @@ export async function persistNormalizedPart(normalizedPart: NormalizedProviderPa
   } finally {
     client.release();
   }
+
+  return persistedPartId;
 }
 
 /**
@@ -979,9 +987,16 @@ export async function markDatasheetAssetAsDownloaded(
 
 /**
  * Reads the current import status for a pending provider + part key, or null when no row exists.
+ *
+ * `orgId` must match the tenant the import will write under so prior-status lookup uses the same
+ * namespaced source id as persist (and never org-default's unscoped row for the same provider key).
  */
-export async function readSourceRecordImportStatus(providerId: string, providerPartKey: string): Promise<SourceImportStatus | null> {
-  const id = buildSourceRecordId(providerId, providerPartKey);
+export async function readSourceRecordImportStatus(
+  providerId: string,
+  providerPartKey: string,
+  orgId: string = DEFAULT_ORG_ID
+): Promise<SourceImportStatus | null> {
+  const id = scopeEntityId(orgId, buildSourceRecordId(providerId, providerPartKey));
   const result = await getDatabasePool().query<{ import_status: SourceImportStatus }>(
     `SELECT import_status FROM source_records WHERE id = $1 LIMIT 1`,
     [id]
