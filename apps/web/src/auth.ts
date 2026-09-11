@@ -7,6 +7,7 @@ import { createDbPool, users } from "@ee-library/db";
 import { eq } from "drizzle-orm";
 import NextAuth, { type DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { readLiveSessionRole } from "@/lib/live-session-role";
 
 /** AppRole keeps auth state explicit and narrow across callbacks. */
 type AppRole = "admin" | "user";
@@ -19,6 +20,7 @@ type AppJwtClaims = {
   id?: string;
   role?: AppRole;
   orgId?: string;
+  sub?: string;
 };
 
 declare module "next-auth" {
@@ -69,13 +71,31 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   session: { strategy: "jwt" },
   callbacks: {
-    jwt({ token, user }) {
+    async jwt({ token, user }) {
       const appToken = token as typeof token & AppJwtClaims;
 
       if (user) {
         appToken.id = user.id ?? "";
         appToken.role = user.role;
         appToken.orgId = user.orgId ?? DEFAULT_ORG_ID;
+        return appToken;
+      }
+
+      // Re-read role/org from the users table so demotion takes effect on the next session access
+      // without requiring the demoted member to sign out and back in.
+      const userId = appToken.id || (typeof appToken.sub === "string" ? appToken.sub : "");
+
+      if (userId) {
+        try {
+          const live = await readLiveSessionRole(userId);
+
+          if (live) {
+            appToken.role = live.role;
+            appToken.orgId = live.orgId;
+          }
+        } catch {
+          // Keep the prior cookie claims if the user DB is briefly unreachable.
+        }
       }
 
       return appToken;

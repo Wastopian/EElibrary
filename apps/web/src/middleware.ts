@@ -101,8 +101,18 @@ function readAppRole(value: unknown): AppRole | null {
 /**
  * Adds the short-lived Bearer token the private API expects. Browser links can only carry
  * the Auth.js cookie, so the same-origin proxy bridges that cookie session to API auth.
+ *
+ * When the client already sent a Bearer token (api-client mints one from `/api/token`, which reads
+ * the live `users.role` row), keep it. Overwriting with the cookie claim would re-elevate a demoted
+ * member for the cookie's lifetime — the exact privilege leak RBAC demotion must close.
  */
 async function buildApiProxyResponse(request: NextRequest, token: Record<string, unknown>): Promise<NextResponse> {
+  const incomingAuthorization = request.headers.get("authorization");
+
+  if (shouldPreserveIncomingBearer(incomingAuthorization)) {
+    return NextResponse.next();
+  }
+
   const sub = typeof token.sub === "string" ? token.sub : null;
   const role = readAppRole(token.role);
   // Carry the tenant claim through to the API. Default to the shared org during the foundation
@@ -134,6 +144,14 @@ async function buildApiProxyResponse(request: NextRequest, token: Record<string,
       headers: requestHeaders
     }
   });
+}
+
+/**
+ * True when the browser (or server action) already attached a Bearer token that should win over the
+ * cookie-minted fallback. Pure so the demotion regression stays unit-testable without Edge requests.
+ */
+export function shouldPreserveIncomingBearer(authorizationHeader: string | null): boolean {
+  return typeof authorizationHeader === "string" && /^Bearer\s+\S+/u.test(authorizationHeader);
 }
 
 /**
