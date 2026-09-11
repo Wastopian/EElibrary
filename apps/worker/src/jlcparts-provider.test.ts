@@ -250,6 +250,20 @@ test("jlcparts provider falls back to MPN in the description when engineering at
   assert.equal(normalized.part.description, "Linear Regulators TPS7A02DBVR (SOT-23-5)");
 });
 
+test("jlcparts provider reads trailing pin counts from package names when joints are missing", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(
+    buildSparsePayload({
+      categoryName: "Linear Regulators",
+      subcategoryName: "Linear Regulators",
+      joints: null,
+      mfr: "TPS7A02DBVR",
+      packageName: "SOT-23-5"
+    })
+  );
+
+  assert.equal(normalized.package.pinCount, 5);
+});
+
 /**
  * Builds a raw payload using the public jlcparts category-row schema for C1091.
  * Extra attributes are merged on top of the base component attributes.
@@ -331,11 +345,13 @@ function buildNumberAttribute(value: number) {
 function buildSparsePayload({
   categoryName,
   subcategoryName,
+  joints = 5,
   mfr,
   packageName
 }: {
   categoryName: string;
   subcategoryName: string;
+  joints?: number | null;
   mfr: string;
   packageName: string;
 }): RawProviderPayload {
@@ -353,7 +369,7 @@ function buildSparsePayload({
         datasheet: null,
         description: "Sparse provider description used only as a fallback.",
         img: null,
-        joints: 5,
+        joints,
         lcsc: "C-SPARSE-1",
         mfr,
         price: [],

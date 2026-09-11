@@ -1,5 +1,7 @@
+/** File header: Issues short-lived API tokens using the account's current role and team. */
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { readLiveSessionRole } from "@/lib/live-session-role";
 import { SignJWT } from "jose";
 
 /**
@@ -10,6 +12,7 @@ import { SignJWT } from "jose";
  */
 const MIN_AUTH_SECRET_BYTES = 32;
 
+/** Validates the session and live account before signing a thirty-second API token. */
 export async function GET() {
   const session = await auth();
 
@@ -30,10 +33,23 @@ export async function GET() {
     );
   }
 
+  // Mint from the live users.role row, not the JWT cookie claim. Demotion writes the DB immediately;
+  // trusting the cookie here would keep issuing admin API tokens until the demoted member re-signs in.
+  let live;
+  try {
+    live = await readLiveSessionRole(session.user.id);
+  } catch {
+    return NextResponse.json({ error: "Unable to verify your account right now." }, { status: 503 });
+  }
+
+  if (!live) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const token = await new SignJWT({
     sub: session.user.id,
-    role: session.user.role,
-    orgId: session.user.orgId,
+    role: live.role,
+    orgId: live.orgId,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()

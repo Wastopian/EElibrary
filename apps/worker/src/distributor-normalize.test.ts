@@ -71,3 +71,21 @@ test("parseEngineeringNumber scales attached sub-unit prefixes and leading-dot d
   close("200mA", "A", 0.2);
   close("64MHz", "Hz", 64_000_000);
 });
+
+/**
+ * Verifies scientific notation (JLC String(1e-7) and provider "1.0E-7 F") keeps the exponent instead of
+ * truncating to the mantissa and storing Farads off by orders of magnitude.
+ */
+test("parseEngineeringNumber preserves scientific-notation exponents", () => {
+  const close = (raw: string, unit: Parameters<typeof parseEngineeringNumber>[1], expected: number) => {
+    const value = parseEngineeringNumber(raw, unit) ?? NaN;
+    assert.ok(Math.abs(value - expected) <= Math.abs(expected) * 1e-9, `${raw} -> ${value}, expected ~${expected}`);
+  };
+
+  close("1e-7", "F", 1e-7);
+  close("1E-7", "F", 1e-7);
+  close("4.7e-6", "F", 4.7e-6);
+  close("1.0E-7 F", "F", 1e-7);
+  close(String(1e-7), "F", 1e-7);
+  close(String(2.2e-12), "F", 2.2e-12);
+});

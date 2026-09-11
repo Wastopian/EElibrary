@@ -1412,10 +1412,19 @@ function parseLengthToMm(value: unknown): number | null {
 
 /**
  * Parses a package pin count from provider joints first, then package text.
+ *
+ * Prefer a trailing `-<pins>` token (SOT-23-5 → 5, QFN-48 → 48) before the first
+ * hyphenated number. The older left-to-right match treated SOT-23-5 as 23 pins, which
+ * then UPSERT-corrupted the shared package row and failed footprint pad-count checks.
  */
 function parsePinCount(joints: number | null, packageName: string): number | null {
   if (joints !== null && joints > 0) {
     return joints;
+  }
+
+  const trailing = packageName.match(/-(\d{1,3})$/u);
+  if (trailing?.[1]) {
+    return Number(trailing[1]);
   }
 
   const match = packageName.match(/(?:^|-)(\d{1,3})(?:$|[^\d])/u);

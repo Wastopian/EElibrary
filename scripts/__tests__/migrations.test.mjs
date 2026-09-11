@@ -109,6 +109,15 @@ test("discoverMigrations includes the audit events migration", async () => {
   );
 });
 
+test("discoverMigrations includes the audit events org_id migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("audit_events_org_id.sql")),
+    `expected a *_audit_events_org_id.sql migration in ${files.join(", ")}`
+  );
+});
+
 test("discoverMigrations includes the document control migration", async () => {
   const files = await discoverMigrations();
 
@@ -124,5 +133,14 @@ test("discoverMigrations includes the supply offerings migration", async () => {
   assert.ok(
     files.some((name) => name.endsWith("supply_offerings.sql")),
     `expected a *_supply_offerings.sql migration in ${files.join(", ")}`
+  );
+});
+
+test("discoverMigrations includes the acquisition jobs org unique index migration", async () => {
+  const files = await discoverMigrations();
+
+  assert.ok(
+    files.some((name) => name.endsWith("acquisition_jobs_org_unique.sql")),
+    `expected a *_acquisition_jobs_org_unique.sql migration in ${files.join(", ")}`
   );
 });

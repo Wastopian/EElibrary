@@ -1,10 +1,11 @@
 /**
- * File header: Protects authenticated workspace routes with Edge-safe JWT role checks.
+ * File header: Protects workspace routes and API proxy requests using the current database role.
  */
 
 import { getToken } from "next-auth/jwt";
 import { SignJWT } from "jose";
 import { NextResponse, type NextRequest } from "next/server";
+import { readLiveSessionRole } from "@/lib/live-session-role";
 
 /** AppRole mirrors the narrow role values embedded by the NextAuth JWT callback. */
 type AppRole = "admin" | "user";
@@ -26,6 +27,19 @@ export default async function middleware(request: NextRequest) {
 
   if (!token) {
     return NextResponse.redirect(buildSignInRedirect(request));
+  }
+
+  // Decoding a cookie does not run Auth.js callbacks. Recheck here before either routing an
+  // admin page or minting a proxy token, including direct links with no Authorization header.
+  try {
+    const live = typeof token.sub === "string" ? await readLiveSessionRole(token.sub) : null;
+    if (!live) {
+      return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Sign in again to continue." } }, { status: 401 });
+    }
+    token.role = live.role;
+    token.orgId = live.orgId;
+  } catch {
+    return NextResponse.json({ error: { code: "AUTH_UNAVAILABLE", message: "Unable to verify your account right now." } }, { status: 503 });
   }
 
   if (request.nextUrl.pathname.startsWith("/admin") && readAppRole(token.role) !== "admin") {
@@ -101,8 +115,18 @@ function readAppRole(value: unknown): AppRole | null {
 /**
  * Adds the short-lived Bearer token the private API expects. Browser links can only carry
  * the Auth.js cookie, so the same-origin proxy bridges that cookie session to API auth.
+ *
+ * When the client already sent a Bearer token (api-client mints one from `/api/token`, which reads
+ * the live `users.role` row), keep it. Overwriting with the cookie claim would re-elevate a demoted
+ * member for the cookie's lifetime — the exact privilege leak RBAC demotion must close.
  */
 async function buildApiProxyResponse(request: NextRequest, token: Record<string, unknown>): Promise<NextResponse> {
+  const incomingAuthorization = request.headers.get("authorization");
+
+  if (shouldPreserveIncomingBearer(incomingAuthorization)) {
+    return NextResponse.next();
+  }
+
   const sub = typeof token.sub === "string" ? token.sub : null;
   const role = readAppRole(token.role);
   // Carry the tenant claim through to the API. Default to the shared org during the foundation
@@ -137,6 +161,14 @@ async function buildApiProxyResponse(request: NextRequest, token: Record<string,
 }
 
 /**
+ * True when the browser (or server action) already attached a Bearer token that should win over the
+ * cookie-minted fallback. Pure so the demotion regression stays unit-testable without Edge requests.
+ */
+export function shouldPreserveIncomingBearer(authorizationHeader: string | null): boolean {
+  return typeof authorizationHeader === "string" && /^Bearer\s+\S+/u.test(authorizationHeader);
+}
+
+/**
  * Reads the shared API/Web auth secret using the same minimum length as the API.
  */
 function readApiAuthSecret(): Uint8Array | null {
@@ -150,6 +182,7 @@ function readApiAuthSecret(): Uint8Array | null {
 }
 
 export const config = {
+  runtime: "nodejs",
   matcher: [
     "/",
     "/account/:path*",

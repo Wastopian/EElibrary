@@ -175,7 +175,7 @@ async function readExportBundleAssemblyCount(pool: Pool): Promise<{ pending: num
     const result = await pool.query<{ pending: string | number; failed: string | number }>(
       `
         SELECT
-          COUNT(*) FILTER (WHERE assembly_status = 'pending') AS pending,
+          COUNT(*) FILTER (WHERE assembly_status IN ('pending', 'assembling')) AS pending,
           COUNT(*) FILTER (WHERE assembly_status = 'assembly_failed') AS failed
         FROM export_bundles
       `

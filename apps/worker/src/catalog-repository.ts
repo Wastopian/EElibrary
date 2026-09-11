@@ -307,10 +307,16 @@ export async function replayLocalCatalogCrossPartRelations(adapter: ProviderAdap
 
 /**
  * Persists a normalized provider part into canonical Postgres tables.
+ *
+ * Returns the org-scoped part id that was actually written. Callers must use this id (not the
+ * adapter's pre-namespace id) when linking acquisition jobs, enrichment, BOM lines, or API
+ * responses — otherwise non-default tenants point at the legacy unscoped id that may belong to
+ * org-default or may not exist at all.
  */
-export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<void> {
+export async function persistNormalizedPart(normalizedPart: NormalizedProviderPart, orgId: string = DEFAULT_ORG_ID): Promise<string> {
   const databasePool = getDatabasePool();
   const client = await databasePool.connect();
+  const persistedPartId = scopeEntityId(orgId, normalizedPart.part.id);
 
   try {
     await client.query("BEGIN");
@@ -323,6 +329,8 @@ export async function persistNormalizedPart(normalizedPart: NormalizedProviderPa
   } finally {
     client.release();
   }
+
+  return persistedPartId;
 }
 
 /**
@@ -917,8 +925,8 @@ export async function captureReferencedDatasheetEvidenceForPart(
 }
 
 /** Reads the org that owns a part, defaulting to the shared org when the part is missing/unstamped. */
-async function readPartOrgId(client: PoolClient, partId: string): Promise<string> {
-  const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM parts WHERE id = $1 LIMIT 1", [partId]);
+async function readPartOrgId(queryable: Pick<Pool, "query">, partId: string): Promise<string> {
+  const result = await queryable.query<{ org_id: string | null }>("SELECT org_id FROM parts WHERE id = $1 LIMIT 1", [partId]);
   return result.rows[0]?.org_id ?? DEFAULT_ORG_ID;
 }
 
@@ -979,9 +987,16 @@ export async function markDatasheetAssetAsDownloaded(
 
 /**
  * Reads the current import status for a pending provider + part key, or null when no row exists.
+ *
+ * `orgId` must match the tenant the import will write under so prior-status lookup uses the same
+ * namespaced source id as persist (and never org-default's unscoped row for the same provider key).
  */
-export async function readSourceRecordImportStatus(providerId: string, providerPartKey: string): Promise<SourceImportStatus | null> {
-  const id = buildSourceRecordId(providerId, providerPartKey);
+export async function readSourceRecordImportStatus(
+  providerId: string,
+  providerPartKey: string,
+  orgId: string = DEFAULT_ORG_ID
+): Promise<SourceImportStatus | null> {
+  const id = scopeEntityId(orgId, buildSourceRecordId(providerId, providerPartKey));
   const result = await getDatabasePool().query<{ import_status: SourceImportStatus }>(
     `SELECT import_status FROM source_records WHERE id = $1 LIMIT 1`,
     [id]
@@ -1157,6 +1172,11 @@ async function persistManufacturer(client: PoolClient, manufacturer: Manufacture
  * Upserts one normalized package row.
  */
 async function persistPackage(client: PoolClient, partPackage: Package): Promise<void> {
+  // Packages are shared taxonomy rows (id is provider + package name). Provider adapters often
+  // emit null for pin/body fields when a given part's payload is sparse. Blind UPSERT would wipe
+  // richer values written by an earlier import of the same package and break footprint validation
+  // for every part pointing at that row — keep existing non-null measurements when the incoming
+  // snapshot omits them.
   await client.query(
     `
       INSERT INTO packages (
@@ -1171,11 +1191,11 @@ async function persistPackage(client: PoolClient, partPackage: Package): Promise
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (id) DO UPDATE SET
         package_name = EXCLUDED.package_name,
-        pin_count = EXCLUDED.pin_count,
-        pitch_mm = EXCLUDED.pitch_mm,
-        body_length_mm = EXCLUDED.body_length_mm,
-        body_width_mm = EXCLUDED.body_width_mm,
-        body_height_mm = EXCLUDED.body_height_mm
+        pin_count = COALESCE(EXCLUDED.pin_count, packages.pin_count),
+        pitch_mm = COALESCE(EXCLUDED.pitch_mm, packages.pitch_mm),
+        body_length_mm = COALESCE(EXCLUDED.body_length_mm, packages.body_length_mm),
+        body_width_mm = COALESCE(EXCLUDED.body_width_mm, packages.body_width_mm),
+        body_height_mm = COALESCE(EXCLUDED.body_height_mm, packages.body_height_mm)
     `,
     [
       partPackage.id,
@@ -1548,6 +1568,11 @@ function isEmbeddableFileFormat(fileFormat: Asset["fileFormat"]): boolean {
  * Upserts one datasheet revision row.
  */
 async function persistDatasheetRevision(client: PoolClient, datasheetRevision: DatasheetRevision): Promise<void> {
+  // Provider import stubs always emit parse_confidence = 0 (and pin_table_status =
+  // not_available). Enrichment later raises confidence via
+  // updateDatasheetRevisionParseConfidence. A supply-offer refresh / re-import must not
+  // clobber that enrichment result with the stub, or the UI silently drops to 0% while
+  // datasheet-confirmed parameters remain.
   await client.query(
     `
       INSERT INTO datasheet_revisions (
@@ -1567,10 +1592,19 @@ async function persistDatasheetRevision(client: PoolClient, datasheetRevision: D
         part_id = EXCLUDED.part_id,
         revision_label = EXCLUDED.revision_label,
         revision_date = EXCLUDED.revision_date,
-        page_count = EXCLUDED.page_count,
-        file_asset_id = EXCLUDED.file_asset_id,
-        parse_confidence = EXCLUDED.parse_confidence,
-        pin_table_status = EXCLUDED.pin_table_status,
+        page_count = COALESCE(EXCLUDED.page_count, datasheet_revisions.page_count),
+        file_asset_id = COALESCE(EXCLUDED.file_asset_id, datasheet_revisions.file_asset_id),
+        parse_confidence = CASE
+          WHEN EXCLUDED.parse_confidence = 0 AND datasheet_revisions.parse_confidence > 0
+            THEN datasheet_revisions.parse_confidence
+          ELSE EXCLUDED.parse_confidence
+        END,
+        pin_table_status = CASE
+          WHEN EXCLUDED.pin_table_status = 'not_available'
+            AND datasheet_revisions.pin_table_status <> 'not_available'
+            THEN datasheet_revisions.pin_table_status
+          ELSE EXCLUDED.pin_table_status
+        END,
         source_record_id = EXCLUDED.source_record_id,
         last_updated_at = EXCLUDED.last_updated_at
     `,
@@ -2007,6 +2041,33 @@ export async function stampDatasheetExtractionOrgIds(client: PoolClient, partId:
   const orgId = await readPartOrgId(client, partId);
 
   for (const table of ["part_datasheet_parameters", "part_parameters"]) {
+    // Table names are hardcoded constants, not user input.
+    await client.query(`UPDATE ${table} SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
+  }
+}
+
+/**
+ * Stamps org_id on daemon-written asset_validation_records from the part's org.
+ *
+ * Footprint/symbol/3D validation jobs write outside the import path, so stampPartChildOrgIds never
+ * sees the new rows. FORCE RLS compares org_id to app.current_org, and NULL never matches — the API
+ * then hides the qualifying evidence and promote-for-export stays blocked after a successful review.
+ */
+export async function stampAssetValidationOrgIds(queryable: Pick<Pool, "query">, partId: string): Promise<void> {
+  const orgId = await readPartOrgId(queryable, partId);
+  await queryable.query(`UPDATE asset_validation_records SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
+}
+
+/**
+ * Stamps org_id on draft-generation assets and workflows from the part's org.
+ *
+ * `generate:drafts` persists outside the import path. Without this stamp, FORCE RLS hides the draft
+ * assets and generation_workflows from the API, so engineers never see the generated CAD to review.
+ */
+export async function stampDraftGenerationOrgIds(client: PoolClient, partId: string): Promise<void> {
+  const orgId = await readPartOrgId(client, partId);
+
+  for (const table of ["assets", "generation_workflows"] as const) {
     // Table names are hardcoded constants, not user input.
     await client.query(`UPDATE ${table} SET org_id = $1 WHERE part_id = $2 AND org_id IS NULL`, [orgId, partId]);
   }
@@ -2859,6 +2920,9 @@ async function refreshStoredPartProjectionRows(client: PoolClient, partId: strin
   });
 
   await writePartProjectionRows(client, partId, projection);
+  // Projection INSERTs omit org_id (same pattern as other catalog children). Stamp here so
+  // sibling refreshes — not just the imported part — keep issues and risk flags visible under RLS.
+  await stampPartChildOrgIds(client, partId);
 }
 
 /**
@@ -3035,22 +3099,28 @@ async function refreshStoredConnectorFamilyConflictRows(client: PoolClient, part
 
 /**
  * Reads every part id whose duplicate-candidate projection could change after one canonical part write.
+ * Scoped to the imported part's org: MPN+package matches in other tenants must not refresh this
+ * tenant's readiness, approvals, issues, or risk flags (worker pool bypasses RLS).
  */
 async function readAffectedProjectionPartIds(
   client: PoolClient,
   part: Part,
   previousPartIdentity: { mpn: string; packageId: string } | null
 ): Promise<string[]> {
+  const orgId = await readPartOrgId(client, part.id);
   const result = await client.query<{ id: string }>(
     `
       SELECT id
       FROM parts
-      WHERE id = $1
-        OR (lower(mpn) = lower($2) AND package_id = $3)
-        OR ($4::text IS NOT NULL AND $5::text IS NOT NULL AND lower(mpn) = lower($4) AND package_id = $5)
+      WHERE org_id = $6
+        AND (
+          id = $1
+          OR (lower(mpn) = lower($2) AND package_id = $3)
+          OR ($4::text IS NOT NULL AND $5::text IS NOT NULL AND lower(mpn) = lower($4) AND package_id = $5)
+        )
       ORDER BY id ASC
     `,
-    [part.id, part.mpn, part.packageId, previousPartIdentity?.mpn ?? null, previousPartIdentity?.packageId ?? null]
+    [part.id, part.mpn, part.packageId, previousPartIdentity?.mpn ?? null, previousPartIdentity?.packageId ?? null, orgId]
   );
 
   return Array.from(new Set(result.rows.map((row) => row.id)));
@@ -3616,6 +3686,7 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
         FROM parts p
         JOIN parts candidate
           ON candidate.id <> p.id
+          AND candidate.org_id = p.org_id
           AND lower(candidate.mpn) = lower(p.mpn)
           AND candidate.package_id = p.package_id
         JOIN manufacturers duplicate_manufacturer ON duplicate_manufacturer.id = candidate.manufacturer_id
@@ -3773,6 +3844,9 @@ async function readStoredProjectionSource(client: PoolClient, partId: string): P
 
 /**
  * Writes one derived projection into the persisted readiness, approval, issue, and risk tables.
+ *
+ * Human approval decisions (FUNC16 batch / any non-system decided_by) are preserved. Derived
+ * approvals must not overwrite engineer sign-off the way issue sync already preserves workflow.
  */
 async function writePartProjectionRows(
   client: PoolClient,
@@ -3829,13 +3903,41 @@ async function writePartProjectionRows(
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (part_id) DO UPDATE SET
-        approval_status = EXCLUDED.approval_status,
-        summary = EXCLUDED.summary,
-        detail = EXCLUDED.detail,
-        evidence = EXCLUDED.evidence,
-        decided_by = EXCLUDED.decided_by,
-        decided_at = EXCLUDED.decided_at,
-        last_updated_at = EXCLUDED.last_updated_at
+        approval_status = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.approval_status
+          ELSE EXCLUDED.approval_status
+        END,
+        summary = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.summary
+          ELSE EXCLUDED.summary
+        END,
+        detail = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.detail
+          ELSE EXCLUDED.detail
+        END,
+        evidence = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.evidence
+          ELSE EXCLUDED.evidence
+        END,
+        decided_by = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.decided_by
+          ELSE EXCLUDED.decided_by
+        END,
+        decided_at = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.decided_at
+          ELSE EXCLUDED.decided_at
+        END,
+        last_updated_at = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.last_updated_at
+          ELSE EXCLUDED.last_updated_at
+        END
     `,
     [
       projection.approval.partId,

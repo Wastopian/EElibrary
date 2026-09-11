@@ -272,8 +272,8 @@ function createProviderAcquisitionPool(): TestPool {
       detail JSONB,
       created_at TIMESTAMPTZ NOT NULL
     );
-    CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_provider_part
-      ON provider_acquisition_jobs (provider_id, provider_part_key)
+    CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_org_provider_part
+      ON provider_acquisition_jobs (org_id, provider_id, provider_part_key)
       WHERE job_status IN ('queued', 'running');
   `);
 

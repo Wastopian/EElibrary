@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newDb } from "pg-mem";
 import { withCanonicalAssetTruth } from "@ee-library/shared/asset-state";
-import { listWorkerOperationalDiagnostics, persistNormalizedPartRows, persistProviderImportFailureRows, setWorkerRepositoryPoolForTests } from "./catalog-repository";
+import { listWorkerOperationalDiagnostics, persistNormalizedPart, persistNormalizedPartRows, persistProviderImportFailureRows, readSourceRecordImportStatus, setWorkerRepositoryPoolForTests } from "./catalog-repository";
 import type { Pool, PoolClient } from "pg";
 import type { NormalizedProviderPart } from "./provider-adapters";
 
@@ -192,6 +192,55 @@ test("persistProviderImportFailureRows namespaces failure source ids for non-def
 });
 
 /**
+ * Non-default imports persist scoped part ids. The outer persist helper must return that scoped id
+ * so acquisition/BOM/API callers never link the adapter's unscoped legacy key (which may FK to
+ * org-default's part or fail entirely).
+ */
+test("persistNormalizedPart returns the org-scoped part id for non-default orgs", async () => {
+  const pool = createMinimalImportPool();
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    const partId = await persistNormalizedPart(buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6), "org-acme");
+    assert.equal(partId, "org-acme__part-repeat-c1");
+
+    const defaultPartId = await persistNormalizedPart(buildMinimalImportPart("2026-04-12T01:00:00.000Z", 0.7), "org-default");
+    assert.equal(defaultPartId, "part-repeat-c1", "org-default keeps the legacy unprefixed id");
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Prior-status lookup must use the same namespaced source id as persist; otherwise a non-default
+ * refresh reads org-default's row (or misses its own) and reports the wrong import outcome.
+ */
+test("readSourceRecordImportStatus scopes the source id to the requesting org", async () => {
+  const queries: QueryCall[] = [];
+  const pool = {
+    async query(text: string, values?: unknown[]) {
+      queries.push({ text, values });
+      return { rows: [{ import_status: "imported" }] };
+    }
+  } as unknown as Pool;
+
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    const status = await readSourceRecordImportStatus("digikey", "STM32G031K8T6", "org-acme");
+    assert.equal(status, "imported");
+    assert.equal(queries[0]?.values?.[0], "org-acme__source-digikey-stm32g031k8t6");
+
+    queries.length = 0;
+    await readSourceRecordImportStatus("digikey", "STM32G031K8T6", "org-default");
+    assert.equal(queries[0]?.values?.[0], "source-digikey-stm32g031k8t6");
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+  }
+});
+
+/**
  * Verifies supply offering snapshots and price tiers are persisted with source provenance.
  */
 test("persistNormalizedPartRows persists supply offerings and replaces stale price tiers", async () => {
@@ -247,6 +296,125 @@ test("persistNormalizedPartRows persists supply offerings and replaces stale pri
 /**
  * Verifies provider metadata refreshes cannot erase already downloaded and reviewed file evidence.
  */
+test("persistNormalizedPartRows preserves package pin/body fields when a later import is sparse", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const rich = buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.7);
+    rich.package = {
+      bodyHeightMm: 1.1,
+      bodyLengthMm: 3.0,
+      bodyWidthMm: 3.0,
+      id: "pkg-shared-sot23",
+      packageName: "SOT-23-5",
+      pinCount: 5,
+      pitchMm: 0.95
+    };
+    rich.part = { ...rich.part, id: "part-rich-sot", mpn: "RICH-SOT", packageId: "pkg-shared-sot23" };
+    rich.sourceRecord = {
+      ...rich.sourceRecord,
+      id: "source-rich-sot",
+      partId: "part-rich-sot",
+      providerPartKey: "RICH-SOT"
+    };
+
+    const sparse = buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.65);
+    sparse.package = {
+      bodyHeightMm: null,
+      bodyLengthMm: null,
+      bodyWidthMm: null,
+      id: "pkg-shared-sot23",
+      packageName: "SOT-23-5",
+      pinCount: null,
+      pitchMm: null
+    };
+    sparse.part = { ...sparse.part, id: "part-sparse-sot", mpn: "SPARSE-SOT", packageId: "pkg-shared-sot23" };
+    sparse.sourceRecord = {
+      ...sparse.sourceRecord,
+      id: "source-sparse-sot",
+      partId: "part-sparse-sot",
+      providerPartKey: "SPARSE-SOT"
+    };
+
+    await persistNormalizedPartRows(client, rich);
+    await persistNormalizedPartRows(client, sparse);
+
+    const packageRows = await client.query<{
+      body_height_mm: string | null;
+      body_length_mm: string | null;
+      body_width_mm: string | null;
+      pin_count: number | null;
+      pitch_mm: string | null;
+    }>(
+      `
+        SELECT pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm
+        FROM packages
+        WHERE id = 'pkg-shared-sot23'
+      `
+    );
+
+    assert.equal(packageRows.rows.length, 1);
+    assert.equal(packageRows.rows[0]?.pin_count, 5);
+    assert.equal(Number(packageRows.rows[0]?.pitch_mm), 0.95);
+    assert.equal(Number(packageRows.rows[0]?.body_length_mm), 3.0);
+    assert.equal(Number(packageRows.rows[0]?.body_width_mm), 3.0);
+    assert.equal(Number(packageRows.rows[0]?.body_height_mm), 1.1);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows preserves datasheet parse confidence across stub re-imports", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(
+      client,
+      buildDatasheetAssetImportPart({
+        fileHash: "sha256:stored-datasheet",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        parseConfidence: 0.82,
+        pinTableStatus: "available",
+        sourceUrl: "https://provider.example/old-datasheet.pdf",
+        storageKey: "datasheets/repeat-c1.pdf"
+      })
+    );
+
+    await persistNormalizedPartRows(
+      client,
+      buildDatasheetAssetImportPart({
+        fileHash: null,
+        lastUpdatedAt: "2026-04-12T03:00:00.000Z",
+        parseConfidence: 0,
+        pinTableStatus: "not_available",
+        sourceUrl: "https://provider.example/new-datasheet.pdf",
+        storageKey: null
+      })
+    );
+
+    const revisionRows = await client.query<{
+      parse_confidence: string;
+      pin_table_status: string;
+    }>(
+      `
+        SELECT parse_confidence, pin_table_status
+        FROM datasheet_revisions
+        WHERE id = 'dsr-repeat-c1'
+      `
+    );
+
+    assert.equal(revisionRows.rows.length, 1);
+    assert.equal(Number(revisionRows.rows[0]?.parse_confidence), 0.82);
+    assert.equal(revisionRows.rows[0]?.pin_table_status, "available");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 test("persistNormalizedPartRows preserves stored asset evidence during reference-only refreshes", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
@@ -523,6 +691,77 @@ test("persistNormalizedPartRows namespaces ids per org so a shared provider part
 
     const acmeCount = await client.query<{ count: number | string }>("SELECT COUNT(*) AS count FROM parts WHERE id = $1", [acmePartId]);
     assert.equal(Number(acmeCount.rows[0]?.count), 1, "same-org re-ingest refreshes in place, no duplicate");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Two tenants importing the same MPN+package must not treat each other as duplicate-candidate
+ * siblings. The worker bypasses RLS, so an unscoped MPN+package lookup would refresh the other
+ * org's projection: wipe risk-flag org_id (rows vanish under RLS) and write a duplicate warning
+ * that names the foreign part id.
+ */
+test("persistNormalizedPartRows does not treat another org's matching MPN+package as a duplicate", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(
+      client,
+      buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6, "not_recommended"),
+      "org-acme"
+    );
+
+    const acmePartId = "org-acme__part-repeat-c1";
+    const acmeRiskBefore = await client.query<{ org_id: string | null; risk_code: string }>(
+      "SELECT org_id, risk_code FROM part_risk_flags WHERE part_id = $1 ORDER BY risk_code ASC",
+      [acmePartId]
+    );
+    assert.equal(
+      acmeRiskBefore.rows.some((row) => row.risk_code === "lifecycle_not_active"),
+      true,
+      "org-acme should have a lifecycle risk flag before the other org imports"
+    );
+    assert.equal(
+      acmeRiskBefore.rows.every((row) => row.org_id === "org-acme"),
+      true,
+      "org-acme risk flags should be stamped before the other org imports"
+    );
+
+    await persistNormalizedPartRows(
+      client,
+      buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.7, "not_recommended"),
+      "org-other"
+    );
+
+    const otherPartId = "org-other__part-repeat-c1";
+    const acmeDuplicates = await client.query<{ issue_code: string; detail: string }>(
+      "SELECT issue_code, detail FROM part_issues WHERE part_id = $1 AND issue_code = 'duplicate_candidate'",
+      [acmePartId]
+    );
+    const otherDuplicates = await client.query<{ issue_code: string; detail: string }>(
+      "SELECT issue_code, detail FROM part_issues WHERE part_id = $1 AND issue_code = 'duplicate_candidate'",
+      [otherPartId]
+    );
+    const acmeRiskAfter = await client.query<{ org_id: string | null; risk_code: string }>(
+      "SELECT org_id, risk_code FROM part_risk_flags WHERE part_id = $1 ORDER BY risk_code ASC",
+      [acmePartId]
+    );
+
+    assert.equal(acmeDuplicates.rows.length, 0, "org-acme must not gain a duplicate_candidate from org-other's import");
+    assert.equal(otherDuplicates.rows.length, 0, "org-other must not treat org-acme's part as a duplicate");
+    assert.equal(
+      acmeRiskAfter.rows.some((row) => row.risk_code === "lifecycle_not_active"),
+      true,
+      "org-acme lifecycle risk flag must survive the other org's import"
+    );
+    assert.equal(
+      acmeRiskAfter.rows.every((row) => row.org_id === "org-acme"),
+      true,
+      "org-acme risk flags must keep org_id so RLS still exposes them"
+    );
   } finally {
     client.release();
     await pool.end();
@@ -1145,6 +1384,8 @@ function buildSupplyImportPart(
 function buildDatasheetAssetImportPart(input: {
   fileHash: string | null;
   lastUpdatedAt: string;
+  parseConfidence?: number;
+  pinTableStatus?: "available" | "needs_review" | "not_available";
   sourceUrl: string;
   storageKey: string | null;
 }): NormalizedProviderPart {
@@ -1183,9 +1424,9 @@ function buildDatasheetAssetImportPart(input: {
         id: "dsr-repeat-c1",
         lastUpdatedAt: input.lastUpdatedAt,
         pageCount: null,
-        parseConfidence: 0,
+        parseConfidence: input.parseConfidence ?? 0,
         partId: "part-repeat-c1",
-        pinTableStatus: "not_available",
+        pinTableStatus: input.pinTableStatus ?? "not_available",
         revisionDate: null,
         revisionLabel: "Provider datasheet reference",
         sourceRecordId: "source-repeat-provider-c1"
@@ -1600,6 +1841,15 @@ test("persistNormalizedPartRows creates duplicate_candidate issues for parts sha
 
     assert.equal(issuesA.rows.length, 1, "part-dup-a should have a duplicate_candidate issue after part-dup-b import");
     assert.equal(issuesB.rows.length, 1, "part-dup-b should have a duplicate_candidate issue");
+
+    const stampedA = await client.query<{ org_id: string | null }>(
+      "SELECT org_id FROM part_issues WHERE part_id = 'part-dup-a' AND issue_code = 'duplicate_candidate'"
+    );
+    assert.equal(
+      stampedA.rows[0]?.org_id,
+      "org-default",
+      "sibling projection refresh must stamp org_id on the earlier part's new duplicate issue"
+    );
   } finally {
     client.release();
     await pool.end();
@@ -1668,6 +1918,99 @@ test("persistNormalizedPartRows writes a fresh part_readiness_summaries row on e
     const secondEvaluation = new Date(afterSecondImport.rows[0]?.last_evaluated_at ?? 0).getTime();
 
     assert.ok(secondEvaluation >= firstEvaluation, "subsequent imports must not move last_evaluated_at backwards");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies engineer approval batch decisions survive provider re-import / readiness refresh.
+ * derivePartProjection never reads the stored approval row, so a blind UPSERT would reset
+ * approved parts back to not_requested and drop decided_by / project evidence.
+ */
+test("persistNormalizedPartRows preserves human part_approvals across re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6));
+
+    const afterFirstImport = await client.query<{ approval_status: string; decided_by: string | null }>(
+      "SELECT approval_status, decided_by FROM part_approvals WHERE part_id = 'part-repeat-c1'"
+    );
+    assert.equal(afterFirstImport.rows.length, 1);
+    assert.equal(afterFirstImport.rows[0]?.approval_status, "not_requested");
+    assert.equal(afterFirstImport.rows[0]?.decided_by, null);
+
+    await client.query(
+      `
+        UPDATE part_approvals
+        SET
+          approval_status = 'approved',
+          summary = 'Approved via project project-alpha batch',
+          detail = 'Approved via project project-alpha batch. Notes: BOM sign-off.',
+          evidence = ARRAY['project:project-alpha', 'triggered_by:approval_batch', 'decided_by:gerry@hardware'],
+          decided_by = 'gerry@hardware',
+          decided_at = '2026-04-12T02:00:00.000Z',
+          last_updated_at = '2026-04-12T02:00:00.000Z'
+        WHERE part_id = 'part-repeat-c1'
+      `
+    );
+
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T05:00:00.000Z", 0.85));
+
+    const afterSecondImport = await client.query<{
+      approval_status: string;
+      decided_by: string | null;
+      summary: string;
+      evidence: string[];
+    }>(
+      "SELECT approval_status, decided_by, summary, evidence FROM part_approvals WHERE part_id = 'part-repeat-c1'"
+    );
+
+    assert.equal(afterSecondImport.rows.length, 1);
+    assert.equal(afterSecondImport.rows[0]?.approval_status, "approved");
+    assert.equal(afterSecondImport.rows[0]?.decided_by, "gerry@hardware");
+    assert.equal(afterSecondImport.rows[0]?.summary, "Approved via project project-alpha batch");
+    assert.ok(afterSecondImport.rows[0]?.evidence.includes("triggered_by:approval_batch"));
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies auto-derived approvals (decided_by = system or null) still refresh on re-import.
+ */
+test("persistNormalizedPartRows refreshes system-derived part_approvals on re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.85));
+
+    await client.query(
+      `
+        UPDATE part_approvals
+        SET
+          approval_status = 'approved',
+          summary = 'Approved for engineering use',
+          decided_by = 'system',
+          decided_at = '2026-04-12T01:00:00.000Z',
+          last_updated_at = '2026-04-12T01:00:00.000Z'
+        WHERE part_id = 'part-repeat-c1'
+      `
+    );
+
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T05:00:00.000Z", 0.85));
+
+    const afterRefresh = await client.query<{ approval_status: string; decided_by: string | null }>(
+      "SELECT approval_status, decided_by FROM part_approvals WHERE part_id = 'part-repeat-c1'"
+    );
+
+    assert.equal(afterRefresh.rows[0]?.approval_status, "not_requested");
+    assert.equal(afterRefresh.rows[0]?.decided_by, null);
   } finally {
     client.release();
     await pool.end();

@@ -2769,12 +2769,13 @@ test("applyApprovalBatchInDatabase applies bulk approve and records project cont
     assert.ok(missingOutcome);
     assert.equal(missingOutcome!.status, "not_found");
 
-    const approvalRow = await pool.query<{ approval_status: string; summary: string; evidence: unknown }>(
-      "SELECT approval_status, summary, evidence FROM part_approvals WHERE part_id = $1",
+    const approvalRow = await pool.query<{ approval_status: string; summary: string; evidence: unknown; org_id: string | null }>(
+      "SELECT approval_status, summary, evidence, org_id FROM part_approvals WHERE part_id = $1",
       ["part-memory-resistor"]
     );
     assert.equal(approvalRow.rows[0]?.approval_status, "approved");
     assert.match(String(approvalRow.rows[0]?.summary), /ALPHA/u);
+    assert.equal(approvalRow.rows[0]?.org_id, "org-default");
 
     // Readiness rows should be untouched.
     const readinessRow = await pool.query<{ readiness_status: string }>(
@@ -2789,6 +2790,42 @@ test("applyApprovalBatchInDatabase applies bulk approve and records project cont
       ["part-memory-ldo"]
     );
     assert.equal(assetCount.rows[0]?.count, "0");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a bulk approve of a part that already has a not_requested approval row upserts
+ * the decision and keeps the existing tenant stamp (ON CONFLICT must not drop org_id).
+ */
+test("applyApprovalBatchInDatabase upserts an existing approval row without dropping org_id", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(
+      `INSERT INTO part_approvals (part_id, approval_status, summary, detail, evidence, decided_by, decided_at, last_updated_at, org_id)
+       VALUES ('part-memory-resistor', 'not_requested', 'Approval not requested', 'No decision yet.', '{}', NULL, NULL, '2026-04-30T00:06:00.000Z', 'org-default')`
+    );
+
+    const result = await applyApprovalBatchInDatabase(
+      "project-alpha",
+      { action: "approve", partIds: ["part-memory-resistor"] },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "applied");
+    if (result.status !== "applied") return;
+    assert.equal(result.response.appliedCount, 1);
+
+    const approvalRow = await pool.query<{ approval_status: string; org_id: string | null }>(
+      "SELECT approval_status, org_id FROM part_approvals WHERE part_id = $1",
+      ["part-memory-resistor"]
+    );
+    assert.equal(approvalRow.rows[0]?.approval_status, "approved");
+    assert.equal(approvalRow.rows[0]?.org_id, "org-default");
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
@@ -3949,7 +3986,8 @@ function createProjectMemoryPool(seedRows: boolean): TestPool {
       evidence TEXT[] NOT NULL DEFAULT '{}',
       decided_by TEXT,
       decided_at TIMESTAMPTZ,
-      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      org_id TEXT
     );
 
     CREATE TABLE part_readiness_summaries (

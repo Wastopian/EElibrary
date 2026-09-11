@@ -1199,6 +1199,81 @@ export async function readAssetPreviewArtifactDownloadTargetFromDatabase(
   }
 }
 
+/** StorageKeyOwnershipResult is the fail-closed verdict for raw `/storage/:key` downloads. */
+export type StorageKeyOwnershipResult =
+  | { status: "owned" }
+  | { status: "not_found" }
+  | { status: "not_configured" };
+
+/**
+ * Returns whether the acting tenant owns a storage key referenced by an org-scoped row.
+ *
+ * Raw `GET /storage/:key` is key-addressed local IO with no inherent tenant boundary. Asset and
+ * preview download routes already authorize via id lookup under the request org; export-bundle and
+ * other UI links still hit `/storage/:key` directly. This check fails closed when the database is
+ * unavailable, the request has no org, or no owned row references the key — so an admin in org A
+ * cannot stream org B's datasheet/CAD/bundle bytes by guessing or learning a foreign key.
+ */
+export async function readStorageKeyOwnershipFromDatabase(storageKey: string): Promise<StorageKeyOwnershipResult> {
+  const databasePool = getDatabasePool();
+
+  if (!databasePool) {
+    return { status: "not_configured" };
+  }
+
+  const orgId = getRequestOrgId();
+
+  if (!orgId) {
+    return { status: "not_found" };
+  }
+
+  try {
+    const result = await databasePool.query<{ owned: number }>(
+      `
+        WITH storage_key_ownership AS (
+          SELECT 1 AS owned
+          FROM assets
+          WHERE org_id = $2
+            AND (storage_key = $1 OR preview_artifact_storage_key = $1)
+          UNION ALL
+          SELECT 1 AS owned
+          FROM export_bundles
+          WHERE org_id = $2
+            AND (
+              storage_key = $1
+              OR archive_storage_key = $1
+              OR signature_storage_key = $1
+            )
+          UNION ALL
+          SELECT 1 AS owned
+          FROM bom_imports
+          WHERE org_id = $2
+            AND storage_key = $1
+          UNION ALL
+          SELECT 1 AS owned
+          FROM evidence_attachments
+          WHERE org_id = $2
+            AND storage_key = $1
+        )
+        SELECT 1 AS owned
+        FROM storage_key_ownership
+        LIMIT 1
+      `,
+      [storageKey, orgId]
+    );
+
+    return result.rows[0] ? { status: "owned" } : { status: "not_found" };
+  } catch (error) {
+    // During HTTP requests getDatabasePool() returns the request-db facade even when no Postgres
+    // URL is configured; the first query then throws. Fail closed instead of streaming orphan bytes.
+    if (error instanceof Error && error.message === "request_db_not_configured") {
+      return { status: "not_configured" };
+    }
+
+    throw toCatalogStoreError(error);
+  }
+}
+
 /**
  * Creates or reuses one active provider acquisition job without broadening normal catalog search.
  */
@@ -2435,6 +2510,8 @@ function getDatabasePool(): Pool | null {
 
 /**
  * Reads the id of an active queued/running acquisition job for one provider part key when it already exists.
+ * The lookup is org-scoped: a global (provider, part-key) unique index used to make a second tenant's
+ * insert fail while RLS hid the first tenant's row, so duplicate recovery returned nothing.
  */
 async function findActiveProviderAcquisitionJobId(client: PoolClient, providerId: string, providerPartKey: string): Promise<string | null> {
   const result = await client.query<{ id: string }>(
@@ -2443,11 +2520,12 @@ async function findActiveProviderAcquisitionJobId(client: PoolClient, providerId
       FROM provider_acquisition_jobs
       WHERE provider_id = $1
         AND provider_part_key = $2
+        AND org_id = $3
         AND job_status IN ('queued', 'running')
       ORDER BY CASE job_status WHEN 'running' THEN 0 ELSE 1 END ASC, requested_at ASC, id ASC
       LIMIT 1
     `,
-    [providerId, providerPartKey]
+    [providerId, providerPartKey, requireRequestOrgId()]
   );
 
   return result.rows[0]?.id ?? null;
@@ -2467,11 +2545,12 @@ async function readActiveProviderAcquisitionJobDetailByProviderKey(
       FROM provider_acquisition_jobs
       WHERE provider_id = $1
         AND provider_part_key = $2
+        AND org_id = $3
         AND job_status IN ('queued', 'running')
       ORDER BY CASE job_status WHEN 'running' THEN 0 ELSE 1 END ASC, requested_at ASC, id ASC
       LIMIT 1
     `,
-    [providerId, providerPartKey]
+    [providerId, providerPartKey, requireRequestOrgId()]
   );
   const activeJobId = result.rows[0]?.id ?? null;
 
@@ -2957,6 +3036,9 @@ async function refreshPartProjectionInDatabase(databasePool: Pool, partId: strin
 
 /**
  * Persists one refreshed part-level readiness projection from the current joined record view.
+ *
+ * Human approval decisions (non-system decided_by) are preserved so review/promote/issue
+ * refreshes cannot wipe FUNC16 batch sign-off.
  */
 async function persistPartProjectionRows(client: PoolClient, record: PartSearchRecord): Promise<void> {
   const projection = derivePartProjection({
@@ -3031,13 +3113,41 @@ async function persistPartProjectionRows(client: PoolClient, record: PartSearchR
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (part_id) DO UPDATE SET
-        approval_status = EXCLUDED.approval_status,
-        summary = EXCLUDED.summary,
-        detail = EXCLUDED.detail,
-        evidence = EXCLUDED.evidence,
-        decided_by = EXCLUDED.decided_by,
-        decided_at = EXCLUDED.decided_at,
-        last_updated_at = EXCLUDED.last_updated_at
+        approval_status = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.approval_status
+          ELSE EXCLUDED.approval_status
+        END,
+        summary = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.summary
+          ELSE EXCLUDED.summary
+        END,
+        detail = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.detail
+          ELSE EXCLUDED.detail
+        END,
+        evidence = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.evidence
+          ELSE EXCLUDED.evidence
+        END,
+        decided_by = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.decided_by
+          ELSE EXCLUDED.decided_by
+        END,
+        decided_at = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.decided_at
+          ELSE EXCLUDED.decided_at
+        END,
+        last_updated_at = CASE
+          WHEN part_approvals.decided_by IS NOT NULL AND part_approvals.decided_by <> 'system'
+            THEN part_approvals.last_updated_at
+          ELSE EXCLUDED.last_updated_at
+        END
     `,
     [
       projection.approval.partId,
@@ -5026,7 +5136,9 @@ const PART_ISSUE_ROWS_SQL = `
   ORDER BY severity ASC, summary ASC, id ASC
 `;
 
-/** PART_DUPLICATE_CANDIDATE_ROWS_SQL reads DB-backed duplicate candidates from canonical part rows. */
+/** PART_DUPLICATE_CANDIDATE_ROWS_SQL reads DB-backed duplicate candidates from canonical part rows.
+ * Candidate matches are same-org only so another tenant's copy of the same MPN+package is not a duplicate.
+ */
 const PART_DUPLICATE_CANDIDATE_ROWS_SQL = `
   SELECT
     (
@@ -5056,6 +5168,7 @@ const PART_DUPLICATE_CANDIDATE_ROWS_SQL = `
   FROM parts p
   JOIN parts candidate
     ON candidate.id <> p.id
+    AND candidate.org_id = p.org_id
     AND lower(candidate.mpn) = lower(p.mpn)
     AND candidate.package_id = p.package_id
   JOIN manufacturers duplicate_manufacturer ON duplicate_manufacturer.id = candidate.manufacturer_id

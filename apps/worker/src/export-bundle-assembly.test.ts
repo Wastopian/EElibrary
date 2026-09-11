@@ -15,7 +15,8 @@ import {
   buildExportBundleAssetStorageKey,
   buildExportBundleSignatureStorageKey,
   processPendingExportBundleAssembly,
-  readBundleSigningKeyMaterial
+  readBundleSigningKeyMaterial,
+  recoverStaleExportBundleAssemblies
 } from "./export-bundle-assembly";
 import {
   readBundleVerificationKeyMaterial,
@@ -140,6 +141,7 @@ async function createPendingExportBundlesPool(manifest: ExportBundleManifest): P
       assembly_status TEXT NOT NULL DEFAULT 'not_required',
       assembly_error JSONB,
       assembly_completed_at TIMESTAMPTZ,
+      assembly_started_at TIMESTAMPTZ,
       assembly_attempt_count INTEGER NOT NULL DEFAULT 0,
       archive_sha256 TEXT,
       manifest_sha256 TEXT,
@@ -344,7 +346,7 @@ test("processPendingExportBundleAssembly persists assembled state and bumps atte
     assert.equal(row.rows[0]?.assembly_status, "assembled");
     assert.equal(row.rows[0]?.assembly_error, null);
     assert.equal(Number(row.rows[0]?.assembly_attempt_count), 1);
-    assert.equal(row.rows[0]?.archive_storage_key, buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, TEST_BUNDLE_ID));
+    assert.equal(row.rows[0]?.archive_storage_key, buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, `${TEST_BUNDLE_ID}/attempt-1`));
   } finally {
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
@@ -384,6 +386,145 @@ test("processPendingExportBundleAssembly writes structured assembly_error teleme
     assert.equal(persisted?.failedAssetId, "asset-2");
     assert.equal(persisted?.failedBundlePath, "C0805/symbol.lib");
   } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies a second overlapping assembly cannot claim a row already in `assembling`, and that a
+ * late unconditional-style failure cannot overwrite a completed `assembled` row once the claim
+ * gate requires `assembly_status = 'assembling'`.
+ */
+test("processPendingExportBundleAssembly claims pending rows so overlapping runs cannot steal the same bundle", async () => {
+  const manifest = buildTestManifest();
+  const pool = await createPendingExportBundlesPool(manifest);
+  setWorkerRepositoryPoolForTests(pool);
+  const { storage } = createMemoryStorageClient({
+    "assets/part-1/footprint.kicad_mod": Buffer.from("(footprint)"),
+    "assets/part-1/symbol.lib": Buffer.from("(symbol)")
+  });
+
+  try {
+    const first = await processPendingExportBundleAssembly(10, storage);
+    assert.equal(first.processed.length, 1);
+    assert.equal(first.processed[0]?.status, "assembled");
+
+    const second = await processPendingExportBundleAssembly(10, storage);
+    assert.equal(second.processed.length, 0, "already-assembled rows must not be reclaimed as pending");
+
+    // Simulate a stale racing worker that still holds an outcome and tries to write failure after
+    // the winning claim already finished. The conditional UPDATE must no-op.
+    await pool.query(
+      `UPDATE export_bundles
+          SET assembly_status = 'assembly_failed',
+              assembly_error = $2::jsonb
+        WHERE id = $1
+          AND assembly_status = 'assembling'`,
+      [
+        TEST_BUNDLE_ID,
+        JSON.stringify({
+          failedAssetId: "asset-1",
+          failedAt: "2026-05-07T10:01:00.000Z",
+          failedBundlePath: "C0805/footprint.kicad_mod",
+          message: "late racing failure",
+          phase: "write_asset"
+        })
+      ]
+    );
+
+    const row = await pool.query<{ assembly_status: string; assembly_error: unknown }>(
+      "SELECT assembly_status, assembly_error FROM export_bundles WHERE id = $1",
+      [TEST_BUNDLE_ID]
+    );
+
+    assert.equal(row.rows[0]?.assembly_status, "assembled");
+    assert.equal(row.rows[0]?.assembly_error, null);
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies abandoned `assembling` claims return to `pending` so a crashed worker cannot wedge the queue.
+ */
+test("recoverStaleExportBundleAssemblies returns abandoned assembling claims to pending", async () => {
+  const manifest = buildTestManifest();
+  const pool = await createPendingExportBundlesPool(manifest);
+  setWorkerRepositoryPoolForTests(pool);
+
+  try {
+    await pool.query(
+      `UPDATE export_bundles
+          SET assembly_status = 'assembling',
+              assembly_started_at = $2
+        WHERE id = $1`,
+      [TEST_BUNDLE_ID, "2020-01-01T00:00:00.000Z"]
+    );
+
+    const recovered = await recoverStaleExportBundleAssemblies(60_000);
+    assert.equal(recovered, 1);
+
+    const row = await pool.query<{ assembly_status: string; assembly_started_at: Date | string | null }>(
+      "SELECT assembly_status, assembly_started_at FROM export_bundles WHERE id = $1",
+      [TEST_BUNDLE_ID]
+    );
+
+    assert.equal(row.rows[0]?.assembly_status, "pending");
+    assert.equal(row.rows[0]?.assembly_started_at, null);
+  } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/** A paused worker must not publish over a retry, even while the retry is still assembling. */
+test("a reclaimed export attempt cannot overwrite a newer claim or its archive bytes", async () => {
+  const pool = await createPendingExportBundlesPool(buildTestManifest());
+  setWorkerRepositoryPoolForTests(pool);
+  const { storage, writes } = createMemoryStorageClient({
+    "assets/part-1/footprint.kicad_mod": Buffer.from("(footprint)"),
+    "assets/part-1/symbol.lib": Buffer.from("(symbol)")
+  });
+  let releaseFirst!: () => void;
+  let releaseSecond!: () => void;
+  let firstStarted!: () => void;
+  let secondStarted!: () => void;
+  const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondBlocked = new Promise<void>((resolve) => { releaseSecond = resolve; });
+  const firstReady = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const secondReady = new Promise<void>((resolve) => { secondStarted = resolve; });
+  const delayed = (ready: () => void, blocked: Promise<void>): FileStorageClient => ({
+    ...storage,
+    async read(key) {
+      ready();
+      await blocked;
+      return storage.read!(key);
+    }
+  });
+  const first = processPendingExportBundleAssembly(1, delayed(firstStarted, firstBlocked));
+  let second: ReturnType<typeof processPendingExportBundleAssembly> | undefined;
+  try {
+    await firstReady;
+    await pool.query("UPDATE export_bundles SET assembly_started_at = '2020-01-01' WHERE id = $1", [TEST_BUNDLE_ID]);
+    second = processPendingExportBundleAssembly(1, delayed(secondStarted, secondBlocked));
+    await secondReady;
+    releaseFirst();
+    assert.deepEqual((await first).processed, [], "the expired claim cannot publish a terminal result");
+    const active = await pool.query("SELECT assembly_status, assembly_attempt_count FROM export_bundles WHERE id = $1", [TEST_BUNDLE_ID]);
+    assert.equal(active.rows[0]?.assembly_status, "assembling");
+    assert.equal(active.rows[0]?.assembly_attempt_count, 2);
+    releaseSecond();
+    const winner = (await second).processed[0]!;
+    assert.equal(winner.status, "assembled");
+    assert.equal(winner.archiveStorageKey, buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, `${TEST_BUNDLE_ID}/attempt-2`));
+    assert.ok(writes[buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, `${TEST_BUNDLE_ID}/attempt-1`)]);
+    assert.ok(writes[winner.archiveStorageKey!]);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await Promise.allSettled([first, second]);
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
   }

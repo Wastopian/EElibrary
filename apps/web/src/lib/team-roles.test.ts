@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseTeamRole, resolveRoleChange } from "./team-roles";
+import { canAdministerTeam, parseTeamRole, resolveRoleChange } from "./team-roles";
 
 const BASE = {
   actingUserId: "admin-1",
@@ -47,4 +47,12 @@ test("parseTeamRole narrows to the assignable set", () => {
   assert.equal(parseTeamRole("viewer"), null);
   assert.equal(parseTeamRole(""), null);
   assert.equal(parseTeamRole(undefined), null);
+});
+
+test("canAdministerTeam is admin-only so read-only members cannot mint admin-creating invites", () => {
+  assert.equal(canAdministerTeam("admin"), true);
+  assert.equal(canAdministerTeam("user"), false);
+  assert.equal(canAdministerTeam(null), false);
+  assert.equal(canAdministerTeam(undefined), false);
+  assert.equal(canAdministerTeam("approver"), false);
 });

@@ -31,7 +31,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { getWorkerDatabasePool } from "./catalog-repository";
+import { getWorkerDatabasePool, stampAssetValidationOrgIds } from "./catalog-repository";
 import type { FileStorageClient } from "@ee-library/shared/file-storage";
 import type { AssetValidationType, ValidationStatus } from "@ee-library/shared/types";
 import type { Pool } from "pg";
@@ -1012,6 +1012,9 @@ async function persistAssetValidationRecord(
       isoTimestamp
     ]
   );
+
+  // Daemon validation runs outside import, so stampPartChildOrgIds never sees these rows.
+  await stampAssetValidationOrgIds(pool, input.partId);
 }
 
 /**

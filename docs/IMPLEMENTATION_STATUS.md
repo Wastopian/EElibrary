@@ -2,6 +2,13 @@
 
 This document maps the product and architecture docs to the code that is actually shipped today.
 
+The September integration of PRs #111–#123 hardens live account-role checks, tenant-scoped
+audit and supplier notes, raw file downloads, import queues and duplicate detection, human
+approval persistence, and provider metric parsing. Export assembly now claims one job at a
+time, writes numbered attempt directories, and publishes only the current attempt. Archive
+links require both completed assembly and an available file; polling includes `assembling`.
+See [the integration review](INTEGRATION_REVIEW_2026-09-10.md) for changes and validation boundaries.
+
 For dated **git worktree / working-tree registration** (for example same-day integration notes), see [`REGISTER.md`](../REGISTER.md) in the repo root.
 
 Status legend:

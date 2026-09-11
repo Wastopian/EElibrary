@@ -29,8 +29,8 @@ export interface SystemHealthResponse {
     acquisition: { pending: number; failed: number };
     enrichment: { pending: number; failed: number };
     /**
-     * Export bundle assembly counts. `pending` mirrors `assembly_status = 'pending'` on
-     * `export_bundles`; `failed` mirrors `assembly_status = 'assembly_failed'`. Surfaced on
+     * Export bundle assembly counts. `pending` mirrors `assembly_status IN ('pending', 'assembling')`
+     * on `export_bundles`; `failed` mirrors `assembly_status = 'assembly_failed'`. Surfaced on
      * `/system` so an operator sees queued or failed bundle assembly without opening every project.
      */
     exportBundleAssembly: { pending: number; failed: number };

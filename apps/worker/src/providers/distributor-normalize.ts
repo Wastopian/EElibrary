@@ -581,8 +581,10 @@ function readInventoryStatus(inventoryQuantity: number | null, onOrderQuantity: 
  */
 export function parseEngineeringNumber(value: unknown, unit: MetricUnit): number | null {
   const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-  // Accept leading-dot decimals (".1UF" for 0.1 µF); some distributors drop the leading zero.
-  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))/u);
+  // Accept leading-dot decimals (".1UF" for 0.1 µF) and scientific notation ("1e-7", "1.0E-7").
+  // Without the exponent group, String(1e-7) / provider "1e-7 F" would parse as 1 and store Farads
+  // off by 1e7 — silent wrong searchable metrics for small passives.
+  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)/u);
 
   if (!match?.[1]) {
     return null;
@@ -752,6 +754,13 @@ export function readCurrencyCode(value: unknown): string {
  * Reads a pin count from common package text suffixes.
  */
 export function readPinCountFromPackage(packageName: string): number | null {
+  // Prefer a trailing pin token (SOT-23-5 → 5) before the first embedded number so body-size
+  // digits do not masquerade as pin counts on shared package rows.
+  const trailing = packageName.match(/(?:-|\s)(\d{1,3})$/u);
+  if (trailing?.[1]) {
+    return Number(trailing[1]);
+  }
+
   const match = packageName.match(/(?:^|[-\s])(\d{1,3})(?:$|[^\d])/u);
 
   return match?.[1] ? Number(match[1]) : null;

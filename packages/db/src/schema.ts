@@ -223,8 +223,8 @@ export const providerAcquisitionJobs = pgTable(
     lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("uq_provider_acquisition_jobs_active_provider_part")
-      .on(t.providerId, t.providerPartKey)
+    uniqueIndex("uq_provider_acquisition_jobs_active_org_provider_part")
+      .on(t.orgId, t.providerId, t.providerPartKey)
       .where(sql`${t.jobStatus} IN ('queued', 'running')`),
     index("provider_acquisition_jobs_org_id_idx").on(t.orgId),
     index("idx_provider_acquisition_jobs_status_requested_at").on(t.jobStatus, t.requestedAt, t.id),
@@ -1556,6 +1556,8 @@ export const auditEvents = pgTable(
     id: text("id").primaryKey(),
     requestId: text("request_id").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Acting tenant; reads filter by this. Nullable for unauthenticated denials (fail closed on read). */
+    orgId: text("org_id").references(() => organizations.id),
     actorId: text("actor_id"),
     actorRole: text("actor_role"),
     action: text("action").notNull(),
@@ -1572,6 +1574,7 @@ export const auditEvents = pgTable(
   },
   (t) => [
     index("idx_audit_events_occurred_at").on(t.occurredAt, t.id),
+    index("idx_audit_events_org_occurred_at").on(t.orgId, t.occurredAt, t.id),
     index("idx_audit_events_actor").on(t.actorId, t.occurredAt),
     index("idx_audit_events_target").on(t.targetType, t.targetId, t.occurredAt),
     index("idx_audit_events_action").on(t.action, t.outcome, t.occurredAt),

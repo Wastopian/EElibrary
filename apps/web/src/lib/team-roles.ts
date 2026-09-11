@@ -60,3 +60,12 @@ export function resolveRoleChange(input: RoleChangeInput): RoleChangeDecision {
 export function parseTeamRole(value: unknown): TeamRole | null {
   return value === "admin" || value === "user" ? value : null;
 }
+
+/**
+ * True when the role may mint invites, reset passwords, or change roles. Read-only members (`user`)
+ * must not — joins still create full-access admins, so an invite from a demoted member is privilege
+ * escalation.
+ */
+export function canAdministerTeam(role: string | null | undefined): boolean {
+  return role === "admin";
+}
