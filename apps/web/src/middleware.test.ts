@@ -72,7 +72,8 @@ test("middleware uses the live role and fails closed for deleted accounts and da
     });
     const proxy = await middleware(request("/api-proxy/storage/example.pdf"));
     const authorization = proxy.headers.get("x-middleware-request-authorization");
-    assert.ok(authorization?.startsWith("Bearer "));
+    assert.ok(authorization);
+    assert.ok(authorization.startsWith("Bearer "));
     const { payload } = await jwtVerify(authorization.slice(7), new TextEncoder().encode(STRONG_SECRET));
     assert.equal(payload.role, "user");
     assert.equal(payload.orgId, "org-current");
