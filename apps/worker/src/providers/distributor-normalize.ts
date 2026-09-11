@@ -752,6 +752,13 @@ export function readCurrencyCode(value: unknown): string {
  * Reads a pin count from common package text suffixes.
  */
 export function readPinCountFromPackage(packageName: string): number | null {
+  // Prefer a trailing pin token (SOT-23-5 → 5) before the first embedded number so body-size
+  // digits do not masquerade as pin counts on shared package rows.
+  const trailing = packageName.match(/(?:-|\s)(\d{1,3})$/u);
+  if (trailing?.[1]) {
+    return Number(trailing[1]);
+  }
+
   const match = packageName.match(/(?:^|[-\s])(\d{1,3})(?:$|[^\d])/u);
 
   return match?.[1] ? Number(match[1]) : null;

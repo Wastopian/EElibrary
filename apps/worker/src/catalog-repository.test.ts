@@ -296,6 +296,125 @@ test("persistNormalizedPartRows persists supply offerings and replaces stale pri
 /**
  * Verifies provider metadata refreshes cannot erase already downloaded and reviewed file evidence.
  */
+test("persistNormalizedPartRows preserves package pin/body fields when a later import is sparse", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const rich = buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.7);
+    rich.package = {
+      bodyHeightMm: 1.1,
+      bodyLengthMm: 3.0,
+      bodyWidthMm: 3.0,
+      id: "pkg-shared-sot23",
+      packageName: "SOT-23-5",
+      pinCount: 5,
+      pitchMm: 0.95
+    };
+    rich.part = { ...rich.part, id: "part-rich-sot", mpn: "RICH-SOT", packageId: "pkg-shared-sot23" };
+    rich.sourceRecord = {
+      ...rich.sourceRecord,
+      id: "source-rich-sot",
+      partId: "part-rich-sot",
+      providerPartKey: "RICH-SOT"
+    };
+
+    const sparse = buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.65);
+    sparse.package = {
+      bodyHeightMm: null,
+      bodyLengthMm: null,
+      bodyWidthMm: null,
+      id: "pkg-shared-sot23",
+      packageName: "SOT-23-5",
+      pinCount: null,
+      pitchMm: null
+    };
+    sparse.part = { ...sparse.part, id: "part-sparse-sot", mpn: "SPARSE-SOT", packageId: "pkg-shared-sot23" };
+    sparse.sourceRecord = {
+      ...sparse.sourceRecord,
+      id: "source-sparse-sot",
+      partId: "part-sparse-sot",
+      providerPartKey: "SPARSE-SOT"
+    };
+
+    await persistNormalizedPartRows(client, rich);
+    await persistNormalizedPartRows(client, sparse);
+
+    const packageRows = await client.query<{
+      body_height_mm: string | null;
+      body_length_mm: string | null;
+      body_width_mm: string | null;
+      pin_count: number | null;
+      pitch_mm: string | null;
+    }>(
+      `
+        SELECT pin_count, pitch_mm, body_length_mm, body_width_mm, body_height_mm
+        FROM packages
+        WHERE id = 'pkg-shared-sot23'
+      `
+    );
+
+    assert.equal(packageRows.rows.length, 1);
+    assert.equal(packageRows.rows[0]?.pin_count, 5);
+    assert.equal(Number(packageRows.rows[0]?.pitch_mm), 0.95);
+    assert.equal(Number(packageRows.rows[0]?.body_length_mm), 3.0);
+    assert.equal(Number(packageRows.rows[0]?.body_width_mm), 3.0);
+    assert.equal(Number(packageRows.rows[0]?.body_height_mm), 1.1);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+test("persistNormalizedPartRows preserves datasheet parse confidence across stub re-imports", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(
+      client,
+      buildDatasheetAssetImportPart({
+        fileHash: "sha256:stored-datasheet",
+        lastUpdatedAt: "2026-04-12T00:00:00.000Z",
+        parseConfidence: 0.82,
+        pinTableStatus: "available",
+        sourceUrl: "https://provider.example/old-datasheet.pdf",
+        storageKey: "datasheets/repeat-c1.pdf"
+      })
+    );
+
+    await persistNormalizedPartRows(
+      client,
+      buildDatasheetAssetImportPart({
+        fileHash: null,
+        lastUpdatedAt: "2026-04-12T03:00:00.000Z",
+        parseConfidence: 0,
+        pinTableStatus: "not_available",
+        sourceUrl: "https://provider.example/new-datasheet.pdf",
+        storageKey: null
+      })
+    );
+
+    const revisionRows = await client.query<{
+      parse_confidence: string;
+      pin_table_status: string;
+    }>(
+      `
+        SELECT parse_confidence, pin_table_status
+        FROM datasheet_revisions
+        WHERE id = 'dsr-repeat-c1'
+      `
+    );
+
+    assert.equal(revisionRows.rows.length, 1);
+    assert.equal(Number(revisionRows.rows[0]?.parse_confidence), 0.82);
+    assert.equal(revisionRows.rows[0]?.pin_table_status, "available");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 test("persistNormalizedPartRows preserves stored asset evidence during reference-only refreshes", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
@@ -1194,6 +1313,8 @@ function buildSupplyImportPart(
 function buildDatasheetAssetImportPart(input: {
   fileHash: string | null;
   lastUpdatedAt: string;
+  parseConfidence?: number;
+  pinTableStatus?: "available" | "needs_review" | "not_available";
   sourceUrl: string;
   storageKey: string | null;
 }): NormalizedProviderPart {
@@ -1232,9 +1353,9 @@ function buildDatasheetAssetImportPart(input: {
         id: "dsr-repeat-c1",
         lastUpdatedAt: input.lastUpdatedAt,
         pageCount: null,
-        parseConfidence: 0,
+        parseConfidence: input.parseConfidence ?? 0,
         partId: "part-repeat-c1",
-        pinTableStatus: "not_available",
+        pinTableStatus: input.pinTableStatus ?? "not_available",
         revisionDate: null,
         revisionLabel: "Provider datasheet reference",
         sourceRecordId: "source-repeat-provider-c1"
