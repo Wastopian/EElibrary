@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { getWorkerDatabasePool } from "./catalog-repository";
+import { getWorkerDatabasePool, stampDraftGenerationOrgIds } from "./catalog-repository";
 import type { Asset, GenerationTargetAssetType, SourceExtractionSignalType } from "@ee-library/shared/types";
 
 /** DraftableTarget limits Phase 5B generation to footprint and symbol drafts only. */
@@ -146,6 +146,7 @@ async function generateDraftAssetsWithClient(client: PoolClient, options: { limi
 
     await persistDraftAsset(client, output.asset);
     await persistDraftWorkflow(client, output.workflow, output.request.request_id);
+    await stampDraftGenerationOrgIds(client, output.asset.partId);
     await markRequestReviewRequired(client, output.request.request_id, output.workflow.id, generatedAt);
 
     generated.push({
