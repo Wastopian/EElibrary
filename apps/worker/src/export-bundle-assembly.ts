@@ -76,13 +76,18 @@ export async function processPendingExportBundleAssembly(
   const signingKey = readBundleSigningKeyMaterial();
 
   const recoveredStaleCount = await recoverStaleExportBundleAssemblies();
-  const claimedRows = await claimPendingExportBundles(Math.max(1, limit));
   const processed: AssembledExportBundleResult[] = [];
 
-  for (const bundle of claimedRows) {
-    const outcome = await assembleSingleExportBundle(storage, bundle, { signingKey });
+  for (let index = 0; index < Math.max(1, limit); index += 1) {
+    // Claim only when ready to start; a slow first archive must not age every queued claim.
+    const bundle = await claimNextPendingExportBundle();
+    if (!bundle) break;
+    const outcome = await assembleSingleExportBundle(storage, bundle, {
+      signingKey,
+      storageBundleId: `${bundle.id}/attempt-${bundle.assembly_attempt_count}`
+    });
     const completedAt = new Date();
-    const persisted = await persistExportBundleAssemblyOutcome(bundle.id, outcome, completedAt);
+    const persisted = await persistExportBundleAssemblyOutcome(bundle, outcome, completedAt);
 
     // A lost claim (another worker reclaimed a stale assembling row, or the row was otherwise
     // moved) must not report success/failure to the batch summary as if this worker owned the
@@ -138,27 +143,6 @@ export async function recoverStaleExportBundleAssemblies(
 }
 
 /**
- * Claims up to `limit` pending bundles into `assembling` using SKIP LOCKED so concurrent workers
- * never copy the same deterministic archive path. Falls back without SKIP LOCKED for pg-mem tests.
- * Claims one row at a time (matching acquisition/enrichment) so the SELECT FOR UPDATE path stays
- * portable across Postgres and pg-mem.
- */
-async function claimPendingExportBundles(limit: number): Promise<PendingExportBundleRow[]> {
-  const claimed: PendingExportBundleRow[] = [];
-  const boundedLimit = Math.max(1, limit);
-
-  for (let index = 0; index < boundedLimit; index += 1) {
-    const next = await claimNextPendingExportBundle();
-    if (!next) {
-      break;
-    }
-    claimed.push(next);
-  }
-
-  return claimed;
-}
-
-/**
  * Claims the oldest pending bundle into `assembling` inside one transaction, or returns null when
  * the queue is empty.
  */
@@ -187,7 +171,8 @@ async function claimNextPendingExportBundle(): Promise<PendingExportBundleRow | 
         UPDATE export_bundles
            SET assembly_status = 'assembling',
                assembly_started_at = $2::timestamptz,
-               assembly_error = NULL
+               assembly_error = NULL,
+               assembly_attempt_count = assembly_attempt_count + 1
          WHERE id = $1
            AND assembly_status = 'pending'
         RETURNING id, project_id, manifest, assembly_attempt_count
@@ -256,11 +241,12 @@ function isSkipLockedUnsupportedError(error: unknown): boolean {
 }
 
 /**
- * Persists one assembly outcome only when this worker still owns the `assembling` claim.
+ * Persists an outcome only for its numbered claim, even if a newer attempt is also assembling.
+ * Each attempt writes separate paths, so a resumed stale worker cannot corrupt the winning bytes.
  * Returns false when the claim was lost so callers can omit a stale outcome from the summary.
  */
 async function persistExportBundleAssemblyOutcome(
-  bundleId: string,
+  bundle: PendingExportBundleRow,
   outcome: AssembledExportBundleResult,
   completedAt: Date
 ): Promise<boolean> {
@@ -273,7 +259,6 @@ async function persistExportBundleAssemblyOutcome(
               assembly_error = NULL,
               assembly_completed_at = $2,
               assembly_started_at = NULL,
-              assembly_attempt_count = assembly_attempt_count + 1,
               archive_storage_key = $3,
               archive_sha256 = $4,
               manifest_sha256 = $5,
@@ -283,9 +268,10 @@ async function persistExportBundleAssemblyOutcome(
               signature_storage_key = $9,
               signature_signed_at = $10
         WHERE id = $1
-          AND assembly_status = 'assembling'`,
+          AND assembly_status = 'assembling'
+          AND assembly_attempt_count = $11`,
       [
-        bundleId,
+        bundle.id,
         completedAt,
         outcome.archiveStorageKey,
         outcome.archiveSha256,
@@ -294,7 +280,8 @@ async function persistExportBundleAssemblyOutcome(
         outcome.signatureAlgorithm,
         outcome.signaturePublicKeyFingerprint,
         outcome.signatureStorageKey,
-        outcome.signatureSignedAt
+        outcome.signatureSignedAt,
+        bundle.assembly_attempt_count
       ]
     );
 
@@ -306,11 +293,11 @@ async function persistExportBundleAssemblyOutcome(
         SET assembly_status = 'assembly_failed',
             assembly_error = $2::jsonb,
             assembly_completed_at = $3,
-            assembly_started_at = NULL,
-            assembly_attempt_count = assembly_attempt_count + 1
+            assembly_started_at = NULL
       WHERE id = $1
-        AND assembly_status = 'assembling'`,
-    [bundleId, JSON.stringify(outcome.failure), completedAt]
+        AND assembly_status = 'assembling'
+        AND assembly_attempt_count = $4`,
+    [bundle.id, JSON.stringify(outcome.failure), completedAt, bundle.assembly_attempt_count]
   );
 
   return (result.rowCount ?? 0) > 0;
@@ -429,9 +416,10 @@ class AssemblyPhaseError extends Error {
 export async function assembleSingleExportBundle(
   storage: FileStorageClient,
   bundle: PendingExportBundleRow,
-  options: { signingKey?: BundleSigningKeyMaterial | null } = {}
+  options: { signingKey?: BundleSigningKeyMaterial | null; storageBundleId?: string } = {}
 ): Promise<AssembledExportBundleResult> {
   const manifest = bundle.manifest;
+  const storageBundleId = options.storageBundleId ?? bundle.id;
   const unsignedDefaults = buildUnsignedCryptographicDefaults();
 
   if (manifest.includedAssets.length === 0) {
@@ -461,7 +449,7 @@ export async function assembleSingleExportBundle(
   }
 
   for (const includedAsset of manifest.includedAssets) {
-    const destinationStorageKey = buildExportBundleAssetStorageKey(bundle.project_id, bundle.id, includedAsset.bundlePath);
+    const destinationStorageKey = buildExportBundleAssetStorageKey(bundle.project_id, storageBundleId, includedAsset.bundlePath);
 
     try {
       const sourceBytes = await readAssetBytes(storage, includedAsset.storageKey);
@@ -519,7 +507,7 @@ export async function assembleSingleExportBundle(
     path: "manifest.json.sha256"
   });
 
-  const archiveStorageKey = buildExportBundleArchiveStorageKey(bundle.project_id, bundle.id);
+  const archiveStorageKey = buildExportBundleArchiveStorageKey(bundle.project_id, storageBundleId);
   let gzipBuffer: Buffer;
   try {
     const tarBuffer = buildUstarTarBuffer(archiveEntries);
@@ -549,7 +537,7 @@ export async function assembleSingleExportBundle(
   // verify the archive without round-tripping through the database. Honesty discipline: if this
   // sidecar write fails the archive write already succeeded, so we surface the failure rather
   // than rolling back -- but we never claim signed when we have not produced a signature.
-  const sha256StorageKey = buildExportBundleArchiveSha256StorageKey(bundle.project_id, bundle.id);
+  const sha256StorageKey = buildExportBundleArchiveSha256StorageKey(bundle.project_id, storageBundleId);
   try {
     await storage.write(sha256StorageKey, Buffer.from(`${archiveSha256}  bundle.tar.gz\n`, "utf8"));
   } catch (error) {
@@ -587,7 +575,7 @@ export async function assembleSingleExportBundle(
   if (options.signingKey) {
     const signedAt = new Date().toISOString();
     const signature = signArchiveHash(archiveSha256, options.signingKey);
-    const signatureStorageKey = buildExportBundleSignatureStorageKey(bundle.project_id, bundle.id);
+    const signatureStorageKey = buildExportBundleSignatureStorageKey(bundle.project_id, storageBundleId);
     try {
       await storage.write(signatureStorageKey, signature);
     } catch (error) {
@@ -731,4 +719,3 @@ async function writeAssetBytes(storage: FileStorageClient, destinationStorageKey
     throw new AssemblyPhaseError("write_asset", error);
   }
 }
-

@@ -346,7 +346,7 @@ test("processPendingExportBundleAssembly persists assembled state and bumps atte
     assert.equal(row.rows[0]?.assembly_status, "assembled");
     assert.equal(row.rows[0]?.assembly_error, null);
     assert.equal(Number(row.rows[0]?.assembly_attempt_count), 1);
-    assert.equal(row.rows[0]?.archive_storage_key, buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, TEST_BUNDLE_ID));
+    assert.equal(row.rows[0]?.archive_storage_key, buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, `${TEST_BUNDLE_ID}/attempt-1`));
   } finally {
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
@@ -474,6 +474,57 @@ test("recoverStaleExportBundleAssemblies returns abandoned assembling claims to 
     assert.equal(row.rows[0]?.assembly_status, "pending");
     assert.equal(row.rows[0]?.assembly_started_at, null);
   } finally {
+    setWorkerRepositoryPoolForTests(null);
+    await pool.end();
+  }
+});
+
+/** A paused worker must not publish over a retry, even while the retry is still assembling. */
+test("a reclaimed export attempt cannot overwrite a newer claim or its archive bytes", async () => {
+  const pool = await createPendingExportBundlesPool(buildTestManifest());
+  setWorkerRepositoryPoolForTests(pool);
+  const { storage, writes } = createMemoryStorageClient({
+    "assets/part-1/footprint.kicad_mod": Buffer.from("(footprint)"),
+    "assets/part-1/symbol.lib": Buffer.from("(symbol)")
+  });
+  let releaseFirst!: () => void;
+  let releaseSecond!: () => void;
+  let firstStarted!: () => void;
+  let secondStarted!: () => void;
+  const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondBlocked = new Promise<void>((resolve) => { releaseSecond = resolve; });
+  const firstReady = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const secondReady = new Promise<void>((resolve) => { secondStarted = resolve; });
+  const delayed = (ready: () => void, blocked: Promise<void>): FileStorageClient => ({
+    ...storage,
+    async read(key) {
+      ready();
+      await blocked;
+      return storage.read!(key);
+    }
+  });
+  const first = processPendingExportBundleAssembly(1, delayed(firstStarted, firstBlocked));
+  let second: ReturnType<typeof processPendingExportBundleAssembly> | undefined;
+  try {
+    await firstReady;
+    await pool.query("UPDATE export_bundles SET assembly_started_at = '2020-01-01' WHERE id = $1", [TEST_BUNDLE_ID]);
+    second = processPendingExportBundleAssembly(1, delayed(secondStarted, secondBlocked));
+    await secondReady;
+    releaseFirst();
+    assert.deepEqual((await first).processed, [], "the expired claim cannot publish a terminal result");
+    const active = await pool.query("SELECT assembly_status, assembly_attempt_count FROM export_bundles WHERE id = $1", [TEST_BUNDLE_ID]);
+    assert.equal(active.rows[0]?.assembly_status, "assembling");
+    assert.equal(active.rows[0]?.assembly_attempt_count, 2);
+    releaseSecond();
+    const winner = (await second).processed[0]!;
+    assert.equal(winner.status, "assembled");
+    assert.equal(winner.archiveStorageKey, buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, `${TEST_BUNDLE_ID}/attempt-2`));
+    assert.ok(writes[buildExportBundleArchiveStorageKey(TEST_PROJECT_ID, `${TEST_BUNDLE_ID}/attempt-1`)]);
+    assert.ok(writes[winner.archiveStorageKey!]);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await Promise.allSettled([first, second]);
     setWorkerRepositoryPoolForTests(null);
     await pool.end();
   }

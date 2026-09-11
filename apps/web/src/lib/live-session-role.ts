@@ -13,6 +13,15 @@ import { parseTeamRole, type TeamRole } from "@/lib/team-roles";
 /** DEFAULT_DATABASE_URL matches the other web auth helpers when DATABASE_URL is unset locally. */
 const DEFAULT_DATABASE_URL = "postgres://ee_library:ee_library@localhost:5432/ee_library";
 
+/** Reuse the role lookup pool across requests instead of leaking a new pool per session read. */
+let roleDatabase: DbPool | undefined;
+
+/** Lazily opens the process-wide pool used for live authorization checks. */
+function getRoleDatabase(): DbPool {
+  roleDatabase ??= createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+  return roleDatabase;
+}
+
 /** LiveSessionRole is the org-scoped role currently stored for one user id. */
 export interface LiveSessionRole {
   role: TeamRole;
@@ -25,7 +34,7 @@ export interface LiveSessionRole {
  */
 export async function readLiveSessionRole(
   userId: string,
-  db: DbPool = createDbPool(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL)
+  db: DbPool = getRoleDatabase()
 ): Promise<LiveSessionRole | null> {
   const [row] = await db
     .select({ orgId: users.orgId, role: users.role })

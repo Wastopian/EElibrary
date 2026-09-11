@@ -1,10 +1,14 @@
 /**
- * File header: Tests Edge middleware auth-secret hardening without constructing Next requests.
+ * File header: Tests middleware secret validation and live-role authorization with signed cookies.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readSessionSecret, shouldPreserveIncomingBearer } from "./middleware";
+import middleware, { readSessionSecret, shouldPreserveIncomingBearer } from "./middleware";
+import { NextRequest } from "next/server";
+import { encode } from "next-auth/jwt";
+import { jwtVerify } from "jose";
+import { Pool } from "pg";
 
 const STRONG_SECRET = "session-secret-padded-to-thirty-two-bytes";
 
@@ -44,4 +48,42 @@ test("shouldPreserveIncomingBearer keeps client-minted API tokens", () => {
   assert.equal(shouldPreserveIncomingBearer("Basic nope"), false);
   assert.equal(shouldPreserveIncomingBearer("Bearer"), false);
   assert.equal(shouldPreserveIncomingBearer("Bearer "), false);
+});
+
+/** Signed stale cookies must never restore an old role through direct API links or admin routes. */
+test("middleware uses the live role and fails closed for deleted accounts and database errors", async (context) => {
+  const previousSecret = process.env.AUTH_SECRET;
+  process.env.AUTH_SECRET = STRONG_SECRET;
+  let rows: string[][] = [["org-current", "user"]];
+  let databaseUnavailable = false;
+  context.mock.method(Pool.prototype, "query", async () => {
+    if (databaseUnavailable) throw new Error("Database unavailable");
+    // Drizzle requests array-mode rows in the selected org_id, role order.
+    return { rows };
+  });
+  try {
+    const cookie = await encode({
+      secret: STRONG_SECRET,
+      salt: "authjs.session-token",
+      token: { sub: "member-1", role: "admin", orgId: "org-old" }
+    });
+    const request = (path: string) => new NextRequest(`http://localhost:3000${path}`, {
+      headers: { cookie: `authjs.session-token=${cookie}` }
+    });
+    const proxy = await middleware(request("/api-proxy/storage/example.pdf"));
+    const authorization = proxy.headers.get("x-middleware-request-authorization");
+    assert.ok(authorization?.startsWith("Bearer "));
+    const { payload } = await jwtVerify(authorization.slice(7), new TextEncoder().encode(STRONG_SECRET));
+    assert.equal(payload.role, "user");
+    assert.equal(payload.orgId, "org-current");
+    assert.equal((await middleware(request("/admin"))).headers.get("location"), "http://localhost:3000/");
+
+    rows = [];
+    assert.equal((await middleware(request("/api-proxy/projects"))).status, 401);
+    databaseUnavailable = true;
+    assert.equal((await middleware(request("/api-proxy/projects"))).status, 503);
+  } finally {
+    if (previousSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = previousSecret;
+  }
 });

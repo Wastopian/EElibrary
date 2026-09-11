@@ -92,10 +92,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (live) {
             appToken.role = live.role;
             appToken.orgId = live.orgId;
+          } else {
+            return null;
           }
         } catch {
-          // Keep the prior cookie claims if the user DB is briefly unreachable.
+          // A database outage must not restore a deleted account or a previous admin role.
+          return null;
         }
+      } else {
+        return null;
       }
 
       return appToken;

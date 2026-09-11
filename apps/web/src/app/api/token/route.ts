@@ -1,3 +1,4 @@
+/** File header: Issues short-lived API tokens using the account's current role and team. */
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { readLiveSessionRole } from "@/lib/live-session-role";
@@ -11,6 +12,7 @@ import { SignJWT } from "jose";
  */
 const MIN_AUTH_SECRET_BYTES = 32;
 
+/** Validates the session and live account before signing a thirty-second API token. */
 export async function GET() {
   const session = await auth();
 
