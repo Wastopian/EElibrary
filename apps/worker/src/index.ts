@@ -181,8 +181,11 @@ async function drainProviderAcquisitionJobs(batchSizeValue?: string, concurrency
 
   await timeWorkerOperation("worker.database_ready", () => assertDatabaseReady(), timings);
 
+  let totalRecoveredStale = 0;
+
   for (;;) {
     const summary = await processProviderAcquisitionJobs(boundedBatchSize, boundedConcurrency);
+    totalRecoveredStale += summary.recoveredStaleCount;
 
     if (summary.processed.length === 0) {
       break;
@@ -196,11 +199,33 @@ async function drainProviderAcquisitionJobs(batchSizeValue?: string, concurrency
     totalFailed += batchFailed;
 
     process.stderr.write(
-      JSON.stringify({ batch: batchNumber, batchProcessed: summary.processed.length, batchSucceeded, batchFailed, totalProcessed, totalSucceeded, totalFailed }) + "\n"
+      JSON.stringify({
+        batch: batchNumber,
+        batchProcessed: summary.processed.length,
+        batchSucceeded,
+        batchFailed,
+        recoveredStaleCount: summary.recoveredStaleCount,
+        totalProcessed,
+        totalSucceeded,
+        totalFailed
+      }) + "\n"
     );
   }
 
-  console.log(JSON.stringify({ totalProcessed, totalSucceeded, totalFailed, batches: batchNumber, timings }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        totalProcessed,
+        totalSucceeded,
+        totalFailed,
+        totalRecoveredStale,
+        batches: batchNumber,
+        timings
+      },
+      null,
+      2
+    )
+  );
 }
 
 /**
@@ -322,7 +347,12 @@ async function processQueuedProviderAcquisitionJobs(limitValue?: string): Promis
       "worker.process_provider_acquisition_jobs",
       () => processProviderAcquisitionJobs(Number.isFinite(limit) ? limit : 20),
       timings,
-      (value) => `${value.processed.length} jobs`
+      (value) =>
+        `${value.processed.length} jobs${
+          value.recoveredStaleCount > 0
+            ? `, ${value.recoveredStaleCount} abandoned import${value.recoveredStaleCount === 1 ? "" : "s"} retried`
+            : ""
+        }`
     );
 
     console.log(JSON.stringify({ ...summary, timings }, null, 2));
