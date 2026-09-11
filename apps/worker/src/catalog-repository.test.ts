@@ -1845,6 +1845,99 @@ test("persistNormalizedPartRows writes a fresh part_readiness_summaries row on e
 });
 
 /**
+ * Verifies engineer approval batch decisions survive provider re-import / readiness refresh.
+ * derivePartProjection never reads the stored approval row, so a blind UPSERT would reset
+ * approved parts back to not_requested and drop decided_by / project evidence.
+ */
+test("persistNormalizedPartRows preserves human part_approvals across re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.6));
+
+    const afterFirstImport = await client.query<{ approval_status: string; decided_by: string | null }>(
+      "SELECT approval_status, decided_by FROM part_approvals WHERE part_id = 'part-repeat-c1'"
+    );
+    assert.equal(afterFirstImport.rows.length, 1);
+    assert.equal(afterFirstImport.rows[0]?.approval_status, "not_requested");
+    assert.equal(afterFirstImport.rows[0]?.decided_by, null);
+
+    await client.query(
+      `
+        UPDATE part_approvals
+        SET
+          approval_status = 'approved',
+          summary = 'Approved via project project-alpha batch',
+          detail = 'Approved via project project-alpha batch. Notes: BOM sign-off.',
+          evidence = ARRAY['project:project-alpha', 'triggered_by:approval_batch', 'decided_by:gerry@hardware'],
+          decided_by = 'gerry@hardware',
+          decided_at = '2026-04-12T02:00:00.000Z',
+          last_updated_at = '2026-04-12T02:00:00.000Z'
+        WHERE part_id = 'part-repeat-c1'
+      `
+    );
+
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T05:00:00.000Z", 0.85));
+
+    const afterSecondImport = await client.query<{
+      approval_status: string;
+      decided_by: string | null;
+      summary: string;
+      evidence: string[];
+    }>(
+      "SELECT approval_status, decided_by, summary, evidence FROM part_approvals WHERE part_id = 'part-repeat-c1'"
+    );
+
+    assert.equal(afterSecondImport.rows.length, 1);
+    assert.equal(afterSecondImport.rows[0]?.approval_status, "approved");
+    assert.equal(afterSecondImport.rows[0]?.decided_by, "gerry@hardware");
+    assert.equal(afterSecondImport.rows[0]?.summary, "Approved via project project-alpha batch");
+    assert.ok(afterSecondImport.rows[0]?.evidence.includes("triggered_by:approval_batch"));
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies auto-derived approvals (decided_by = system or null) still refresh on re-import.
+ */
+test("persistNormalizedPartRows refreshes system-derived part_approvals on re-import", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.85));
+
+    await client.query(
+      `
+        UPDATE part_approvals
+        SET
+          approval_status = 'approved',
+          summary = 'Approved for engineering use',
+          decided_by = 'system',
+          decided_at = '2026-04-12T01:00:00.000Z',
+          last_updated_at = '2026-04-12T01:00:00.000Z'
+        WHERE part_id = 'part-repeat-c1'
+      `
+    );
+
+    await persistNormalizedPartRows(client, buildMinimalImportPart("2026-04-12T05:00:00.000Z", 0.85));
+
+    const afterRefresh = await client.query<{ approval_status: string; decided_by: string | null }>(
+      "SELECT approval_status, decided_by FROM part_approvals WHERE part_id = 'part-repeat-c1'"
+    );
+
+    assert.equal(afterRefresh.rows[0]?.approval_status, "not_requested");
+    assert.equal(afterRefresh.rows[0]?.decided_by, null);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+/**
  * Finds the first query call that writes to a table.
  */
 function tableCallIndex(calls: QueryCall[], tableName: string): number {
