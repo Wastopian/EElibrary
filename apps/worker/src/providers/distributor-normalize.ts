@@ -581,8 +581,10 @@ function readInventoryStatus(inventoryQuantity: number | null, onOrderQuantity: 
  */
 export function parseEngineeringNumber(value: unknown, unit: MetricUnit): number | null {
   const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-  // Accept leading-dot decimals (".1UF" for 0.1 µF); some distributors drop the leading zero.
-  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))/u);
+  // Accept leading-dot decimals (".1UF" for 0.1 µF) and scientific notation ("1e-7", "1.0E-7").
+  // Without the exponent group, String(1e-7) / provider "1e-7 F" would parse as 1 and store Farads
+  // off by 1e7 — silent wrong searchable metrics for small passives.
+  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)/u);
 
   if (!match?.[1]) {
     return null;

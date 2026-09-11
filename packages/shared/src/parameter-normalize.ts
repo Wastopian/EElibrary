@@ -378,9 +378,10 @@ function parseNumericValue(text: string, unit: string | null): number | null {
     }
   }
 
-  // Accept leading-dot decimals (".1uF" for 0.1 µF) as well as the usual "0.1"/"64" forms; some
-  // distributors (Mouser passives) drop the leading zero.
-  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))/u);
+  // Accept leading-dot decimals (".1uF" for 0.1 µF), scientific notation ("1e-7", "4.7E-6"), and the
+  // usual "0.1"/"64" forms. JLC stores small capacitances as base-Farad floats whose String() form is
+  // scientific; without the exponent group the mantissa alone ("1" from "1e-7") would become 1 F.
+  const match = text.match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)/u);
 
   if (!match?.[1]) {
     return null;

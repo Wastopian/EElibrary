@@ -7,6 +7,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, InventoryStatus, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
+import { parseEngineeringNumber } from "./distributor-normalize";
 
 /** OCTOPART_PROVIDER_ID is the canonical adapter id for Octopart data accessed through Nexar. */
 const OCTOPART_PROVIDER_ID = "octopart";
@@ -1174,70 +1175,6 @@ function findSpecByHints(specs: OctopartSpec[], hints: string[]): OctopartSpec |
 
     return names.some((name) => normalizedHints.some((hint) => name.includes(hint)));
   }) ?? null;
-}
-
-/**
- * Parses common electronics unit strings into normalized base units.
- */
-function parseEngineeringNumber(value: unknown, unit: MetricUnit): number | null {
-  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-  const match = text.match(/([+-]?\d+(?:\.\d+)?)/u);
-
-  if (!match?.[1]) {
-    return null;
-  }
-
-  const parsed = Number(match[1]);
-
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-
-  return parsed * readMetricMultiplier(text, unit);
-}
-
-/**
- * Reads unit prefixes from common provider display values.
- */
-function readMetricMultiplier(text: string, unit: MetricUnit): number {
-  const normalized = text.trim().toLowerCase();
-
-  if (unit === "ohm") {
-    if (/\b(mOhm|m ohm|milliohm|milli-ohm)\b/u.test(text)) return 0.001;
-    if (/\b(kohm|k ohm|kiloohm)\b/u.test(normalized)) return 1_000;
-    if (/\b(MOhm|M ohm)\b/u.test(text) || /\b(megohm|megaohm)\b/iu.test(text)) return 1_000_000;
-  }
-
-  if (unit === "F") {
-    if (/\bpf\b/u.test(normalized)) return 1e-12;
-    if (/\bnf\b/u.test(normalized)) return 1e-9;
-    if (/\b(uf|microfarad)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mf|millifarad)\b/u.test(normalized)) return 1e-3;
-  }
-
-  if (unit === "H") {
-    if (/\bnh\b/u.test(normalized)) return 1e-9;
-    if (/\b(uh|microhenry)\b/u.test(normalized)) return 1e-6;
-    if (/\b(mh|millihenry)\b/u.test(normalized)) return 1e-3;
-  }
-
-  if (unit === "V") {
-    if (/\bmv\b/u.test(normalized)) return 1e-3;
-    if (/\bkv\b/u.test(normalized)) return 1_000;
-  }
-
-  if (unit === "A") {
-    if (/\bma\b/u.test(normalized)) return 1e-3;
-    if (/\bua\b/u.test(normalized)) return 1e-6;
-  }
-
-  if (unit === "Hz") {
-    if (/\bkhz\b/u.test(normalized)) return 1_000;
-    if (/\bmhz\b/u.test(normalized)) return 1_000_000;
-    if (/\bghz\b/u.test(normalized)) return 1_000_000_000;
-  }
-
-  return 1;
 }
 
 /**
