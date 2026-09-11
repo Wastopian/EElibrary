@@ -1372,6 +1372,80 @@ test("project document extraction migration preserves progress and source locati
   assert.match(projectDocumentExtractionPreviewsMigrationSql, /source_location_previews/u);
 });
 
+/** acquisitionJobsOrgUniqueMigrationSql loads the per-org active-job unique index migration. */
+const acquisitionJobsOrgUniqueMigrationSql = readFileSync(
+  new URL("../../../infra/postgres/062_acquisition_jobs_org_unique.sql", import.meta.url),
+  "utf8"
+);
+
+/**
+ * Verifies the global active-acquisition unique index is replaced with an org-scoped one so two
+ * tenants can queue the same distributor part at once.
+ */
+test("acquisition jobs unique index migration scopes active jobs by org", () => {
+  const db = newDb();
+
+  db.public.none(`
+    CREATE TABLE provider_acquisition_jobs (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      provider_part_key TEXT NOT NULL,
+      requested_lookup TEXT NOT NULL,
+      match_type TEXT NOT NULL,
+      match_confidence NUMERIC NOT NULL,
+      job_status TEXT NOT NULL,
+      requested_by TEXT NOT NULL,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      org_id TEXT,
+      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_provider_part
+      ON provider_acquisition_jobs (provider_id, provider_part_key)
+      WHERE job_status IN ('queued', 'running');
+    INSERT INTO provider_acquisition_jobs (
+      id, provider_id, provider_part_key, requested_lookup, match_type, match_confidence,
+      job_status, requested_by, org_id
+    ) VALUES (
+      'acqjob-default-c1091', 'jlcparts', 'C1091', 'C1091', 'exact_provider_part_id', 1,
+      'queued', 'default-admin', NULL
+    );
+  `);
+
+  applyMigrationSql(db, acquisitionJobsOrgUniqueMigrationSql);
+  applyMigrationSql(db, acquisitionJobsOrgUniqueMigrationSql);
+
+  const backfilled = db.public.one(`SELECT org_id FROM provider_acquisition_jobs WHERE id = 'acqjob-default-c1091'`);
+  assert.equal(backfilled.org_id, "org-default");
+
+  db.public.none(`
+    INSERT INTO provider_acquisition_jobs (
+      id, provider_id, provider_part_key, requested_lookup, match_type, match_confidence,
+      job_status, requested_by, org_id
+    ) VALUES (
+      'acqjob-acme-c1091', 'jlcparts', 'C1091', 'C1091', 'exact_provider_part_id', 1,
+      'queued', 'acme-admin', 'org-acme'
+    );
+  `);
+
+  const ids = db.public.many(`SELECT id FROM provider_acquisition_jobs ORDER BY id ASC`);
+  assert.deepEqual(ids.map((row) => row.id), ["acqjob-acme-c1091", "acqjob-default-c1091"]);
+  assert.throws(
+    () =>
+      db.public.none(`
+        INSERT INTO provider_acquisition_jobs (
+          id, provider_id, provider_part_key, requested_lookup, match_type, match_confidence,
+          job_status, requested_by, org_id
+        ) VALUES (
+          'acqjob-default-c1091-dup', 'jlcparts', 'C1091', 'C1091', 'exact_provider_part_id', 1,
+          'queued', 'default-admin', 'org-default'
+        )
+      `),
+    /unique/i
+  );
+  assert.match(acquisitionJobsOrgUniqueMigrationSql, /uq_provider_acquisition_jobs_active_org_provider_part/u);
+  assert.match(acquisitionJobsOrgUniqueMigrationSql, /DROP INDEX IF EXISTS uq_provider_acquisition_jobs_active_provider_part/u);
+});
+
 /**
  * Applies one SQL migration to pg-mem after rewriting idempotent DO-block guards into plain ALTER statements.
  * Skips applying when the rewriter strips the migration down to comments/whitespace, which happens

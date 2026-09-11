@@ -3,6 +3,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { DEFAULT_ORG_ID } from "@ee-library/shared/tenant";
 import { getWorkerDatabasePool } from "./catalog-repository";
 import { enqueueProviderEnrichmentJobsForPart } from "./provider-enrichment-jobs";
 import { runProviderPartImport as defaultRunProviderPartImport } from "./provider-part-import";
@@ -196,15 +197,18 @@ function buildBulkInsertQuery(
       )
       SELECT
         c.id, $1, c.provider_part_key, c.provider_part_key, c.manufacturer_name, c.mpn,
-        'exact_provider_part_id', 1.0, 'queued', $2, 'org-default', now(), now()
+        'exact_provider_part_id', 1.0, 'queued', $2, '${DEFAULT_ORG_ID}', now(), now()
       FROM candidates c
       WHERE NOT EXISTS (
         SELECT 1 FROM source_records sr
-        WHERE sr.provider_id = $1 AND sr.provider_part_key = c.provider_part_key
+        WHERE sr.provider_id = $1
+          AND sr.provider_part_key = c.provider_part_key
+          AND (sr.org_id = '${DEFAULT_ORG_ID}' OR sr.org_id IS NULL)
       ) AND NOT EXISTS (
         SELECT 1 FROM provider_acquisition_jobs paj
         WHERE paj.provider_id = $1
           AND paj.provider_part_key = c.provider_part_key
+          AND (paj.org_id = '${DEFAULT_ORG_ID}' OR paj.org_id IS NULL)
           AND paj.job_status IN ('queued', 'running', 'succeeded')
       )
     `,

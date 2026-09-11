@@ -301,6 +301,24 @@ test("provider acquisition worker retries abandoned running work without stealin
   }
 });
 
+test("active acquisition unique index allows the same provider part in two orgs", async () => {
+  const pool = createProviderAcquisitionPool();
+  await seedQueuedJob(pool, "acqjob-default-c1091", "2026-08-17T11:00:00.000Z", "C1091", "RC-02W300JT", "org-default");
+  await seedQueuedJob(pool, "acqjob-acme-c1091", "2026-08-17T11:00:01.000Z", "C1091", "RC-02W300JT", "org-acme");
+
+  try {
+    const rows = await pool.query<{ id: string; org_id: string }>(
+      "SELECT id, org_id FROM provider_acquisition_jobs WHERE provider_part_key = 'C1091' ORDER BY org_id ASC"
+    );
+    assert.deepEqual(rows.rows, [
+      { id: "acqjob-acme-c1091", org_id: "org-acme" },
+      { id: "acqjob-default-c1091", org_id: "org-default" }
+    ]);
+  } finally {
+    await pool.end();
+  }
+});
+
 /**
  * Builds a minimal in-memory schema for acquisition queue worker tests.
  */
@@ -368,6 +386,9 @@ function createProviderAcquisitionPool(): TestPool {
       detail JSONB,
       created_at TIMESTAMPTZ NOT NULL
     );
+    CREATE UNIQUE INDEX uq_provider_acquisition_jobs_active_org_provider_part
+      ON provider_acquisition_jobs (org_id, provider_id, provider_part_key)
+      WHERE job_status IN ('queued', 'running');
     CREATE TABLE assets (
       id TEXT PRIMARY KEY,
       part_id TEXT NOT NULL,
@@ -412,7 +433,14 @@ async function seedPartRow(pool: TestPool, partId: string): Promise<void> {
 /**
  * Inserts one queued provider acquisition job plus its initial queued event.
  */
-async function seedQueuedJob(pool: TestPool, jobId: string, requestedAt: string, providerPartKey: string, mpn: string): Promise<void> {
+async function seedQueuedJob(
+  pool: TestPool,
+  jobId: string,
+  requestedAt: string,
+  providerPartKey: string,
+  mpn: string,
+  orgId = "org-default"
+): Promise<void> {
   await pool.query(
     `
       INSERT INTO provider_acquisition_jobs (
@@ -436,11 +464,12 @@ async function seedQueuedJob(pool: TestPool, jobId: string, requestedAt: string,
         error_message,
         started_at,
         completed_at,
+        org_id,
         last_updated_at
       )
-      VALUES ($1, 'jlcparts', $2, $3, 'Guangdong Fenghua Advanced Tech', $3, '0402', 'https://lcsc.com/product-detail/example', 'exact_provider_part_id', 1, 'queued', 'admin-user', $4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, $4)
+      VALUES ($1, 'jlcparts', $2, $3, 'Guangdong Fenghua Advanced Tech', $3, '0402', 'https://lcsc.com/product-detail/example', 'exact_provider_part_id', 1, 'queued', 'admin-user', $4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, $5, $4)
     `,
-    [jobId, providerPartKey, mpn, requestedAt]
+    [jobId, providerPartKey, mpn, requestedAt, orgId]
   );
   await pool.query(
     `
