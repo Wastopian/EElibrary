@@ -70,6 +70,14 @@ test("parseEngineeringNumber scales attached sub-unit prefixes and leading-dot d
   close("16V", "V", 16);
   close("200mA", "A", 0.2);
   close("64MHz", "Hz", 64_000_000);
+  // U+03BC GREEK SMALL LETTER MU is not U+00B5 MICRO SIGN. Description capture accepts both;
+  // scaling only µ stored "10μF" as 10 F and "25μA" as 25 A.
+  close("10μF", "F", 1e-5);
+  close("10 μF", "F", 1e-5);
+  close("4.7μH", "H", 4.7e-6);
+  close("25μA", "A", 25e-6);
+  close("100μV", "V", 100e-6);
+  close("1µF", "F", 1e-6);
 });
 
 /**
