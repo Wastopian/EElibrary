@@ -258,6 +258,13 @@ test("parseEngineeringValue scales attached sub-unit prefixes and leading-dot de
   close("10 uF", CAP, 1e-5);
   close("4.7uH", IND, 4.7e-6);
   close("10nH", IND, 1e-8);
+  // Greek mu (U+03BC) is what PDF text and some distributor strings emit. It must scale like µ.
+  const VOLTAGE: CanonicalParameterDef = { label: "Voltage", metricKeys: [], paramKey: "voltage", specKeyPatterns: ["voltage"], unit: "V", valueKind: "numeric" };
+  close("10μF", CAP, 1e-5);
+  close("10 μF", CAP, 1e-5);
+  close("4.7μH", IND, 4.7e-6);
+  close("25μA", CURRENT, 25e-6);
+  close("100μV", VOLTAGE, 100e-6);
 });
 
 /**

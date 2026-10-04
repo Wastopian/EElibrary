@@ -410,32 +410,34 @@ function readMultiplier(text: string, unit: string | null): number {
   // F and H use the same (?<![a-z0-9]) + \d… forms as V/A/Hz below: a value like "100nF" or "1uF"
   // puts a digit directly before the prefix letter, where a leading \b never fires (the exact bug
   // that left attached capacitor/inductor values unscaled — "1uF" read as 1 F).
+  // Micro is two different code points: U+00B5 MICRO SIGN (µ) and U+03BC GREEK SMALL LETTER MU (μ).
+  // Distributor specs and PDF text use both. toLowerCase() does not fold one into the other, so a
+  // parser that only lists µ stores "25μA" as 25 A.
   if (unit === "F") {
     if (/(?<![a-z0-9])pf\b/u.test(normalized) || /\dpf\b/u.test(normalized)) return 1e-12;
     if (/(?<![a-z0-9])nf\b/u.test(normalized) || /\dnf\b/u.test(normalized)) return 1e-9;
-    if (/(?<![a-z0-9])(uf|µf|microfarad)\b/u.test(normalized) || /\d(uf|µf)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])([uµμ]f|microfarad)\b/u.test(normalized) || /\d[uµμ]f\b/u.test(normalized)) return 1e-6;
     if (/(?<![a-z0-9])(mf|millifarad)\b/u.test(normalized) || /\dmf\b/u.test(normalized)) return 1e-3;
   }
 
   if (unit === "H") {
     if (/(?<![a-z0-9])ph\b/u.test(normalized) || /\dph\b/u.test(normalized)) return 1e-12;
     if (/(?<![a-z0-9])nh\b/u.test(normalized) || /\dnh\b/u.test(normalized)) return 1e-9;
-    if (/(?<![a-z0-9])(uh|µh|microhenry)\b/u.test(normalized) || /\d(uh|µh)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])([uµμ]h|microhenry)\b/u.test(normalized) || /\d[uµμ]h\b/u.test(normalized)) return 1e-6;
     if (/(?<![a-z0-9])(mh|millihenry)\b/u.test(normalized) || /\dmh\b/u.test(normalized)) return 1e-3;
   }
 
   // Prefixes are matched with (?<![a-z0-9]) rather than \b so attached provider forms parse too:
   // "200mA", "64MHz", "1.2mV" put a digit directly before the prefix letter, where \b never fires.
   if (unit === "V") {
-    if (/(?<![a-z0-9])(uv|µv)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])[uµμ]v\b/u.test(normalized) || /\d[uµμ]v\b/u.test(normalized)) return 1e-6;
     if (/(?<![a-z0-9])mv\b/u.test(normalized) || /\dmv\b/u.test(normalized)) return 1e-3;
     if (/(?<![a-z0-9])kv\b/u.test(normalized) || /\dkv\b/u.test(normalized)) return 1_000;
-    if (/\d(uv|µv)\b/u.test(normalized)) return 1e-6;
   }
 
   if (unit === "A") {
     if (/(?<![a-z0-9])na\b/u.test(normalized) || /\dna\b/u.test(normalized)) return 1e-9;
-    if (/(?<![a-z0-9])(ua|µa)\b/u.test(normalized) || /\d(ua|µa)\b/u.test(normalized)) return 1e-6;
+    if (/(?<![a-z0-9])[uµμ]a\b/u.test(normalized) || /\d[uµμ]a\b/u.test(normalized)) return 1e-6;
     if (/(?<![a-z0-9])ma\b/u.test(normalized) || /\dma\b/u.test(normalized)) return 1e-3;
   }
 

@@ -267,3 +267,24 @@ test("mouser provider parses a capacitor description including leading-dot value
   const voltage = (normalized.specifications ?? []).find((row) => row.specKey === "Voltage Rating");
   assert.equal(voltage?.specValue, "16V", "the capacitor voltage rating is captured from the description");
 });
+
+/**
+ * Verifies a description that uses Greek mu (U+03BC), which the capture pattern accepts, still
+ * scales to microfarads. Treating that character as a bare number stored 10 F.
+ */
+test("mouser provider scales Greek-mu capacitance in the description", () => {
+  const payload = buildResistorRawPayload();
+  const part = (payload.payload as { part: Record<string, unknown> }).part;
+  part.Category = "Capacitors / Multilayer Ceramic Capacitors MLCC - SMD/SMT";
+  part.Description = "Multilayer Ceramic Capacitors MLCC - SMD/SMT 10μF 16V 10% 0805";
+  part.ManufacturerPartNumber = "GRM21BR61A106KE19L";
+
+  const normalized = mouserProviderAdapter.normalizeRawPart(payload);
+  const capacitance = normalized.metrics.find((metric) => metric.metricKey === "capacitance");
+
+  assert.ok(capacitance, "expected a capacitance metric parsed from the Greek-mu description");
+  assert.ok(
+    capacitance.metricValue !== null && Math.abs(capacitance.metricValue - 1e-5) <= 1e-16,
+    `capacitance ${capacitance?.metricValue} should be ~1e-5 F (10 µF), not 10 F`
+  );
+});
