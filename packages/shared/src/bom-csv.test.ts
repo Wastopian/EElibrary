@@ -34,6 +34,35 @@ test("BOM CSV preview parses headers, quoted cells, blanks, and repeated designa
 });
 
 /**
+ * Verifies a generic earlier column does not steal the MPN field from a more specific header.
+ * Auto-import paths persist this suggestion without asking, then match on the chosen column.
+ */
+test("BOM column suggestion prefers the most specific MPN header", () => {
+  const preview = buildBomImportPreview({
+    rawContent: "Designator,Part,Part Number,Manufacturer Part Number,Qty,Count\nU1,PN-1001,INT-42,TPS7A02DBVR,2,8\n",
+    sourceFilename: "board.csv",
+    sourceFormat: "csv"
+  });
+
+  assert.equal(preview.suggestedMapping.mpn, "Manufacturer Part Number");
+  assert.equal(preview.suggestedMapping.designators, "Designator");
+  assert.equal(preview.suggestedMapping.quantity, "Qty");
+
+  const drafts = mapBomRowsToDrafts(preview.rowsPreview, preview.suggestedMapping);
+
+  assert.equal(drafts[0]?.rawMpn, "TPS7A02DBVR");
+  assert.equal(drafts[0]?.quantity, 2);
+
+  const legacy = buildBomImportPreview({
+    rawContent: "Designator,Part,Qty\nU1,TPS7A02DBVR,2\n",
+    sourceFilename: "legacy.csv",
+    sourceFormat: "csv"
+  });
+
+  assert.equal(legacy.suggestedMapping.mpn, "Part");
+});
+
+/**
  * Verifies malformed CSV fails clearly instead of producing misleading row data.
  */
 test("BOM CSV preview rejects malformed quoted fields", () => {

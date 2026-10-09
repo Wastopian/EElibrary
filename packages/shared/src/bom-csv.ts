@@ -346,12 +346,31 @@ function normalizeCsvCell(value: string): string {
 }
 
 /**
- * Finds the first header that matches a known normalized alias.
+ * Finds the header that matches the highest-priority alias.
+ *
+ * Alias lists are ordered from most specific to least (`mpn` before `part number`
+ * before `part`). Scanning headers left to right let an earlier generic column
+ * (`Part`, `Part Number`) win over a later real MPN column. Folder onboard,
+ * project-from-CSV, and "use as BOM import" all persist that suggestion without
+ * a confirmation step, so the wrong column became the stored MPN and the match key.
  */
 function findHeader(headers: string[], aliases: string[]): string | null {
-  const normalizedAliases = new Set(aliases.map(normalizeHeaderForMatching));
+  const normalizedAliases = aliases.map(normalizeHeaderForMatching);
+  let best: { header: string; rank: number } | null = null;
 
-  return headers.find((header) => normalizedAliases.has(normalizeHeaderForMatching(header))) ?? null;
+  for (const header of headers) {
+    const rank = normalizedAliases.indexOf(normalizeHeaderForMatching(header));
+
+    if (rank === -1) {
+      continue;
+    }
+
+    if (!best || rank < best.rank) {
+      best = { header, rank };
+    }
+  }
+
+  return best?.header ?? null;
 }
 
 /**
