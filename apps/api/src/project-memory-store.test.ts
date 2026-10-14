@@ -32,6 +32,7 @@ import {
   createPartSubstitutionInDatabase,
   instantiateCircuitBlockIntoProjectBomInDatabase,
   readBomImportDiagnosticsFromDatabase,
+  readBomRevisionCompareFromDatabase,
   readPartSubstitutionsForPartFromDatabase,
   readPartWhereUsedFromDatabase,
   readProjectBomHealthFromDatabase,
@@ -2060,6 +2061,74 @@ test("readProjectRevisionCompareFromDatabase distinguishes quantity and designat
 
     assert.equal(response.quantityChangedCount, 1);
     assert.equal(response.mpnSwapCount, 0);
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
+ * Verifies import compare totals repeated MPNs before diffing.
+ * One reference designator per row is a normal BOM, so the same part number appears many times.
+ * A join on that part number used to multiply the rows and report a removed placement as unchanged.
+ */
+test("readBomRevisionCompareFromDatabase reports a removed repeated MPN instead of unchanged", async () => {
+  const pool = createProjectMemoryPool(false);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(
+      `INSERT INTO bom_imports (id, project_id, project_revision_id, source_filename)
+       VALUES ('bom-compare-a', 'project-compare', 'rev-compare', 'before.csv'),
+              ('bom-compare-b', 'project-compare', 'rev-compare', 'after.csv')`
+    );
+    await pool.query(
+      `INSERT INTO bom_lines (id, bom_import_id, project_id, project_revision_id, row_number, designators, quantity, raw_mpn, raw_manufacturer, match_status, matched_part_id)
+       VALUES
+         ('cmp-a-1', 'bom-compare-a', 'project-compare', 'rev-compare', 1, '{"C1"}', 1, 'CL10A106', 'Samsung', 'matched', 'part-cap'),
+         ('cmp-a-2', 'bom-compare-a', 'project-compare', 'rev-compare', 2, '{"C2"}', 1, 'CL10A106', 'Samsung', 'matched', 'part-cap'),
+         ('cmp-a-3', 'bom-compare-a', 'project-compare', 'rev-compare', 3, '{"C3"}', 1, 'CL10A106', 'Samsung', 'matched', 'part-cap'),
+         ('cmp-a-4', 'bom-compare-a', 'project-compare', 'rev-compare', 4, '{"R1"}', 2, 'RC0603-10K', 'Yageo', 'matched', 'part-res'),
+         ('cmp-a-5', 'bom-compare-a', 'project-compare', 'rev-compare', 5, '{"U1"}', 1, 'TPS7A02', 'Texas Instruments', 'matched', 'part-ldo'),
+         ('cmp-b-1', 'bom-compare-b', 'project-compare', 'rev-compare', 1, '{"C1"}', 1, 'cl10a106', 'Samsung', 'matched', 'part-cap'),
+         ('cmp-b-2', 'bom-compare-b', 'project-compare', 'rev-compare', 2, '{"C2"}', 1, 'CL10A106', 'Samsung', 'matched', 'part-cap'),
+         ('cmp-b-3', 'bom-compare-b', 'project-compare', 'rev-compare', 3, '{"R1"}', 4, 'RC0603-10K', 'Yageo', 'matched', 'part-other'),
+         ('cmp-b-4', 'bom-compare-b', 'project-compare', 'rev-compare', 4, '{"U1"}', 1, 'TPS7A02', 'Texas Instruments', 'matched', 'part-ldo')`
+    );
+
+    const result = await readBomRevisionCompareFromDatabase("project-compare", "bom-compare-a", "bom-compare-b");
+
+    assert.equal(result.status, "available");
+    if (result.status !== "available") return;
+
+    assert.equal(result.response.addedCount, 0);
+    assert.equal(result.response.removedCount, 0);
+    assert.equal(result.response.unchangedCount, 1);
+    assert.equal(result.response.changedCount, 2);
+    assert.equal(result.response.rows.length, 3);
+
+    const capacitor = result.response.rows.find((row) => row.rawMpn?.toLowerCase() === "cl10a106");
+    assert.equal(capacitor?.kind, "changed");
+    assert.equal(capacitor?.rawMpn, "cl10a106");
+    assert.equal(capacitor?.quantity, 2);
+    assert.match(capacitor?.changeDetail ?? "", /Quantity 3 -> 2/u);
+    assert.match(capacitor?.changeDetail ?? "", /3 rows -> 2 rows/u);
+    assert.match(capacitor?.changeDetail ?? "", /Designators C1, C2, C3 -> C1, C2/u);
+    assert.doesNotMatch(capacitor?.changeDetail ?? "", /Match status changed/u);
+
+    const regulator = result.response.rows.find((row) => row.rawMpn === "TPS7A02");
+    assert.equal(regulator?.kind, "unchanged");
+
+    const resistor = result.response.rows.find((row) => row.rawMpn === "RC0603-10K");
+    assert.equal(resistor?.kind, "changed");
+    assert.match(resistor?.changeDetail ?? "", /Quantity 2 -> 4/u);
+    assert.match(resistor?.changeDetail ?? "", /Matched part changed/u);
+
+    const missing = await readBomRevisionCompareFromDatabase("project-other", "bom-compare-a", "bom-compare-b");
+    assert.equal(missing.status, "not_found");
+
+    const oneSided = await readBomRevisionCompareFromDatabase("project-compare", "bom-compare-a", "bom-missing");
+    assert.equal(oneSided.status, "invalid");
   } finally {
     setProjectMemoryStorePoolForTests(null);
     await pool.end();
