@@ -8718,18 +8718,31 @@ interface DatabaseDiagnosticsRow {
   matched_manufacturer_name: string | null;
 }
 
-interface DatabaseRevisionCompareRow {
+/** BomImportCompareLineRow is one stored BOM line used to diff two imports. */
+interface BomImportCompareLineRow {
+  bom_import_id: string;
+  row_number: number | string;
   raw_mpn: string | null;
   raw_manufacturer: string | null;
   raw_description: string | null;
-  quantity: string | null;
+  quantity: string | number | null;
   designators: string[] | null;
   match_status: string;
   matched_part_id: string | null;
-  in_import1: boolean;
-  in_import2: boolean;
-  qty_changed: boolean;
-  match_changed: boolean;
+}
+
+/** BomImportCompareBucket collapses every line that shares one normalized MPN. */
+interface BomImportCompareBucket {
+  rawMpn: string | null;
+  rawManufacturer: string | null;
+  rawDescription: string | null;
+  quantitySum: number | null;
+  lineCount: number;
+  designators: string[];
+  matchStatuses: string[];
+  matchedPartIds: string[];
+  displayMatchStatus: BomLineMatchStatus;
+  displayMatchedPartId: string | null;
 }
 
 /**
@@ -8822,7 +8835,11 @@ export async function readBomImportDiagnosticsFromDatabase(importId: string): Pr
 }
 
 /**
- * Compares two BOM imports row-by-row, keyed by normalized MPN.
+ * Compares two BOM imports keyed by normalized MPN.
+ *
+ * Lines that share an MPN are totaled first. A direct join on that key multiplies when either
+ * import lists the same part on more than one row (one reference designator per row is a normal
+ * BOM shape), and the extra pairs can all look unchanged even after a placement was removed.
  */
 export async function readBomRevisionCompareFromDatabase(projectId: string, importId1: string, importId2: string): Promise<BomRevisionCompareReadResult> {
   const databasePool = getProjectMemoryDatabasePool();
@@ -8837,8 +8854,8 @@ export async function readBomRevisionCompareFromDatabase(projectId: string, impo
 
   try {
     const importCheck = await databasePool.query<{ id: string; project_id: string }>(
-      "SELECT id, project_id FROM bom_imports WHERE id = ANY($1::text[]) AND project_id = $2",
-      [[importId1, importId2], projectId]
+      "SELECT id, project_id FROM bom_imports WHERE id IN ($1, $2) AND project_id = $3",
+      [importId1, importId2, projectId]
     );
 
     if ((importCheck.rowCount ?? 0) === 0) {
@@ -8849,80 +8866,198 @@ export async function readBomRevisionCompareFromDatabase(projectId: string, impo
       return { status: "invalid", code: "IMPORT_NOT_IN_PROJECT", message: "Both BOM import ids must belong to the specified project." };
     }
 
-    const rows = await databasePool.query<DatabaseRevisionCompareRow>(
-      `WITH
-         i1 AS (
-           SELECT COALESCE(LOWER(TRIM(raw_mpn)), '#row-' || row_number::text) AS key,
-                  raw_mpn, raw_manufacturer, raw_description, quantity, designators,
-                  match_status, matched_part_id
-             FROM bom_lines WHERE bom_import_id = $2
-         ),
-         i2 AS (
-           SELECT COALESCE(LOWER(TRIM(raw_mpn)), '#row-' || row_number::text) AS key,
-                  raw_mpn, raw_manufacturer, raw_description, quantity, designators,
-                  match_status, matched_part_id
-             FROM bom_lines WHERE bom_import_id = $3
-         )
-       SELECT
-         COALESCE(i1.raw_mpn, i2.raw_mpn) AS raw_mpn,
-         COALESCE(i1.raw_manufacturer, i2.raw_manufacturer) AS raw_manufacturer,
-         COALESCE(i1.raw_description, i2.raw_description) AS raw_description,
-         COALESCE(i2.quantity, i1.quantity) AS quantity,
-         COALESCE(i2.designators, i1.designators) AS designators,
-         COALESCE(i2.match_status, i1.match_status) AS match_status,
-         COALESCE(i2.matched_part_id, i1.matched_part_id) AS matched_part_id,
-         (i1.key IS NOT NULL) AS in_import1,
-         (i2.key IS NOT NULL) AS in_import2,
-         (i1.quantity IS DISTINCT FROM i2.quantity) AS qty_changed,
-         (i1.match_status IS DISTINCT FROM i2.match_status) AS match_changed
-       FROM i1 FULL OUTER JOIN i2 ON i1.key = i2.key
-       ORDER BY raw_mpn NULLS LAST`,
-      [projectId, importId1, importId2]
+    const lineResult = await databasePool.query<BomImportCompareLineRow>(
+      `SELECT bom_import_id, row_number, raw_mpn, raw_manufacturer, raw_description,
+              quantity, designators, match_status, matched_part_id
+         FROM bom_lines
+         WHERE bom_import_id IN ($1, $2)
+         ORDER BY bom_import_id, row_number`,
+      [importId1, importId2]
     );
-
-    const compareRows: BomRevisionCompareRow[] = rows.rows.map((row) => {
-      let kind: BomRevisionCompareRow["kind"];
-      let changeDetail: string | null = null;
-
-      if (row.in_import1 && !row.in_import2) {
-        kind = "removed";
-      } else if (!row.in_import1 && row.in_import2) {
-        kind = "added";
-      } else if (row.qty_changed || row.match_changed) {
-        kind = "changed";
-        const details: string[] = [];
-        if (row.qty_changed) details.push("quantity changed");
-        if (row.match_changed) details.push("match status changed");
-        changeDetail = details.join(", ");
-      } else {
-        kind = "unchanged";
-      }
-
-      return {
-        changeDetail,
-        designators: toStringArray(row.designators),
-        kind,
-        matchStatus: row.match_status as BomLineMatchStatus,
-        matchedPartId: row.matched_part_id,
-        quantity: toNullableNumber(row.quantity),
-        rawDescription: row.raw_description,
-        rawManufacturer: row.raw_manufacturer,
-        rawMpn: row.raw_mpn
-      };
-    });
-
-    const addedCount = compareRows.filter((r) => r.kind === "added").length;
-    const removedCount = compareRows.filter((r) => r.kind === "removed").length;
-    const changedCount = compareRows.filter((r) => r.kind === "changed").length;
-    const unchangedCount = compareRows.filter((r) => r.kind === "unchanged").length;
+    const import1Lines = lineResult.rows.filter((row) => row.bom_import_id === importId1);
+    const import2Lines = lineResult.rows.filter((row) => row.bom_import_id === importId2);
+    const compareRows = diffBomImportCompareBuckets(
+      aggregateBomImportCompareLines(import1Lines),
+      aggregateBomImportCompareLines(import2Lines)
+    );
 
     return {
       status: "available",
-      response: { addedCount, changedCount, importId1, importId2, projectId, removedCount, rows: compareRows, unchangedCount }
+      response: {
+        addedCount: compareRows.filter((row) => row.kind === "added").length,
+        changedCount: compareRows.filter((row) => row.kind === "changed").length,
+        importId1,
+        importId2,
+        projectId,
+        removedCount: compareRows.filter((row) => row.kind === "removed").length,
+        rows: compareRows,
+        unchangedCount: compareRows.filter((row) => row.kind === "unchanged").length
+      }
     };
   } catch (error) {
     throw new CatalogStoreError("query_failed", "BOM revision compare read failed.", error);
   }
+}
+
+/**
+ * Totals every line that shares a normalized MPN. Blank MPNs stay on their own row number so
+ * unrelated empty rows are not collapsed into one bucket.
+ */
+function aggregateBomImportCompareLines(rows: BomImportCompareLineRow[]): Map<string, BomImportCompareBucket> {
+  const buckets = new Map<string, BomImportCompareBucket>();
+
+  for (const row of rows) {
+    const normalizedMpn = row.raw_mpn?.trim().toLowerCase() ?? "";
+    const key = normalizedMpn.length > 0 ? `mpn:${normalizedMpn}` : `row:${toNumber(row.row_number)}`;
+    const quantity = toNullableNumber(row.quantity);
+    const existing = buckets.get(key);
+
+    if (!existing) {
+      buckets.set(key, {
+        designators: toStringArray(row.designators),
+        displayMatchStatus: row.match_status as BomLineMatchStatus,
+        displayMatchedPartId: row.matched_part_id,
+        lineCount: 1,
+        matchStatuses: [row.match_status],
+        matchedPartIds: row.matched_part_id ? [row.matched_part_id] : [],
+        quantitySum: quantity,
+        rawDescription: row.raw_description,
+        rawManufacturer: row.raw_manufacturer,
+        rawMpn: normalizeOptionalText(row.raw_mpn)
+      });
+      continue;
+    }
+
+    existing.lineCount += 1;
+    existing.designators = mergeDesignatorLists(existing.designators, toStringArray(row.designators));
+    existing.matchStatuses.push(row.match_status);
+    if (row.matched_part_id && !existing.matchedPartIds.includes(row.matched_part_id)) {
+      existing.matchedPartIds.push(row.matched_part_id);
+    }
+    existing.rawManufacturer ??= row.raw_manufacturer;
+    existing.rawDescription ??= row.raw_description;
+    existing.displayMatchedPartId ??= row.matched_part_id;
+
+    if (existing.quantitySum === null || quantity === null) {
+      existing.quantitySum = null;
+    } else {
+      existing.quantitySum += quantity;
+    }
+  }
+
+  return buckets;
+}
+
+/**
+ * Diffs aggregated import buckets. A repeated MPN that loses a row changes the total even when
+ * each surviving row still has the same quantity as before.
+ */
+function diffBomImportCompareBuckets(
+  import1: Map<string, BomImportCompareBucket>,
+  import2: Map<string, BomImportCompareBucket>
+): BomRevisionCompareRow[] {
+  const rows: BomRevisionCompareRow[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [key, fromBucket] of import1) {
+    seenKeys.add(key);
+    const toBucket = import2.get(key);
+    rows.push(toBucket ? buildBomImportCompareRow(fromBucket, toBucket) : buildBomImportSideRow("removed", fromBucket));
+  }
+
+  for (const [key, toBucket] of import2) {
+    if (seenKeys.has(key)) {
+      continue;
+    }
+    rows.push(buildBomImportSideRow("added", toBucket));
+  }
+
+  return rows.sort(compareBomImportRows);
+}
+
+/**
+ * Classifies one MPN that exists on both imports.
+ */
+function buildBomImportCompareRow(fromBucket: BomImportCompareBucket, toBucket: BomImportCompareBucket): BomRevisionCompareRow {
+  const details: string[] = [];
+
+  if (fromBucket.quantitySum !== toBucket.quantitySum) {
+    details.push(`Quantity ${formatQuantity(fromBucket.quantitySum)} -> ${formatQuantity(toBucket.quantitySum)}`);
+  }
+
+  if (fromBucket.lineCount !== toBucket.lineCount) {
+    details.push(`${fromBucket.lineCount} rows -> ${toBucket.lineCount} rows`);
+  }
+
+  if (!sameStringSet(fromBucket.matchStatuses, toBucket.matchStatuses)) {
+    details.push("Match status changed");
+  }
+
+  if (!sameStringSet(fromBucket.matchedPartIds, toBucket.matchedPartIds)) {
+    details.push("Matched part changed");
+  }
+
+  if (!designatorListsMatch(fromBucket.designators, toBucket.designators)) {
+    details.push(`Designators ${formatDesignators(fromBucket.designators)} -> ${formatDesignators(toBucket.designators)}`);
+  }
+
+  return {
+    changeDetail: details.length > 0 ? details.join(", ") : null,
+    designators: toBucket.designators,
+    kind: details.length > 0 ? "changed" : "unchanged",
+    matchStatus: toBucket.displayMatchStatus,
+    matchedPartId: toBucket.displayMatchedPartId,
+    quantity: toBucket.quantitySum,
+    rawDescription: toBucket.rawDescription ?? fromBucket.rawDescription,
+    rawManufacturer: toBucket.rawManufacturer ?? fromBucket.rawManufacturer,
+    rawMpn: toBucket.rawMpn ?? fromBucket.rawMpn
+  };
+}
+
+/**
+ * Builds an added or removed compare row from the only side that still has the MPN.
+ */
+function buildBomImportSideRow(kind: "added" | "removed", bucket: BomImportCompareBucket): BomRevisionCompareRow {
+  return {
+    changeDetail: null,
+    designators: bucket.designators,
+    kind,
+    matchStatus: bucket.displayMatchStatus,
+    matchedPartId: bucket.displayMatchedPartId,
+    quantity: bucket.quantitySum,
+    rawDescription: bucket.rawDescription,
+    rawManufacturer: bucket.rawManufacturer,
+    rawMpn: bucket.rawMpn
+  };
+}
+
+/**
+ * Returns true when two lists contain the same distinct values, ignoring order and repeats.
+ */
+function sameStringSet(left: string[], right: string[]): boolean {
+  const sortedLeft = [...new Set(left)].sort();
+  const sortedRight = [...new Set(right)].sort();
+
+  return sortedLeft.length === sortedRight.length && sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+/**
+ * Orders compare rows by MPN, with blank MPNs last.
+ */
+function compareBomImportRows(left: BomRevisionCompareRow, right: BomRevisionCompareRow): number {
+  if (left.rawMpn === null && right.rawMpn === null) {
+    return formatDesignators(left.designators).localeCompare(formatDesignators(right.designators));
+  }
+
+  if (left.rawMpn === null) {
+    return 1;
+  }
+
+  if (right.rawMpn === null) {
+    return -1;
+  }
+
+  return left.rawMpn.localeCompare(right.rawMpn);
 }
 
 /** AggregatedRevisionLineRow is the union of BOM lines across all imports in one revision. */
