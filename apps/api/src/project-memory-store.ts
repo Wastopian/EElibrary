@@ -10572,12 +10572,16 @@ export async function instantiateCircuitBlockIntoProjectBomInDatabase(
     }
 
     const savedLines: BomLine[] = [];
+    // One prefix is shared by every role, so numbering must continue past earlier quantities.
+    // Starting each role at its row number reuses designators whenever a prior quantity is above 1.
+    let nextDesignatorIndex = 1;
 
     for (let index = 0; index < eligibleRoles.length; index += 1) {
       const role = eligibleRoles[index]!;
       const rowNumber = index + 1;
       const quantity = toNullableNumber(role.quantity ?? null);
-      const designators = buildInstantiatedDesignators(designatorPrefix, rowNumber, quantity);
+      const designators = buildInstantiatedDesignators(designatorPrefix, nextDesignatorIndex, quantity);
+      nextDesignatorIndex += designators.length;
       const rawRowPayload = {
         circuitBlockId: input.circuitBlockId,
         circuitBlockPartId: role.id,
@@ -10714,17 +10718,17 @@ function normalizeDesignatorPrefix(value: string | null): string | null {
 
 /**
  * Builds the designator list for one instantiated BOM line.
- * Auto-numbers when a prefix is provided so multi-quantity roles get distinct designators.
+ * Auto-numbers from `startIndex` so a shared prefix stays unique across roles.
+ * A blank prefix leaves designators empty; the caller still records the quantity.
  */
-function buildInstantiatedDesignators(prefix: string | null, rowNumber: number, quantity: number | null): string[] {
+function buildInstantiatedDesignators(prefix: string | null, startIndex: number, quantity: number | null): string[] {
   if (!prefix) {
     return [];
   }
   const count = quantity && Number.isFinite(quantity) && quantity > 0 ? Math.floor(quantity) : 1;
   const designators: string[] = [];
-  const baseIndex = rowNumber === 1 ? 1 : (rowNumber - 1) * 1 + 1;
   for (let offset = 0; offset < count; offset += 1) {
-    designators.push(`${prefix}${baseIndex + offset}`);
+    designators.push(`${prefix}${startIndex + offset}`);
   }
   return designators;
 }

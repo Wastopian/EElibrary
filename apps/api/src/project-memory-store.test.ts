@@ -2640,6 +2640,49 @@ test("instantiateCircuitBlockIntoProjectBomInDatabase creates a synthetic BOM im
 });
 
 /**
+ * Verifies a shared designator prefix keeps numbering unique when an earlier role quantity is above 1.
+ * Starting each role at its row number would assign U2 to both the second LDO and the following part.
+ */
+test("instantiateCircuitBlockIntoProjectBomInDatabase does not reuse designators across multi-quantity roles", async () => {
+  const pool = createProjectMemoryPool(true);
+  setProjectMemoryStorePoolForTests(pool);
+
+  try {
+    await pool.query(
+      `UPDATE circuit_block_parts SET quantity = 2 WHERE id = 'cbpart-alpha-power-ldo'`
+    );
+    await pool.query(
+      `INSERT INTO circuit_block_parts (id, circuit_block_id, part_id, role, quantity, is_required, substitution_policy, notes, created_at, updated_at)
+       VALUES ('cbpart-alpha-power-cap', 'cblock-alpha-power', 'part-memory-ldo', 'Output capacitor', 1, true, 'exact_required', NULL, '2026-04-30T00:11:00.000Z', '2026-04-30T00:11:00.000Z')`
+    );
+
+    const result = await instantiateCircuitBlockIntoProjectBomInDatabase(
+      "project-alpha",
+      {
+        circuitBlockId: "cblock-alpha-power",
+        designatorPrefix: "U",
+        includeOptional: false,
+        projectRevisionId: "rev-alpha-a"
+      },
+      "test-admin"
+    );
+
+    assert.equal(result.status, "created");
+    if (result.status !== "created") return;
+
+    const byRole = new Map(result.response.bomLines.map((line) => [line.rawDescription, line.designators]));
+    assert.deepEqual(byRole.get("Instantiated from circuit block Alpha power rail role: Main LDO"), ["U1", "U2"]);
+    assert.deepEqual(byRole.get("Instantiated from circuit block Alpha power rail role: Output capacitor"), ["U3"]);
+
+    const assigned = result.response.bomLines.flatMap((line) => line.designators);
+    assert.equal(new Set(assigned).size, assigned.length, "instantiated designators must be unique");
+  } finally {
+    setProjectMemoryStorePoolForTests(null);
+    await pool.end();
+  }
+});
+
+/**
  * Verifies the connector-set catalog returns groups, mate pairs, and project usage counts without inventing schema.
  */
 test("readConnectorSetCatalogFromDatabase returns connector groups with mate pairs and trust boundary copy", async () => {
