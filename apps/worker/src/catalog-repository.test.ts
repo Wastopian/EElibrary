@@ -366,6 +366,98 @@ test("persistNormalizedPartRows preserves package pin/body fields when a later i
   }
 });
 
+/**
+ * Verifies a later import that knows only the canonical manufacturer name does not erase
+ * aliases captured from an earlier parenthetical JLC name. BOM exact-match depends on them.
+ */
+test("persistNormalizedPartRows keeps manufacturer aliases when a later snapshot sends none", async () => {
+  const pool = createMinimalImportPool();
+  const client = await pool.connect();
+
+  try {
+    const withAliases = buildMinimalImportPart("2026-04-12T00:00:00.000Z", 0.7);
+    withAliases.manufacturer = {
+      aliases: ["FH", "FH(Guangdong Fenghua Advanced Tech)"],
+      id: "mfr-jlcparts-guangdong-fenghua-advanced-tech",
+      name: "Guangdong Fenghua Advanced Tech",
+      website: null
+    };
+    withAliases.part = {
+      ...withAliases.part,
+      id: "part-fenghua-aliased",
+      manufacturerId: withAliases.manufacturer.id,
+      mpn: "FH-ALIASED"
+    };
+    withAliases.sourceRecord = {
+      ...withAliases.sourceRecord,
+      id: "source-fenghua-aliased",
+      partId: "part-fenghua-aliased",
+      providerPartKey: "FH-ALIASED"
+    };
+
+    const withoutAliases = buildMinimalImportPart("2026-04-12T03:00:00.000Z", 0.65);
+    withoutAliases.manufacturer = {
+      aliases: [],
+      id: "mfr-jlcparts-guangdong-fenghua-advanced-tech",
+      name: "Guangdong Fenghua Advanced Technology",
+      website: null
+    };
+    withoutAliases.part = {
+      ...withoutAliases.part,
+      id: "part-fenghua-plain",
+      manufacturerId: withoutAliases.manufacturer.id,
+      mpn: "FH-PLAIN"
+    };
+    withoutAliases.sourceRecord = {
+      ...withoutAliases.sourceRecord,
+      id: "source-fenghua-plain",
+      partId: "part-fenghua-plain",
+      providerPartKey: "FH-PLAIN"
+    };
+
+    await persistNormalizedPartRows(client, withAliases);
+    await persistNormalizedPartRows(client, withoutAliases);
+
+    const kept = await client.query<{ aliases: string[] | null; name: string }>(
+      "SELECT name, aliases FROM manufacturers WHERE id = 'mfr-jlcparts-guangdong-fenghua-advanced-tech'"
+    );
+
+    assert.equal(kept.rows.length, 1);
+    assert.equal(kept.rows[0]?.name, "Guangdong Fenghua Advanced Technology");
+    assert.deepEqual(kept.rows[0]?.aliases, ["FH", "FH(Guangdong Fenghua Advanced Tech)"]);
+
+    const corrected = buildMinimalImportPart("2026-04-12T04:00:00.000Z", 0.66);
+    corrected.manufacturer = {
+      aliases: ["Fenghua"],
+      id: "mfr-jlcparts-guangdong-fenghua-advanced-tech",
+      name: "Guangdong Fenghua Advanced Technology",
+      website: null
+    };
+    corrected.part = {
+      ...corrected.part,
+      id: "part-fenghua-corrected",
+      manufacturerId: corrected.manufacturer.id,
+      mpn: "FH-CORRECTED"
+    };
+    corrected.sourceRecord = {
+      ...corrected.sourceRecord,
+      id: "source-fenghua-corrected",
+      partId: "part-fenghua-corrected",
+      providerPartKey: "FH-CORRECTED"
+    };
+
+    await persistNormalizedPartRows(client, corrected);
+
+    const replaced = await client.query<{ aliases: string[] | null }>(
+      "SELECT aliases FROM manufacturers WHERE id = 'mfr-jlcparts-guangdong-fenghua-advanced-tech'"
+    );
+    assert.deepEqual(replaced.rows[0]?.aliases, ["Fenghua"]);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
 test("persistNormalizedPartRows preserves datasheet parse confidence across stub re-imports", async () => {
   const pool = createMinimalImportPool();
   const client = await pool.connect();
