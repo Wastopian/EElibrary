@@ -1155,16 +1155,26 @@ function getDatabasePool(): Pool {
  * Upserts one manufacturer row.
  */
 async function persistManufacturer(client: PoolClient, manufacturer: Manufacturer): Promise<void> {
+  // JLC and the distributor assembler send `aliases: []` when this snapshot has no extra names.
+  // That is missing evidence, not a request to delete aliases learned from an earlier
+  // parenthetical name ("FH(Guangdong Fenghua…)"). BOM exact-match uses those aliases; wiping
+  // them turns a later rematch into weak_match and deletes the project usage row. A non-empty
+  // list still replaces, so a corrected alias set is not frozen. The flag is computed here
+  // because the in-memory test database has no array_length().
+  const incomingAliasesAreEmpty = manufacturer.aliases.length === 0;
   await client.query(
     `
       INSERT INTO manufacturers (id, name, aliases, website)
       VALUES ($1, $2, $3, $4)
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
-        aliases = EXCLUDED.aliases,
+        aliases = CASE
+          WHEN $5 THEN manufacturers.aliases
+          ELSE EXCLUDED.aliases
+        END,
         website = EXCLUDED.website
     `,
-    [manufacturer.id, manufacturer.name, manufacturer.aliases, manufacturer.website]
+    [manufacturer.id, manufacturer.name, manufacturer.aliases, manufacturer.website, incomingAliasesAreEmpty]
   );
 }
 
