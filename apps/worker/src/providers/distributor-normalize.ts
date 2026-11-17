@@ -751,17 +751,34 @@ export function readCurrencyCode(value: unknown): string {
 }
 
 /**
+ * JEDEC outline families whose lone trailing number is the body series, not a pin count.
+ * "SOT-23" is a 3-lead outline; "SOT-23-5" keeps the explicit pin suffix and is handled below.
+ */
+const PACKAGE_SERIES_BODY_CODE = /^(?:SOT|SOD|SC|TO|DO)[-\s]\d{1,4}$/iu;
+
+/**
  * Reads a pin count from common package text suffixes.
+ *
+ * A bare series code such as SOT-23, SOD-123, TO-220, or DO-214 must stay unknown. Treating that
+ * number as a pin count stores 23 (or 220) pins, then footprint checks reject a correct pad count
+ * and draft symbols grow a pad per false pin. An explicit suffix (SOT-23-5, QFN-16, SOIC-8) is
+ * still a pin count.
  */
 export function readPinCountFromPackage(packageName: string): number | null {
+  const normalized = packageName.trim();
+
+  if (PACKAGE_SERIES_BODY_CODE.test(normalized)) {
+    return null;
+  }
+
   // Prefer a trailing pin token (SOT-23-5 → 5) before the first embedded number so body-size
   // digits do not masquerade as pin counts on shared package rows.
-  const trailing = packageName.match(/(?:-|\s)(\d{1,3})$/u);
+  const trailing = normalized.match(/(?:-|\s)(\d{1,3})$/u);
   if (trailing?.[1]) {
     return Number(trailing[1]);
   }
 
-  const match = packageName.match(/(?:^|[-\s])(\d{1,3})(?:$|[^\d])/u);
+  const match = normalized.match(/(?:^|[-\s])(\d{1,3})(?:$|[^\d])/u);
 
   return match?.[1] ? Number(match[1]) : null;
 }

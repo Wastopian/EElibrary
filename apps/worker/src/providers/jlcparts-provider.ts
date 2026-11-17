@@ -8,7 +8,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
-import { buildSpecificationRows, type NeutralSpecification } from "./distributor-normalize";
+import { buildSpecificationRows, readPinCountFromPackage, type NeutralSpecification } from "./distributor-normalize";
 
 /** JLC_PARTS_PROVIDER_ID is the canonical worker-only provider identifier. */
 const JLC_PARTS_PROVIDER_ID = "jlcparts";
@@ -1422,14 +1422,8 @@ function parsePinCount(joints: number | null, packageName: string): number | nul
     return joints;
   }
 
-  const trailing = packageName.match(/-(\d{1,3})$/u);
-  if (trailing?.[1]) {
-    return Number(trailing[1]);
-  }
-
-  const match = packageName.match(/(?:^|-)(\d{1,3})(?:$|[^\d])/u);
-
-  return match?.[1] ? Number(match[1]) : null;
+  // Same suffix rules as the other adapters: SOT-23-5 is 5 pins, bare SOT-23 is not 23.
+  return readPinCountFromPackage(packageName);
 }
 
 /**

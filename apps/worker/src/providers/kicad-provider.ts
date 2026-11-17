@@ -11,7 +11,6 @@ import {
   assembleNormalizedPart,
   normalizeComparableText,
   normalizeOptionalText,
-  readPinCountFromPackage,
   type NeutralCadAsset
 } from "./distributor-normalize";
 
@@ -200,7 +199,10 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
     metrics: [],
     mpn: stem,
     packageName: library,
-    pinCount: readPinCountFromPackage(stem),
+    // The package row is the library directory, shared by every footprint in it. A pin count
+    // parsed from one stem (SOT-23 → 23, or SOT-23-5 → 5) would be stored on that shared row
+    // and then fail pad-count checks for every other footprint in the library.
+    pinCount: null,
     providerId: KICAD_PROVIDER_ID,
     providerPartKey: stem,
     rawPayload: payload,
