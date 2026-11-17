@@ -7,7 +7,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, InventoryStatus, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
-import { parseEngineeringNumber } from "./distributor-normalize";
+import { parseEngineeringNumber, readPinCountFromPackage } from "./distributor-normalize";
 
 /** OCTOPART_PROVIDER_ID is the canonical adapter id for Octopart data accessed through Nexar. */
 const OCTOPART_PROVIDER_ID = "octopart";
@@ -1076,16 +1076,9 @@ function readPinCount(part: OctopartPart, packageName: string): number | null {
     return parsedSpec;
   }
 
-  // Prefer trailing `-<pins>` / ` <pins>` (SOT-23-5 → 5) before the first embedded number
-  // so body-size digits like "23" do not overwrite the real pin count on shared package rows.
-  const trailing = packageName.match(/(?:-|\s)(\d{1,3})$/u);
-  if (trailing?.[1]) {
-    return Number(trailing[1]);
-  }
-
-  const match = packageName.match(/(?:^|[-\s])(\d{1,3})(?:$|[^\d])/u);
-
-  return match?.[1] ? Number(match[1]) : null;
+  // Package text is only a fallback. Series codes (SOT-23) are not pin counts; explicit
+  // suffixes (SOT-23-5) and pin-count families (SOIC-14) still parse.
+  return readPinCountFromPackage(packageName);
 }
 
 /**

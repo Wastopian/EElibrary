@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSpecificationRows, parseEngineeringNumber } from "./providers/distributor-normalize";
+import { buildSpecificationRows, parseEngineeringNumber, readPinCountFromPackage } from "./providers/distributor-normalize";
 
 /**
  * Verifies ohm prefixes parse across plural, attached, and case-sensitive forms so a real provider
@@ -36,6 +36,25 @@ test("parseEngineeringNumber resolves farad and henry prefixes", () => {
 /**
  * Verifies spec rows dedupe repeated labels, join their values, and get deterministic, provider-scoped ids.
  */
+/**
+ * Series codes name the body, not the lead count. Storing 23 for SOT-23 makes a correct
+ * 3-pad footprint fail pad-count checks and stamps that false count on any shared package row.
+ */
+test("readPinCountFromPackage ignores JEDEC series numbers and keeps explicit pin suffixes", () => {
+  assert.equal(readPinCountFromPackage("SOT-23"), null);
+  assert.equal(readPinCountFromPackage("SOT 23"), null);
+  assert.equal(readPinCountFromPackage("SOD-123"), null);
+  assert.equal(readPinCountFromPackage("SC-70"), null);
+  assert.equal(readPinCountFromPackage("TO-220"), null);
+  assert.equal(readPinCountFromPackage("DO-214"), null);
+  assert.equal(readPinCountFromPackage("SOT-23-5"), 5);
+  assert.equal(readPinCountFromPackage("SC-70-6"), 6);
+  assert.equal(readPinCountFromPackage("TO-220-5"), 5);
+  assert.equal(readPinCountFromPackage("QFN-16"), 16);
+  assert.equal(readPinCountFromPackage("SOIC-8"), 8);
+  assert.equal(readPinCountFromPackage("0402"), null);
+});
+
 test("buildSpecificationRows dedupes repeated labels and builds deterministic ids", () => {
   const rows = buildSpecificationRows("mouser", "603-RC0603FR-0710KL", "part-x", "source-x", "2026-05-16T00:00:00.000Z", [
     { specGroup: "parametric", specKey: "Packaging", specValue: "Cut Tape (CT)" },

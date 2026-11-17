@@ -37,6 +37,7 @@ test("kicad provider indexes a local library group and normalizes honest CAD ref
     assert.equal(normalized.part.mpn, "Conn_01x04");
     assert.equal(normalized.manufacturer.name, "KiCad public library");
     assert.equal(normalized.package.packageName, "MyLib.pretty");
+    assert.equal(normalized.package.pinCount, null, "a library directory is not one pin count");
     assert.equal(normalized.part.lifecycleStatus, "unknown");
     assert.equal(normalized.datasheetRevisions[0]?.parseConfidence, 0);
 

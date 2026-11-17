@@ -264,6 +264,20 @@ test("jlcparts provider reads trailing pin counts from package names when joints
   assert.equal(normalized.package.pinCount, 5);
 });
 
+test("jlcparts provider does not treat a SOT-23 series code as 23 pins when joints are missing", () => {
+  const normalized = jlcpartsProviderAdapter.normalizeRawPart(
+    buildSparsePayload({
+      categoryName: "Transistors",
+      subcategoryName: "Bipolar Transistors",
+      joints: null,
+      mfr: "MMBT3904",
+      packageName: "SOT-23"
+    })
+  );
+
+  assert.equal(normalized.package.pinCount, null);
+});
+
 /**
  * Builds a raw payload using the public jlcparts category-row schema for C1091.
  * Extra attributes are merged on top of the base component attributes.
