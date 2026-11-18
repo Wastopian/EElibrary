@@ -123,6 +123,40 @@ test("mouser provider parses MCU and regulator description specs conservatively"
     ["Clock Frequency", "64 MHz"]
   ]);
 
+  // The same blurbs often omit the word CPU. The radio band must still not become the stored clock.
+  const unanchoredSubGig = parametricRows(
+    "RF Microcontrollers - MCU",
+    "Sub-1 GHz wireless MCU, 48 MHz, 64 Kbytes of Flash 8 Kbytes RAM"
+  );
+
+  assert.deepEqual(unanchoredSubGig.rows, [
+    ["Flash Size", "64 Kbytes"],
+    ["RAM Size", "8 Kbytes"],
+    ["Clock Frequency", "48 MHz"]
+  ]);
+
+  const unanchoredBluetooth = parametricRows(
+    "RF Microcontrollers - MCU",
+    "2.4 GHz Bluetooth Low Energy MCU, 64MHz, 512 Kbytes of Flash 64 Kbytes RAM"
+  );
+
+  assert.deepEqual(unanchoredBluetooth.rows, [
+    ["Flash Size", "512 Kbytes"],
+    ["RAM Size", "64 Kbytes"],
+    ["Clock Frequency", "64MHz"]
+  ]);
+
+  const gigahertzCpu = parametricRows(
+    "ARM Microcontrollers - MCU",
+    "1 GHz CPU, 2MB of Flash, 1MB RAM"
+  );
+
+  assert.deepEqual(gigahertzCpu.rows, [
+    ["Flash Size", "2MB"],
+    ["RAM Size", "1MB"],
+    ["Clock Frequency", "1 GHz"]
+  ]);
+
   const ldo = parametricRows("LDO Voltage Regulators", "LDO Voltage Regulators 200mA nanopower-IQ ( 25 nA) low-dropout");
 
   assert.deepEqual(ldo.rows, [
