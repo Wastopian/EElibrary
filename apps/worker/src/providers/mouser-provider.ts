@@ -396,8 +396,8 @@ function readDescriptionSpecs(part: MouserPart): { metrics: NeutralSpec[]; speci
 /**
  * Reads flash size, RAM size, and clock frequency from an MCU description ("Mainstream Arm Cortex-M0+
  * MCU 64 Kbytes of Flash 8 Kbytes RAM, 64 MHz CPU"). Each value must appear with its unit and its
- * anchor word (Flash / RAM / a frequency unit). When a radio-band GHz figure appears first, prefer the
- * frequency next to CPU/clock/core so the RF band is never stored as Clock Frequency.
+ * anchor word (Flash / RAM / a frequency unit). A radio-band figure ("Sub-1 GHz", "2.4 GHz") must
+ * not be stored as Clock Frequency when the description also carries the CPU clock.
  */
 function readMcuDescriptionSpecs(description: string): NeutralSpecification[] {
   const specifications: NeutralSpecification[] = [];
@@ -413,18 +413,61 @@ function readMcuDescriptionSpecs(description: string): NeutralSpecification[] {
     specifications.push({ specGroup: "parametric", specKey: "RAM Size", specValue: ramMatch[1].trim() });
   }
 
-  // Prefer a frequency anchored to CPU/clock/core so RF band copy ("Sub-1 GHz", "2.4GHz") does not
-  // win over the real MCU clock later in the same sentence ("… 48 MHz CPU").
-  const clockMatch =
-    description.match(/(?:cpu|clock|core)\s*[:=]?\s*(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu) ??
-    description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\s*(?:cpu|clock|core)\b/iu) ??
-    description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu);
+  const clockValue = readMcuClockFrequency(description);
 
-  if (clockMatch?.[1]) {
-    specifications.push({ specGroup: "parametric", specKey: "Clock Frequency", specValue: clockMatch[1].trim() });
+  if (clockValue) {
+    specifications.push({ specGroup: "parametric", specKey: "Clock Frequency", specValue: clockValue });
   }
 
   return specifications;
+}
+
+/** MCU_CLOCK_FREQUENCY matches one engineering frequency token such as "48 MHz" or "2.4GHz". */
+const MCU_CLOCK_FREQUENCY = /\d+(?:\.\d+)?\s*[kmg]hz\b/giu;
+
+/**
+ * Reads the CPU clock from an MCU description.
+ *
+ * An explicit CPU/clock/core anchor wins. Otherwise a leading radio band is skipped when another
+ * frequency is present, so "Sub-1 GHz wireless MCU, 48 MHz" stores 48 MHz rather than 1 GHz.
+ * A description with only a radio band still keeps that figure — there is no second number to prefer.
+ */
+function readMcuClockFrequency(description: string): string | null {
+  const anchored =
+    description.match(/(?:cpu|clock|core)\s*[:=]?\s*(\d+(?:\.\d+)?\s*[kmg]hz)\b/iu) ??
+    description.match(/(\d+(?:\.\d+)?\s*[kmg]hz)\s*(?:cpu|clock|core)\b/iu);
+
+  if (anchored?.[1]) {
+    return anchored[1].trim();
+  }
+
+  const matches = [...description.matchAll(MCU_CLOCK_FREQUENCY)];
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const nonRadio = matches.filter((match) => !isRadioBandFrequency(description, match.index ?? 0, match[0]));
+
+  return (nonRadio[0] ?? matches[0])?.[0].trim() ?? null;
+}
+
+/**
+ * Reports the ISM radio bands Mouser puts in front of a wireless MCU clock.
+ *
+ * "Sub-1 GHz" captures as "1 GHz", so the Sub- prefix is checked separately. A bare "1 GHz" with no
+ * Sub- prefix is left alone so a 1 GHz CPU is not discarded.
+ */
+function isRadioBandFrequency(description: string, index: number, raw: string): boolean {
+  const prefix = description.slice(Math.max(0, index - 5), index);
+
+  if (/sub-?\s*$/iu.test(prefix)) {
+    return true;
+  }
+
+  const compact = raw.toLowerCase().replace(/\s+/gu, "");
+
+  return compact === "2.4ghz" || compact === "2.45ghz" || compact === "5ghz" || compact === "5.8ghz";
 }
 
 /**
