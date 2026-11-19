@@ -10,6 +10,7 @@ import {
   assembleNormalizedPart,
   normalizeComparableText,
   normalizeOptionalText,
+  selectMechanicalPackageName,
   readNullableInteger,
   readPositiveInteger,
   readPositiveNumber,
@@ -307,10 +308,23 @@ function normalizeRawPart(rawPayload: RawProviderPayload): NormalizedProviderPar
   const mpn = readRequiredText(product.ManufacturerProductNumber, "product.ManufacturerProductNumber");
   const manufacturerName = readRequiredText(product.Manufacturer?.Name, "product.Manufacturer.Name");
   const variations = Array.isArray(product.ProductVariations) ? product.ProductVariations : [];
-  const packageName = normalizeOptionalText(variations.find((variation) => normalizeOptionalText(variation.PackageType?.Name))?.PackageType?.Name) ?? "Unknown package";
+  const category = resolveLeafCategoryName(product.Category) ?? "";
   const description = normalizeOptionalText(product.Description?.ProductDescription)
     ?? normalizeOptionalText(product.Description?.DetailedDescription)
     ?? `${manufacturerName} ${mpn}`;
+  const parameters = Array.isArray(product.Parameters) ? product.Parameters : [];
+  const passiveDescription = /resistor|capacitor|inductor/iu.test(category) ? description : null;
+  // PackageType.Name is the shipping option ("Cut Tape (CT)"), already stored on the supply offer.
+  // The footprint is a product parameter.
+  const packageName = selectMechanicalPackageName(
+    parameters.flatMap((parameter) => {
+      const name = normalizeOptionalText(parameter.ParameterText);
+      const value = normalizeOptionalText(parameter.ValueText);
+
+      return name && value ? [{ name, value }] : [];
+    }),
+    passiveDescription
+  ) ?? "Unknown package";
 
   return assembleNormalizedPart({
     category: resolveLeafCategoryName(product.Category) ?? "Unknown",

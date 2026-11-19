@@ -100,6 +100,16 @@ test("mouser provider parses MCU and regulator description specs conservatively"
   ]);
   assert.equal(mcu.metrics.length, 0, "description parsing emits verbatim spec rows, not metrics");
 
+  const shippingFirst = buildRawPayload();
+  const shippingPart = (shippingFirst.payload as { part: Record<string, unknown> }).part;
+  shippingPart.ProductAttributes = [
+    { AttributeName: "Packaging", AttributeValue: "Tray" },
+    { AttributeName: "Standard Package", AttributeValue: "250" },
+    { AttributeName: "Package / Case", AttributeValue: "LQFP-32" }
+  ];
+
+  assert.equal(mouserProviderAdapter.normalizeRawPart(shippingFirst).package.packageName, "LQFP-32");
+
   // RF MCU blurbs often lead with the radio band before the CPU clock. The band must not become Clock Frequency.
   const rfMcu = parametricRows(
     "RF Microcontrollers - MCU",
@@ -158,6 +168,7 @@ test("mouser provider parses passive description specs and captures commercial a
   assert.equal(byKey("Tolerance")?.specValue, "1%");
   assert.equal(byKey("Tolerance")?.specGroup, "parametric");
   assert.equal(byKey("Power Rating")?.specValue, "1/10W");
+  assert.equal(normalized.package.packageName, "0603", "the chip size in the description is the package, not Cut Tape");
 
   const packaging = specifications.filter((row) => row.specKey === "Packaging");
 

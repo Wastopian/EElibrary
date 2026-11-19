@@ -751,6 +751,101 @@ export function readCurrencyCode(value: unknown): string {
 }
 
 /**
+ * EIA imperial chip sizes that appear as their own token in passive descriptions ("0603, 10kOhms").
+ * Metric body sizes such as 1608 and 1005 are intentionally absent so "(1005 Metric)" is not stored
+ * as the package.
+ */
+const CHIP_PACKAGE_SIZE_PATTERN = /\b(01005|0201|0402|0603|0805|1206|1210|1806|1812|2010|2512)\b/u;
+
+/**
+ * Picks the mechanical package from provider attribute rows.
+ *
+ * Distributor payloads carry shipping options ("Packaging" / DigiKey `PackageType` = "Cut Tape (CT)",
+ * "Tape & Reel") next to the footprint ("Package / Case" = "0402 (1005 Metric)", "Supplier Device
+ * Package" = "SOT-23-5"). The first label that contains "package" is the shipping option on live
+ * Mouser and DigiKey responses, and every cut-tape part then shares one package row. Search, compare,
+ * and the part identity panel read that row, so the footprint disappears.
+ *
+ * Chip sizes that start with a digit ("0402 (1005 Metric)", "8-SOIC") win. Otherwise the supplier
+ * device package wins over a JEDEC alias ("SOT-23-5" rather than "SC-74A, SOT-753"). When a passive
+ * description is the only place the size is written, a lone EIA chip size is used. Shipping labels
+ * never become the package.
+ */
+export function selectMechanicalPackageName(
+  attributes: ReadonlyArray<{ name: string; value: string }>,
+  passiveDescription?: string | null
+): string | null {
+  const candidates = attributes.flatMap((attribute) => {
+    const name = normalizeComparableText(attribute.name);
+    const value = normalizeOptionalText(attribute.value);
+
+    if (!name || !value || isUnusablePackageValue(value) || isShippingOrQuantityLabel(name)) {
+      return [];
+    }
+
+    if (!name.includes("package") && !name.includes("case")) {
+      return [];
+    }
+
+    return [{ name, value }];
+  });
+  const casePackage = candidates.find((candidate) => isCasePackageLabel(candidate.name));
+  const supplierPackage = candidates.find((candidate) => candidate.name.includes("supplier") && candidate.name.includes("package"));
+
+  if (casePackage && /^\d/u.test(casePackage.value)) {
+    return casePackage.value;
+  }
+
+  if (supplierPackage) {
+    return supplierPackage.value;
+  }
+
+  if (casePackage) {
+    return casePackage.value;
+  }
+
+  const generic = candidates.find((candidate) => candidate !== supplierPackage);
+
+  if (generic) {
+    return generic.value;
+  }
+
+  const description = normalizeOptionalText(passiveDescription);
+  const chipSize = description?.match(CHIP_PACKAGE_SIZE_PATTERN)?.[1];
+
+  return chipSize ?? null;
+}
+
+/**
+ * Reports labels that name how the distributor ships the part, not the footprint.
+ */
+function isShippingOrQuantityLabel(name: string): boolean {
+  return name.includes("packaging") || name.includes("qty") || name.includes("quantity") || name.includes("standard pack") || name.includes("standard package");
+}
+
+/**
+ * Reports the attribute that carries the case or footprint name rather than a supplier alias.
+ */
+function isCasePackageLabel(name: string): boolean {
+  return name.includes("package / case")
+    || name.includes("package/case")
+    || name.includes("case / package")
+    || name.includes("case/package")
+    || name.includes("case_package")
+    || name.includes("package_case")
+    || name.includes("case code")
+    || name === "case"
+    || name === "package";
+}
+
+/**
+ * Reports placeholder package values distributors emit when the field is empty.
+ */
+function isUnusablePackageValue(value: string): boolean {
+  return /^(?:-+|—+|n\/a|na|none|null|unknown|not applicable)$/iu.test(value.trim());
+}
+
+/**
  * Reads a pin count from common package text suffixes.
  */
 export function readPinCountFromPackage(packageName: string): number | null {

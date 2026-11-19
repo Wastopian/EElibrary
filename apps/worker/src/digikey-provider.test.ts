@@ -18,6 +18,7 @@ test("digikey provider normalizes product metadata and packaging offers", () => 
   assert.equal(normalized.part.category, "Linear Regulators");
   assert.equal(normalized.part.lifecycleStatus, "active");
   assert.equal(normalized.package.packageName, "SOT-23-5");
+  assert.equal(normalized.supplyOfferings[0]?.packaging, "Cut Tape (CT)");
   assert.equal(normalized.sourceRecord.providerId, "digikey");
   assert.equal(normalized.sourceRecord.providerPartKey, "296-TPS7A0228PDBVRCT-ND");
   assert.equal(normalized.sourceRecord.importStatus, "imported");
@@ -65,7 +66,9 @@ test("digikey provider keeps the full parameter table as verbatim spec rows", ()
     specifications.map((row) => [row.specKey, row.specValue, row.specGroup]),
     [
       ["Output Type", "Fixed", "parametric"],
-      ["Voltage - Output (Min/Fixed)", "2.28V", "parametric"]
+      ["Voltage - Output (Min/Fixed)", "2.28V", "parametric"],
+      ["Package / Case", "SC-74A, SOT-753", "parametric"],
+      ["Supplier Device Package", "SOT-23-5", "parametric"]
     ]
   );
 });
@@ -85,7 +88,9 @@ function buildRawPayload(): RawProviderPayload {
         ManufacturerProductNumber: "TPS7A0228PDBVR",
         Parameters: [
           { ParameterText: "Output Type", ValueText: "Fixed" },
-          { ParameterText: "Voltage - Output (Min/Fixed)", ValueText: "2.28V" }
+          { ParameterText: "Voltage - Output (Min/Fixed)", ValueText: "2.28V" },
+          { ParameterText: "Package / Case", ValueText: "SC-74A, SOT-753" },
+          { ParameterText: "Supplier Device Package", ValueText: "SOT-23-5" }
         ],
         ProductStatus: { Status: "Active" },
         ProductUrl: "https://www.digikey.com/en/products/detail/texas-instruments/TPS7A0228PDBVR/1234567",
@@ -93,7 +98,7 @@ function buildRawPayload(): RawProviderPayload {
           {
             DigiKeyProductNumber: "296-TPS7A0228PDBVRCT-ND",
             MinimumOrderQuantity: 1,
-            PackageType: { Name: "SOT-23-5" },
+            PackageType: { Name: "Cut Tape (CT)" },
             QuantityAvailableforPackageType: 18_452,
             StandardPricing: [
               { BreakQuantity: 1, UnitPrice: 0.41 },

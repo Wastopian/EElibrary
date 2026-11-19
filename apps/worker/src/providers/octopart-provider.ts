@@ -7,7 +7,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, InventoryStatus, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
-import { parseEngineeringNumber } from "./distributor-normalize";
+import { parseEngineeringNumber, selectMechanicalPackageName } from "./distributor-normalize";
 
 /** OCTOPART_PROVIDER_ID is the canonical adapter id for Octopart data accessed through Nexar. */
 const OCTOPART_PROVIDER_ID = "octopart";
@@ -1058,10 +1058,18 @@ function readProviderPartKey(part: OctopartPart, manufacturerName: string, mpn: 
  */
 function readPackageName(part: OctopartPart): string {
   const specs = Array.isArray(part.specs) ? part.specs : [];
-  const packageSpec = findSpecByHints(specs, ["case_package", "package_case", "package"]);
-  const value = normalizeOptionalText(packageSpec?.displayValue);
+  const category = readCategoryName(part);
+  const passiveDescription = /resistor|capacitor|inductor/iu.test(category) ? part.shortDescription : null;
+  const attributes = specs.flatMap((spec) => {
+    const value = normalizeOptionalText(spec.displayValue);
+    const name = normalizeOptionalText(spec.attribute?.name)
+      ?? normalizeOptionalText(spec.attribute?.shortname)
+      ?? normalizeOptionalText(spec.attribute?.id);
 
-  return value ?? "Unknown package";
+    return name && value ? [{ name, value }] : [];
+  });
+
+  return selectMechanicalPackageName(attributes, passiveDescription) ?? "Unknown package";
 }
 
 /**

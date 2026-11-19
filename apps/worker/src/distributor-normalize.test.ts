@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSpecificationRows, parseEngineeringNumber } from "./providers/distributor-normalize";
+import { buildSpecificationRows, parseEngineeringNumber, selectMechanicalPackageName } from "./providers/distributor-normalize";
 
 /**
  * Verifies ohm prefixes parse across plural, attached, and case-sensitive forms so a real provider
@@ -53,6 +53,42 @@ test("buildSpecificationRows dedupes repeated labels and builds deterministic id
   assert.equal(packaging?.id, "spec-mouser-603-rc0603fr-0710kl-packaging");
   assert.equal(packaging?.partId, "part-x");
   assert.equal(packaging?.sourceRecordId, "source-x");
+});
+
+/**
+ * Verifies shipping labels never become the footprint, including when they are listed first.
+ * A passive description's EIA size is used only when no mechanical attribute exists.
+ */
+test("selectMechanicalPackageName keeps the footprint and ignores shipping packaging", () => {
+  assert.equal(
+    selectMechanicalPackageName([
+      { name: "Packaging", value: "Cut Tape (CT)" },
+      { name: "Standard Package", value: "5000" },
+      { name: "Package / Case", value: "0603 (1608 Metric)" },
+      { name: "Supplier Device Package", value: "0603" }
+    ]),
+    "0603 (1608 Metric)"
+  );
+  assert.equal(
+    selectMechanicalPackageName([
+      { name: "Packaging", value: "Tape & Reel (TR)" },
+      { name: "Package / Case", value: "SC-74A, SOT-753" },
+      { name: "Supplier Device Package", value: "SOT-23-5" }
+    ]),
+    "SOT-23-5"
+  );
+  assert.equal(
+    selectMechanicalPackageName(
+      [
+        { name: "Packaging", value: "Cut Tape (CT)" },
+        { name: "Supplier Device Package", value: "-" }
+      ],
+      "Thick Film Resistors - SMD General Purpose Chip Resistor 0603, 10kOhms, 1%, 1/10W"
+    ),
+    "0603"
+  );
+  assert.equal(selectMechanicalPackageName([{ name: "Packaging", value: "Cut Tape (CT)" }], "ARM Cortex-M0+ MCU 64 Kbytes"), null);
+  assert.equal(selectMechanicalPackageName([{ name: "case_package", value: "SOIC-14" }]), "SOIC-14");
 });
 
 test("parseEngineeringNumber scales attached sub-unit prefixes and leading-dot decimals", () => {
