@@ -10,6 +10,7 @@ import {
   assembleNormalizedPart,
   normalizeComparableText,
   normalizeOptionalText,
+  selectMechanicalPackageName,
   readNullableInteger,
   readPositiveInteger,
   readPositiveNumber,
@@ -285,13 +286,18 @@ function buildSpecRow(specKey: string, value: string | number | null | undefined
  */
 function readPackageName(part: MouserPart): string {
   const attributes = Array.isArray(part.ProductAttributes) ? part.ProductAttributes : [];
-  const attribute = attributes.find((entry) => {
-    const name = normalizeComparableText(entry.AttributeName);
+  const category = normalizeOptionalText(part.Category) ?? "";
+  const passiveDescription = /resistor|capacitor|inductor/iu.test(category) ? part.Description : null;
 
-    return name.includes("package") || name.includes("case");
-  });
+  return selectMechanicalPackageName(
+    attributes.flatMap((entry) => {
+      const name = normalizeOptionalText(entry.AttributeName);
+      const value = normalizeOptionalText(entry.AttributeValue);
 
-  return normalizeOptionalText(attribute?.AttributeValue) ?? "Unknown package";
+      return name && value ? [{ name, value }] : [];
+    }),
+    passiveDescription
+  ) ?? "Unknown package";
 }
 
 /**

@@ -42,6 +42,11 @@ test("findParamDefForSpecKey maps provider labels to canonical params, most-spec
   assert.equal(findParamDefForSpecKey("resistor", "Power Rating")?.paramKey, "power_rating");
   assert.equal(findParamDefForSpecKey("resistor", "Overload Voltage (Max)")?.paramKey, "voltage_rating");
   assert.equal(findParamDefForSpecKey("resistor", "Package / Case")?.paramKey, "package");
+  assert.equal(findParamDefForSpecKey("resistor", "Supplier Device Package")?.paramKey, "package");
+  // Shipping and reel-quantity labels contain "package" but are not the footprint.
+  assert.equal(findParamDefForSpecKey("resistor", "Packaging"), null);
+  assert.equal(findParamDefForSpecKey("capacitor", "Standard Package"), null);
+  assert.equal(findParamDefForSpecKey("resistor", "Standard Pack Qty"), null);
   // "case code" is more specific than "case" and must win.
   assert.equal(findParamDefForSpecKey("resistor", "Case Code (Imperial)")?.paramKey, "package");
   assert.equal(findParamDefForSpecKey("capacitor", "Dielectric")?.paramKey, "dielectric");

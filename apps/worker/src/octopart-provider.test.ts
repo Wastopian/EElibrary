@@ -86,6 +86,23 @@ test("octopart provider scales attached SI prefixes in metric display values", (
 });
 
 /**
+ * Verifies a leading Packaging spec does not replace the mechanical case.
+ */
+test("octopart provider keeps the case when a shipping package spec is listed first", () => {
+  const normalized = octopartProviderAdapter.normalizeRawPart(
+    buildRawPayload({
+      specs: [
+        buildSpec("packaging", "Packaging", "Cut Tape"),
+        buildSpec("case_package", "Package / Case", "SOIC-14"),
+        buildSpec("supplier_package", "Supplier Device Package", "SOIC-14")
+      ]
+    })
+  );
+
+  assert.equal(normalized.package.packageName, "SOIC-14");
+});
+
+/**
  * Verifies optional exact provider lookup skips Octopart when credentials are absent.
  */
 test("octopart provider lookup returns no candidates when credentials are not configured", async () => {

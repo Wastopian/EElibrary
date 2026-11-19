@@ -182,12 +182,64 @@ export function findParamDefForSpecKey(partType: PartType, specKey: string): Can
   let best: { def: CanonicalParameterDef; patternLength: number } | null = null;
 
   for (const def of getParameterDefs(partType)) {
+    // "Packaging" and "Standard Package" are distributor shipping/quantity labels. They contain
+    // the word package, but the value is "Cut Tape" or a reel count, not the footprint.
+    if (def.paramKey === "package" && isShippingPackageSpecKey(normalizedKey)) {
+      continue;
+    }
+
     for (const pattern of def.specKeyPatterns) {
-      if (normalizedKey.includes(pattern) && (best === null || pattern.length > best.patternLength)) {
+      if (specKeyHasPattern(normalizedKey, pattern) && (best === null || pattern.length > best.patternLength)) {
         best = { def, patternLength: pattern.length };
       }
     }
   }
 
   return best?.def ?? null;
+}
+
+/**
+ * Reports distributor labels that describe how the part is shipped, not its footprint.
+ */
+function isShippingPackageSpecKey(normalizedKey: string): boolean {
+  return normalizedKey.includes("packaging")
+    || normalizedKey.includes("standard package")
+    || normalizedKey.includes("standard pack")
+    || normalizedKey.includes("pack qty")
+    || normalizedKey.includes("package qty")
+    || normalizedKey.includes("package quantity");
+}
+
+/**
+ * Reports whether a pattern occurs in a spec key as its own token, not as a prefix of a longer word.
+ */
+function specKeyHasPattern(normalizedKey: string, pattern: string): boolean {
+  let from = 0;
+
+  while (from < normalizedKey.length) {
+    const index = normalizedKey.indexOf(pattern, from);
+
+    if (index === -1) {
+      return false;
+    }
+
+    const before = index === 0 ? "" : normalizedKey[index - 1] ?? "";
+    const after = normalizedKey[index + pattern.length] ?? "";
+
+    if (!isPatternWordChar(before) && !isPatternWordChar(after)) {
+      return true;
+    }
+
+    from = index + 1;
+  }
+
+  return false;
+}
+
+/**
+ * Reports a letter or digit. Spaces, slashes, and parentheses stay boundaries so
+ * "voltage - output (min)" still matches the "voltage - output" pattern.
+ */
+function isPatternWordChar(character: string): boolean {
+  return /^[a-z0-9]$/u.test(character);
 }
