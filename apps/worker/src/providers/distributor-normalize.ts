@@ -768,7 +768,13 @@ export function readPinCountFromPackage(packageName: string): number | null {
 
 /**
  * Converts provider names and identifiers into deterministic lowercase id fragments.
+ *
+ * "+" is kept as the token "plus". It is an orderable-part suffix (MAX232CPE versus MAX232CPE+),
+ * not a separator. Stripping it made those MPNs share one part id, so the later import overwrote
+ * the earlier part's MPN, lifecycle, and specifications.
  */
 export function slugify(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "unknown";
+  const withPlus = value.trim().toLowerCase().replace(/\+/gu, "plus");
+
+  return withPlus.replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "unknown";
 }
