@@ -86,6 +86,24 @@ test("octopart provider scales attached SI prefixes in metric display values", (
 });
 
 /**
+ * Verifies a lead-free "+" MPN does not share the base part id. Octopart builds that id from the
+ * MPN slug, and the parts table then overwrites on id conflict.
+ */
+test("octopart provider keeps a lead-free plus suffix as a distinct part id", () => {
+  const plain = octopartProviderAdapter.normalizeRawPart(buildRawPayload());
+  const payload = buildRawPayload();
+  const part = (payload.payload as { part: { mpn: string } }).part;
+  part.mpn = "SN74S74N+";
+
+  const leadFree = octopartProviderAdapter.normalizeRawPart(payload);
+
+  assert.equal(plain.part.id, "part-octopart-texas-instruments-sn74s74n");
+  assert.equal(leadFree.part.id, "part-octopart-texas-instruments-sn74s74nplus");
+  assert.equal(leadFree.part.mpn, "SN74S74N+");
+  assert.notEqual(plain.part.id, leadFree.part.id);
+});
+
+/**
  * Verifies optional exact provider lookup skips Octopart when credentials are absent.
  */
 test("octopart provider lookup returns no candidates when credentials are not configured", async () => {

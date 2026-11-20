@@ -7,7 +7,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, InventoryStatus, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
-import { parseEngineeringNumber } from "./distributor-normalize";
+import { parseEngineeringNumber, slugify } from "./distributor-normalize";
 
 /** OCTOPART_PROVIDER_ID is the canonical adapter id for Octopart data accessed through Nexar. */
 const OCTOPART_PROVIDER_ID = "octopart";
@@ -1284,9 +1284,3 @@ function truncateDescription(value: string): string {
   return value.slice(0, MAX_NORMALIZED_DESCRIPTION_LENGTH).trimEnd();
 }
 
-/**
- * Converts provider names and identifiers into deterministic lowercase id fragments.
- */
-function slugify(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "unknown";
-}

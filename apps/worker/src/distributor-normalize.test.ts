@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSpecificationRows, parseEngineeringNumber } from "./providers/distributor-normalize";
+import { assembleNormalizedPart, buildSpecificationRows, parseEngineeringNumber, slugify } from "./providers/distributor-normalize";
 
 /**
  * Verifies ohm prefixes parse across plural, attached, and case-sensitive forms so a real provider
@@ -89,3 +89,46 @@ test("parseEngineeringNumber preserves scientific-notation exponents", () => {
   close(String(1e-7), "F", 1e-7);
   close(String(2.2e-12), "F", 2.2e-12);
 });
+
+/**
+ * Verifies a lead-free "+" suffix stays in the part id. MAX232CPE and MAX232CPE+ are different
+ * orderable parts; stripping "+" made the second import overwrite the first.
+ */
+test("slugify keeps a lead-free plus suffix distinct from the base MPN", () => {
+  assert.equal(slugify("MAX232CPE"), "max232cpe");
+  assert.equal(slugify("MAX232CPE+"), "max232cpeplus");
+  assert.equal(slugify("RC0603FR-0710KL"), "rc0603fr-0710kl");
+
+  const plain = assembleNormalizedPart(minimalPartInput("MAX232CPE"));
+  const leadFree = assembleNormalizedPart(minimalPartInput("MAX232CPE+"));
+
+  assert.equal(plain.part.id, "part-digikey-maxim-integrated-max232cpe");
+  assert.equal(leadFree.part.id, "part-digikey-maxim-integrated-max232cpeplus");
+  assert.equal(leadFree.part.mpn, "MAX232CPE+");
+  assert.notEqual(plain.part.id, leadFree.part.id);
+});
+
+/**
+ * Builds the smallest assembleNormalizedPart input that still produces a stable part id.
+ */
+function minimalPartInput(mpn: string) {
+  return {
+    category: "Interface",
+    datasheetUrl: null,
+    description: mpn,
+    fetchedAt: "2026-11-20T00:00:00.000Z",
+    lifecycleStatus: "active" as const,
+    manufacturerName: "Maxim Integrated",
+    manufacturerWebsite: null,
+    metrics: [],
+    mpn,
+    packageName: "PDIP-16",
+    pinCount: 16,
+    providerId: "digikey",
+    providerPartKey: `dk-${mpn}`,
+    rawPayload: { mpn },
+    sourceUrl: "https://www.digikey.com",
+    supplyOfferings: [],
+    trustScore: 0.66
+  };
+}
