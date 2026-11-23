@@ -8,6 +8,7 @@ import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawP
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
 import {
   assembleNormalizedPart,
+  manufacturerNameMatchesHint,
   normalizeComparableText,
   normalizeOptionalText,
   readNullableInteger,
@@ -160,10 +161,10 @@ async function fetchMouserRawPart(request: ProviderPartRequest): Promise<RawProv
 /**
  * Selects the exact MPN part, using a manufacturer hint only to disambiguate.
  */
-function selectExactPart(parts: MouserPart[], mpn: string, manufacturerName: string | undefined): MouserPart | null {
+export function selectExactPart(parts: MouserPart[], mpn: string, manufacturerName: string | undefined): MouserPart | null {
   const exact = parts.filter((part) => normalizeComparableText(part.ManufacturerPartNumber) === normalizeComparableText(mpn));
   const hint = normalizeComparableText(manufacturerName);
-  const byManufacturer = hint ? exact.find((part) => normalizeComparableText(part.Manufacturer).includes(hint)) : undefined;
+  const byManufacturer = hint ? exact.find((part) => manufacturerNameMatchesHint(part.Manufacturer ?? "", hint)) : undefined;
 
   return byManufacturer ?? exact[0] ?? null;
 }

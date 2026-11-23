@@ -8,7 +8,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
-import { buildSpecificationRows, type NeutralSpecification } from "./distributor-normalize";
+import { buildSpecificationRows, manufacturerNameMatchesHint, type NeutralSpecification } from "./distributor-normalize";
 
 /** JLC_PARTS_PROVIDER_ID is the canonical worker-only provider identifier. */
 const JLC_PARTS_PROVIDER_ID = "jlcparts";
@@ -973,7 +973,7 @@ function matchesPartRequest(
   const normalizedManufacturer = manufacturer ? normalizeManufacturerName(manufacturer) : null;
   const manufacturerSearchValues = normalizedManufacturer && manufacturer ? [manufacturer, normalizedManufacturer.canonicalName, ...normalizedManufacturer.aliases] : [];
   const normalizedRequestManufacturer = manufacturerName ? normalizeComparableText(manufacturerName) : null;
-  const matchesManufacturer = !normalizedRequestManufacturer || manufacturerSearchValues.some((value) => normalizeComparableText(value).includes(normalizedRequestManufacturer));
+  const matchesManufacturer = !normalizedRequestManufacturer || manufacturerSearchValues.some((value) => manufacturerNameMatchesHint(value, manufacturerName ?? ""));
 
   return matchesIdentifier && matchesManufacturer;
 }

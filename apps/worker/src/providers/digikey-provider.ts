@@ -8,6 +8,7 @@ import type { NormalizedProviderPart, ProviderAdapter, ProviderPartRequest, RawP
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
 import {
   assembleNormalizedPart,
+  manufacturerNameMatchesHint,
   normalizeComparableText,
   normalizeOptionalText,
   readNullableInteger,
@@ -192,10 +193,10 @@ async function fetchDigiKeyRawPart(request: ProviderPartRequest): Promise<RawPro
 /**
  * Selects the exact MPN product, using a manufacturer hint only to disambiguate.
  */
-function selectExactProduct(products: DigiKeyProduct[], mpn: string, manufacturerName: string | undefined): DigiKeyProduct | null {
+export function selectExactProduct(products: DigiKeyProduct[], mpn: string, manufacturerName: string | undefined): DigiKeyProduct | null {
   const exact = products.filter((product) => normalizeComparableText(product.ManufacturerProductNumber) === normalizeComparableText(mpn));
   const hint = normalizeComparableText(manufacturerName);
-  const byManufacturer = hint ? exact.find((product) => normalizeComparableText(product.Manufacturer?.Name).includes(hint)) : undefined;
+  const byManufacturer = hint ? exact.find((product) => manufacturerNameMatchesHint(product.Manufacturer?.Name ?? "", hint)) : undefined;
 
   return byManufacturer ?? exact[0] ?? null;
 }

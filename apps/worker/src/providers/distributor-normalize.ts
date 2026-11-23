@@ -706,6 +706,52 @@ export function normalizeComparableText(value: unknown): string {
 }
 
 /**
+ * Reports whether a provider manufacturer name matches a caller hint.
+ *
+ * The hint may be the full name, a leading prefix ("ST" → "STMicroelectronics", "ON" → "onsemi"),
+ * or a whole-token phrase inside the name ("Fenghua" → "FH (Guangdong Fenghua Advanced Tech)").
+ * A letter sequence buried inside a different word is not a match: "ST" is not Texas Instruments
+ * ("instruments"), and "ON" is not NXP Semiconductors ("semiconductors"). Callers that find no
+ * match still apply their own exact-MPN fallback.
+ */
+export function manufacturerNameMatchesHint(manufacturerName: string, hint: string): boolean {
+  const name = normalizeComparableText(manufacturerName);
+  const needle = normalizeComparableText(hint);
+
+  if (!name || !needle) {
+    return false;
+  }
+
+  if (name.startsWith(needle)) {
+    return true;
+  }
+
+  let fromIndex = 0;
+
+  while (fromIndex <= name.length - needle.length) {
+    const index = name.indexOf(needle, fromIndex);
+
+    if (index === -1) {
+      return false;
+    }
+
+    const before = index === 0 ? "" : name[index - 1] ?? "";
+    const afterIndex = index + needle.length;
+    const after = afterIndex >= name.length ? "" : name[afterIndex] ?? "";
+    const startsAtBoundary = before.length === 0 || /[^a-z0-9]/u.test(before);
+    const endsAtBoundary = after.length === 0 || /[^a-z0-9]/u.test(after);
+
+    if (startsAtBoundary && endsAtBoundary) {
+      return true;
+    }
+
+    fromIndex = index + 1;
+  }
+
+  return false;
+}
+
+/**
  * Reads a positive provider number from numeric or numeric-string values.
  */
 export function readPositiveNumber(value: unknown): number | null {

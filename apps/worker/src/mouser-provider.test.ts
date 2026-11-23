@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mouserProviderAdapter } from "./providers/mouser-provider";
+import { mouserProviderAdapter, selectExactPart } from "./providers/mouser-provider";
 import type { RawProviderPayload } from "./provider-adapters";
 
 /**
@@ -266,4 +266,17 @@ test("mouser provider parses a capacitor description including leading-dot value
 
   const voltage = (normalized.specifications ?? []).find((row) => row.specKey === "Voltage Rating");
   assert.equal(voltage?.specValue, "16V", "the capacitor voltage rating is captured from the description");
+});
+
+test("mouser exact MPN selection does not pick Texas Instruments for an ST hint", () => {
+  const selected = selectExactPart(
+    [
+      { Manufacturer: "Texas Instruments", ManufacturerPartNumber: "LM358N" },
+      { Manufacturer: "STMicroelectronics", ManufacturerPartNumber: "LM358N" }
+    ],
+    "LM358N",
+    "ST"
+  );
+
+  assert.equal(selected?.Manufacturer, "STMicroelectronics");
 });

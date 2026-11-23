@@ -10,6 +10,7 @@ import type { Asset, AssetPromotionAuditRecord, AssetValidationRecord, Datasheet
 import type { AccessoryRequirement, CableCompatibility, CompanionRecommendation, ConnectorFamily, ConnectorFamilyConflict, GenerationWorkflow, MateRelation, ReviewRecord, SimilarPartRelation, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
+import { manufacturerNameMatchesHint } from "./distributor-normalize";
 
 /** LocalCatalogFile describes the adapter fixture envelope. */
 interface LocalCatalogFile {
@@ -245,7 +246,7 @@ function findLocalCatalogRecord(
         : matchesMpn;
     const matchesManufacturer =
       normalizedManufacturerName.length === 0 ||
-      candidate.manufacturer.name.toLowerCase().includes(normalizedManufacturerName);
+      manufacturerNameMatchesHint(candidate.manufacturer.name, normalizedManufacturerName);
 
     return matchesIdentifier && matchesManufacturer;
   });
