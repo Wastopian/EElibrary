@@ -7,7 +7,7 @@ import { normalizeLifecycleStatus } from "@ee-library/shared/normalization";
 import type { Asset, DatasheetRevision, InventoryStatus, LifecycleStatus, MetricUnit, PartMetric, SourceExtractionSignal } from "@ee-library/shared/types";
 import type { NormalizedProviderPart, NormalizedSupplyOffering, NormalizedSupplyPriceBreak, ProviderAdapter, ProviderPartRequest, RawProviderPayload } from "../provider-adapters";
 import { buildExactLookupCandidate } from "../provider-lookup-candidate";
-import { parseEngineeringNumber } from "./distributor-normalize";
+import { manufacturerNameMatchesHint, parseEngineeringNumber } from "./distributor-normalize";
 
 /** OCTOPART_PROVIDER_ID is the canonical adapter id for Octopart data accessed through Nexar. */
 const OCTOPART_PROVIDER_ID = "octopart";
@@ -438,7 +438,7 @@ query OctopartPartById {
 /**
  * Selects the exact MPN result, using manufacturer and provider-id hints only to disambiguate.
  */
-function selectExactSearchResult(
+export function selectExactSearchResult(
   results: OctopartSearchResult[],
   mpn: string,
   manufacturerName: string | undefined,
@@ -453,8 +453,9 @@ function selectExactSearchResult(
     return exactProviderResult;
   }
 
-  const exactManufacturerResult = normalizeOptionalText(manufacturerName)
-    ? exactMpnResults.find((result) => normalizeComparableText(result.part?.manufacturer?.name).includes(normalizeComparableText(manufacturerName)))
+  const manufacturerHint = normalizeOptionalText(manufacturerName);
+  const exactManufacturerResult = manufacturerHint
+    ? exactMpnResults.find((result) => manufacturerNameMatchesHint(result.part?.manufacturer?.name ?? "", manufacturerHint))
     : undefined;
 
   return exactManufacturerResult ?? exactMpnResults[0] ?? null;

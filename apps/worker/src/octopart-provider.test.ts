@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { octopartProviderAdapter, resetOctopartProviderAuthCacheForTests } from "./providers/octopart-provider";
+import { octopartProviderAdapter, resetOctopartProviderAuthCacheForTests, selectExactSearchResult } from "./providers/octopart-provider";
 import type { RawProviderPayload } from "./provider-adapters";
 
 /**
@@ -360,6 +360,21 @@ function mockFetch(handler: (url: URL, init?: RequestInit) => Response): () => v
 /**
  * Builds a JSON response for mocked provider fetches.
  */
+test("octopart exact MPN selection does not pick NXP when the hint is ON", () => {
+  const selected = selectExactSearchResult(
+    [
+      { part: { id: "nxp", manufacturer: { name: "NXP Semiconductors" }, mpn: "1N4148" } },
+      { part: { id: "onsemi", manufacturer: { name: "onsemi" }, mpn: "1N4148" } }
+    ],
+    "1N4148",
+    "ON",
+    undefined
+  );
+
+  assert.equal(selected?.part?.manufacturer?.name, "onsemi");
+  assert.equal(selected?.part?.id, "onsemi");
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     headers: {

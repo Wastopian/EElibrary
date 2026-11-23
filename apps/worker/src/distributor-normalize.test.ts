@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSpecificationRows, parseEngineeringNumber } from "./providers/distributor-normalize";
+import { buildSpecificationRows, manufacturerNameMatchesHint, parseEngineeringNumber } from "./providers/distributor-normalize";
 
 /**
  * Verifies ohm prefixes parse across plural, attached, and case-sensitive forms so a real provider
@@ -88,4 +88,22 @@ test("parseEngineeringNumber preserves scientific-notation exponents", () => {
   close("1.0E-7 F", "F", 1e-7);
   close(String(1e-7), "F", 1e-7);
   close(String(2.2e-12), "F", 2.2e-12);
+});
+
+/**
+ * Short manufacturer hints must not match a letter sequence inside a different word.
+ * "ST" is inside "inSTruments", and "ON" is inside "semicONductors".
+ */
+test("manufacturerNameMatchesHint rejects buried substrings and keeps real prefixes and phrases", () => {
+  assert.equal(manufacturerNameMatchesHint("Texas Instruments", "ST"), false);
+  assert.equal(manufacturerNameMatchesHint("STMicroelectronics", "ST"), true);
+  assert.equal(manufacturerNameMatchesHint("NXP Semiconductors", "ON"), false);
+  assert.equal(manufacturerNameMatchesHint("onsemi", "ON"), true);
+  assert.equal(manufacturerNameMatchesHint("ON Semiconductor", "ON"), true);
+  assert.equal(manufacturerNameMatchesHint("Texas Instruments", "Texas Instruments"), true);
+  assert.equal(manufacturerNameMatchesHint("Texas Instruments", "Instruments"), true);
+  assert.equal(manufacturerNameMatchesHint("FH(Guangdong Fenghua Advanced Tech)", "Guangdong Fenghua"), true);
+  assert.equal(manufacturerNameMatchesHint("Diodes Incorporated", "Inc"), false);
+  assert.equal(manufacturerNameMatchesHint("Diodes Incorporated", "Diodes"), true);
+  assert.equal(manufacturerNameMatchesHint("Texas Instruments", ""), false);
 });

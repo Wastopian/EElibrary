@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { digikeyProviderAdapter } from "./providers/digikey-provider";
+import { digikeyProviderAdapter, selectExactProduct } from "./providers/digikey-provider";
 import type { RawProviderPayload } from "./provider-adapters";
 
 /**
@@ -143,4 +143,30 @@ test("digikey provider types a microcontroller by its leaf category so parameter
 
   // The specific leaf, not the coarse top node, is what resolvePartType keys "mcu" off.
   assert.equal(normalized.part.category, "Microcontrollers");
+});
+
+test("digikey exact MPN selection does not pick Texas Instruments for an ST hint", () => {
+  const selected = selectExactProduct(
+    [
+      { Manufacturer: { Name: "Texas Instruments" }, ManufacturerProductNumber: "LM358N" },
+      { Manufacturer: { Name: "STMicroelectronics" }, ManufacturerProductNumber: "LM358N" }
+    ],
+    "LM358N",
+    "ST"
+  );
+
+  assert.equal(selected?.Manufacturer?.Name, "STMicroelectronics");
+});
+
+test("digikey exact MPN selection does not pick NXP when the hint is ON", () => {
+  const selected = selectExactProduct(
+    [
+      { Manufacturer: { Name: "NXP Semiconductors" }, ManufacturerProductNumber: "1N4148" },
+      { Manufacturer: { Name: "onsemi" }, ManufacturerProductNumber: "1N4148" }
+    ],
+    "1N4148",
+    "ON"
+  );
+
+  assert.equal(selected?.Manufacturer?.Name, "onsemi");
 });
